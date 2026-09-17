@@ -2,6 +2,7 @@ plugins {
     id 'java-library'
     id 'idea'
     id 'net.neoforged.moddev' version '2.0.147'
+    id 'me.modmuss50.mod-publish-plugin' version '2.2.0'
 }
 
 tasks.named('wrapper', Wrapper).configure {
@@ -262,5 +263,29 @@ idea {
     module {
         downloadSources = true
         downloadJavadoc = true
+    }
+}
+
+// CurseForge release (me.modmuss50.mod-publish-plugin). Safe by default:
+//   ./gradlew publishMods                   checks the configuration and uploads nothing (dry run)
+//   ./gradlew publishMods -PpublishForReal  uploads the jar to CurseForge
+// The API token is read from the Gradle property curseforgeToken; keep it in ~/.gradle/gradle.properties, never here.
+publishMods {
+    file = tasks.named('jar', Jar).flatMap { it.archiveFile }
+    changelog = providers.fileContents(layout.projectDirectory.file('CHANGELOG.md')).asText
+    type = ALPHA
+    version = project.mod_version
+    displayName = "${project.mod_name} ${project.mod_version}"
+    modLoaders.add('neoforge')
+    dryRun = !providers.gradleProperty('publishForReal').isPresent()
+
+    curseforge {
+        projectId = project.curseforge_project_id
+        accessToken = providers.gradleProperty('curseforgeToken')
+        minecraftVersions.add(project.minecraft_version)
+        javaVersions.add(JavaVersion.VERSION_21)
+        client = true
+        server = true
+        requires('create')
     }
 }

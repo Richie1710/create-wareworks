@@ -174,7 +174,7 @@ start `./gradlew runClient` and pick **"Wareworks Showcase"**.
 
 ## License
 
-All rights reserved.
+Create: Wareworks is released under the [MIT License](LICENSE).
 
 Create, Ponder, Flywheel and Registrate belong to their respective authors; this addon depends on them and ships none of
 their code.
