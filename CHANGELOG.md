@@ -1,3 +1,8 @@
+## 0.1.1-alpha
+
+- License changed from MIT to GPL-3.0-only for this and all future versions
+- The license file is now included in the mod jar
+
 ## 0.1.0-alpha
 
 First public alpha.

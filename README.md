@@ -172,9 +172,21 @@ start `./gradlew runClient` and pick **"Wareworks Showcase"**.
 * [Roadmap](docs/roadmap.md): milestones and planned features
 * [Manual test checklist](docs/manual-test-checklist.md): play-test checks
 
+## AI disclosure
+
+* **Images:** artwork such as the project logo was generated with AI. The screenshots in this README are in-game
+  captures.
+* **Code:** the code was written with AI assistance.
+* **Human review:** every AI-generated part, whether image or code, was reviewed by a human before it was released.
+
 ## License
 
-Create: Wareworks is released under the [MIT License](LICENSE).
+Copyright (C) 2026 Richie1710
+
+Create: Wareworks is released under the [GNU General Public License v3.0](LICENSE) (GPL-3.0-only).
+
+You may use, modify and redistribute it, but copies and modified versions must stay under the same license, keep the
+copyright and license notices, and make their source code available.
 
 Create, Ponder, Flywheel and Registrate belong to their respective authors; this addon depends on them and ships none of
 their code.
