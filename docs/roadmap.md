@@ -19,12 +19,9 @@
 
 ## Planned
 
-* Multi-aisle warehouses and several cranes per controller
-* Stock rules (minimum, maximum, reserve) and restocking of production lines
-* Recursive production (stage 2): ordering an item whose ingredients must be produced first
-* Ponder scenes for the warehouse terminal and the production station, and a Ponder beat for storage location filters
-* Display Link sources for stock displays
-* Pallets, Create packages and fluids
-* Computer integration (e.g. CC: Tweaked)
-* Mechanical arm interaction points for stations and warehouse interfaces
-* Optional chunk loading for aisles with active jobs
+Planned features and ideas are tracked as [GitHub issues](https://github.com/Richie1710/create-wareworks/issues?q=is%3Aissue+label%3Aenhancement):
+
+* [`planned`](https://github.com/Richie1710/create-wareworks/labels/planned): intended for a future version
+* [`idea`](https://github.com/Richie1710/create-wareworks/labels/idea): under consideration, not committed
+
+Feature requests are welcome there. Please add a reaction to an existing issue instead of opening a duplicate.
