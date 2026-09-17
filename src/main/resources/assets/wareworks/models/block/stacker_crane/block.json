@@ -1,0 +1,396 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"casing": "create:block/andesite_casing",
+		"port": "create:block/gearbox",
+		"rail": "create:block/industrial_iron_block",
+		"brass": "create:block/brass_casing",
+		"particle": "create:block/andesite_casing"
+	},
+	"elements": [
+		{
+			"name": "bed",
+			"from": [
+				0,
+				0,
+				0
+			],
+			"to": [
+				16,
+				1,
+				16
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						0,
+						15,
+						16,
+						16
+					],
+					"texture": "#casing",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						0,
+						15,
+						16,
+						16
+					],
+					"texture": "#casing",
+					"cullface": "east"
+				},
+				"south": {
+					"uv": [
+						0,
+						15,
+						16,
+						16
+					],
+					"texture": "#casing",
+					"cullface": "south"
+				},
+				"west": {
+					"uv": [
+						0,
+						15,
+						16,
+						16
+					],
+					"texture": "#casing",
+					"cullface": "west"
+				},
+				"up": {
+					"uv": [
+						0,
+						0,
+						16,
+						16
+					],
+					"texture": "#casing"
+				},
+				"down": {
+					"uv": [
+						0,
+						0,
+						16,
+						16
+					],
+					"texture": "#port",
+					"cullface": "down"
+				}
+			}
+		},
+		{
+			"name": "curb_west",
+			"from": [
+				0,
+				1,
+				0
+			],
+			"to": [
+				2,
+				3,
+				16
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						0,
+						1,
+						2,
+						3
+					],
+					"texture": "#casing",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						0,
+						1,
+						16,
+						3
+					],
+					"texture": "#casing"
+				},
+				"south": {
+					"uv": [
+						14,
+						1,
+						16,
+						3
+					],
+					"texture": "#casing",
+					"cullface": "south"
+				},
+				"west": {
+					"uv": [
+						0,
+						1,
+						16,
+						3
+					],
+					"texture": "#casing",
+					"cullface": "west"
+				},
+				"up": {
+					"uv": [
+						0,
+						0,
+						2,
+						16
+					],
+					"texture": "#casing"
+				}
+			}
+		},
+		{
+			"name": "curb_east",
+			"from": [
+				14,
+				1,
+				0
+			],
+			"to": [
+				16,
+				3,
+				16
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						14,
+						1,
+						16,
+						3
+					],
+					"texture": "#casing",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						0,
+						1,
+						16,
+						3
+					],
+					"texture": "#casing",
+					"cullface": "east"
+				},
+				"south": {
+					"uv": [
+						0,
+						1,
+						2,
+						3
+					],
+					"texture": "#casing",
+					"cullface": "south"
+				},
+				"west": {
+					"uv": [
+						0,
+						1,
+						16,
+						3
+					],
+					"texture": "#casing"
+				},
+				"up": {
+					"uv": [
+						14,
+						0,
+						16,
+						16
+					],
+					"texture": "#casing"
+				}
+			}
+		},
+		{
+			"name": "rail_base",
+			"from": [
+				5,
+				1,
+				0
+			],
+			"to": [
+				11,
+				2,
+				15
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						5,
+						14,
+						11,
+						15
+					],
+					"texture": "#rail",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						0,
+						14,
+						15,
+						15
+					],
+					"texture": "#rail"
+				},
+				"south": {
+					"uv": [
+						5,
+						14,
+						11,
+						15
+					],
+					"texture": "#rail"
+				},
+				"west": {
+					"uv": [
+						1,
+						14,
+						16,
+						15
+					],
+					"texture": "#rail"
+				},
+				"up": {
+					"uv": [
+						5,
+						0,
+						11,
+						15
+					],
+					"texture": "#rail"
+				}
+			}
+		},
+		{
+			"name": "rail_head",
+			"from": [
+				6,
+				2,
+				0
+			],
+			"to": [
+				10,
+				3,
+				15
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						6,
+						13,
+						10,
+						14
+					],
+					"texture": "#rail",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						0,
+						13,
+						15,
+						14
+					],
+					"texture": "#rail"
+				},
+				"south": {
+					"uv": [
+						6,
+						13,
+						10,
+						14
+					],
+					"texture": "#rail"
+				},
+				"west": {
+					"uv": [
+						1,
+						13,
+						16,
+						14
+					],
+					"texture": "#rail"
+				},
+				"up": {
+					"uv": [
+						6,
+						0,
+						10,
+						15
+					],
+					"texture": "#rail"
+				}
+			}
+		},
+		{
+			"name": "end_stop",
+			"from": [
+				4,
+				1,
+				15
+			],
+			"to": [
+				12,
+				4,
+				16
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						4,
+						0,
+						12,
+						3
+					],
+					"texture": "#brass"
+				},
+				"east": {
+					"uv": [
+						0,
+						0,
+						1,
+						3
+					],
+					"texture": "#brass"
+				},
+				"south": {
+					"uv": [
+						4,
+						0,
+						12,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "south"
+				},
+				"west": {
+					"uv": [
+						15,
+						0,
+						16,
+						3
+					],
+					"texture": "#brass"
+				},
+				"up": {
+					"uv": [
+						4,
+						0,
+						12,
+						1
+					],
+					"texture": "#brass"
+				}
+			}
+		}
+	]
+}

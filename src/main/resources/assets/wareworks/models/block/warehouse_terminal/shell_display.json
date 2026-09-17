@@ -1,0 +1,80 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"brass": "create:block/brass_casing",
+		"steel": "create:block/railway_casing",
+		"hole": "create:block/chute_hole",
+		"screen": "wareworks:block/terminal_screen",
+		"particle": "create:block/brass_casing"
+	},
+	"elements": [
+		{
+			"name": "frame_top",
+			"from": [0, 14, 0],
+			"to": [13, 16, 3],
+			"faces": {
+				"north": {"uv": [3, 0, 16, 2], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 0, 3, 2], "texture": "#brass", "cullface": "west"},
+				"up": {"uv": [0, 0, 13, 3], "texture": "#brass", "cullface": "up"},
+				"down": {"uv": [0, 13, 13, 16], "texture": "#steel"}
+			}
+		},
+		{
+			"name": "frame_bottom",
+			"from": [0, 0, 0],
+			"to": [13, 2, 3],
+			"faces": {
+				"north": {"uv": [3, 14, 16, 16], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 14, 3, 16], "texture": "#brass", "cullface": "west"},
+				"up": {"uv": [0, 13, 13, 16], "texture": "#steel"},
+				"down": {"uv": [0, 13, 13, 16], "texture": "#brass", "cullface": "down"}
+			}
+		},
+		{
+			"name": "frame_west",
+			"from": [0, 2, 0],
+			"to": [4, 14, 3],
+			"faces": {
+				"north": {"uv": [12, 2, 16, 14], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 2, 3, 14], "texture": "#brass", "cullface": "west"},
+				"east": {"uv": [13, 2, 16, 14], "texture": "#steel"}
+			}
+		},
+		{
+			"name": "frame_east",
+			"from": [12, 2, 0],
+			"to": [13, 14, 3],
+			"faces": {
+				"north": {"uv": [3, 2, 4, 14], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 2, 3, 14], "texture": "#steel"}
+			}
+		},
+		{
+			"name": "shelf",
+			"from": [4, 5, 0],
+			"to": [12, 6, 3],
+			"faces": {
+				"north": {"uv": [4, 10, 12, 11], "texture": "#brass", "cullface": "north"},
+				"up": {"uv": [4, 13, 12, 16], "texture": "#steel"},
+				"down": {"uv": [4, 13, 12, 16], "texture": "#steel"}
+			}
+		},
+		{
+			"name": "screen",
+			"from": [4, 6, 1],
+			"to": [12, 14, 3],
+			"faces": {
+				"north": {"uv": [0, 0, 16, 16], "texture": "#screen"}
+			}
+		},
+		{
+			"name": "tray_back",
+			"from": [4, 2, 2],
+			"to": [12, 5, 3],
+			"faces": {
+				"north": {"uv": [4, 11, 12, 14], "texture": "#hole"}
+			}
+		}
+	]
+}

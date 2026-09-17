@@ -1,0 +1,477 @@
+{
+  "multipart": [
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/block"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 180
+      },
+      "when": {
+        "display": "back",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake"
+      },
+      "when": {
+        "display": "back",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 90
+      },
+      "when": {
+        "display": "back",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 270
+      },
+      "when": {
+        "display": "back",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 270
+      },
+      "when": {
+        "display": "left",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake"
+      },
+      "when": {
+        "display": "left",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 90
+      },
+      "when": {
+        "display": "left",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 180
+      },
+      "when": {
+        "display": "left",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 90
+      },
+      "when": {
+        "display": "right",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake"
+      },
+      "when": {
+        "display": "right",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 180
+      },
+      "when": {
+        "display": "right",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 270
+      },
+      "when": {
+        "display": "right",
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 270
+      },
+      "when": {
+        "display": "back",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 90
+      },
+      "when": {
+        "display": "back",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain"
+      },
+      "when": {
+        "display": "back",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 180
+      },
+      "when": {
+        "display": "back",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display"
+      },
+      "when": {
+        "display": "left",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 90
+      },
+      "when": {
+        "display": "left",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 180
+      },
+      "when": {
+        "display": "left",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 270
+      },
+      "when": {
+        "display": "left",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 180
+      },
+      "when": {
+        "display": "right",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 90
+      },
+      "when": {
+        "display": "right",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain"
+      },
+      "when": {
+        "display": "right",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 270
+      },
+      "when": {
+        "display": "right",
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display"
+      },
+      "when": {
+        "display": "back",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 180
+      },
+      "when": {
+        "display": "back",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 90
+      },
+      "when": {
+        "display": "back",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 270
+      },
+      "when": {
+        "display": "back",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 90
+      },
+      "when": {
+        "display": "left",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 180
+      },
+      "when": {
+        "display": "left",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain"
+      },
+      "when": {
+        "display": "left",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 270
+      },
+      "when": {
+        "display": "left",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 270
+      },
+      "when": {
+        "display": "right",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 180
+      },
+      "when": {
+        "display": "right",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain"
+      },
+      "when": {
+        "display": "right",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 90
+      },
+      "when": {
+        "display": "right",
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 90
+      },
+      "when": {
+        "display": "back",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 270
+      },
+      "when": {
+        "display": "back",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain"
+      },
+      "when": {
+        "display": "back",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 180
+      },
+      "when": {
+        "display": "back",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display",
+        "y": 180
+      },
+      "when": {
+        "display": "left",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 270
+      },
+      "when": {
+        "display": "left",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain"
+      },
+      "when": {
+        "display": "left",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 90
+      },
+      "when": {
+        "display": "left",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_display"
+      },
+      "when": {
+        "display": "right",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_intake",
+        "y": 270
+      },
+      "when": {
+        "display": "right",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 90
+      },
+      "when": {
+        "display": "right",
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_terminal/shell_plain",
+        "y": 180
+      },
+      "when": {
+        "display": "right",
+        "facing": "west"
+      }
+    }
+  ]
+}

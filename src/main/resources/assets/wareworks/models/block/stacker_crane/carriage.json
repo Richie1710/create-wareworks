@@ -1,0 +1,90 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"brass": "create:block/brass_casing",
+		"casing": "create:block/andesite_casing",
+		"short": "create:block/andesite_casing_short",
+		"particle": "create:block/brass_casing"
+	},
+	"elements": [
+		{
+			"name": "deck",
+			"from": [1, 8, 3],
+			"to": [15, 9.5, 11],
+			"faces": {
+				"north": {"uv": [1, 0, 15, 1.5], "texture": "#short"},
+				"east": {"uv": [3, 0, 11, 1.5], "texture": "#short"},
+				"south": {"uv": [1, 0, 15, 1.5], "texture": "#short"},
+				"west": {"uv": [5, 0, 13, 1.5], "texture": "#short"},
+				"up": {"uv": [0, 0, 16, 16], "texture": "#brass"},
+				"down": {"uv": [1, 3, 15, 11], "texture": "#casing"}
+			}
+		},
+		{
+			"name": "lip",
+			"from": [1, 9.5, 2.75],
+			"to": [15, 11, 4.25],
+			"faces": {
+				"north": {"uv": [1, 1, 15, 2.5], "texture": "#brass"},
+				"east": {"uv": [1, 1, 2.5, 2.5], "texture": "#brass"},
+				"south": {"uv": [1, 1, 15, 2.5], "texture": "#brass"},
+				"west": {"uv": [13.5, 1, 15, 2.5], "texture": "#brass"},
+				"up": {"uv": [1, 2.75, 15, 4.25], "texture": "#brass"},
+				"down": {"uv": [1, 2.75, 15, 4.25], "texture": "#brass"}
+			}
+		},
+		{
+			"name": "guide_front",
+			"from": [3, 8, 11],
+			"to": [13, 15, 12],
+			"faces": {
+				"north": {"uv": [0, 0, 16, 16], "texture": "#brass"},
+				"east": {"uv": [0, 1, 1, 8], "texture": "#brass"},
+				"south": {"uv": [3, 1, 13, 8], "texture": "#brass"},
+				"west": {"uv": [15, 1, 16, 8], "texture": "#brass"},
+				"up": {"uv": [3, 0, 13, 1], "texture": "#brass"},
+				"down": {"uv": [3, 15, 13, 16], "texture": "#brass"}
+			}
+		},
+		{
+			"name": "guide_west",
+			"from": [1, 8, 12],
+			"to": [3, 15, 13.5],
+			"faces": {
+				"north": {"uv": [13, 1, 15, 8], "texture": "#brass"},
+				"east": {"uv": [0, 1, 1.5, 8], "texture": "#brass"},
+				"south": {"uv": [1, 1, 3, 8], "texture": "#brass"},
+				"west": {"uv": [0, 0, 16, 16], "texture": "#brass"},
+				"up": {"uv": [1, 12, 3, 13.5], "texture": "#brass"},
+				"down": {"uv": [1, 12, 3, 13.5], "texture": "#brass"}
+			}
+		},
+		{
+			"name": "guide_east",
+			"from": [13, 8, 12],
+			"to": [15, 15, 13.5],
+			"faces": {
+				"north": {"uv": [1, 1, 3, 8], "texture": "#brass"},
+				"east": {"uv": [0, 0, 16, 16], "texture": "#brass"},
+				"south": {"uv": [13, 1, 15, 8], "texture": "#brass"},
+				"west": {"uv": [14.5, 1, 16, 8], "texture": "#brass"},
+				"up": {"uv": [13, 12, 15, 13.5], "texture": "#brass"},
+				"down": {"uv": [13, 12, 15, 13.5], "texture": "#brass"}
+			}
+		},
+		{
+			"name": "belt_clamp",
+			"from": [6, 15, 10.75],
+			"to": [10, 16, 12],
+			"faces": {
+				"north": {"uv": [6, 0, 10, 1], "texture": "#casing"},
+				"east": {"uv": [0, 0, 1.25, 1], "texture": "#casing"},
+				"south": {"uv": [6, 0, 10, 1], "texture": "#casing"},
+				"west": {"uv": [0, 0, 1.25, 1], "texture": "#casing"},
+				"up": {"uv": [6, 0, 10, 1.25], "texture": "#casing"},
+				"down": {"uv": [6, 3.75, 10, 5], "texture": "#casing"}
+			}
+		}
+	]
+}

@@ -1,0 +1,568 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"brass": "create:block/brass_casing",
+		"hole": "create:block/chute_hole",
+		"particle": "create:block/brass_casing"
+	},
+	"elements": [
+		{
+			"name": "body",
+			"from": [
+				0,
+				0,
+				3
+			],
+			"to": [
+				16,
+				16,
+				13
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						0,
+						0,
+						16,
+						16
+					],
+					"texture": "#hole"
+				},
+				"south": {
+					"uv": [
+						0,
+						0,
+						16,
+						16
+					],
+					"texture": "#hole"
+				},
+				"east": {
+					"uv": [
+						3,
+						0,
+						13,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "east"
+				},
+				"west": {
+					"uv": [
+						3,
+						0,
+						13,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "west"
+				},
+				"up": {
+					"uv": [
+						0,
+						3,
+						16,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "up"
+				},
+				"down": {
+					"uv": [
+						0,
+						3,
+						16,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "down"
+				}
+			}
+		},
+		{
+			"name": "aisle_frame_top",
+			"from": [
+				0,
+				13,
+				0
+			],
+			"to": [
+				16,
+				16,
+				3
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						0,
+						0,
+						16,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						13,
+						0,
+						16,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "east"
+				},
+				"west": {
+					"uv": [
+						0,
+						0,
+						3,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "west"
+				},
+				"up": {
+					"uv": [
+						0,
+						0,
+						16,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "up"
+				},
+				"down": {
+					"uv": [
+						0,
+						13,
+						16,
+						16
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "aisle_frame_bottom",
+			"from": [
+				0,
+				0,
+				0
+			],
+			"to": [
+				16,
+				3,
+				3
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						0,
+						13,
+						16,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						13,
+						13,
+						16,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "east"
+				},
+				"west": {
+					"uv": [
+						0,
+						13,
+						3,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "west"
+				},
+				"down": {
+					"uv": [
+						0,
+						13,
+						16,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "down"
+				},
+				"up": {
+					"uv": [
+						0,
+						0,
+						16,
+						3
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "aisle_frame_west",
+			"from": [
+				0,
+				3,
+				0
+			],
+			"to": [
+				3,
+				13,
+				3
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						13,
+						3,
+						16,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "north"
+				},
+				"west": {
+					"uv": [
+						0,
+						3,
+						3,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "west"
+				},
+				"east": {
+					"uv": [
+						13,
+						3,
+						16,
+						13
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "aisle_frame_east",
+			"from": [
+				13,
+				3,
+				0
+			],
+			"to": [
+				16,
+				13,
+				3
+			],
+			"faces": {
+				"north": {
+					"uv": [
+						0,
+						3,
+						3,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [
+						13,
+						3,
+						16,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "east"
+				},
+				"west": {
+					"uv": [
+						0,
+						3,
+						3,
+						13
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "port_frame_top",
+			"from": [
+				0,
+				13,
+				13
+			],
+			"to": [
+				16,
+				16,
+				16
+			],
+			"faces": {
+				"south": {
+					"uv": [
+						0,
+						0,
+						16,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "south"
+				},
+				"east": {
+					"uv": [
+						0,
+						0,
+						3,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "east"
+				},
+				"west": {
+					"uv": [
+						13,
+						0,
+						16,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "west"
+				},
+				"up": {
+					"uv": [
+						0,
+						13,
+						16,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "up"
+				},
+				"down": {
+					"uv": [
+						0,
+						0,
+						16,
+						3
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "port_frame_bottom",
+			"from": [
+				0,
+				0,
+				13
+			],
+			"to": [
+				16,
+				3,
+				16
+			],
+			"faces": {
+				"south": {
+					"uv": [
+						0,
+						13,
+						16,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "south"
+				},
+				"east": {
+					"uv": [
+						0,
+						13,
+						3,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "east"
+				},
+				"west": {
+					"uv": [
+						13,
+						13,
+						16,
+						16
+					],
+					"texture": "#brass",
+					"cullface": "west"
+				},
+				"down": {
+					"uv": [
+						0,
+						0,
+						16,
+						3
+					],
+					"texture": "#brass",
+					"cullface": "down"
+				},
+				"up": {
+					"uv": [
+						0,
+						13,
+						16,
+						16
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "port_frame_west",
+			"from": [
+				0,
+				3,
+				13
+			],
+			"to": [
+				3,
+				13,
+				16
+			],
+			"faces": {
+				"south": {
+					"uv": [
+						0,
+						3,
+						3,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "south"
+				},
+				"west": {
+					"uv": [
+						13,
+						3,
+						16,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "west"
+				},
+				"east": {
+					"uv": [
+						0,
+						3,
+						3,
+						13
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "port_frame_east",
+			"from": [
+				13,
+				3,
+				13
+			],
+			"to": [
+				16,
+				13,
+				16
+			],
+			"faces": {
+				"south": {
+					"uv": [
+						13,
+						3,
+						16,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "south"
+				},
+				"east": {
+					"uv": [
+						0,
+						3,
+						3,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "east"
+				},
+				"west": {
+					"uv": [
+						13,
+						3,
+						16,
+						13
+					],
+					"texture": "#hole"
+				}
+			}
+		},
+		{
+			"name": "port_spout",
+			"from": [
+				3,
+				3,
+				13
+			],
+			"to": [
+				13,
+				5.5,
+				16
+			],
+			"faces": {
+				"south": {
+					"uv": [
+						3,
+						10.5,
+						13,
+						13
+					],
+					"texture": "#brass",
+					"cullface": "south"
+				},
+				"east": {
+					"uv": [
+						13,
+						10.5,
+						16,
+						13
+					],
+					"texture": "#brass"
+				},
+				"west": {
+					"uv": [
+						0,
+						10.5,
+						3,
+						13
+					],
+					"texture": "#brass"
+				},
+				"up": {
+					"uv": [
+						3,
+						13,
+						13,
+						16
+					],
+					"texture": "#hole"
+				}
+			}
+		}
+	]
+}

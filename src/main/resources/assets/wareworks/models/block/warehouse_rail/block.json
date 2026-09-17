@@ -1,0 +1,65 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"display": {
+		"gui": {"rotation": [30, 225, 0], "translation": [0, 5, 0], "scale": [0.85, 0.85, 0.85]}
+	},
+	"textures": {
+		"casing": "create:block/andesite_casing",
+		"rail": "create:block/industrial_iron_block",
+		"particle": "create:block/industrial_iron_block"
+	},
+	"elements": [
+		{
+			"name": "sleeper_north",
+			"from": [1, 0, 2],
+			"to": [15, 1, 6],
+			"faces": {
+				"north": {"uv": [1, 15, 15, 16], "texture": "#casing"},
+				"east": {"uv": [10, 15, 14, 16], "texture": "#casing"},
+				"south": {"uv": [1, 15, 15, 16], "texture": "#casing"},
+				"west": {"uv": [2, 15, 6, 16], "texture": "#casing"},
+				"up": {"uv": [1, 2, 15, 6], "texture": "#casing"},
+				"down": {"uv": [1, 10, 15, 14], "texture": "#casing", "cullface": "down"}
+			}
+		},
+		{
+			"name": "sleeper_south",
+			"from": [1, 0, 10],
+			"to": [15, 1, 14],
+			"faces": {
+				"north": {"uv": [1, 15, 15, 16], "texture": "#casing"},
+				"east": {"uv": [2, 15, 6, 16], "texture": "#casing"},
+				"south": {"uv": [1, 15, 15, 16], "texture": "#casing"},
+				"west": {"uv": [10, 15, 14, 16], "texture": "#casing"},
+				"up": {"uv": [1, 10, 15, 14], "texture": "#casing"},
+				"down": {"uv": [1, 2, 15, 6], "texture": "#casing", "cullface": "down"}
+			}
+		},
+		{
+			"name": "rail_base",
+			"from": [5, 1, 0],
+			"to": [11, 2, 16],
+			"faces": {
+				"north": {"uv": [5, 14, 11, 15], "texture": "#rail"},
+				"east": {"uv": [0, 14, 16, 15], "texture": "#rail"},
+				"south": {"uv": [5, 14, 11, 15], "texture": "#rail"},
+				"west": {"uv": [0, 14, 16, 15], "texture": "#rail"},
+				"up": {"uv": [5, 0, 11, 16], "texture": "#rail"},
+				"down": {"uv": [5, 0, 11, 16], "texture": "#rail"}
+			}
+		},
+		{
+			"name": "rail_head",
+			"from": [6, 2, 0],
+			"to": [10, 3, 16],
+			"faces": {
+				"north": {"uv": [6, 13, 10, 14], "texture": "#rail"},
+				"east": {"uv": [0, 13, 16, 14], "texture": "#rail"},
+				"south": {"uv": [6, 13, 10, 14], "texture": "#rail"},
+				"west": {"uv": [0, 13, 16, 14], "texture": "#rail"},
+				"up": {"uv": [6, 0, 10, 16], "texture": "#rail"}
+			}
+		}
+	]
+}

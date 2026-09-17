@@ -1,0 +1,61 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"brass": "create:block/brass_casing",
+		"steel": "create:block/railway_casing",
+		"panel": "create:block/industrial_iron_block",
+		"particle": "create:block/brass_casing"
+	},
+	"elements": [
+		{
+			"name": "band_top",
+			"from": [0, 13, 0],
+			"to": [13, 16, 3],
+			"faces": {
+				"north": {"uv": [3, 0, 16, 3], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 0, 3, 3], "texture": "#brass", "cullface": "west"},
+				"up": {"uv": [0, 0, 13, 3], "texture": "#brass", "cullface": "up"},
+				"down": {"uv": [0, 13, 13, 16], "texture": "#steel"}
+			}
+		},
+		{
+			"name": "band_bottom",
+			"from": [0, 0, 0],
+			"to": [13, 3, 3],
+			"faces": {
+				"north": {"uv": [3, 13, 16, 16], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 13, 3, 16], "texture": "#brass", "cullface": "west"},
+				"up": {"uv": [0, 13, 13, 16], "texture": "#steel"},
+				"down": {"uv": [0, 13, 13, 16], "texture": "#brass", "cullface": "down"}
+			}
+		},
+		{
+			"name": "post_west",
+			"from": [0, 3, 0],
+			"to": [4, 13, 3],
+			"faces": {
+				"north": {"uv": [12, 3, 16, 13], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 3, 3, 13], "texture": "#brass", "cullface": "west"},
+				"east": {"uv": [13, 3, 16, 13], "texture": "#steel"}
+			}
+		},
+		{
+			"name": "post_east",
+			"from": [12, 3, 0],
+			"to": [13, 13, 3],
+			"faces": {
+				"north": {"uv": [3, 3, 4, 13], "texture": "#brass", "cullface": "north"},
+				"west": {"uv": [0, 3, 3, 13], "texture": "#steel"}
+			}
+		},
+		{
+			"name": "panel",
+			"from": [4, 3, 1],
+			"to": [12, 13, 3],
+			"faces": {
+				"north": {"uv": [4, 3, 12, 13], "texture": "#panel"}
+			}
+		}
+	]
+}

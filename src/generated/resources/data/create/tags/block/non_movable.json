@@ -1,0 +1,11 @@
+{
+  "values": [
+    "wareworks:stacker_crane",
+    "wareworks:warehouse_controller",
+    "wareworks:warehouse_interface",
+    "wareworks:warehouse_input",
+    "wareworks:warehouse_output",
+    "wareworks:warehouse_terminal",
+    "wareworks:warehouse_production"
+  ]
+}

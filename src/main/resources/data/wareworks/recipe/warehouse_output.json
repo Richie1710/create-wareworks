@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "C": { "item": "create:andesite_casing" },
+    "F": { "item": "create:andesite_funnel" },
+    "N": { "tag": "c:nuggets/brass" }
+  },
+  "pattern": [
+    " C ",
+    "NFN"
+  ],
+  "result": { "count": 1, "id": "wareworks:warehouse_output" }
+}

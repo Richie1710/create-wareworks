@@ -1,0 +1,82 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"render_type": "minecraft:cutout",
+	"textures": {
+		"iron": "create:block/industrial_iron_block",
+		"brass": "create:block/brass_casing",
+		"rack": "create:block/controller_rail_base",
+		"web": "create:block/railway_casing",
+		"particle": "create:block/industrial_iron_block"
+	},
+	"elements": [
+		{
+			"name": "column_west",
+			"from": [3, 0, 12],
+			"to": [6, 13.5, 15.75],
+			"faces": {
+				"north": {"uv": [10, 2.5, 13, 16], "texture": "#iron"},
+				"east": {"uv": [0.25, 2.5, 4, 16], "texture": "#iron"},
+				"south": {"uv": [3, 2.5, 6, 16], "texture": "#iron"},
+				"west": {"uv": [12, 2.5, 15.75, 16], "texture": "#iron"}
+			}
+		},
+		{
+			"name": "column_east",
+			"from": [10, 0, 12],
+			"to": [13, 13.5, 15.75],
+			"faces": {
+				"north": {"uv": [3, 2.5, 6, 16], "texture": "#iron"},
+				"east": {"uv": [0.25, 2.5, 4, 16], "texture": "#iron"},
+				"south": {"uv": [10, 2.5, 13, 16], "texture": "#iron"},
+				"west": {"uv": [12, 2.5, 15.75, 16], "texture": "#iron"}
+			}
+		},
+		{
+			"name": "web",
+			"from": [6, 0, 14.25],
+			"to": [10, 13.5, 15.5],
+			"faces": {
+				"north": {"uv": [6, 2.5, 10, 16], "texture": "#web"},
+				"south": {"uv": [6, 2.5, 10, 16], "texture": "#web"}
+			}
+		},
+		{
+			"name": "rack",
+			"from": [6, 0, 12.25],
+			"to": [10, 13.5, 12.75],
+			"faces": {
+				"north": {"uv": [6, 2.5, 10, 16], "texture": "#rack"},
+				"east": {"uv": [12.25, 2.5, 12.75, 16], "texture": "#rack"},
+				"south": {"uv": [6, 2.5, 10, 16], "texture": "#rack"},
+				"west": {"uv": [12.25, 2.5, 12.75, 16], "texture": "#rack"}
+			}
+		},
+		{
+			"name": "flange_front",
+			"from": [3, 13.5, 12],
+			"to": [13, 16, 13.5],
+			"faces": {
+				"north": {"uv": [3, 0, 13, 2.5], "texture": "#brass"},
+				"east": {"uv": [12, 0, 13.5, 2.5], "texture": "#brass"},
+				"south": {"uv": [3, 0, 13, 2.5], "texture": "#brass"},
+				"west": {"uv": [12, 0, 13.5, 2.5], "texture": "#brass"},
+				"up": {"uv": [3, 12, 13, 13.5], "texture": "#brass"},
+				"down": {"uv": [3, 12, 13, 13.5], "texture": "#brass"}
+			}
+		},
+		{
+			"name": "flange_back",
+			"from": [2, 13.5, 13.5],
+			"to": [14, 16, 15.75],
+			"faces": {
+				"north": {"uv": [2, 0, 14, 2.5], "texture": "#brass"},
+				"east": {"uv": [0.25, 0, 2.5, 2.5], "texture": "#brass"},
+				"south": {"uv": [2, 0, 14, 2.5], "texture": "#brass"},
+				"west": {"uv": [13.5, 0, 15.75, 2.5], "texture": "#brass"},
+				"up": {"uv": [2, 13.5, 14, 15.75], "texture": "#brass"},
+				"down": {"uv": [2, 13.5, 14, 15.75], "texture": "#brass"}
+			}
+		}
+	]
+}

@@ -1,0 +1,51 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"iron": "create:block/industrial_iron_block_top",
+		"rim": "create:block/industrial_iron_block",
+		"particle": "create:block/industrial_iron_block"
+	},
+	"elements": [
+		{
+			"name": "disc",
+			"from": [5, 6, 6],
+			"to": [11, 10, 10],
+			"faces": {
+				"north": {"uv": [5, 6, 11, 10], "texture": "#rim"},
+				"east": {"uv": [0, 0, 16, 16], "texture": "#iron"},
+				"south": {"uv": [5, 6, 11, 10], "texture": "#rim"},
+				"west": {"uv": [0, 0, 16, 16], "texture": "#iron"},
+				"up": {"uv": [5, 6, 11, 10], "texture": "#rim"},
+				"down": {"uv": [5, 6, 11, 10], "texture": "#rim"}
+			}
+		},
+		{
+			"name": "disc_45",
+			"from": [5, 6, 6],
+			"to": [11, 10, 10],
+			"rotation": {"angle": 45, "axis": "x", "origin": [8, 8, 8]},
+			"faces": {
+				"north": {"uv": [5, 6, 11, 10], "texture": "#rim"},
+				"east": {"uv": [0, 0, 16, 16], "texture": "#iron"},
+				"south": {"uv": [5, 6, 11, 10], "texture": "#rim"},
+				"west": {"uv": [0, 0, 16, 16], "texture": "#iron"},
+				"up": {"uv": [5, 6, 11, 10], "texture": "#rim"},
+				"down": {"uv": [5, 6, 11, 10], "texture": "#rim"}
+			}
+		},
+		{
+			"name": "hub",
+			"from": [4.5, 7, 7],
+			"to": [11.5, 9, 9],
+			"faces": {
+				"north": {"uv": [4.5, 7, 11.5, 9], "texture": "#rim"},
+				"east": {"uv": [7, 7, 9, 9], "texture": "#rim"},
+				"south": {"uv": [4.5, 7, 11.5, 9], "texture": "#rim"},
+				"west": {"uv": [7, 7, 9, 9], "texture": "#rim"},
+				"up": {"uv": [4.5, 7, 11.5, 9], "texture": "#rim"},
+				"down": {"uv": [4.5, 7, 11.5, 9], "texture": "#rim"}
+			}
+		}
+	]
+}

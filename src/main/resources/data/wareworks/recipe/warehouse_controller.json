@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "B": { "item": "create:brass_casing" },
+    "E": { "item": "create:electron_tube" },
+    "N": { "item": "create:nixie_tube" },
+    "P": { "item": "create:precision_mechanism" }
+  },
+  "pattern": [
+    " N ",
+    "EBE",
+    " P "
+  ],
+  "result": { "count": 1, "id": "wareworks:warehouse_controller" }
+}

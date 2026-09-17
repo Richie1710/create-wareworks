@@ -1,0 +1,266 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.neoforged.moddev' version '2.0.147'
+}
+
+tasks.named('wrapper', Wrapper).configure {
+    distributionType = Wrapper.DistributionType.BIN
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = "create-wareworks-${minecraft_version}"
+}
+
+// Minecraft 1.21.1 ships Java 21.
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+sourceSets.main.resources {
+    srcDir('src/generated/resources')
+    exclude('**/*.bbmodel')
+    exclude('.cache/')
+}
+
+// Test-only code and test-only assets never ship:
+//  - dev/wareworks/dev: the visual smoke test harness (ADR-014; WareworksClient only starts it outside production);
+//  - dev/wareworks/gametest: the GameTest holders and fixtures, which NeoForge can never discover in a release because
+//    GameTestHooks.isGametestEnabled() is false there;
+//  - data/wareworks/structure: the GameTest structure templates. Unlike the classes these have no production gate:
+//    data/<namespace>/structure is the vanilla structure-template path, so a shipped template would be live datapack
+//    content that /place template and any structure block could pull a bare test floor plate out of (M5 release audit).
+// All of them are loaded from the compiled classes and resources in dev runs (runVisualTest, runRobustnessTest,
+// runGameTestServer), never from this jar, and nothing in src/main references them.
+tasks.named('jar', Jar) {
+    exclude('dev/wareworks/dev/**')
+    exclude('dev/wareworks/gametest/**')
+    exclude('data/wareworks/structure/**')
+}
+
+repositories {
+    maven {
+        name = 'Create / Ponder / Flywheel'
+        url = 'https://maven.createmod.net'
+        content {
+            includeGroup 'com.simibubi.create'
+            includeGroup 'net.createmod.ponder'
+            includeGroup 'dev.engine-room.flywheel'
+            includeGroup 'dev.engine-room.vanillin'
+        }
+    }
+    maven {
+        name = 'Registrate'
+        url = 'https://maven.ithundxr.dev/snapshots'
+        content {
+            includeGroup 'com.tterrag.registrate'
+        }
+    }
+}
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        configureEach {
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+
+        client {
+            client()
+        }
+
+        // Automated visual smoke test (dev tooling, dev.wareworks.dev): fresh superflat world, scenario
+        // build, screenshots into run/visual/screenshots, then the game exits. Scenario: -Pwareworks.visualTest=<name>.
+        visualTest {
+            client()
+            gameDirectory = project.file('run/visual')
+            systemProperty 'wareworks.visualTest', (project.findProperty('wareworks.visualTest') ?: 'aisle').toString()
+            programArguments.addAll '--width', '1600', '--height', '900'
+        }
+
+        // Robustness scenario of the same harness (M5): builds an aisle far from spawn, runs jobs and then forces a
+        // chunk unload, a save + quit + rejoin and blocks broken mid job, checking item conservation after every step.
+        // Its own game directory, so it never fights runVisualTest over the world or the Flywheel client config.
+        robustnessTest {
+            client()
+            gameDirectory = project.file('run/robustness')
+            systemProperty 'wareworks.visualTest', 'robustness'
+            programArguments.addAll '--width', '1280', '--height', '720'
+        }
+
+        // Showcase world (M6): the same harness builds a complete, powered warehouse and then saves and quits, leaving
+        // the world intact. Unlike the screenshot scenarios the player stays CREATIVE with the vanilla interaction
+        // ranges, so the world can actually be played. Copy run/showcase/saves/wareworks_showcase into run/saves to
+        // open it with runClient.
+        showcase {
+            client()
+            gameDirectory = project.file('run/showcase')
+            systemProperty 'wareworks.visualTest', 'showcase'
+            programArguments.addAll '--width', '1600', '--height', '900'
+        }
+
+        server {
+            server()
+            gameDirectory = project.file('run/server')
+            programArgument '--nogui'
+        }
+
+        gameTestServer {
+            type = 'gameTestServer'
+            gameDirectory = project.file('run/gametest')
+        }
+
+        data {
+            data()
+            gameDirectory = project.file('run/data')
+            // --existing-mod create: generated models may reference create: models and textures.
+            programArguments.addAll '--mod', project.mod_id, '--all',
+                    '--output', file('src/generated/resources/').getAbsolutePath(),
+                    '--existing', file('src/main/resources/').getAbsolutePath(),
+                    '--existing-mod', 'create'
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+configurations {
+    runtimeClasspath.extendsFrom localRuntime
+}
+
+dependencies {
+    // Create's published POM declares many optional integrations (Architectury, FTB, JourneyMap, JEI, ...)
+    // as runtime dependencies. We never want those, so every Create-related artifact is non-transitive
+    // and its real requirements are listed explicitly. See docs/dependencies.md.
+    implementation("com.simibubi.create:create-${minecraft_version}:${create_version}:slim") { transitive = false }
+    implementation("net.createmod.ponder:ponder-neoforge:${ponder_version}+mc${minecraft_version}") { transitive = false }
+    implementation("com.tterrag.registrate:Registrate:${registrate_version}")
+
+    compileOnly("dev.engine-room.flywheel:flywheel-neoforge-api-${minecraft_version}:${flywheel_version}") { transitive = false }
+    localRuntime("dev.engine-room.flywheel:flywheel-neoforge-${minecraft_version}:${flywheel_version}") { transitive = false }
+    localRuntime("dev.engine-room.vanillin:vanillin-neoforge-${minecraft_version}:${vanillin_version}") { transitive = false }
+
+    testImplementation(platform('org.junit:junit-bom:5.11.4'))
+    testImplementation('org.junit.jupiter:junit-jupiter')
+    testRuntimeOnly('org.junit.platform:junit-platform-launcher')
+}
+
+var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            loader_version_range   : loader_version_range,
+            create_version_range   : create_version_range,
+            ponder_version         : ponder_version,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from 'src/main/templates'
+    into 'build/generated/sources/modMetadata'
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+// The GameTest structure templates are generated binaries (scripts/gen_structures.py). Drift in one of them surfaces as
+// a cascade of confusing GameTest failures ("missing block entity") rather than as a template error, so `check` runs the
+// script's own --verify pass. Skipped with a warning when no Python interpreter is on PATH, so the build never depends
+// on one being installed (M5 release audit).
+var pythonExecutable = findPythonOnPath()
+var verifyStructureTemplates = tasks.register('verifyStructureTemplates', Exec) {
+    group = 'verification'
+    description = 'Verifies the committed GameTest structure templates with scripts/gen_structures.py --verify.'
+    var stamp = layout.buildDirectory.file('tmp/verifyStructureTemplates/verified.txt')
+    inputs.file('scripts/gen_structures.py')
+    inputs.dir('src/main/resources/data/wareworks/structure')
+    outputs.file(stamp)
+    onlyIf {
+        if (pythonExecutable == null)
+            logger.warn('verifyStructureTemplates: no Python interpreter on PATH, skipping. '
+                    + 'Run "py scripts/gen_structures.py --verify" by hand after changing a template.')
+        pythonExecutable != null
+    }
+    commandLine(pythonExecutable ?: 'python', 'scripts/gen_structures.py', '--verify')
+    doLast {
+        var file = stamp.get().asFile
+        file.parentFile.mkdirs()
+        file.text = 'verified'
+    }
+}
+// The warehouse terminal's screen is the project's only texture that is not one of Create's (ADR-023) and it is
+// generated too (scripts/gen_textures.py), so that the exception stays reviewable: the palette and the layout are code,
+// not pixel art. A hand-edited PNG would drift from the script that documents it, so `check` re-runs the script's own
+// --verify pass, skipped with a warning when no Python interpreter is on PATH.
+var verifyTextures = tasks.register('verifyTextures', Exec) {
+    group = 'verification'
+    description = 'Verifies the committed generated textures with scripts/gen_textures.py --verify.'
+    var stamp = layout.buildDirectory.file('tmp/verifyTextures/verified.txt')
+    inputs.file('scripts/gen_textures.py')
+    inputs.dir('src/main/resources/assets/wareworks/textures')
+    outputs.file(stamp)
+    onlyIf {
+        if (pythonExecutable == null)
+            logger.warn('verifyTextures: no Python interpreter on PATH, skipping. '
+                    + 'Run "py scripts/gen_textures.py --verify" by hand after changing a texture.')
+        pythonExecutable != null
+    }
+    commandLine(pythonExecutable ?: 'python', 'scripts/gen_textures.py', '--verify')
+    doLast {
+        var file = stamp.get().asFile
+        file.parentFile.mkdirs()
+        file.text = 'verified'
+    }
+}
+tasks.named('check') {
+    dependsOn(verifyStructureTemplates, verifyTextures)
+}
+
+/** The first Python interpreter on PATH, or null: py/python on Windows, python3/python elsewhere. */
+static String findPythonOnPath() {
+    var path = System.getenv('PATH')
+    if (path == null)
+        return null
+    var windows = System.getProperty('os.name').toLowerCase().contains('windows')
+    for (String candidate : (windows ? ['py.exe', 'python.exe'] : ['python3', 'python'])) {
+        for (String directory : path.split(File.pathSeparator)) {
+            var file = new File(directory, candidate)
+            if (file.isFile())
+                return file.absolutePath
+        }
+    }
+    return null
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}

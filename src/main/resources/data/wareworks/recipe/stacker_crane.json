@@ -1,0 +1,21 @@
+{
+  "type": "create:mechanical_crafting",
+  "accept_mirrored": true,
+  "category": "misc",
+  "key": {
+    "A": { "item": "create:andesite_alloy" },
+    "B": { "item": "create:brass_casing" },
+    "E": { "item": "create:electron_tube" },
+    "G": { "item": "create:large_cogwheel" },
+    "H": { "item": "create:brass_hand" },
+    "I": { "tag": "c:plates/iron" },
+    "P": { "item": "create:precision_mechanism" }
+  },
+  "pattern": [
+    "IE ",
+    "IPH",
+    "IB ",
+    "AGA"
+  ],
+  "result": { "count": 1, "id": "wareworks:stacker_crane" }
+}

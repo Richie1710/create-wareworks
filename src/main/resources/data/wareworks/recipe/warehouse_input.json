@@ -1,0 +1,13 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "C": { "item": "create:andesite_casing" },
+    "F": { "item": "create:andesite_funnel" }
+  },
+  "pattern": [
+    "F",
+    "C"
+  ],
+  "result": { "count": 1, "id": "wareworks:warehouse_input" }
+}

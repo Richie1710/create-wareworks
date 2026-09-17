@@ -1,0 +1,19 @@
+{
+  "variants": {
+    "facing=east": {
+      "model": "wareworks:block/warehouse_interface/block",
+      "y": 90
+    },
+    "facing=north": {
+      "model": "wareworks:block/warehouse_interface/block"
+    },
+    "facing=south": {
+      "model": "wareworks:block/warehouse_interface/block",
+      "y": 180
+    },
+    "facing=west": {
+      "model": "wareworks:block/warehouse_interface/block",
+      "y": 270
+    }
+  }
+}
