@@ -34,7 +34,8 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
  * from {@link WarehouseDeliveryStationBlockEntity}; this class adds only how a request is <b>entered</b>.
  * <p>
  * <b>Automation.</b> The item capability is an {@link ExtractOnlyItemHandler}: funnels, chutes and hoppers can pull,
- * nothing can be pushed in. There is no belt input.
+ * nothing can be pushed in. There is no belt input. A Create mechanical arm can take items out through the same view
+ * ({@link DeliveryStationArmPoint}, take only; M12).
  * <p>
  * <b>Request.</b> A {@link RequestFilterBehaviour} (Create's {@link FilteringBehaviour} with a visible count) defines what
  * to request (ADR-013): the exact filter stack as {@link ItemKey} (item and components) and up to the count, at most one

@@ -1,17 +1,35 @@
-## 0.1.1-alpha
+# Changelog
 
-- License changed from MIT to GPL-3.0-only for this and all future versions
-- The license file is now included in the mod jar
+All notable changes to this project will be documented in this file.
 
-## 0.1.0-alpha
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-First public alpha.
+## [Unreleased]
+
+### Added
+
+- Mechanical Arms can take items from the warehouse output, terminal and production station, and put items into the
+  warehouse input
+- The license file is included in the mod jar
+
+### Changed
+
+- License changed from MIT to GPL-3.0-only. Version 0.1.0-alpha remains available under MIT
+
+## [0.1.0-alpha] - 2026-09-17
+
+First public alpha. Please back up your world before trying it.
+
+### Added
 
 - Stacker crane with animated chassis, mast, lift carriage and telescopic arm
 - Warehouse rail, controller, interface, input and output stations
-- Warehouse terminal: searchable stock screen and click-to-request; repeated requests for the same item travel in one trip
+- Warehouse terminal: searchable stock screen and click-to-request; repeated requests for the same item travel in one
+  trip
 - Storage location filters with Create's List Filter, Attribute Filter and Package Filter
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-This is an early alpha. Please back up your world before trying it.
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.1.0-alpha...HEAD
+[0.1.0-alpha]: https://github.com/Richie1710/create-wareworks/releases/tag/v0.1.0-alpha

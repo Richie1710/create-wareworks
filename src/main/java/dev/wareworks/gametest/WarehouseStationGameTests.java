@@ -14,7 +14,6 @@ import com.simibubi.create.AllItems;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.belt.behaviour.DirectBeltInputBehaviour;
 import com.simibubi.create.content.kinetics.belt.transport.TransportedItemStack;
-import com.simibubi.create.content.kinetics.mechanicalArm.ArmInteractionPointType;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsBehaviour.ValueSettings;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
@@ -968,45 +967,7 @@ public final class WarehouseStationGameTests {
                 .thenSucceed();
     }
 
-    /**
-     * A Create <b>mechanical arm</b> cannot target Wareworks blocks, and the documentation says so
-     * ({@code docs/warehouse-system.md} §3.2 and the block entity Javadoc, which claimed the opposite
-     * before M5). An arm resolves a target only through a registered
-     * {@link ArmInteractionPointType}: {@code getPrimaryType} returns null for anything no registered type accepts,
-     * there is no item-capability fallback type, and Wareworks registers none. Funnels, chutes, hoppers and belts are
-     * unaffected, because they use the item capability or {@code DirectBeltInputBehaviour} directly.
-     * <p>
-     * A composter is checked as well, so a passing test can never just mean that the lookup itself is broken. If arm
-     * support is ever added, this test fails and the documented limitation must be corrected with it.
-     */
-    @GameTest(template = EMPTY_7X5X7)
-    public static void stationsAreNotArmTargets(GameTestHelper helper) {
-        ServerLevel level = helper.getLevel();
-        BlockPos composter = new BlockPos(1, BASE_Y, 5);
-        helper.setBlock(composter, Blocks.COMPOSTER);
-        helper.assertTrue(armPointType(helper, composter) != null,
-                "a composter is a mechanical arm target: the lookup works in this test");
-
-        helper.setBlock(CENTER, inputState(Direction.NORTH));
-        helper.setBlock(OTHER, outputState(Direction.NORTH));
-        helper.setBlock(CLEARED, WareworksBlocks.WAREHOUSE_INTERFACE.getDefaultState()
-                .setValue(WarehouseInterfaceBlock.FACING, Direction.NORTH));
-        for (BlockPos pos : List.of(CENTER, OTHER, CLEARED)) {
-            helper.assertTrue(armPointType(helper, pos) == null, "no arm interaction point type accepts "
-                    + level.getBlockState(helper.absolutePos(pos)) + "; see the known limitation in "
-                    + "warehouse-system.md §3.2 before changing this");
-        }
-        helper.succeed();
-    }
-
     // --- helpers ---------------------------------------------------------------------------------------------------
-
-    /** Create's arm interaction point type for a test-relative position, or null if a mechanical arm cannot target it. */
-    private static ArmInteractionPointType armPointType(GameTestHelper helper, BlockPos pos) {
-        BlockPos absolute = helper.absolutePos(pos);
-        return ArmInteractionPointType.getPrimaryType(helper.getLevel(), absolute,
-                helper.getLevel().getBlockState(absolute));
-    }
 
     /** Dock, rails, controller, a chest with diamonds behind an interface, aligned and misaligned stations. */
     private static void buildStationAisle(GameTestHelper helper) {

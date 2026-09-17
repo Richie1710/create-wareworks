@@ -37,7 +37,7 @@
 
   "block.wareworks.warehouse_input": "Lagereingang",
   "block.wareworks.warehouse_input.tooltip.behaviour1": "Die _Öffnung_ zeigt zu dir: Stelle dich in den _Gang_ und setze ihn in ein _Regal_ neben dem Gang.",
-  "block.wareworks.warehouse_input.tooltip.behaviour2": "Nimmt Gegenstände von _Förderbändern_, _Trichtern_, _Rutschen_ und _Hoppern_ an. Das _Regalbediengerät_ bringt sie zu einem freien _Lagerplatz_; Automatisierung kann nur _einfügen_, nie etwas herausholen.",
+  "block.wareworks.warehouse_input.tooltip.behaviour2": "Nimmt Gegenstände von _Förderbändern_, _Trichtern_, _Rutschen_, _Hoppern_ und _Mechanischen Armen_ an. Das _Regalbediengerät_ bringt sie zu einem freien _Lagerplatz_; Automatisierung kann nur _einfügen_, nie etwas herausholen.",
   "block.wareworks.warehouse_input.tooltip.behaviour3": "Zeigt seine _Adresse_ und die _gepufferten Gegenstände_.",
   "block.wareworks.warehouse_input.tooltip.condition1": "Beim Platzieren",
   "block.wareworks.warehouse_input.tooltip.condition2": "Wenn Gegenstände ankommen",
@@ -53,7 +53,7 @@
   "block.wareworks.warehouse_output.tooltip.condition2": "Beim Einstellen des Filters",
   "block.wareworks.warehouse_output.tooltip.condition3": "Bei Redstone-Signal",
   "block.wareworks.warehouse_output.tooltip.condition4": "Beim Betrachten mit der Ingenieursbrille",
-  "block.wareworks.warehouse_output.tooltip.summary": "Eine _Station_ eines _Lagergangs_, an der ausgelagerte Gegenstände das Lager _verlassen_. _Trichter_, _Rutschen_ und _Hopper_ können sie herausziehen.",
+  "block.wareworks.warehouse_output.tooltip.summary": "Eine _Station_ eines _Lagergangs_, an der ausgelagerte Gegenstände das Lager _verlassen_. _Trichter_, _Rutschen_, _Hopper_ und _Mechanische Arme_ können sie herausziehen.",
 
   "block.wareworks.warehouse_terminal": "Lagerterminal",
   "block.wareworks.warehouse_terminal.tooltip.behaviour1": "Der _Bildschirm_ zeigt zu dir, die _Greiferöffnung_ zur Gegenseite: Stelle dich dorthin, wo du das Terminal ablesen willst, mit dem _Gang_ auf der anderen Seite des _Regals_. Die Öffnung wandert dann auf die Seite, auf der der Gang wirklich liegt.",
@@ -64,7 +64,7 @@
   "block.wareworks.warehouse_terminal.tooltip.condition2": "Beim Drehen mit dem Schraubenschlüssel",
   "block.wareworks.warehouse_terminal.tooltip.condition3": "Beim Anfordern von Gegenständen",
   "block.wareworks.warehouse_terminal.tooltip.condition4": "Beim Betrachten mit der Ingenieursbrille",
-  "block.wareworks.warehouse_terminal.tooltip.summary": "Eine _Station_ eines _Lagergangs_ mit einem _Bildschirm_: Fordere hier Gegenstände an, und das _Regalbediengerät_ holt sie. _Trichter_, _Rutschen_ und _Hopper_ können sie wieder herausziehen.",
+  "block.wareworks.warehouse_terminal.tooltip.summary": "Eine _Station_ eines _Lagergangs_ mit einem _Bildschirm_: Fordere hier Gegenstände an, und das _Regalbediengerät_ holt sie. _Trichter_, _Rutschen_, _Hopper_ und _Mechanische Arme_ können sie wieder herausziehen.",
 
   "block.wareworks.warehouse_production": "Produktionsstation",
   "block.wareworks.warehouse_production.tooltip.behaviour1": "Die _Öffnung_ zeigt zu dir: Stelle dich in den _Gang_ und setze sie in ein _Regal_ neben dem Gang.",
@@ -75,7 +75,7 @@
   "block.wareworks.warehouse_production.tooltip.condition2": "Beim Festlegen eines Musters",
   "block.wareworks.warehouse_production.tooltip.condition3": "Beim Anfordern des Ergebnisses",
   "block.wareworks.warehouse_production.tooltip.condition4": "Beim Betrachten mit der Ingenieursbrille",
-  "block.wareworks.warehouse_production.tooltip.summary": "Eine _Station_ eines _Lagergangs_, die deine _Maschinen_ versorgt. Lege hier ein _Muster_ fest, und das _Regalbediengerät_ bringt dessen _Zutaten_ zu diesem Block; dein eigener _Trichter_, deine _Rutsche_ oder dein _Förderband_ trägt sie in die Maschine. Wareworks stellt selbst nie etwas her.",
+  "block.wareworks.warehouse_production.tooltip.summary": "Eine _Station_ eines _Lagergangs_, die deine _Maschinen_ versorgt. Lege hier ein _Muster_ fest, und das _Regalbediengerät_ bringt dessen _Zutaten_ zu diesem Block; dein eigener _Trichter_, deine _Rutsche_, dein _Förderband_ oder dein _Mechanischer Arm_ trägt sie in die Maschine. Wareworks stellt selbst nie etwas her.",
 
   "wareworks.controller.aisle_letter": "Gang",
   "wareworks.controller.aisle_letter_row": "Buchstabe",

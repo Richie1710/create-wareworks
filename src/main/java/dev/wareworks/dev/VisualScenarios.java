@@ -16,7 +16,9 @@ final class VisualScenarios {
             RobustnessVisualScenario.NAME, RobustnessVisualScenario::new,
             PonderVisualScenario.NAME, PonderVisualScenario::new,
             TerminalVisualScenario.NAME, TerminalVisualScenario::new,
-            ShowcaseVisualScenario.NAME, ShowcaseVisualScenario::new);
+            ShowcaseVisualScenario.NAME, ShowcaseVisualScenario::new,
+            ArmVisualScenario.NAME, ArmVisualScenario::new,
+            ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new);
 
     private VisualScenarios() {
     }

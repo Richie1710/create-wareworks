@@ -383,3 +383,138 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
     is still complete. The production section is what gives way for such a buffer — the stock grid and the buffer keep
     their rows, and the order lines disappear rather than the window growing past the screen.
 86b. A **German client** shows the section label, the order lines, the states and the tooltips in German.
+
+## P. Mechanical Arms at the stations (M12)
+
+> Take a **Mechanical Arm** item from Create's tab. Selecting targets with it happens on the client, so the GameTests
+> only prove what an arm *does* at a station, not what the player sees while selecting.
+>
+> **Automated in the real game (2026-09-17).** Two scenarios of the visual harness play these checks:
+>
+> * `./gradlew runVisualTest -Pwareworks.visualTest=arm` plays checks 87–91 and the single-player half of 92 in a real
+>   client (about 3 minutes). Every assertion writes a `CHECK <n> PASS` line to `run/visual/logs/latest.log`; a good
+>   run ends with `ALL CHECKS PASSED` and `PASSED`, and it fails as soon as one check does not hold.
+> * `arm-dedicated` plays the dedicated-server half of 92 against a running `runServer` (see 92 for how to start it).
+>
+> The clicks are real. In the world, the use, attack and hotbar keys are clicked the way the mouse handler clicks them,
+> and the crosshair is checked on the intended face before every click. In a screen, mouse clicks, the mouse wheel and
+> Escape go through the same handler methods the GLFW callbacks call (`MouseHandler#onPress`, `#onScroll`,
+> `KeyboardHandler#keyPress`), at positions checked against the screen's own hit test. What a person does differently:
+> no GLFW device event starts the input, every click is a short click (no key is ever held, so nothing that needs
+> "click and hold" is played), and no modifier key (Shift, Ctrl) is ever down. Under each check, **Automated** says what
+> the runs prove and where they take a different path than a player, and **By eye** what is left for a person.
+
+87. Hold the arm item and right-click a **warehouse input**: it gets a **yellow** outline and the action bar reads
+    "Deposit items to Warehouse Input". Right-click it a few more times: it **stays yellow** with the same message — the
+    input can never be selected as a source. (On a depot, for comparison, each click switches between yellow and blue.)
+
+    **Automated** (`arm`, and again in `arm-dedicated`): three right-clicks on the input, each asserted as "deposit"
+    (`WarehouseInputArmPoint`) with the outline colour `#DDC166` and the action bar "Deposit items to Warehouse Input";
+    three clicks on a depot switch take, deposit, take. **By eye:** nothing left (shots `select-input-click1`,
+    `select-input-click3`).
+88. Right-click a **warehouse output**, a **warehouse terminal** and a **warehouse production station**: each gets a
+    **light blue** outline with "Take items from …", and further clicks keep it blue. Left-click removes a selection as
+    usual. Then right-click a warehouse **interface**, the **controller**, the **crane dock** and a **rail** with the arm
+    item: none of them is selected; the arm is simply placed against the block like against any other. While the arm
+    item points at the output's request filter slot (the middle of its top face), no "Click with item to set" hint
+    appears.
+
+    **Automated** (`arm`; selection of all three also in `arm-dedicated`): output, terminal and production station are
+    each clicked three times and stay "take" (`DeliveryStationArmPoint`, outline `#7FCDE0`, "Take items from Warehouse
+    Output", "… Warehouse Terminal", "… Warehouse Production"). The first click on the output lands on its request
+    filter slot: it must select the output and leave the filter empty. A left-click removes the terminal from the
+    selection and the terminal stays; the left-click is only tried on the terminal. Right-clicks on the interface,
+    controller, dock and rail select nothing, show no message and place an arm against the block. With the arm item on
+    the filter slot for 25 ticks, Create's outliner holds no value box for the slot and its hint overlay shows nothing;
+    with an empty hand on the same spot both appear, so the check can see them (shots `select-output-filter-slot`,
+    `output-filter-slot-empty-hand`). **By eye:** nothing left.
+89. Place the arm with an input selected as its target and a depot with a stack of items as its source, and power it.
+    The claw visibly reaches for the **middle of the input's top face** (not into the opening on the aisle side), the
+    items end up in the input's buffer (goggles) and the crane stores them. Put a block on top of the input: the arm
+    still delivers, and only the claw dips into that block.
+
+    **Automated** (`arm`): arm A, placed by a click, moves 32 iron from a depot into the input and the crane stores all
+    of it; with a stone block on top of the input it moves 32 gold the same way. Arm B empties the output after a
+    request and arm C the terminal after 12 diamonds were requested in the terminal screen (right-click to open it, the
+    mouse wheel on the amount field, a left click on the diamonds). An item census of the whole scene holds around every
+    item move. Where the claw reaches is measured: the game is frozen one tick before the claw arrives, and the claw is
+    placed with the arm renderer's own transforms. For the angles the movement ends in, the claw's axis passes through
+    the centre of the input's top face (0.0001 blocks off) and the claw tip lies 0.015 blocks from it; in the frozen frame
+    the tip is nearest to the top face centre of all six face centres (0.315 blocks, the aisle-side face 0.977). The same
+    holds for the output, and with the stone block on top the claw's grip ends inside that block. Differences: the items
+    are put on the depot through its item handler instead of by hand, the output's request is the controller call its
+    redstone input makes, and the stored items are checked instead of the goggles (`arm-dedicated` feeds by hand and
+    triggers the output with its filter slot and a redstone block). **By eye:** nothing required. The motion itself was
+    only looked at in frozen frames (shots `claw-input-west`, `claw-input-southwest`, `claw-covered-input-west`,
+    `claw-output-*`); watch it once in game if the animation between those frames matters.
+90. Build the "1 oak log → 4 oak planks" loop of section N with a single **Mechanical Crafter** as the machine: the
+    production station, an arm that takes from the station and deposits into the crafter, and the crafter pointing
+    into a warehouse input. Order oak planks at the terminal. The arm carries **one log at a time** into the crafter
+    and waits while the crafter is busy, the order moves on to "waiting for the result" once the arm has taken every
+    log, the planks go through the input into storage and the order reaches "complete". Nothing is dropped on the
+    floor at any point.
+
+    **Automated** (`arm`, and with its own pattern in `arm-dedicated`): this loop, with arm D set up by clicks. The
+    planks are ordered in the terminal screen the way a player orders them (an empty hand opens it with a right-click,
+    the mouse wheel sets the amount to 12, a left click on the planks sends the request; Escape closes it), and the
+    server must then hold a new production order for exactly 12 planks. The order must pass `WAITING_FOR_INGREDIENTS`,
+    `DELIVERED`, `WAITING_FOR_RESULT` and `COMPLETE` in this order (recorded every server tick); arm D never holds more
+    than one log; 3 logs become 12 planks that reach the terminal; no item entity lies in the scene and the census
+    holds. The reopened terminal screen shows "waiting for the result" and then "complete" (shots
+    `terminal-order-waiting-for-result`, `terminal-order-complete`), and the claw aim at the production station is
+    measured as in 89. After the rejoin a second order of 4 planks is placed the same way. Differences: in `arm` the
+    pattern is written by the test (`arm-dedicated` writes it by clicks in the production station's screen), and "waits
+    while the crafter is busy" is covered only by the one-log limit. **By eye:** nothing left.
+91. Shift on the input, output, terminal and production station items now names **Mechanical Arms** beside funnels and
+    chutes. On a **German client** the output and terminal read "Mechanische Arme", the input reads "Mechanischen
+    Armen" and the production station reads "Mechanischer Arm", and the arm's selection message names the German block
+    ("Lege Gegenstände in Lagereingang").
+
+    **Automated** (`arm`): all four items in English and German with the phrases above, and the German selection
+    message on the input. The tooltip without Shift is the real one (`Screen#getTooltipFromItem`, which every inventory
+    screen calls); the Shift view is rebuilt from Create's item description (`ItemDescription#linesOnShift`), because
+    the test cannot hold the physical Shift key. The run switches the language at runtime the way the language screen
+    does (select, reload resources) instead of starting a German client. **By eye:** only the physical Shift key: hold
+    it once over one of the four items (shots `tooltip-de-*`, `select-input-german` show the texts).
+92. On a **dedicated server** (`runServer`, then join with `runClient`): select a station with the arm item and place the
+    arm. The arm works the station exactly as in single player, it still does after the server restarts, and neither
+    log shows an error.
+
+    **Automated, single player** (`arm`): after saving, quitting to the title screen and rejoining, all four arms have
+    their points with the same type ids and modes and keep working (arm A feeds the input, B and C empty output and
+    terminal, D runs a second crafter order); the census holds throughout.
+
+    **Automated, dedicated server** (`arm-dedicated`, passed on 2026-09-17 with 45 `CHECK 92 PASS (dedicated)` lines):
+    a client joins a running `runServer` over TCP and builds the aisle of the `arm` scenario with commands. With real
+    clicks it selects all four stations (input, output first on its filter slot, terminal, production station), two
+    depots, a basin and a Mechanical Crafter, and places four arms, so the synced arm point type registry,
+    `ArmPlacementPacket`, Create's value settings packet and the Wareworks screen payloads really cross the network. It
+    writes the pattern "1 oak log → 4 oak planks" in the production station's screen (picking the items up from the
+    inventory, clicking the cells, scrolling the result to 4), feeds 32 iron and 12 logs onto a depot by hand, sets the
+    output's filter by clicking its slot with an ingot and requests with a redstone block, and orders 8 planks in the
+    terminal screen, keeping the screen open until it shows the order complete. It reads the server's block entity data
+    back with `/data get block`: the saved points of all four arms, the pattern, and the items in depots, claws, station
+    buffers, crafter, basin and chests after each step (arm A fed the input, arm B emptied the output, arm D fed the
+    crafter, arm C moved the planks out of the terminal into the basin). It then stops the server with `/stop`, joins
+    again once the server is back, checks the saved points and the point classes the client arms resolved, and moves
+    16 gold and 4 more planks through all four arms. Arm C delivers into a basin because a depot holds one stack and an
+    arm puts nothing onto a depot that holds one, while planks can reach the terminal in two deliveries. To run it again
+    (the client cannot start the server itself):
+
+    1. Back up `run/server/server.properties` and `run/server/ops.json`. Set `level-name` to a throw-away world (never
+       `world`), `level-type=minecraft\:flat` with the classic flat layers, `gamemode=creative`, `allow-flight=true`
+       and `spawn-protection=0`, and add the offline dev player `Dev` (UUID `380df991-f603-344c-a090-369bad2a924a`) to
+       `ops.json` with level 4.
+    2. Start `./gradlew runServer`. The client stops the server once in the middle of the run: start it again right
+       away (the client checks the server's port every second and joins once it accepts connections, for up to 10
+       minutes). At the end the client stops it again.
+    3. Start a client with the system property `wareworks.visualTest=arm-dedicated` (another address:
+       `wareworks.visualTest.server=<host:port>`, default `localhost:25565`). `build.gradle` has no run for this; the
+       2026-09-17 runs used `runClient` with a local Gradle init script that sets this property, a 1600 × 900 window and
+       the game directory `run/dedicated-client`.
+    4. The client's `logs/latest.log` (in `run/dedicated-client` for that run) must show the `CHECK 92 PASS (dedicated)`
+       lines, `ALL CHECKS PASSED` and `PASSED`. Then restore both files and delete the throw-away world.
+
+    In the 2026-09-17 run neither server log nor the client log had an `ERROR` line. **By eye:** nothing left for one
+    machine. Not covered: a client on another machine with real network latency, and a player who is not an operator
+    (the scene is built with commands).

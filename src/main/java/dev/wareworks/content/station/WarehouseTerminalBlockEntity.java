@@ -55,7 +55,8 @@ import net.neoforged.neoforge.items.IItemHandler;
  * indistinguishable downstream.
  * <p>
  * <b>Automation.</b> The item capability is an {@link ExtractOnlyItemHandler}, exactly as on the warehouse output:
- * funnels, chutes and hoppers pull delivered items out, nothing can be pushed in.
+ * funnels, chutes, hoppers and Create mechanical arms ({@link DeliveryStationArmPoint}, take only; M12) pull delivered
+ * items out, nothing can be pushed in.
  * <p>
  * <b>Server-side API for the screen</b> (the GUI itself comes in the next task). All of it runs on the server and is
  * called on demand, never per tick:

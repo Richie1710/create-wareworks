@@ -12,6 +12,7 @@ import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.CraneServerHooks;
 import dev.wareworks.data.WareworksDatagen;
 import dev.wareworks.network.WareworksNetwork;
+import dev.wareworks.registry.WareworksArmInteractionPoints;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCapabilities;
@@ -60,11 +61,12 @@ public final class Wareworks {
 
         WareworksConfig.register(modContainer);
 
-        // 3. Registry classes, in dependency order (block entity types reference blocks).
+        // 3. Registry classes, in dependency order (block entity types and arm interaction point types reference blocks).
         WareworksCreativeTabs.register(modEventBus);
         WareworksBlocks.register();
         WareworksBlockEntityTypes.register();
         WareworksMenuTypes.register();
+        WareworksArmInteractionPoints.register(modEventBus);
 
         modEventBus.addListener(WareworksCapabilities::register);
         modEventBus.addListener(WareworksNetwork::register);

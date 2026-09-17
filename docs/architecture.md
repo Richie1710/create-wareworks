@@ -32,7 +32,9 @@ dev.wareworks
 ├── Wareworks                  common @Mod entry, CreateRegistrate instance
 ├── WareworksClient            @Mod(dist = CLIENT) entry
 ├── registry                   WareworksBlocks, WareworksBlockEntityTypes, WareworksCreativeTabs,
-│                              WareworksCapabilities, WareworksTags, WareworksStress
+│                              WareworksCapabilities, WareworksTags, WareworksStress, WareworksMenuTypes;
+│                              WareworksArmInteractionPoints (Create mechanical arm interaction point types of the
+│                              stations, registered into Create's registry, M12, ADR-025)
 │                              (WareworksItems only if plain items are ever added)
 ├── config                     WareworksConfig (SERVER ModConfigSpec + safe typed getters)
 ├── core                       ── pure logic, no Minecraft world access ──
@@ -88,7 +90,10 @@ dev.wareworks
 │                              WarehouseProductionBlock / BlockEntity (the station the crane delivers a production
 │                              order's ingredients into), ProductionPatterns (its editable 3x3 pattern slots and their
 │                              NBT), ProductionGoggleSummary, ProductionMenu, ProductionMenuLayout,
-│                              ProductionScreenState (M11, ADR-024)
+│                              ProductionScreenState (M11, ADR-024);
+│                              StationArmPointType (the arm interaction point type of exactly one station block),
+│                              WarehouseInputArmPoint (deposit only), DeliveryStationArmPoint (take only: output,
+│                              terminal, production station) (M12, ADR-025)
 ├── network                    WareworksNetwork (payload registration), the terminal screen payloads:
 │                              TerminalStockPayload, TerminalStatusPayload (server → client),
 │                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019),
@@ -118,10 +123,14 @@ dev.wareworks
 │                              StorageFilterGameTests: one test per Create filter item plus the sorting, full,
 │                              re-dedication, persistence and goggle cases, M8;
 │                              ProductionGameTests: patterns, supply jobs, the full loop with the test playing the
-│                              player's machine, refusal, cancel, timeout and persistence, M11)
+│                              player's machine, refusal, cancel, timeout and persistence, M11;
+│                              MechanicalArmGameTests: arm interaction point types, their fixed modes and real
+│                              powered arms at the stations, M12)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
-│                              ItemCensus: per-tick item census of a test; ConfigOverrides: in-memory server config
-│                              overrides restored by an @AfterBatch hook, M5; templates: scripts/gen_structures.py).
+│                              ItemCensus: per-tick item census of a test, arm claws included since M12;
+│                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
+│                              MechanicalArmFixture: real Create arms selected and powered like a player's, M12;
+│                              templates: scripts/gen_structures.py).
 │                              Excluded from the release jar together with dev (build.gradle, M5 review)
 ├── dev                        dev-only visual smoke test, client side (ADR-014): VisualTestHarness (entry, step runner),
 │                              VisualContext, VisualStep / VisualScript (step builder), VisualWorld (title screen, flat
@@ -173,7 +182,7 @@ Naming notes (M1):
 * Goggle data of block entities is derived state that the server keeps small, compares by value and syncs only through `write(..., clientPacket = true)` when it changed (throttled); it is not saved to disk (warehouse interface, `warehouse-system.md` §3.1.1).
   * Its size must be bounded independently of inventory contents, because the update tag is part of every chunk packet and clients read block entity tags there with a 2 MB NBT quota. Never sync item data components for display; sync item ids (item types) instead.
   * It is refreshed and synced only while a player observes the block through goggles (`util.GoggleObservers`, per player, one ray pick per interval). Block entities implement `GoggleObservers.Observable` and need no ticker for this.
-* Initialisation order in the `Wareworks` constructor: `registerEventListeners` → `defaultCreativeTab(WareworksCreativeTabs.BASE_KEY)` → config → creative tab register → `WareworksBlocks` → `WareworksBlockEntityTypes` → capability and datagen listeners. No static field of `Wareworks` references a registry class.
+* Initialisation order in the `Wareworks` constructor: `registerEventListeners` → `defaultCreativeTab(WareworksCreativeTabs.BASE_KEY)` → config → creative tab register → `WareworksBlocks` → `WareworksBlockEntityTypes` → `WareworksMenuTypes` → `WareworksArmInteractionPoints` (M12; its `DeferredRegister` goes on the mod bus, and its types reference blocks) → capability, network and datagen listeners. No static field of `Wareworks` references a registry class.
 
 ## Key design decisions (ADR log)
 
@@ -804,6 +813,77 @@ the fixed layout (slot positions cannot move later), so the stock grid shows two
 scrolls, an order line does not — and a buffer large enough to leave no room drops the section rather than the window's
 size guarantee (`warehouse-system.md` §3.4.2). `TerminalSort` gained a first key (in stock before producible) because
 "by name" alone would have mixed offers into the inventory.
+
+### ADR-025 — Mechanical arms reach the stations through one interaction point type per block, with fixed modes (M12)
+*Context:* A Create mechanical arm is the obvious machine for a player to put next to a station, and up to M11 it could
+not use one. An arm targets a block only when a registered `ArmInteractionPointType` accepts it
+(`ArmInteractionPointType#getPrimaryType` returns null otherwise), and Create has no fallback type for blocks that
+merely expose an item capability. The M5 release audit documented that limitation and pinned it with GameTest
+`stationsarenotarmtargets`; the workaround was a funnel between the arm and the station. Create's registry for these
+types, `CreateBuiltInRegistries.ARM_INTERACTION_POINT_TYPE`, is created by Create itself with NeoForge's
+`RegistryBuilder` (synced, with a bake callback that sorts the types by priority). Points are created on the **client**
+while a player selects targets with the arm item, cycle their mode on every right-click, and reach the server only as
+NBT (`ArmPlacementPacket`, world saves, schematics), where `ArmInteractionPoint.deserialize` rebuilds them and reads
+their mode back from the tag. Every station already exposes the item views funnels, chutes and hoppers use
+(`WareworksCapabilities`): insert-only on the input, extract-only on the output, terminal and production station.
+
+*Decision:*
+* **Register into Create's registry with a plain `DeferredRegister`.** `registry.WareworksArmInteractionPoints` holds a
+  `DeferredRegister` for `CreateRegistries.ARM_INTERACTION_POINT_TYPE` in namespace `wareworks` and registers it on the
+  mod bus from the `Wareworks` constructor, after `WareworksMenuTypes`. This was verified before it was relied on:
+  Create adds the registry to `BuiltInRegistries.REGISTRY` from a mixin into `BuiltInRegistries`' static initialiser,
+  NeoForge's `GameData.postRegisterEvents` posts a `RegisterEvent` for every key of that registry of registries, and the
+  freeze runs Create's bake callback, which rebuilds the sorted type list from the whole registry
+  (`warehouse-system.md` §3.2.2). GameTest `stationarmpointtypes` checks the result at runtime, so no registration
+  workaround (a direct `Registry.register` in a `RegisterEvent` listener) was needed.
+* **Four type ids, one per station block:** `wareworks:warehouse_input`, `wareworks:warehouse_output`,
+  `wareworks:warehouse_terminal`, `wareworks:warehouse_production`. `content.station.StationArmPointType#canCreatePoint`
+  accepts exactly its block, in every block state, and nothing else, at Create's default priority. Output, terminal
+  and production station behave alike today and still get separate ids, because an arm **saves the type id with every
+  point**: one id for all three would tie their arm behaviour together for as long as worlds keep old arms.
+* **The input is deposit only.** `WarehouseInputArmPoint` extends Create's `DepositOnlyArmInteractionPoint` (the
+  base of Create's funnel point): no mode change, no slots, no extraction.
+* **Output, terminal and production station are take only.** One point class, `DeliveryStationArmPoint`, serves all
+  three: "take" from construction, no mode change, and `insert` returns the offered stack itself without touching the
+  station. It is not final, so a station that needs different arm behaviour later gets a subclass under its existing id.
+* **The fixed mode is also enforced on deserialize.** Both point classes set their mode after Create's `deserialize`
+  has read `Mode` from the tag, so a hand-edited save, an old schematic or a packet built by a modified client cannot
+  load an input as a source or an output as a destination.
+* **The arm reaches for the centre of the top face** of all four, the formula of Create's `TopFaceArmInteractionPoint`
+  (`StationArmPointType#topFaceCentre`). All four are full-block models, and the aisle face belongs to the crane.
+* **No arm point for the warehouse interface**, nor for the controller, the stacker crane dock or the rail.
+* **Common code only.** The type and point classes live in `content.station` with no client imports, because Create
+  creates points on both sides.
+* **Items still move only through a machine.** The arm is the player's own Create machine working the same capability
+  views a funnel uses; inside the warehouse the crane stays the only thing that moves items.
+
+*Reason:* A registered type is the only way Create offers to make a block an arm target, so the choice was only *how
+many* types and *what they may do*. One type per block costs three extra registry entries and keeps every station free
+to change without a save migration; a shared type would have been the one decision that cannot be taken back once
+arms are saved in worlds. The modes follow what each station is: the input only ever receives, and the three delivery
+stations only ever hand out, exactly as their capability views already say. Letting a click cycle the mode anyway
+would have offered a selection that does nothing — an output selected as a destination refuses every item, and it is
+then never taken from either — so the modes are fixed, and fixing them only in `cycleMode` would have left the one
+path that matters on a server open: the mode a point is *loaded* with comes from a tag, not from the click. The top
+face is Create's own answer for blocks an arm should reach from above, and it keeps the arm out of the crane's opening.
+The interface gets no point because it has nothing to hand over: it has no inventory of its own, and the chest behind
+it is the warehouse's storage, which a player's machine should not reach around the stock index through a block that
+exists to *address* it. Create arms do not target a plain chest either, and a funnel on the chest remains the normal
+Create way for anyone who wants that anyway. The controller, dock and rail hold nothing a machine could take or give.
+
+*Consequences:* The four station tooltips (and the German lang) name Mechanical Arms beside funnels, chutes and hoppers.
+`WarehouseStationGameTests.stationsarenotarmtargets` is gone; `gametest.MechanicalArmGameTests` replaces it with the
+type, semantics and real-arm tests, `ProductionGameTests.productioningredientstakenbymechanicalarm` runs the production
+loop with an arm, and `ItemCensus` counts what an arm's claw holds (read from the arm's save data, because an arm has
+no item capability). The GameTests build real arms through Create's own selection calls and packet constructor but
+hand the list to the arm through its saved data, because the packet's server half needs a connected player; the
+client-side selection and a client joining a dedicated server are manual checks (`manual-test-checklist.md` section
+P). The GameTest helpers read two keys of the arm's save format (`InteractionPoints`, `HeldItem`), which is Create
+internals and has to be re-checked on a Create update (`dependencies.md`). Because the capability is asked, not the
+face, an arm also works on a station under the next rack level; only the claw's animation then reaches into the block
+above. Renaming or removing one of the four ids later would silently drop that point from every saved arm
+(`ArmInteractionPoint.deserialize` returns null for an unknown type), which is why the ids are named after the blocks
+and treated as a save format.
 
 ## Persistence & sync
 

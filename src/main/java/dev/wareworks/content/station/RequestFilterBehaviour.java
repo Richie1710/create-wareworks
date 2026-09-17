@@ -2,6 +2,7 @@ package dev.wareworks.content.station;
 
 import java.util.function.Predicate;
 
+import com.simibubi.create.AllBlocks;
 import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueBoxTransform;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsBoard;
@@ -22,7 +23,7 @@ import net.minecraft.world.phys.BlockHitResult;
 
 /**
  * The request filter of a warehouse output ({@code docs/warehouse-system.md} §3.2.1, §7.2): Create's
- * {@link FilteringBehaviour} (item plus amount, drawn by Create's renderer, clipboard support) with three changes.
+ * {@link FilteringBehaviour} (item plus amount, drawn by Create's renderer, clipboard support) with four changes.
  * <ul>
  * <li><b>Refused items never cost the player anything.</b> Items the {@code requestable} predicate refuses (list,
  * attribute and package filters) cannot define a request. Create's clipboard paste takes a filter item of the pasted
@@ -33,6 +34,8 @@ import net.minecraft.world.phys.BlockHitResult;
  * hold-to-edit board offers only Create's "Up to" row under the title "Requested Amount" ({@link #createBoard}); any
  * "Exactly" setting from a clipboard or an older save loads as "up to".</li>
  * <li>The value box shows the amount as a number, never Create's "*" (which would read as "any amount").</li>
+ * <li>A click with the Mechanical Arm item passes through the slot to Create's arm target selection
+ * ({@link #bypassesInput}), and the slot shows no hint while the arm item hovers it ({@link #mayInteract}).</li>
  * </ul>
  */
 public class RequestFilterBehaviour extends FilteringBehaviour {
@@ -96,6 +99,31 @@ public class RequestFilterBehaviour extends FilteringBehaviour {
     public void read(CompoundTag nbt, HolderLookup.Provider registries, boolean clientPacket) {
         super.read(nbt, registries, clientPacket);
         upTo = true;
+    }
+
+    /**
+     * A click with the Mechanical Arm item passes through the filter slot (M12, {@code docs/warehouse-system.md}
+     * §3.2.2). The slot sits in the centre of the top, back and side faces, exactly where a player clicks to select the
+     * output as an arm target. Create's {@code ValueSettingsInputHandler} would take that click first and cancel it, so
+     * Create's arm selection handler never saw it, and Create's own {@code FilteringBehaviour#canShortInteract} then
+     * refuses the arm item as a filter: the click did nothing at all. Bypassing lets the selection through; with any
+     * other item or an empty hand the slot works as before.
+     */
+    @Override
+    public boolean bypassesInput(ItemStack mainhandItem) {
+        return AllBlocks.MECHANICAL_ARM.isIn(mainhandItem) || super.bypassesInput(mainhandItem);
+    }
+
+    /**
+     * A player holding the Mechanical Arm item does not interact with the slot at all, so Create's
+     * {@code FilteringRenderer} draws no value box and no "Click with item to set" hint while the arm item hovers the
+     * slot (M12, {@code docs/warehouse-system.md} §3.2.2). Bypassing alone left that hint up although the click selects
+     * the output as an arm target. {@code ValueSettingsInputHandler} skips the slot either way, and the clipboard path,
+     * which also asks this, is taken with a clipboard in hand, never with the arm.
+     */
+    @Override
+    public boolean mayInteract(Player player) {
+        return !AllBlocks.MECHANICAL_ARM.isIn(player.getMainHandItem()) && super.mayInteract(player);
     }
 
     @Override

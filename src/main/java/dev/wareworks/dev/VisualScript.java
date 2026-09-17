@@ -46,6 +46,8 @@ public final class VisualScript {
     private static final double CAMERA_ARRIVAL_DISTANCE_SQR = 0.01;
     /** Ticks until the screenshot file is written by the IO pool. */
     private static final int SHOT_WRITE_TIMEOUT_TICKS = 200;
+    /** Ticks between showing the GUI and a {@link #shotWithGui} (one frame would do; two leave room for a slow frame). */
+    private static final int GUI_SETTLE_TICKS = 2;
     private static final String SHOT_FILE_FORMAT = "visual-%s-%02d-%s.png";
 
     /** A server-thread action of a step. */
@@ -323,7 +325,8 @@ public final class VisualScript {
                 if (ticks < CAMERA_MAX_TICKS)
                     return false;
                 if (!arrived)
-                    throw new VisualTestException("the camera did not arrive at view " + view.label() + " " + placement.feet());
+                    throw new VisualTestException("the camera did not arrive at view " + view.label() + " " + placement.feet()
+                            + " (the player is at " + (player == null ? "nowhere" : player.position()) + ")");
                 LOGGER.warn(PREFIX + "chunk sections still compiling after {} ticks at view {}; taking the shot anyway", ticks,
                         view.label());
                 return true;
@@ -385,6 +388,19 @@ public final class VisualScript {
                 return SHOT_WRITE_TIMEOUT_TICKS;
             }
         });
+    }
+
+    /**
+     * Like {@link #shot}, but with the in-game GUI shown (hotbar, crosshair, action bar), i.e. what a player sees.
+     * Every run hides the GUI ({@code VisualWorld#applyClientOptions}); this shows it for the frames of one shot and hides
+     * it again afterwards, so the other shots of a scenario stay GUI-free.
+     */
+    public VisualScript shotWithGui(String label) {
+        client("show the GUI for the shot " + label, context -> context.minecraft().options.hideGui = false);
+        waitTicks(GUI_SETTLE_TICKS);
+        shot(label);
+        return client("hide the GUI again after the shot " + label,
+                context -> context.minecraft().options.hideGui = true);
     }
 
     /** {@link #camera} to {@code view}, then {@link #shot} labelled {@code <moment>-<view label>}. */

@@ -237,14 +237,14 @@ public final class WareworksLangGen {
                 "When placed",
                 "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle.",
                 "When items arrive",
-                "Accepts items from _belts_, _funnels_, _chutes_ and _hoppers_. The _stacker crane_ carries them to a free "
-                        + "_storage location_; automation can only _insert_, never take items out.",
+                "Accepts items from _belts_, _funnels_, _chutes_, _hoppers_ and _Mechanical Arms_. The _stacker crane_ "
+                        + "carries them to a free _storage location_; automation can only _insert_, never take items out.",
                 "When looked at with Goggles",
                 "Shows its _address_ and the _buffered items_.");
 
         tooltip(lang, "block.wareworks.warehouse_output",
-                "A _station_ of a warehouse _aisle_ where retrieved items _leave_ the warehouse. _Funnels_, _chutes_ and "
-                        + "_hoppers_ can pull them out.",
+                "A _station_ of a warehouse _aisle_ where retrieved items _leave_ the warehouse. _Funnels_, _chutes_, "
+                        + "_hoppers_ and _Mechanical Arms_ can pull them out.",
                 "When placed",
                 "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle.",
                 "When setting the filter",
@@ -260,7 +260,7 @@ public final class WareworksLangGen {
 
         tooltip(lang, "block.wareworks.warehouse_terminal",
                 "A _station_ of a warehouse _aisle_ with a _screen_: ask for items here and the _stacker crane_ fetches "
-                        + "them. _Funnels_, _chutes_ and _hoppers_ can pull them out again.",
+                        + "them. _Funnels_, _chutes_, _hoppers_ and _Mechanical Arms_ can pull them out again.",
                 "When placed",
                 "The _screen_ faces you and the _arm port_ the opposite way: stand where you want to read the "
                         + "terminal, with the _aisle_ on the far side of the _rack_. The port then moves to whichever "
@@ -278,8 +278,8 @@ public final class WareworksLangGen {
 
         tooltip(lang, "block.wareworks.warehouse_production",
                 "A _station_ of a warehouse _aisle_ that feeds your _machines_. Define a _pattern_ here, and the "
-                        + "_stacker crane_ brings its _ingredients_ to this block; your own _funnel_, _chute_ or "
-                        + "_belt_ carries them into the machine. Wareworks never crafts anything itself.",
+                        + "_stacker crane_ brings its _ingredients_ to this block; your own _funnel_, _chute_, _belt_ or "
+                        + "_Mechanical Arm_ carries them into the machine. Wareworks never crafts anything itself.",
                 "When placed",
                 "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle.",
                 "When setting a pattern",

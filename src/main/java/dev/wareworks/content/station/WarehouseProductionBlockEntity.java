@@ -44,7 +44,8 @@ import net.neoforged.neoforge.items.IItemHandler;
  * {@link LocationKind#PRODUCTION} rather than {@code OUTPUT}. That distinction is the whole point: a production station
  * is never the destination of a retrieval request, and retrieve leftovers are never dumped into one, both of which
  * reusing {@code OUTPUT} would have allowed (ADR-024). What it shares with the output is everything physical: the
- * extract-only buffer a funnel, chute or belt pulls from, and the crane's {@code insert}.
+ * extract-only buffer a funnel, chute, belt or Create mechanical arm ({@link DeliveryStationArmPoint}; M12) pulls from,
+ * and the crane's {@code insert}.
  * <p>
  * <b>The patterns live here</b> ({@link ProductionPatterns}), which answers "which machine gets these ingredients"
  * without any extra configuration: they get them here, and the player's machinery is whatever they hooked up to this

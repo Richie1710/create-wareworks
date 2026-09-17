@@ -42,12 +42,19 @@ can watch it happen.
   a stock index and plans store and retrieve jobs. It never moves items itself.
 * **Warehouse Interface**: turns any inventory with an item capability (chests, barrels, Create vaults, modded storage)
   into an addressable storage location such as `A-03-07R`. Its filter slot decides what may be stored there.
-* **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes and hoppers feeding the warehouse.
-* **Warehouse Output**: the brass hand-over point that requests the item in its filter slot on a redstone pulse.
+* **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
+  warehouse.
+* **Warehouse Output**: the brass hand-over point that requests the item in its filter slot on a redstone pulse;
+  funnels, chutes, hoppers and Mechanical Arms take the delivered items out.
 * **Warehouse Terminal**: a searchable screen showing the aisle's whole stock; click an item and the crane delivers it
   into the terminal.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
-  machines and the product comes back into storage. Wareworks never crafts anything itself.
+  machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Wareworks
+  never crafts anything itself.
+
+**Mechanical Arms** can use the stations directly: the warehouse input only as a target to put items into, and the
+output, terminal and production station only as a source to take items from. Clicking a station again with the arm
+does not switch that. The warehouse interface, controller, crane dock and rails are not arm targets.
 
 Also included: goggle information on every block, Create-style item descriptions, Ponder scenes, English and German
 translations, and recipes at mid-game Create tier.
@@ -82,10 +89,10 @@ The build *is* the configuration; there is no setup screen.
    brass port towards the inventory, plate towards the aisle. Clicking the side of an interface you already placed
    copies its facing, so a rack row goes up quickly.
 6. **Place a Warehouse Input** at a rack position with its opening towards the aisle and feed it with a belt, funnel,
-   chute or hopper. The crane stores whatever arrives.
+   chute, hopper or Mechanical Arm. The crane stores whatever arrives.
 7. **Place a Warehouse Output** the same way. Put the item you want into its filter slot, hold right-click to set the
-   amount, and give it a **redstone pulse**: the crane fetches the items and drops them into the output, where a funnel
-   or chute can pull them out.
+   amount, and give it a **redstone pulse**: the crane fetches the items and drops them into the output, where a funnel,
+   chute or Mechanical Arm can pull them out.
 8. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
@@ -102,7 +109,8 @@ never onto the port. Right-click with an empty hand to open it.
 * **Click** to request the amount in the scroll input, **shift-click** for a stack, **ctrl-click** for everything
   available.
 * Repeated clicks on the same item are merged into one request and one crane trip.
-* Delivered items land in the terminal's own slots. Take them by hand, or let a funnel or chute pull them onward.
+* Delivered items land in the terminal's own slots. Take them by hand, or let a funnel, chute or Mechanical Arm pull
+  them onward.
 
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
 path for your factory.
@@ -137,6 +145,9 @@ Ingredients that already went into a machine are not recovered.
 
 Practical notes:
 
+* **A Mechanical Arm can feed your machine straight from the station.** Select the production station as the arm's
+  source and the machine as its target; the order moves on to "waiting for the result" once the arm has taken the
+  ingredients, just as with a funnel.
 * **Mechanical crafters need filtered feeds and hopper buffers.** A crafter slot holds exactly one item, so each funnel
   must be filtered to one ingredient. A crafter also accepts nothing while its group is working, so put a hopper
   between each funnel and its crafter to hold the next ingredient.

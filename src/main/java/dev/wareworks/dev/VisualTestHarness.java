@@ -82,15 +82,16 @@ public final class VisualTestHarness {
         LOGGER.info(PREFIX + "installed: scenario '{}', {} steps", scenarioName, harness.steps.size());
     }
 
-    /** World preparation, the scenario's setup, then one tour per pass. */
+    /** World preparation, the scenario's setup, one tour per pass, then the scenario's closing steps. */
     private static List<VisualStep> plan(VisualScenario scenario) {
         VisualScript script = new VisualScript();
-        VisualWorld.prepare(script, scenario.worldProfile());
+        scenario.prepare(script);
         scenario.setup(script);
         for (VisualPass pass : VisualPass.values()) {
             script.beginPass(pass);
             scenario.pass(pass, script);
         }
+        scenario.finish(script);
         return new ArrayList<>(script.steps());
     }
 

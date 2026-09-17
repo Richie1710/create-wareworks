@@ -30,11 +30,12 @@ import net.neoforged.neoforge.items.IItemHandler;
  * {@link DirectBeltInputBehaviour}, whose handler inserts into the buffer and returns the remainder (the direction
  * passed by Create is not consistent across callers and is ignored). Belt funnels on top are not supported.
  * <p>
- * <b>Not supported in 0.1:</b> a Create <b>mechanical arm</b> cannot target this block. An arm resolves its targets only
- * through a registered {@code ArmInteractionPointType} ({@code ArmInteractionPointType#getPrimaryType} returns
- * {@code null} for anything else, and Create has no capability fallback type), and Wareworks registers none. An arm
- * pointed at a funnel that faces the station does work. GameTest {@code stationsarenotarmtargets} pins this, and it is a
- * known limitation documented in {@code docs/warehouse-system.md} §3.2.
+ * <b>Mechanical arms (M12).</b> A Create arm resolves its targets only through a registered
+ * {@code ArmInteractionPointType}, with no fallback to the item capability, so the input has one of its own
+ * ({@code WareworksArmInteractionPoints#WAREHOUSE_INPUT}). Its {@link WarehouseInputArmPoint} is <b>deposit only</b>: the
+ * arm puts items in through the same insert-only view funnels use and can never take anything out, whatever its
+ * saved mode says. GameTests {@code stationarmpointtypes}, {@code stationarmpointsemantics} and
+ * {@code mechanicalarmsfeedandemptystations} pin this.
  * <p>
  * <b>Crane API (M3).</b> {@link #bufferedItems()} shows what waits to be stored; {@link #extract} takes one stack of an
  * item at a time, with a simulate mode that matches the real result in the same tick; {@link #countOf} counts one item

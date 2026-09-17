@@ -2,10 +2,14 @@ package dev.wareworks.gametest;
 
 import static dev.wareworks.gametest.WareworksGameTests.AISLE_16X10X7;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+
+import com.simibubi.create.AllBlocks;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
@@ -51,6 +55,7 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * machine</b> themselves ({@link #productionFullLoop}, {@link #productionFullLoopTwoIngredients}) — they take the
  * ingredients out of the station and put the product into the input, exactly as a player's sawmill plus funnel would —
  * and the item census expectation changes in precisely that step and nowhere else.
+ * {@link #productionIngredientsTakenByMechanicalArm} lets a real Create mechanical arm take the ingredients instead.
  * <p>
  * Layout ({@code aisle_16x10x7}): the {@link AisleFixture} aisle at z = 3 with {@value #RAILS} rails, a chest of
  * {@value #LOGS_IN_STOCK} logs at 1 left, an empty chest at 2 left for the product, a chest of
@@ -249,6 +254,7 @@ public final class ProductionGameTests {
     public static void productionSupplyJob(GameTestHelper helper) {
         AisleFixture aisle = build(helper);
         Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the ingredients travel"));
         helper.startSequence()
                 .thenWaitUntil(() -> assertStocked(helper, aisle))
                 .thenExecute(() -> {
@@ -267,11 +273,8 @@ public final class ProductionGameTests {
                     helper.assertValueEqual(controller.availableStock(LOG),
                             (long) LOGS_IN_STOCK - RUNS * LOG_PER_RUN, "the logs it needs are promised");
                 })
-                .thenWaitUntil(() -> {
-                    ItemCensus.assertEquals(helper, conserved, "while the ingredients travel");
-                    helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), (long) RUNS * LOG_PER_RUN,
-                            "the logs arrived at the production station");
-                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG),
+                        (long) RUNS * LOG_PER_RUN, "the logs arrived at the production station"))
                 .thenExecute(() -> {
                     ProductionOrder<ItemKey, RackPosition> order = onlyOrder(helper, aisle);
                     helper.assertValueEqual(order.state(), ProductionOrderState.DELIVERED, "order state");
@@ -285,6 +288,8 @@ public final class ProductionGameTests {
     @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
     public static void productionSupplyJobType(GameTestHelper helper) {
         AisleFixture aisle = build(helper);
+        Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the supply job starts"));
         helper.startSequence()
                 .thenWaitUntil(() -> assertStocked(helper, aisle))
                 .thenExecute(() -> order(helper, aisle))
@@ -302,20 +307,18 @@ public final class ProductionGameTests {
     /**
      * The whole loop, with the test playing the player's machine: order planks, let the crane bring the logs, take the
      * logs out of the station and put planks into the warehouse input, and watch the order complete and the original
-     * request be served by an ordinary retrieval.
+     * request be served by an ordinary retrieval. Item conservation is checked on every tick.
      */
     @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
     public static void productionFullLoop(GameTestHelper helper) {
         AisleFixture aisle = build(helper);
         Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the loop runs"));
         helper.startSequence()
                 .thenWaitUntil(() -> assertStocked(helper, aisle))
                 .thenExecute(() -> order(helper, aisle))
-                .thenWaitUntil(() -> {
-                    ItemCensus.assertEquals(helper, conserved, "while the ingredients travel");
-                    helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), (long) RUNS * LOG_PER_RUN,
-                            "ingredients delivered");
-                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG),
+                        (long) RUNS * LOG_PER_RUN, "ingredients delivered"))
                 .thenExecute(() -> {
                     // The test is the machine: it takes the logs and hands back planks through a warehouse input.
                     // This is the only step in which the census expectation changes.
@@ -325,11 +328,8 @@ public final class ProductionGameTests {
                     aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT_RACK)), PLANK.toStack(ORDERED_PLANKS));
                     ItemCensus.change(conserved, PLANK, ORDERED_PLANKS);
                 })
-                .thenWaitUntil(() -> {
-                    ItemCensus.assertEquals(helper, conserved, "while the product is stored and retrieved");
-                    helper.assertValueEqual(aisle.stationCount(OUTPUT_RACK, PLANK), (long) ORDERED_PLANKS,
-                            "the planks reached the output the request named");
-                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(OUTPUT_RACK, PLANK),
+                        (long) ORDERED_PLANKS, "the planks reached the output the request named"))
                 // The crane is still retracting its arm in the tick the last plank lands, so the end state is waited
                 // for rather than asserted at once.
                 .thenWaitUntil(() -> {
@@ -351,6 +351,7 @@ public final class ProductionGameTests {
     public static void productionFullLoopTwoIngredients(GameTestHelper helper) {
         AisleFixture aisle = build(helper);
         Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the loop runs"));
         int logs = RUNS * LOG_PER_RUN;
         int nails = RUNS * NAILS_PER_RUN;
         helper.startSequence()
@@ -366,7 +367,6 @@ public final class ProductionGameTests {
                     helper.assertValueEqual(order.outstanding(NAIL), nails, "nails owed");
                 })
                 .thenWaitUntil(() -> {
-                    ItemCensus.assertEquals(helper, conserved, "while the ingredients travel");
                     helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), (long) logs, "logs delivered");
                     helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, NAIL), (long) nails, "nails delivered");
                     helper.assertValueEqual(onlyOrder(helper, aisle).state(), ProductionOrderState.DELIVERED,
@@ -380,7 +380,66 @@ public final class ProductionGameTests {
                     ItemCensus.change(conserved, PLANK, ORDERED_PLANKS);
                 })
                 .thenWaitUntil(() -> {
-                    ItemCensus.assertEquals(helper, conserved, "while the product is stored and retrieved");
+                    helper.assertValueEqual(aisle.stationCount(OUTPUT_RACK, PLANK), (long) ORDERED_PLANKS,
+                            "the planks reached the output");
+                    helper.assertValueEqual(onlyOrder(helper, aisle).state(), ProductionOrderState.COMPLETE,
+                            "the order completed");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The loop with a <b>real Create mechanical arm</b> as the machine's feeder (M12): the arm takes the delivered logs
+     * out of the production station through its take-only arm point and drops them on a depot, and the order moves on
+     * to "waiting for the result" exactly as when a funnel pulls them. The test then plays the machine behind the depot
+     * and hands back planks through the warehouse input, as in {@link #productionFullLoop}. The item census counts the
+     * arm's claw and the depot on every tick, and the claw is seen holding the logs on at least one of those ticks.
+     * <p>
+     * The arm stands behind the station, one block further from the aisle, with its cogwheel and motor further out and
+     * the depot beside it ({@link MechanicalArmFixture}).
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void productionIngredientsTakenByMechanicalArm(GameTestHelper helper) {
+        AisleFixture aisle = build(helper);
+        Map<ItemKey, Long> conserved = stocked();
+        BlockPos arm = aisle.inventoryPos(PRODUCTION_RACK);
+        BlockPos cog = arm.relative(aisle.sideDirection(PRODUCTION_RACK));
+        BlockPos depot = arm.relative(AisleFixture.AISLE.getOpposite());
+        helper.setBlock(depot, AllBlocks.DEPOT.getDefaultState());
+        MechanicalArmFixture.place(helper, arm, List.of(
+                MechanicalArmFixture.select(helper, aisle.rackPos(PRODUCTION_RACK), MechanicalArmFixture.TAKE_CLICKS),
+                MechanicalArmFixture.select(helper, depot, MechanicalArmFixture.DEPOSIT_CLICKS)));
+        MechanicalArmFixture.power(helper, cog);
+        HolderLookup.Provider registries = helper.getLevel().registryAccess();
+        Set<ItemKey> clawItems = new HashSet<>();
+        helper.onEachTick(() -> {
+            ItemCensus.assertEquals(helper, conserved, "while the crane and the arm carry items");
+            ItemStack claw = MechanicalArmFixture.heldItem(MechanicalArmFixture.armAt(helper, arm), registries);
+            if (!claw.isEmpty())
+                clawItems.add(ItemKey.of(claw));
+        });
+        int logs = RUNS * LOG_PER_RUN;
+        helper.startSequence()
+                .thenWaitUntil(() -> assertStocked(helper, aisle))
+                .thenExecute(() -> order(helper, aisle))
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.inventoryCount(depot, LOG), (long) logs,
+                            "the arm put the delivered logs on the depot");
+                    helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), 0L, "the station is empty");
+                    helper.assertValueEqual(onlyOrder(helper, aisle).state(), ProductionOrderState.WAITING_FOR_RESULT,
+                            "the arm taking the logs moved the order on");
+                })
+                .thenExecute(() -> {
+                    helper.assertValueEqual(clawItems, Set.of(LOG),
+                            "the census counted the arm's claw while it held the logs, and only logs");
+                    // The machine behind the depot takes the logs and hands back planks through a warehouse input.
+                    int taken = extractAll(aisle.handlerAt(depot), LOG);
+                    helper.assertValueEqual(taken, logs, "the machine took every log from the depot");
+                    ItemCensus.change(conserved, LOG, -taken);
+                    aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT_RACK)), PLANK.toStack(ORDERED_PLANKS));
+                    ItemCensus.change(conserved, PLANK, ORDERED_PLANKS);
+                })
+                .thenWaitUntil(() -> {
                     helper.assertValueEqual(aisle.stationCount(OUTPUT_RACK, PLANK), (long) ORDERED_PLANKS,
                             "the planks reached the output");
                     helper.assertValueEqual(onlyOrder(helper, aisle).state(), ProductionOrderState.COMPLETE,
@@ -430,6 +489,7 @@ public final class ProductionGameTests {
     public static void productionOrderCancelled(GameTestHelper helper) {
         AisleFixture aisle = build(helper);
         Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the order is served and cancelled"));
         helper.startSequence()
                 .thenWaitUntil(() -> assertStocked(helper, aisle))
                 .thenExecute(() -> order(helper, aisle))
@@ -538,6 +598,7 @@ public final class ProductionGameTests {
         ConfigOverrides.set(helper, WareworksConfig.SERVER.productionOrderTimeoutTicks, SHORT_ORDER_TIMEOUT);
         AisleFixture aisle = build(helper);
         Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the order runs out"));
         helper.startSequence()
                 .thenWaitUntil(() -> assertStocked(helper, aisle))
                 .thenExecute(() -> order(helper, aisle))
@@ -602,6 +663,7 @@ public final class ProductionGameTests {
     public static void productionCancelStopsTheCraneMidTrip(GameTestHelper helper) {
         AisleFixture aisle = build(helper);
         Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the crane carries and returns"));
         helper.startSequence()
                 .thenWaitUntil(() -> assertStocked(helper, aisle))
                 .thenExecute(() -> order(helper, aisle))
@@ -623,7 +685,6 @@ public final class ProductionGameTests {
                             "they went back into storage");
                     helper.assertValueEqual(onlyOrder(helper, aisle).deliveredIngredients(), 0,
                             "so the order reports nothing handed over");
-                    ItemCensus.assertEquals(helper, conserved, "after cancelling mid trip");
                 })
                 .thenSucceed();
     }
@@ -705,11 +766,13 @@ public final class ProductionGameTests {
 
     /**
      * An open order survives a reload: the controller and the station are replaced by copies loaded from their saves,
-     * and the order then still completes when the product arrives.
+     * and the order then still completes when the product arrives. The reload neither loses nor copies an item.
      */
     @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
     public static void productionOrderPersistence(GameTestHelper helper) {
         AisleFixture aisle = build(helper);
+        Map<ItemKey, Long> conserved = stocked();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "around the reload"));
         helper.startSequence()
                 .thenWaitUntil(() -> assertStocked(helper, aisle))
                 .thenExecute(() -> order(helper, aisle))
@@ -739,8 +802,10 @@ public final class ProductionGameTests {
                     helper.assertValueEqual(controller.openRequestCount(), 1, "and so did the request");
                 })
                 .thenExecute(() -> {
-                    extractAll(aisle.handlerAt(aisle.rackPos(PRODUCTION_RACK)), LOG);
+                    int taken = extractAll(aisle.handlerAt(aisle.rackPos(PRODUCTION_RACK)), LOG);
+                    ItemCensus.change(conserved, LOG, -taken);
                     aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT_RACK)), PLANK.toStack(ORDERED_PLANKS));
+                    ItemCensus.change(conserved, PLANK, ORDERED_PLANKS);
                 })
                 .thenWaitUntil(() -> {
                     helper.assertValueEqual(onlyOrder(helper, aisle).state(), ProductionOrderState.COMPLETE,

@@ -115,11 +115,13 @@ Classes: `content.storage.WarehouseInterfaceBlock`, `WarehouseInterfaceBlockEnti
 * `ItemStackHandler` buffer with `inputBufferSlots` slots (config, default 9).
 * External item capability: **insert-only** view (extraction returns empty).
 * `DirectBeltInputBehaviour`: belts, funnels, chutes and depots can insert.
+* Create mechanical arms can put items in, and only put them in (a deposit-only arm interaction point, §3.2.2).
 * Non-empty buffer means store work is available. The crane extracts through the internal handler.
 
 **Warehouse Output**
 * `ItemStackHandler` buffer with `outputBufferSlots` slots (config, default 9).
 * External item capability: **extract-only** view, so funnels and chutes can pull from it.
+* Create mechanical arms can take items out, and only take them out (a take-only arm interaction point, §3.2.2).
 * `FilteringBehaviour` with count: item and amount to request.
 * A redstone **rising edge** creates a retrieval request `(item, amount)` at the controller.
 * Goggles: buffer contents, pending request with remaining amount, last rejection reason.
@@ -146,11 +148,11 @@ Registered as `WareworksBlocks.WAREHOUSE_INPUT` / `WAREHOUSE_OUTPUT` and `Warewo
   * **Bounded loading (M2 review fix, critical):** save data is untrusted. Block entity data on items (`BlockItem.updateCustomBlockEntityTag`, which any creative player can set because `onlyOpCanSetNbt()` is false), `/data merge`, structures and schematics uploaded to a Schematicannon all reach `load`. The first version expanded a saved `Count` of `Integer.MAX_VALUE` into billions of stacks (server `OutOfMemoryError`). A load now creates at most `StationBuffer.MAX_LOADED_STACKS` (1024) stacks and slots in total; the excess of a crafted entry is skipped with one warning, and entries beyond the budget are not even decoded. Legitimate saves (at most one stack per slot, `≤ 27` slots) are never affected.
   * A load that changes the slot count on a live block entity calls `invalidateCapabilities()`: the view object stays the same, but cached consumers should re-read the slot count. Otherwise NeoForge's automatic invalidation (placement, removal, chunk load/unload) is enough, because the registered views are final fields.
 * **Input** (`WarehouseInputBlockEntity`):
-  * Capability (every side, stable instance): `InsertOnlyItemHandler` over the buffer. Funnels, chutes and hoppers insert; extraction returns empty. A Create **mechanical arm cannot target a station**: an arm only takes targets for which a registered `ArmInteractionPointType` exists, Create has no capability fallback type and Wareworks registers none (**M5 release audit**, GameTest `stationsarenotarmtargets`). An arm that feeds a *funnel* pointing into the station works, and so does a depot emptied by such a funnel.
+  * Capability (every side, stable instance): `InsertOnlyItemHandler` over the buffer. Funnels, chutes and hoppers insert; extraction returns empty. Since **M12** a Create **mechanical arm** can target the input as well, through its own arm interaction point type `wareworks:warehouse_input`: a **deposit-only** point that inserts through this same view, whatever mode a click or a saved tag asks for (§3.2.2). Until then no Wareworks block was an arm target (M5 release audit).
   * `DirectBeltInputBehaviour` with an insertion handler that inserts a copy into the buffer and returns the remainder; the direction Create passes is ignored (inconsistent across callers). Belt funnels on top are not enabled.
   * Crane API (M3): `bufferedItems()` (`InventorySnapshot<ItemKey>`), `hasBufferedItems()`, `extract(ItemKey, amount, simulate)` (at most one stack per call, simulate equals the real result in the same tick), `countOf(ItemKey)` (live count without a snapshot), `insert(ItemStack, simulate)` (rerouted store leftovers go back into the buffer, §8).
 * **Output** (`WarehouseOutputBlockEntity`):
-  * Capability (every side, stable instance): `ExtractOnlyItemHandler` over the buffer; insertion returns the stack unchanged and `isItemValid` is false. No belt input.
+  * Capability (every side, stable instance): `ExtractOnlyItemHandler` over the buffer; insertion returns the stack unchanged and `isItemValid` is false. No belt input. Since **M12** a Create mechanical arm takes items out through the arm interaction point type `wareworks:warehouse_output`, a **take-only** point (§3.2.2).
   * Crane API (M3): `insert(ItemStack, simulate)` (matching stacks first, returns the remainder, never modifies the caller's stack), `bufferedItems()`.
   * Request definition: `content.station.RequestFilterBehaviour`, a subclass of Create's `FilteringBehaviour` with `showCount()` and label "Requested Item". List, attribute and package filter items are refused (the `requestable` predicate), because a request needs one concrete item. Amount = filter count clamped to `1..maxStackSize` of the filter item (ADR-013: one stack per request, unstackable items request 1).
     * **Faces (M2 review fix):** top, back (pull port) and both sides; not the bottom and not the aisle side, where the value box floated inside the crane opening (M4: the arm reaches in there). Faces covered by rack neighbours or a funnel cannot be clicked; a Create clipboard pastes onto any face.
@@ -168,9 +170,143 @@ Registered as `WareworksBlocks.WAREHOUSE_INPUT` / `WAREHOUSE_OUTPUT` and `Warewo
   * Output: **M5 polish:** the whole body and both frames are `create:block/brass_casing` (before: andesite body with brass frames), with the dark openings towards the aisle and on the back (the pull port) and a brass spout in the bottom of the pull port.
   * **Material language (M5 polish):** andesite = the dumb intake, brass = the smart, filtered output — the same distinction Create makes between andesite and brass funnels. Together with the top intake (input only) and the back pull port (output only) the two stations are told apart at a glance from any side, which a frame colour alone did not achieve. An arrow-shaped flow marker was considered and dropped: a proud arrow would clip blocks placed against the station, and an inlaid one cannot go into the aisle face, which has to stay clear for the crane's arm port (`stacker-crane.md` §7.1).
 * **Tests**:
-  * GameTests (`gametest.WarehouseStationGameTests`): `stationregistration` (also: `POWERED` after a placement without player), `inputacceptsitems`, `inputhopperfeed`, `outputextractonly`, `stationdropsbuffer`, `stationpersistence` (also: bounded loading of crafted counts and entry floods), `outputclipboardfilter` (review: no filter item taken, "up to" board), `stationmembership`, `outputrequestclampedtostock`, `outputrequestrejections` (also: per-output cap), `outputrequestorphancancelled` (review), `stationrequestpersistence`, `stationsarenotarmtargets` (M5 release audit: no Wareworks block is a mechanical arm target; a composter is checked as well, so the test cannot pass just because the lookup broke).
+  * GameTests (`gametest.WarehouseStationGameTests`): `stationregistration` (also: `POWERED` after a placement without player), `inputacceptsitems`, `inputhopperfeed`, `outputextractonly`, `stationdropsbuffer`, `stationpersistence` (also: bounded loading of crafted counts and entry floods), `outputclipboardfilter` (review: no filter item taken, "up to" board), `stationmembership`, `outputrequestclampedtostock`, `outputrequestrejections` (also: per-output cap), `outputrequestorphancancelled` (review), `stationrequestpersistence`. The M5 release audit's `stationsarenotarmtargets`, which pinned that no Wareworks block was a mechanical arm target, was removed in M12 together with that limitation; the arm tests are in `gametest.MechanicalArmGameTests` (§3.2.2).
   * JUnit: `RequestQueueTest`.
   * Not covered: a real belt line (it needs a powered belt); the belt path is tested through `DirectBeltInputBehaviour#handleInsertion`, the call belts, tunnels and ejectors make. Real hoppers cover insertion into the input and extraction from the output.
+
+#### 3.2.2 Mechanical arm interaction points (M12)
+
+> Decision and reasons: **ADR-025**.
+
+Classes: `registry.WareworksArmInteractionPoints` (the four registered types), `content.station.StationArmPointType`,
+`WarehouseInputArmPoint`, `DeliveryStationArmPoint`.
+
+* **Why an item capability is not enough.** A Create mechanical arm only targets a block that a registered
+  `ArmInteractionPointType` accepts: `ArmInteractionPointType#getPrimaryType` walks the registered types and returns
+  null when none accepts the block, both selection paths (the arm item and `ArmInteractionPointHandler`) go through it,
+  and Create ships no fallback type for "anything with an item capability". Up to M11 no Wareworks block was an arm
+  target (M5 release audit); a player had to put a funnel between the arm and the station.
+* **One type per station block**, each named after its block:
+
+  | Type id | Block | Point class | The arm may |
+  |---|---|---|---|
+  | `wareworks:warehouse_input` | warehouse input | `WarehouseInputArmPoint` | only put items in |
+  | `wareworks:warehouse_output` | warehouse output | `DeliveryStationArmPoint` | only take items out |
+  | `wareworks:warehouse_terminal` | warehouse terminal | `DeliveryStationArmPoint` | only take items out |
+  | `wareworks:warehouse_production` | warehouse production station | `DeliveryStationArmPoint` | only take items out |
+
+  * `StationArmPointType#canCreatePoint` accepts exactly its station block, in every block state (facing, the output's
+    `powered`, the terminal's `display`), and nothing else; it reads only the block state, never the level. Default
+    priority: no Create type accepts a Wareworks block, so there is nothing to win against.
+  * **Separate ids even where stations behave alike.** An arm saves the type id with every point, so the arm behaviour
+    of one station can change later (a subclass of `DeliveryStationArmPoint`, say) without breaking arms that are
+    already saved in worlds.
+* **Registration.** A NeoForge `DeferredRegister` for Create's registry key
+  `CreateRegistries.ARM_INTERACTION_POINT_TYPE` in namespace `wareworks`, registered on the mod bus from the `Wareworks`
+  constructor right after `WareworksMenuTypes` (the types reference the blocks). This works like a vanilla registry because Create creates the
+  registry early enough: `CreateBuiltInRegistries` builds it with NeoForge's `RegistryBuilder` (`sync(true)`, a bake
+  callback) and adds it to `BuiltInRegistries.REGISTRY` from a mixin into `BuiltInRegistries`' static initialiser, and
+  NeoForge posts a `RegisterEvent` for every key of that registry of registries. When the registry freezes, its bake
+  callback `ArmInteractionPointType.init` rebuilds the priority-sorted type list from the whole registry, ours included.
+  The registry is synced, so a client joining a dedicated server knows the same ids.
+* **Deposit only at the input.** `WarehouseInputArmPoint` extends Create's `DepositOnlyArmInteractionPoint`, the base
+  of Create's own funnel point: `cycleMode` does nothing, `extract` returns empty and `getSlotCount` is 0. A right-click with
+  the arm item selects the input for "Deposit items to" and every further click keeps that.
+* **Take only at the output, terminal and production station.** `DeliveryStationArmPoint` is "take" from construction,
+  its `cycleMode` does nothing, and `insert` returns the offered stack itself without asking the capability. The
+  capability view refuses insertion anyway; the override makes the refusal the point's own rule rather than an accident
+  of the view behind it.
+* **The fixed mode is enforced on load too.** A point reaches the server only as NBT: from `ArmPlacementPacket`, whose
+  list the client builds and the server stores unchecked, from a world save and from a schematic. Create's `deserialize`
+  reads `Mode` from that tag, so both point classes override `deserialize` and set their mode after it. Without that, a
+  tag saying "deposit" for an output would load a point the arm tries to *deliver* to: nothing would go in, and nothing
+  would ever be taken out either. The input forces "deposit" the same way.
+* **Same item path as a funnel.** Create's default point transfer asks `Capabilities.ItemHandler.BLOCK` with
+  `Direction.UP`, which reaches the views of `WareworksCapabilities`: insert-only on the input, extract-only on the
+  other three. The buffer rules therefore apply unchanged: an arm keeps what does not fit, and an arm emptying a
+  production station moves the order on to "waiting for the result" exactly like a funnel would (§3.5.3).
+* **The arm reaches for the centre of the top face** of all four (`StationArmPointType#topFaceCentre`, the formula of
+  Create's `TopFaceArmInteractionPoint`). Every station is a full block, and the aisle face is where the crane reaches
+  in, so an arm standing beside or behind a rack aims at the top instead. Create does not check whether that face is
+  free (`ArmInteractionPoint#getHandler` asks the capability, not the block above), so a station under the next rack
+  level still works; only the claw's animation then reaches into the block above.
+* **The output's filter slot lets the arm item through.** The request filter slot (a Create value box) sits in the
+  centre of the output's top, back and side faces, exactly where a player clicks to select the output. Create's
+  `ValueSettingsInputHandler` took that right-click and cancelled it before `ArmInteractionPointHandler` saw it, and
+  Create's `FilteringBehaviour#canShortInteract` refuses the arm item as a filter, so the click did nothing: no
+  selection, no message (found by the `arm` visual scenario). `RequestFilterBehaviour#bypassesInput` returns true for
+  the Mechanical Arm item, so the click selects the output wherever it lands; with any other item or an empty hand the
+  slot works as before, and holding an arm only means the amount board cannot be opened with the arm in hand. While the
+  arm item hovers the slot, Create would still draw its value box and the hint "Click with item to set / Click and hold
+  for amount", although the click selects the output; `RequestFilterBehaviour#mayInteract` is therefore false for a
+  player holding the arm item, and Create's `FilteringRenderer` skips the slot entirely (found by the same scenario).
+* **No arm point for the warehouse interface, controller, stacker crane dock or rail.** The interface has no inventory
+  of its own: the chest behind it is warehouse storage, which the crane fills and empties, and Create arms do not
+  target a plain chest either (a funnel on the chest is the normal Create way to reach one). The controller, dock and
+  rail hold no items a player's machine should take or give.
+* **Items still never teleport.** An arm is the player's own Create machine, moving items between blocks within its
+  reach through the same capability views funnels, chutes and hoppers use. Inside the warehouse the crane remains the
+  only thing that moves items.
+* **Client safety.** The type and point classes are common code without client imports: Create creates points on the
+  client while a player selects targets with the arm item, and again on the server from the placement packet and from
+  saves.
+* **Tests** (`gametest.MechanicalArmGameTests`, `empty_7x5x7`):
+  * `stationarmpointtypes`: each station is registered as `wareworks:<block>`, is in
+    `ArmInteractionPointType.SORTED_TYPES_VIEW` (so the deferred registration really reached Create's sorted list),
+    every block state resolves to its own type, the arm item selects the station instead of being placed against it,
+    and no type accepts another station. The interface, controller, dock and rail resolve to no type; a composter still
+    resolves to `create:composter`, so a passing test cannot just mean that the lookup broke.
+  * `stationarmpointsemantics`: the points without a running arm, through the API an arm calls. The input selects as
+    "deposit" and stays so, a simulated insert changes nothing, a real one lands in the buffer, it offers no slot and
+    extracts nothing. Output, terminal and production station select as "take" and stay so (also after the two clicks
+    that make a depot a destination), an insert returns the same stack instance and leaves the buffer alone, and a
+    simulated and a real extraction take the buffered gold. Every point survives a save and load with its type id,
+    position and mode; a tag rewritten to the opposite mode still loads with the forced mode; a tag whose type names
+    the input does not load on an output.
+  * `mechanicalarmsfeedandemptystations`: three real arms at 256 RPM on one cogwheel and creative motor. One moves 32
+    iron from a depot into a warehouse input, one 20 gold from a warehouse output onto a depot, one 12 diamonds from a
+    warehouse terminal onto a depot. The terminal arm's saved point list names the terminal with mode "deposit"; the
+    arm still empties the terminal and saves the resolved point as "take". The item census holds on every tick, each
+    arm is seen holding items on at least one of those ticks (so the census really counted a loaded claw), every claw
+    ends empty, and nothing moves during 60 settle ticks.
+  * `ProductionGameTests.productioningredientstakenbymechanicalarm` (§3.5.5): a real arm empties the production
+    station in the full production loop, with the census on every tick and the claw seen holding the logs.
+  * Both real-arm tests fail when `ItemCensus` leaves the claw out: the census of the tick in which the arms hold the
+    items then misses exactly those items.
+  * `gametest.MechanicalArmFixture` builds real arms the way a player does: a point per selected block with
+    `ArmInteractionPoint.create` and one `cycleMode` per right-click, serialized with `ArmPlacementPacket`'s own
+    constructor. The server half of that packet needs a connected player, so the list is loaded into the arm's saved
+    data instead, the way a schematicannon places a configured arm; the arm resolves it with
+    `ArmInteractionPoint.deserialize` on its next tick either way. `ItemCensus` counts what an arm holds, read from the
+    arm's save data (an arm has no item capability and no accessor for its claw).
+  * `outputfilterslotletsarmselectionthrough`: Create's `ValueSettingsInputHandler` is handed a right-click on the
+    centre of the output's top face, as the game posts it on the server: with an iron ingot the filter slot takes the
+    click, with the Mechanical Arm item the event stays uncancelled and the filter is unchanged. Fails without
+    `RequestFilterBehaviour#bypassesInput`.
+  * `outputfilterslotoffersnointeractiontothearm`: the request filter's `mayInteract` is false for a player holding
+    the Mechanical Arm item and true with an iron ingot or an empty hand, so the renderer shows no hint for the arm.
+    Fails without `RequestFilterBehaviour#mayInteract`.
+  * The client side runs in the visual scenario `arm` (`./gradlew runVisualTest -Pwareworks.visualTest=arm`): real
+    right- and left-clicks with the arm item on every station, the depot comparison, the interface, controller, dock and
+    rail, the selection outline colours and action bar messages, the output's filter slot showing no value box and no
+    hint under the arm item (and both under an empty hand), real arm placement through `ArmPlacementPacket`, the claws
+    frozen at the stations with the claw's aim measured through the arm renderer's own transforms (the end pose's axis
+    through the top face centre, the frozen frame's claw tip nearest to the top face), requests and a crafter loop
+    ordered in the terminal screen with mouse input (`dev.ScreenInput`: the handler methods GLFW's callbacks call), a
+    save, quit and rejoin, and the tooltips and selection message in German.
+  * The dedicated-server side runs in the visual scenario `arm-dedicated` (`manual-test-checklist.md` section P, check
+    92): a client that joins a running `runServer` over TCP (the dev player must be an operator there) builds the aisle
+    of the `arm` scenario with commands, selects all four stations, two depots, a basin and a Mechanical Crafter with
+    real clicks, and places four arms, so the synced arm point type registry, `ArmPlacementPacket`, Create's value
+    settings packet and the Wareworks screen payloads really cross the network. It writes the production pattern in the
+    production station's screen and orders planks in the terminal screen by mouse input, feeds a depot and requests at
+    the output (filter slot click, redstone block) by hand. It reads the server's block entity data back through
+    `/data get block`: each arm's saved `InteractionPoints` (type id, mode, position; arm A's list only reaches the
+    order "inputs, then outputs" once the server has resolved both points of its packet), the saved pattern, and the
+    item counts in depots, claws, station buffers, crafter, basin and chests after each arm has worked. It then stops
+    the server with `/stop`, probes the server's port until it has been started again and joins, checks the saved
+    points and the client arms' resolved point classes, and moves a second batch through all four arms. The server
+    restart is started outside the client; the scenario's class comment describes the setup.
 
 ### 3.3 Warehouse Controller (`content.controller`)
 Owns the logical warehouse state of one aisle:
@@ -249,7 +385,9 @@ The player-facing request station of an aisle: a screen instead of a filter slot
   placement and turns with the wrench. The M6 terminal had only the first, so its screen pointed into the aisle — the
   one place a player cannot stand and the place the crane's arm needs.
 * **Its automation surface is the warehouse output's**: the item capability is extract-only for every side, so funnels,
-  chutes and hoppers pull delivered items out and nothing can be pushed in. Player access comes through the screen.
+  chutes and hoppers pull delivered items out and nothing can be pushed in. Since M12 a Create mechanical arm takes them
+  out as well, through the take-only arm interaction point type `wareworks:warehouse_terminal` (§3.2.2). Player access
+  comes through the screen.
 * **Requests go through the existing machinery.** `WarehouseControllerBlockEntity#request` with the terminal's position
   as destination, the same `RequestQueue`, the same `ReservationLedger`, the same clamping to `availableStock` and the
   same rejection reasons. A terminal request is **indistinguishable downstream** from a redstone request: the planner,
@@ -607,9 +745,10 @@ terminal order ─▶ production order ─▶ SUPPLY jobs ─▶ production stat
 
 * **It is an aisle member of its own kind.** It stands at a rack position with its opening towards the aisle
   (`FACING == side.getOpposite()`, the rule input and output follow) and owns an **extract-only** buffer: the crane
-  inserts, and the player's funnel, chute or belt pulls out. It reports `LocationKind.PRODUCTION`, **not** `OUTPUT`
-  (ADR-024): a production station is never the destination of a retrieval request and never receives retrieve
-  leftovers, and reusing `OUTPUT` is exactly what would have allowed both.
+  inserts, and the player's funnel, chute, belt or (since M12) mechanical arm pulls out; the arm through the take-only
+  arm interaction point type `wareworks:warehouse_production` (§3.2.2). It reports `LocationKind.PRODUCTION`,
+  **not** `OUTPUT` (ADR-024): a production station is never the destination of a retrieval request and never receives
+  retrieve leftovers, and reusing `OUTPUT` is exactly what would have allowed both.
 * **The patterns live in the station**, which is what answers "which machine gets these ingredients": *this* one — the
   machinery the player hooked up to *this* block. No controller-side mapping, no second configuration surface.
 * **Nothing is teleported and nothing is crafted**: every item movement is a real crane job through the handling head,
@@ -861,10 +1000,17 @@ Classes:
   `productionscreeneditsandcancels` (the payload path and hostile payloads), `productionordertimeout` (own config
   batch), `productionorderpersistence`, and from the M11 review `productionrefundisonlythepromise` (5 in stock, 7
   ordered, a run of 4 — the request keeps its stock-backed part), `productioncancelstopsthecranemidtrip`,
-  `productionstationbrokencancelsitsorders` and `productionpatternssurvivealoweredcap` (own config batch).
+  `productionstationbrokencancelsitsorders` and `productionpatternssurvivealoweredcap` (own config batch), and from M12
+  `productioningredientstakenbymechanicalarm` (a real, powered mechanical arm takes the delivered ingredients out onto
+  a depot, and the order moves on to "waiting for the result" exactly as when a funnel pulls them; §3.2.2).
   `WarehouseTerminalMenuGameTests.terminalproducibleitemssurvivethecut` pins that an offer is not the first thing the
-  stock window drops. Every test that moves items asserts the item conservation invariant on every tick with
-  `gametest.ItemCensus`.
+  stock window drops. Every test in which the crane or a mechanical arm moves items (`productionsupplyjob`,
+  `productionsupplyjobtype`, both full loops, `productioningredientstakenbymechanicalarm`, `productionordercancelled`,
+  `productionordertimeout`, `productioncancelstopsthecranemidtrip`, `productionorderpersistence`) asserts the item
+  conservation invariant on every tick with `gametest.ItemCensus`, registered with `onEachTick`; the expectation
+  changes only in the step where the test plays the machine. (Until the M12 review the loop tests checked the census
+  inside their `thenWaitUntil` conditions, where a failing check is only retried on the next tick, so it counted only
+  once the items had arrived.)
 
 ## 4. Discovery and membership (no permanent world searches)
 

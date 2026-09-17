@@ -4,6 +4,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
 
+import com.simibubi.create.content.kinetics.mechanicalArm.ArmBlockEntity;
+
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.item.ItemKey;
@@ -23,9 +25,10 @@ import net.neoforged.neoforge.items.IItemHandler;
 
 /**
  * Counts every item of a GameTest by exact identity ({@link ItemKey}: item and components), for the item conservation
- * invariant ({@code docs/warehouse-system.md} §8): all inventories with an item capability (chests, hoppers), all station
- * buffers, all crane handling heads and all item entities inside the test bounds. Nothing is counted twice: stations and
- * docks are read through their own API, everything else through {@code Capabilities.ItemHandler.BLOCK} (single chests
+ * invariant ({@code docs/warehouse-system.md} §8): all inventories with an item capability (chests, hoppers, depots), all
+ * station buffers, all crane handling heads, the claws of Create mechanical arms and all item entities inside the test
+ * bounds. Nothing is counted twice: stations and docks are read through their own API, arms through their save data
+ * ({@link MechanicalArmFixture#heldItem}), everything else through {@code Capabilities.ItemHandler.BLOCK} (single chests
  * only; the tests never merge chests).
  * <p>
  * A census reads every block position of the test bounds once, which is fine for tests (a few thousand lookups).
@@ -51,6 +54,8 @@ final class ItemCensus {
             } else if (be instanceof StackerCraneBlockEntity crane) {
                 for (HeldItems.Entry entry : crane.heldItems().entries())
                     add(counts, entry.key(), entry.count());
+            } else if (be instanceof ArmBlockEntity arm) {
+                add(counts, MechanicalArmFixture.heldItem(arm, level.registryAccess()));
             } else {
                 IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos.immutable(), null);
                 if (handler == null)

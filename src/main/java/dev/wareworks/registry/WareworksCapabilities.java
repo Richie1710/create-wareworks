@@ -22,7 +22,8 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
  * its buffer, the warehouse output, the warehouse terminal and the warehouse production station an extract-only view,
  * all for every side. The views are final fields, so NeoForge's automatic
  * invalidation (placement, removal, chunk load/unload) is enough; a station only invalidates itself when a load changed
- * its slot count. The warehouse interface, controller and crane expose no item capability.
+ * its slot count. The warehouse interface, controller and crane expose no item capability. Create mechanical arms reach
+ * the stations through these same views, via the interaction point types in {@link WareworksArmInteractionPoints}.
  */
 public final class WareworksCapabilities {
     private static final List<Consumer<RegisterCapabilitiesEvent>> REGISTRARS = List.of(

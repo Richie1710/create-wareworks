@@ -4,13 +4,18 @@ import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.screens.AccessibilityOnboardingScreen;
+import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.client.tutorial.TutorialSteps;
 import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
@@ -57,6 +62,13 @@ final class VisualWorld {
     /** Client ticks after world creation until the player is in the world (the blocking load itself does not tick). */
     private static final int WORLD_JOIN_TIMEOUT_TICKS = 20 * 120;
     private static final int WORLD_SETTLE_TICKS = 40;
+    /** Client ticks between two attempts to join a dedicated server whose port is open but that did not let us in. */
+    private static final int CONNECT_RETRY_TICKS = 20 * 10;
+    /** Client ticks between two checks whether a dedicated server that is starting or restarting accepts connections. */
+    private static final int PORT_PROBE_TICKS = 20;
+    private static final int PORT_PROBE_TIMEOUT_MILLIS = 1000;
+    /** Log a closed port only every this many probes, so a long restart does not flood the log. */
+    private static final int PORT_PROBE_LOG_EVERY = 10;
 
     private VisualWorld() {
     }
@@ -126,6 +138,109 @@ final class VisualWorld {
     private static boolean leftWorld(VisualContext context) {
         Minecraft minecraft = context.minecraft();
         return minecraft.level == null && minecraft.getSingleplayerServer() == null && atTitleScreen(context);
+    }
+
+    /**
+     * The preparation of a scenario that runs on a <b>dedicated server</b> instead of a fresh singleplayer world: title
+     * screen, client options, then {@link #joinServer}. The server is started (and its world chosen) outside the client;
+     * the player needs operator rights there if the scenario builds with commands.
+     */
+    static void prepareRemote(VisualScript script, String address, long runTimeoutMillis, int joinTimeoutTicks) {
+        script.client("delete screenshots of an earlier run", VisualContext::cleanScreenshots)
+                .until("wait for the title screen", VisualWorld::atTitleScreen, TITLE_SCREEN_TIMEOUT_TICKS)
+                .client("arm the run watchdog", context -> context.watchdog().rearm(runTimeoutMillis, "run"))
+                .client("apply client options", VisualWorld::applyClientOptions);
+        joinServer(script, address, joinTimeoutTicks);
+    }
+
+    /**
+     * Joins the dedicated server at {@code address} ({@code host:port}) the way the multiplayer screen's "Join Server"
+     * button does ({@code ConnectScreen#startConnecting}), and waits until the player is in its world. While the server
+     * is still starting or restarting, its port is probed with a plain TCP connection every {@value #PORT_PROBE_TICKS}
+     * ticks, and the join only starts once the port accepts: a join against a closed port makes {@code ConnectScreen} log
+     * "Couldn't connect to server" as an error, which would hide real errors in the client log. A join that fails anyway
+     * is retried after {@value #CONNECT_RETRY_TICKS} ticks, until {@code timeoutTicks} have passed. The joined connection
+     * must be a real network connection, never the in-memory one of an integrated server.
+     */
+    static void joinServer(VisualScript script, String address, int timeoutTicks) {
+        int[] ticksSinceAttempt = { CONNECT_RETRY_TICKS };
+        int[] attempts = { 0 };
+        int[] probes = { 0 };
+        script.until("join the dedicated server " + address, context -> {
+            Minecraft minecraft = context.minecraft();
+            if (inServer(context)) {
+                LOGGER.info(PREFIX + "joined the dedicated server {} after {} connection attempt(s) and {} port probe(s): "
+                        + "{}", address, attempts[0], probes[0], describeConnection(minecraft));
+                return true;
+            }
+            // Connecting, logging in or receiving the level: wait for that attempt to end.
+            if (minecraft.screen instanceof ConnectScreen || minecraft.level != null)
+                return false;
+            ++ticksSinceAttempt[0];
+            if (attempts[0] > 0 && ticksSinceAttempt[0] < CONNECT_RETRY_TICKS)
+                return false;
+            if (ticksSinceAttempt[0] % PORT_PROBE_TICKS != 0)
+                return false;
+            probes[0]++;
+            String closed = portClosedReason(address);
+            if (closed != null) {
+                if (probes[0] % PORT_PROBE_LOG_EVERY == 1)
+                    LOGGER.info(PREFIX + "the port of {} does not accept connections yet ({}); probe {}", address,
+                            closed, probes[0]);
+                return false;
+            }
+            ticksSinceAttempt[0] = 0;
+            attempts[0]++;
+            LOGGER.info(PREFIX + "connection attempt {} to {} (screen before: {})", attempts[0], address,
+                    minecraft.screen == null ? "none" : minecraft.screen.getClass().getSimpleName());
+            minecraft.tell(() -> ConnectScreen.startConnecting(new TitleScreen(), minecraft,
+                    ServerAddress.parseString(address), new ServerData("Wareworks dedicated server", address,
+                            ServerData.Type.OTHER), false, null));
+            return false;
+        }, timeoutTicks);
+    }
+
+    /** Why a plain TCP connection to {@code address} fails, or {@code null} when the port accepts one. */
+    private static String portClosedReason(String address) {
+        ServerAddress parsed = ServerAddress.parseString(address);
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(parsed.getHost(), parsed.getPort()), PORT_PROBE_TIMEOUT_MILLIS);
+            return null;
+        } catch (IOException error) {
+            return error.getClass().getSimpleName() + ": " + error.getMessage();
+        }
+    }
+
+    /**
+     * Waits until the dedicated server has closed the connection (e.g. after {@code /stop}) and the client has left its
+     * world; logs the screen the client shows then.
+     */
+    static void waitUntilDisconnected(VisualScript script, String description, int timeoutTicks) {
+        script.until(description, context -> {
+            Minecraft minecraft = context.minecraft();
+            if (minecraft.level != null || minecraft.getConnection() != null)
+                return false;
+            LOGGER.info(PREFIX + "the client left the server; screen: {}",
+                    minecraft.screen == null ? "none" : minecraft.screen.getClass().getSimpleName());
+            return true;
+        }, timeoutTicks);
+    }
+
+    /** In the world of a remote server over a real network connection, with no screen or overlay in the way. */
+    private static boolean inServer(VisualContext context) {
+        Minecraft minecraft = context.minecraft();
+        return minecraft.level != null && minecraft.player != null && minecraft.screen == null
+                && minecraft.getOverlay() == null && minecraft.getSingleplayerServer() == null
+                && minecraft.getConnection() != null && !minecraft.getConnection().getConnection().isMemoryConnection();
+    }
+
+    private static String describeConnection(Minecraft minecraft) {
+        if (minecraft.getConnection() == null)
+            return "no connection";
+        return "remote address " + minecraft.getConnection().getConnection().getRemoteAddress() + ", memory connection "
+                + minecraft.getConnection().getConnection().isMemoryConnection() + ", integrated server "
+                + (minecraft.getSingleplayerServer() != null) + ", server brand "
+                + minecraft.getConnection().serverBrand();
     }
 
     private static void openExistingWorld(VisualContext context, VisualWorldProfile profile) {

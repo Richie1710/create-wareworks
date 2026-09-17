@@ -275,10 +275,14 @@ idea {
 // The API token is read from the Gradle property curseforgeToken; keep it in ~/.gradle/gradle.properties, never here.
 publishMods {
     file = tasks.named('jar', Jar).flatMap { it.archiveFile }
-    // Only the newest section of CHANGELOG.md (the first '## ' block) is uploaded as the file's changelog.
+    // CHANGELOG.md follows Keep a Changelog: only the entries of the released version ('## [<mod_version>] - <date>')
+    // are uploaded. Publishing fails while those entries still sit under '## [Unreleased]'.
+    def releaseVersion = project.mod_version
     changelog = providers.fileContents(layout.projectDirectory.file('CHANGELOG.md')).asText.map { String text ->
-        def sections = text.split(/(?m)^(?=## )/).findAll { it.startsWith('## ') }
-        (sections ? sections[0] : text).trim()
+        def section = text.split(/(?m)^(?=## )/).find { it.startsWith("## [${releaseVersion}]") }
+        if (section == null)
+            throw new GradleException("CHANGELOG.md has no section '## [${releaseVersion}]'. Move the entries from '## [Unreleased]' into it before publishing.")
+        section.readLines().drop(1).join('\n').replaceAll(/(?m)^\[[^\]]+\]: .*$/, '').trim()
     }
     type = ALPHA
     version = project.mod_version

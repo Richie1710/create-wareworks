@@ -16,6 +16,7 @@
 | **M9** | Recipe rebalance | Revised recipes for the terminal, rails, crane and output station, with no two recipes sharing an ingredient set | Done |
 | **M10** | Terminal redesign | Separate display side (chosen at placement, turned with the wrench) and crane intake side (derived from the aisle) | Done |
 | **M11** | Production patterns, stage 1 | Production station with 3 x 3 patterns: the warehouse delivers ingredients to the player's machines and stores the result | Done |
+| **M12** | Mechanical Arm interaction points | Create Mechanical Arms put items into the warehouse input and take them out of the output, terminal and production station | Done |
 
 ## Planned
 
