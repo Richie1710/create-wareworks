@@ -45,6 +45,7 @@ class StockIndexTest {
         assertEquals(0, index.totalItems());
         assertEquals(0, index.distinctKeys());
         assertEquals(0, index.locationCount());
+        assertEquals(0, index.occupiedLocations());
         assertEquals(0, index.count("iron"));
         assertEquals(0, index.countAt("iron", "A"));
         assertTrue(index.locationsOf("iron").isEmpty());
@@ -116,6 +117,42 @@ class StockIndexTest {
         assertTrue(index.contains("A"), "still a location, just empty");
         assertEquals(0, index.totalItems());
         assertTrue(index.keys().isEmpty());
+    }
+
+    /**
+     * {@code occupiedLocations} counts the locations that hold something, for the "used / total" line of a display:
+     * it must follow a location filling up and emptying again, a removal and a restore from a save, and it must not
+     * count a location that reads an inventory another one counts (a shared inventory gets an empty snapshot).
+     */
+    @Test
+    void occupiedLocationsFollowStock() {
+        StockIndex<String, String> index = new StockIndex<>();
+        index.update("A", InventorySnapshot.empty());
+        assertEquals(1, index.locationCount());
+        assertEquals(0, index.occupiedLocations(), "an empty location is indexed but not occupied");
+
+        index.update("A", snapshot("iron", 7));
+        assertEquals(1, index.occupiedLocations());
+        index.update("A", snapshot("iron", 3, "gold", 1));
+        assertEquals(1, index.occupiedLocations(), "a second key does not count the location twice");
+
+        index.update("B", snapshot("gold", 2));
+        index.update("C", InventorySnapshot.empty());
+        assertEquals(3, index.locationCount());
+        assertEquals(2, index.occupiedLocations(), "the alias of a shared inventory holds nothing of its own");
+
+        index.update("A", InventorySnapshot.empty());
+        assertEquals(1, index.occupiedLocations(), "an emptied location stops counting");
+        assertTrue(index.remove("B"));
+        assertEquals(0, index.occupiedLocations());
+        assertFalse(index.remove("B"), "a second removal changes nothing");
+        assertEquals(0, index.occupiedLocations());
+
+        assertTrue(index.restore("A", Map.of("clay", 4L)), "counts from a save");
+        assertEquals(1, index.occupiedLocations());
+        assertTrue(index.restore("A", Map.of()), "restoring nothing empties the location");
+        assertEquals(0, index.occupiedLocations());
+        assertEquals(2, index.locationCount(), "A and C are still indexed");
     }
 
     @Test
@@ -245,6 +282,7 @@ class StockIndexTest {
         assertEquals(0, index.totalItems());
         assertEquals(0, index.distinctKeys());
         assertEquals(0, index.locationCount());
+        assertEquals(0, index.occupiedLocations());
         assertTrue(index.locationsOf("iron").isEmpty());
         index.update("B", snapshot("iron", 1));
         index.update("A", snapshot("iron", 1));
@@ -316,6 +354,7 @@ class StockIndexTest {
         assertEquals(Set.of("iron", "gold"), view.keys());
         assertTrue(view.contains("A"));
         assertEquals(2, view.locationCount());
+        assertEquals(2, view.occupiedLocations());
         assertEquals(index.snapshotOf("A"), view.snapshotOf("A"));
         assertEquals(Map.of("iron", 2L, "gold", 1L), view.countsAt("B"));
         assertThrows(UnsupportedOperationException.class, () -> view.countsAt("B").clear());

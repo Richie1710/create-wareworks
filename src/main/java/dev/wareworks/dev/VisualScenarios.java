@@ -8,17 +8,18 @@ import java.util.function.Supplier;
 
 /** The visual test scenarios by name. Add new scenarios here. */
 final class VisualScenarios {
-    private static final Map<String, Supplier<VisualScenario>> SCENARIOS = Map.of(
-            AisleVisualScenario.NAME, AisleVisualScenario::new,
-            CranePosesVisualScenario.NAME, CranePosesVisualScenario::new,
-            BlocksVisualScenario.NAME, BlocksVisualScenario::new,
-            FiltersVisualScenario.NAME, FiltersVisualScenario::new,
-            RobustnessVisualScenario.NAME, RobustnessVisualScenario::new,
-            PonderVisualScenario.NAME, PonderVisualScenario::new,
-            TerminalVisualScenario.NAME, TerminalVisualScenario::new,
-            ShowcaseVisualScenario.NAME, ShowcaseVisualScenario::new,
-            ArmVisualScenario.NAME, ArmVisualScenario::new,
-            ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new);
+    private static final Map<String, Supplier<VisualScenario>> SCENARIOS = Map.ofEntries(
+            Map.entry(AisleVisualScenario.NAME, AisleVisualScenario::new),
+            Map.entry(CranePosesVisualScenario.NAME, CranePosesVisualScenario::new),
+            Map.entry(BlocksVisualScenario.NAME, BlocksVisualScenario::new),
+            Map.entry(FiltersVisualScenario.NAME, FiltersVisualScenario::new),
+            Map.entry(RobustnessVisualScenario.NAME, RobustnessVisualScenario::new),
+            Map.entry(PonderVisualScenario.NAME, PonderVisualScenario::new),
+            Map.entry(TerminalVisualScenario.NAME, TerminalVisualScenario::new),
+            Map.entry(DisplayVisualScenario.NAME, DisplayVisualScenario::new),
+            Map.entry(ShowcaseVisualScenario.NAME, ShowcaseVisualScenario::new),
+            Map.entry(ArmVisualScenario.NAME, ArmVisualScenario::new),
+            Map.entry(ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new));
 
     private VisualScenarios() {
     }

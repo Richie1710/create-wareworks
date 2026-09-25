@@ -56,6 +56,14 @@ can watch it happen.
 output, terminal and production station only as a source to take items from. Clicking a station again with the arm
 does not switch that. The warehouse interface, controller, crane dock and rails are not arm targets.
 
+**Stock displays** work through Create's **Display Link**, so you build them with the display blocks you already know.
+Put a link on the controller or the terminal for an **aisle summary** (letter, status, storage locations in use, item
+types, items) or a **stock list** of the most stocked item types; on a warehouse output or interface for the aisle's
+**stock of the item in its filter slot**; and on the crane dock for the **crane's status** — what it is doing, what it
+carries and which address it is heading for. Nixie tubes, display boards and lecterns show the text in your own
+language. A sign accepts it too, but it keeps whatever language the server writes it in — English on a dedicated
+server, for everyone — because a sign stores plain text. Create's own display sources behave the same way.
+
 Also included: goggle information on every block, Create-style item descriptions, a Ponder scene for every block,
 English and German translations, and recipes at mid-game Create tier.
 

@@ -545,3 +545,80 @@ that each scene compiles, is registered for the right item and looks right in th
     In the 2026-09-17 run neither server log nor the client log had an `ERROR` line. **By eye:** nothing left for one
     machine. Not covered: a client on another machine with real network latency, and a player who is not an operator
     (the scene is built with commands).
+
+## Q. Stock displays (M14)
+
+> Take a **Display Link** and a display target from Create's tab. Build the aisle of sections B–F, stock it, and hang
+> the links the way Create intends: right-click the **target** (nixie tubes, display board, sign, lectern) with the
+> link item to select it, then place the link **on the source block**. Right-clicking the placed link opens its screen,
+> where the source is chosen; shift-right-clicking with the item in hand clears a selection.
+>
+> **Partly automated in the real game (2026-09-25).** `./gradlew runVisualTest -Pwareworks.visualTest=display` builds a
+> powered aisle with a wall of four display boards and a nixie row, hangs five real links and lets them pull on their
+> own passive schedule. Before each of its 20 shots it compares every line against the controller's own numbers read
+> in the same server tick and checks that each flap section fits its flap count, so a wrong, stale or clipped line
+> fails the run. What it cannot judge: whether a board is **readable** from where a player stands, how the update
+> *feels*, and anything in German — the run is English only. Under each check, **Automated** says what the run proves,
+> **By eye** what is left for a person.
+
+93. Open the Display Link screen on each Wareworks block. The **controller** and the **terminal** offer **"Aisle
+    Summary"** and **"Stock List"**, in that order and with "Aisle Summary" preselected; the **output** and the
+    **interface** offer **"Stock of the Filtered Item"**; the **crane dock** offers **"Crane Status"**. On the
+    **rail**, the **input** and the **production station** the link offers nothing at all. Restart the game once and
+    open the controller's screen again: the two entries are still in the same order. On a **German client** the four
+    read "Gangübersicht", "Bestandsliste", "Bestand des gefilterten Gegenstands" and "Status des Regalbediengeräts",
+    and a board on the controller reads "Gang A: Bereit", "Plätze: …", "Gegenstandsarten: …", "Gegenstände: …" — with
+    the crane broken, "Gang A: Kein Regalbediengerät" (the mod uses no short form for that block).
+
+    **Automated** (GameTest `displaysourcesregistered`): the four ids resolve in Create's registry, each name uses the
+    generated lang key, and `DisplaySource.getAll` returns exactly the expected list, in the expected order, for all
+    eight blocks. The screen itself is never opened by a test. **By eye:** that the screen really lists them that way
+    and that nothing is cut off in German, plus the preselection after a restart.
+94. Point a link on the **controller** at a display board (or a row of nixie tubes) with "Aisle Summary". Within about
+    five seconds it reads `Aisle A: Ready`, `Locations: 3 / 30`, `Item types: 3`, `Items: 176`. Put on goggles and look
+    at the controller: the same numbers. Store something and watch the board pick the change up on its own. Break the
+    crane dock: the board falls back to the single line `Aisle A: No crane`.
+
+    **Automated** (`display`): all four lines compared string by string against the controller's letter, status,
+    `occupiedLocations`/`countedStorageLocationCount`, `distinctKeys` and `totalItems`, at rest and again after the
+    aisle grew (176 → 312 → 400 items). The `No crane` and `No aisle` cases are GameTests (`aislesummarydegraded`,
+    `sourcesoutsideaisle`), and `aislesummarysharedinventory` pins that two interfaces on one double chest count as
+    one inventory in the second number. **By eye:** whether four lines on a 6 × 2 board are legible from the aisle,
+    and whether a five-second refresh feels right.
+95. Point a link on the **terminal** at a display board with "Stock List". The most stocked item types appear largest
+    first, amount then name, and the list is cut to the board's rows. Scroll the link's own **"Display"** option between
+    *Shortened* and *Full Number*: the amounts switch between `1K` and `1024`. Stock two item types to exactly the
+    same amount and watch the
+    board over several refreshes: the two lines keep their order and never swap.
+
+    **Automated** (`display` and GameTests `stocklistoncontroller`, `stocklistonflapdisplay`,
+    `stocklistdeterministicties`, `stocklistemptywarehouse`): largest-first order, the row limit, the flap columns, a
+    fixed order over five consecutive pulls for two equal amounts, and an empty aisle listing nothing. **By eye:** the
+    shortened-number option, which is Create's own widget, and readability.
+96. Put an iron ingot in a **warehouse output's** request filter and point a link on it at a row of nixie tubes with
+    "Stock of the Filtered Item": the row shows the aisle's whole iron stock, not what the output holds. Type a text
+    into the link's **"Label"** field and it appears in front of the number. Take the filter item out: the row reads
+    `0`. Repeat on a **warehouse interface** with its store filter; a **List Filter** in that slot also reads `0`.
+
+    **Automated** (`display` and GameTests `filteredstockonoutput`, `filteredstockoninterface`): the stored total for
+    both slots, `0` for a cleared slot and `0` for a Create list filter. **By eye:** the label field (Create's own
+    widget) and that a nixie row is legible.
+97. Point a link on the **crane dock** at a display board with "Crane Status" and request something. The board follows
+    the crane within about a second: `Storing` / `Retrieving` / `Supplying`, the item with its amount, `To A-01-04R`,
+    and `Empty` flipping to `Holding Iron Ingot x64` when the grabber picks up. Turn the power off: it reads `Paused`.
+    With no job it reads `Idle` and `Empty`.
+
+    **Automated** (`display` and GameTests `cranestatusidle`, `cranestatusonjob`): activity, item with amount and
+    target address compared against the crane's own `CraneGoggleInfo` pulled in the same server tick, plus the idle,
+    holding and paused states. **By eye:** whether a one-second refresh keeps up with the crane well enough to be worth
+    watching, and that the board does not look like it is stuttering.
+98. **Targets and their limits.** Write the aisle summary onto a **sign** and onto a **lectern** on a *dedicated*
+    server, and read both with a **German client**: the lectern is in German, the sign is in English (`Aisle A: Ready`
+    …), because a sign stores plain text and the server flattens the line in its own language — Create's own sources
+    behave the same, and a board, a nixie row or a lectern is the target to use. Then point a link on a terminal that
+    belongs to **no aisle** at a board: it reads `No aisle`.
+
+    **Automated** (GameTest `displaylinkonsign`, and the small board of the `display` scenario): the sign's four lines
+    are the flattened components cut to the sign's line width, line 0 being the English `Aisle A: Ready`, and the
+    stray terminal's board reads exactly the `No aisle` line. **By eye:** that a German client really sees the sign in
+    English and the lectern in German, so the note in `warehouse-system.md` §10.2 is worded honestly.

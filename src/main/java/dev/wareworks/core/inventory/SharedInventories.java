@@ -113,6 +113,15 @@ public final class SharedInventories<L, I> {
         return identities.size();
     }
 
+    /**
+     * Number of locations whose inventory another location counts, i.e. {@link #size()} minus the number of distinct
+     * inventories. A caller that shows "how many inventories does this hold" subtracts this from its location count,
+     * because an alias never carries counts of its own.
+     */
+    public int aliasCount() {
+        return identities.size() - locations.size();
+    }
+
     public void clear() {
         identities.clear();
         locations.clear();

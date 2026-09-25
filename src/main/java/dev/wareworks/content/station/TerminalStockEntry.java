@@ -4,7 +4,6 @@ import java.util.Comparator;
 import java.util.Objects;
 
 import dev.wareworks.content.item.ItemKey;
-import dev.wareworks.content.item.ItemTypeSummaries;
 
 /**
  * One line of a warehouse terminal's stock snapshot ({@code docs/warehouse-system.md} §3.4): an item type of the aisle
@@ -28,8 +27,8 @@ import dev.wareworks.content.item.ItemTypeSummaries;
 public record TerminalStockEntry(ItemKey key, long total, long available, boolean producible, long producibleAmount) {
     /**
      * Stable order of a snapshot, independent of the client's language: the largest stock first, then the most
-     * available, then the item id, then the key's component hash. The same warehouse always produces the same list, and
-     * two items that differ only in their components keep a fixed order.
+     * available, then {@link ItemKey#ORDER} (item id, then the key's text). The same warehouse always produces the same
+     * list, and two items that differ only in their components keep a fixed order.
      * <p>
      * <b>Why the stored amount comes first.</b> A snapshot is cut off at {@code maxTerminalStockEntries}, so the
      * leading key decides which item types a screen gets to see at all. {@code available} moves as soon as anything is
@@ -37,14 +36,15 @@ public record TerminalStockEntry(ItemKey key, long total, long available, boolea
      * amount only moves when items really arrive or leave. The screen orders what it shows by its own
      * {@code TerminalSort} anyway, so this order is about the <b>cut</b>, not about the display.
      * <p>
-     * The last tie-break is {@link ItemKey#hashCode()} (item and components) rather than the key's text, which would
-     * render the whole component patch on every comparison of two entries with the same amounts.
+     * The last tie-break is deliberately <b>not</b> {@link ItemKey#hashCode()}: that hash mixes in {@code Item}'s
+     * identity hash, which differs after every restart, so it would swap two equally stocked keys of the same item
+     * between launches (M14 review fix). {@link ItemKey#ORDER} compares values instead, and renders the component
+     * patch only for two entries that already agree on amounts and item id.
      */
     public static final Comparator<TerminalStockEntry> ORDER = Comparator
             .comparingLong((TerminalStockEntry entry) -> -entry.total())
             .thenComparingLong(entry -> -entry.available())
-            .thenComparing(entry -> ItemTypeSummaries.itemId(entry.key().getItem()))
-            .thenComparingInt(entry -> entry.key().hashCode());
+            .thenComparing(TerminalStockEntry::key, ItemKey.ORDER);
 
     public TerminalStockEntry {
         Objects.requireNonNull(key, "key");

@@ -240,6 +240,59 @@ public final class WareworksLang {
     public static final String TERMINAL_ORDER_LOST = "gui.terminal.order_lost";
     /** {@code "Requested %1$s x%2$s, producing %3$s"}: an accepted request a production order was started for. */
     public static final String TERMINAL_PRODUCING = "gui.terminal.producing";
+    /**
+     * Name of the aisle summary display source in Create's Display Link screen. The four display source names must
+     * carry exactly these keys: Create builds them as {@code <namespace>.display_source.<registry path>}
+     * ({@code DisplaySource#getName}), so the path of the registry entry and the tail of the key are the same string.
+     */
+    public static final String DISPLAY_SOURCE_AISLE_SUMMARY = "display_source.aisle_summary";
+    /** Name of the stock list display source. */
+    public static final String DISPLAY_SOURCE_STOCK_LIST = "display_source.stock_list";
+    /** Name of the filtered stock display source. */
+    public static final String DISPLAY_SOURCE_FILTERED_STOCK = "display_source.filtered_stock";
+    /** Name of the crane status display source. */
+    public static final String DISPLAY_SOURCE_CRANE_STATUS = "display_source.crane_status";
+    /** {@code "Aisle %1$s: %2$s"}: aisle letter and short status on a display. */
+    public static final String DISPLAY_AISLE_LINE_AISLE = "display_source.aisle.line_aisle";
+    /**
+     * {@code "Locations: %1$s / %2$s"}: inventories of the aisle holding something, of all the aisle counts. Both
+     * numbers exclude shared-inventory aliases, which never hold counts of their own
+     * ({@code WarehouseControllerBlockEntity#countedStorageLocationCount()}).
+     */
+    public static final String DISPLAY_AISLE_LINE_LOCATIONS = "display_source.aisle.line_locations";
+    /** {@code "Item types: %1$s"}. */
+    public static final String DISPLAY_AISLE_LINE_ITEM_TYPES = "display_source.aisle.line_item_types";
+    /** {@code "Items: %1$s"}. */
+    public static final String DISPLAY_AISLE_LINE_ITEMS = "display_source.aisle.line_items";
+    /** {@code "No aisle"}: the source block belongs to no loaded aisle. */
+    public static final String DISPLAY_AISLE_NO_AISLE = "display_source.aisle.no_aisle";
+    /**
+     * Controller status {@code READY}, short. The display statuses are deliberately shorter than their goggle
+     * counterparts ({@link #GOGGLES_STATUS_READY} and friends): a row of four nixie tubes shows eight characters.
+     */
+    public static final String DISPLAY_AISLE_STATUS_READY = "display_source.aisle.status.ready";
+    /** Controller status {@code NO_DOCK}, short. */
+    public static final String DISPLAY_AISLE_STATUS_NO_DOCK = "display_source.aisle.status.no_dock";
+    /** Controller status {@code DOCK_MISALIGNED}, short. */
+    public static final String DISPLAY_AISLE_STATUS_DOCK_MISALIGNED = "display_source.aisle.status.dock_misaligned";
+    /** Controller status {@code NO_RAILS}, short. */
+    public static final String DISPLAY_AISLE_STATUS_NO_RAILS = "display_source.aisle.status.no_rails";
+    /** Crane activity on a display: no job. */
+    public static final String DISPLAY_CRANE_IDLE = "display_source.crane.idle";
+    /** Crane activity on a display: a {@code STORE} job. */
+    public static final String DISPLAY_CRANE_STORING = "display_source.crane.storing";
+    /** Crane activity on a display: a {@code RETRIEVE} job. */
+    public static final String DISPLAY_CRANE_RETRIEVING = "display_source.crane.retrieving";
+    /** Crane activity on a display: a {@code SUPPLY} job. */
+    public static final String DISPLAY_CRANE_SUPPLYING = "display_source.crane.supplying";
+    /** Crane activity on a display: paused, whatever the reason. */
+    public static final String DISPLAY_CRANE_PAUSED = "display_source.crane.paused";
+    /** {@code "%1$s x%2$s"}: the item and amount of the crane's job. */
+    public static final String DISPLAY_CRANE_LINE_JOB = "display_source.crane.line_job";
+    /** {@code "To %1$s"}: the address the crane is heading for. */
+    public static final String DISPLAY_CRANE_LINE_TARGET = "display_source.crane.line_target";
+    /** {@code "Holding %1$s"}: what the handling head carries. */
+    public static final String DISPLAY_CRANE_LINE_HOLDING = "display_source.crane.line_holding";
     /** {@code "Incoming: %1$s x%2$s"}: items a crane job is bringing to a storage location. */
     public static final String GOGGLES_RESERVED_INCOMING = "gui.goggles.reserved_incoming";
     /** {@code "Reserved for pickup: %1$s x%2$s"}: items reserved inside a storage location for a crane job. */

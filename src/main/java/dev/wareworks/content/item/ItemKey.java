@@ -1,5 +1,6 @@
 package dev.wareworks.content.item;
 
+import java.util.Comparator;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -40,6 +41,22 @@ public final class ItemKey {
     /** Network codec (item, count 1, components). */
     public static final StreamCodec<RegistryFriendlyByteBuf, ItemKey> STREAM_CODEC =
             ItemStack.STREAM_CODEC.map(ItemKey::new, key -> key.stack);
+
+    /**
+     * Total order of two keys that depends only on their values: the item id, then the key's text ({@link #toString()},
+     * i.e. the item id plus the component patch). Used wherever a list of item types has to look the same after a
+     * restart — the terminal's stock snapshot ({@code TerminalStockEntry.ORDER}) and the stock list display source.
+     * <p>
+     * <b>Not {@link #hashCode()}.</b> That hash is {@link ItemStack#hashItemAndComponents}, which mixes in
+     * {@code Item#hashCode()}; {@code Item} overrides neither {@code hashCode} nor {@code equals}, so the term is the
+     * JVM identity hash — the same within one run and different after every restart. An order falling back to it would
+     * swap two equally ranked keys of the same item (two named shulker boxes, two enchanted books) between launches,
+     * which is exactly what such an order exists to prevent. The text is only rendered when two keys share an item id,
+     * because {@link Comparator#thenComparing(java.util.function.Function)} evaluates its key extractor only on a tie.
+     */
+    public static final Comparator<ItemKey> ORDER =
+            Comparator.comparing((ItemKey key) -> ItemTypeSummaries.itemId(key.getItem()))
+                    .thenComparing(ItemKey::toString);
 
     private final ItemStack stack;
     private final int hash;
@@ -159,6 +176,10 @@ public final class ItemKey {
         return hash;
     }
 
+    /**
+     * The item id, plus the component patch if there is one. Value-based and therefore the same after a restart, which
+     * is why {@link #ORDER} uses it rather than the key's hash.
+     */
     @Override
     public String toString() {
         String id = String.valueOf(BuiltInRegistries.ITEM.getKey(stack.getItem()));

@@ -235,6 +235,24 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return membership.records(LocationKind.STORAGE);
     }
 
+    /** How many storage locations this aisle has, without building the record list ({@link #storageLocations()}). */
+    public int storageLocationCount() {
+        return membership.storageCount();
+    }
+
+    /**
+     * How many storage locations of this aisle count an inventory of their own: {@link #storageLocationCount()} minus
+     * the shared-inventory aliases ({@code docs/warehouse-system.md} §3.1.1).
+     * <p>
+     * This is the number to put opposite {@link StockView#occupiedLocations()}, which can never count an alias: an
+     * alias is indexed with empty counts on purpose, so a ratio against {@link #storageLocationCount()} could never
+     * reach full on an aisle with a double chest or an item vault behind several interfaces (M14 review fix). Two
+     * field reads, like the plain count.
+     */
+    public int countedStorageLocationCount() {
+        return membership.storageCount() - sharedInventories.aliasCount();
+    }
+
     public List<LocationRecord> inputStations() {
         return membership.records(LocationKind.INPUT);
     }

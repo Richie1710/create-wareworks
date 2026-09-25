@@ -17,6 +17,7 @@ import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCapabilities;
 import dev.wareworks.registry.WareworksCreativeTabs;
+import dev.wareworks.registry.WareworksDisplaySources;
 import dev.wareworks.registry.WareworksMenuTypes;
 import dev.wareworks.util.GoggleObservers;
 import net.createmod.catnip.lang.FontHelper;
@@ -61,8 +62,10 @@ public final class Wareworks {
 
         WareworksConfig.register(modContainer);
 
-        // 3. Registry classes, in dependency order (block entity types and arm interaction point types reference blocks).
+        // 3. Registry classes, in dependency order (block builders reference display sources; block entity types and
+        //    arm interaction point types reference blocks).
         WareworksCreativeTabs.register(modEventBus);
+        WareworksDisplaySources.register();
         WareworksBlocks.register();
         WareworksBlockEntityTypes.register();
         WareworksMenuTypes.register();

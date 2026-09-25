@@ -43,6 +43,12 @@ public interface StockView<K, L> {
     int locationCount();
 
     /**
+     * Number of indexed locations that hold at least one item, i.e. {@link #locationCount()} minus the empty ones.
+     * Maintained while the index changes, so asking is a field read, not a walk over the locations.
+     */
+    int occupiedLocations();
+
+    /**
      * The last snapshot of {@code location}; empty if the location is not indexed or its counts were restored without
      * slot information ({@link StockIndex#restore}) and no snapshot arrived since.
      */

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Stock displays through Create's Display Link: an aisle summary and a stock list on the warehouse controller and
+  terminal, the stock of a filter slot's item on the warehouse output and interface, and the crane's status on the
+  stacker crane dock
+
+### Fixed
+
+- The warehouse terminal's stock list could order two items of the same type that differ only in their data components
+  (two named shulker boxes, two enchanted books) differently after a restart
+
 ## [0.2.0-alpha] - 2026-09-25
 
 ### Added

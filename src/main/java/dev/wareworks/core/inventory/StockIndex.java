@@ -44,6 +44,7 @@ public final class StockIndex<K, L> implements StockView<K, L> {
     private final Map<K, Long> totals = new HashMap<>();
     private final StockView<K, L> readOnlyView = new ReadOnlyView();
     private long totalItems;
+    private int occupiedLocations;
     private long nextSequence;
 
     /** An index that orders locations by the time they were first added. */
@@ -66,9 +67,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         Objects.requireNonNull(location, "location");
         Objects.requireNonNull(snapshot, "snapshot");
         LocationEntry<K> entry = entryFor(location);
+        boolean wasOccupied = !entry.counts.isEmpty();
         boolean changed = applyDifference(location, entry.counts, snapshot.totals());
         entry.counts = snapshot.totals();
         entry.snapshot = snapshot;
+        trackOccupancy(wasOccupied, !entry.counts.isEmpty());
         return changed;
     }
 
@@ -94,9 +97,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         }
         Map<K, Long> after = Collections.unmodifiableMap(copy);
         LocationEntry<K> entry = entryFor(location);
+        boolean wasOccupied = !entry.counts.isEmpty();
         boolean changed = applyDifference(location, entry.counts, after);
         entry.counts = after;
         entry.snapshot = null;
+        trackOccupancy(wasOccupied, !after.isEmpty());
         return changed;
     }
 
@@ -112,7 +117,15 @@ public final class StockIndex<K, L> implements StockView<K, L> {
             return false;
         for (Map.Entry<K, Long> stored : entry.counts.entrySet())
             apply(stored.getKey(), location, stored.getValue(), 0L);
+        trackOccupancy(!entry.counts.isEmpty(), false);
         return true;
+    }
+
+    /** Keeps {@link #occupiedLocations} in step with one location changing between empty and holding stock. */
+    private void trackOccupancy(boolean wasOccupied, boolean isOccupied) {
+        if (wasOccupied == isOccupied)
+            return;
+        occupiedLocations += isOccupied ? 1 : -1;
     }
 
     private LocationEntry<K> entryFor(L location) {
@@ -242,6 +255,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
     }
 
     @Override
+    public int occupiedLocations() {
+        return occupiedLocations;
+    }
+
+    @Override
     public Optional<InventorySnapshot<K>> snapshotOf(L location) {
         LocationEntry<K> entry = entries.get(Objects.requireNonNull(location, "location"));
         return entry == null ? Optional.empty() : Optional.ofNullable(entry.snapshot);
@@ -253,6 +271,7 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         countsByKey.clear();
         totals.clear();
         totalItems = 0;
+        occupiedLocations = 0;
         nextSequence = 0;
     }
 
@@ -324,6 +343,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         @Override
         public int locationCount() {
             return StockIndex.this.locationCount();
+        }
+
+        @Override
+        public int occupiedLocations() {
+            return StockIndex.this.occupiedLocations();
         }
 
         @Override

@@ -75,6 +75,32 @@ class SharedInventoriesTest {
     }
 
     @Test
+    void aliasCountIsTheLocationsMinusTheInventories() {
+        SharedInventories<String, String> shared = new SharedInventories<>();
+        assertEquals(0, shared.aliasCount(), "nothing assigned yet");
+
+        shared.assign("left", DOUBLE_CHEST);
+        assertEquals(0, shared.aliasCount(), "a canonical location is no alias");
+        shared.assign("right", DOUBLE_CHEST);
+        shared.assign("single", SINGLE);
+        assertEquals(1, shared.aliasCount(), "one of the three locations counts nothing of its own");
+
+        shared.assign("a", VAULT);
+        shared.assign("b", VAULT);
+        shared.assign("c", VAULT);
+        assertEquals(3, shared.aliasCount(), "two vault aliases on top of the chest half");
+        assertEquals(6, shared.size());
+
+        shared.remove("a"); // the canonical vault location: an alias is promoted, the count drops by one
+        assertEquals(2, shared.aliasCount());
+        shared.assign("right", SINGLE); // the chest half now reads the single chest, whose location is canonical
+        assertEquals(2, shared.aliasCount(), "it left one identity and joined another as an alias");
+
+        shared.clear();
+        assertEquals(0, shared.aliasCount());
+    }
+
+    @Test
     void nullArgumentsAreRejected() {
         SharedInventories<String, String> shared = new SharedInventories<>();
         assertThrows(NullPointerException.class, () -> shared.assign(null, VAULT));

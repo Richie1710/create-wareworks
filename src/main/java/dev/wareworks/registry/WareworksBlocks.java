@@ -1,5 +1,6 @@
 package dev.wareworks.registry;
 
+import com.simibubi.create.api.behaviour.display.DisplaySource;
 import com.simibubi.create.foundation.data.BlockStateGen;
 import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.simibubi.create.foundation.data.ModelGen;
@@ -31,7 +32,9 @@ import net.minecraft.world.level.material.MapColor;
  * drops client-side listeners.
  * <p>
  * Conventions for new blocks: warehouse state blocks use {@code .transform(WareworksTags.relocationProtected())};
- * kinetic consumers use {@code .transform(WareworksStress.configuredImpact())}.
+ * kinetic consumers use {@code .transform(WareworksStress.configuredImpact())}. A block a Display Link may read gets
+ * its sources from {@link WareworksDisplaySources} — one {@code DisplaySource.displaySource(...)} transform, or
+ * {@link WareworksDisplaySources#bind} where a block offers two, so their order in the link's screen is fixed.
  */
 public final class WareworksBlocks {
     private static final CreateRegistrate REGISTRATE = Wareworks.registrate();
@@ -50,6 +53,7 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .transform(WareworksStress.configuredImpact())
+                    .transform(DisplaySource.displaySource(WareworksDisplaySources.CRANE_STATUS))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "item"))
@@ -80,6 +84,8 @@ public final class WareworksBlocks {
                     .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK))
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
+                    .transform(WareworksDisplaySources.bind(WareworksDisplaySources.AISLE_SUMMARY,
+                            WareworksDisplaySources.STOCK_LIST))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
@@ -96,6 +102,7 @@ public final class WareworksBlocks {
                     .properties(p -> p.mapColor(MapColor.PODZOL).sound(SoundType.NETHERITE_BLOCK))
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
+                    .transform(DisplaySource.displaySource(WareworksDisplaySources.FILTERED_STOCK))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
@@ -132,6 +139,7 @@ public final class WareworksBlocks {
                             .isRedstoneConductor((state, level, pos) -> false))
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
+                    .transform(DisplaySource.displaySource(WareworksDisplaySources.FILTERED_STOCK))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
@@ -153,6 +161,8 @@ public final class WareworksBlocks {
                             .isRedstoneConductor((state, level, pos) -> false))
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
+                    .transform(WareworksDisplaySources.bind(WareworksDisplaySources.AISLE_SUMMARY,
+                            WareworksDisplaySources.STOCK_LIST))
                     .blockstate(WareworksBlockStateGen.terminalBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "item"))

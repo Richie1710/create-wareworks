@@ -201,6 +201,32 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_DELIVERED_ITEMS), "Delivered so far: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_INCOMING), "Incoming: %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_OUTGOING), "Reserved for pickup: %1$s x%2$s");
+
+        // Display Link sources (M14). The four names must stay in step with the registry paths in
+        // WareworksDisplaySources: Create builds a source name as "wareworks.display_source.<path>". The line texts are
+        // deliberately short, because a row of four nixie tubes shows eight characters.
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_AISLE_SUMMARY), "Aisle Summary");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_STOCK_LIST), "Stock List");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_FILTERED_STOCK), "Stock of the Filtered Item");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_STATUS), "Crane Status");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLE), "Aisle %1$s: %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS), "Locations: %1$s / %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES), "Item types: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEMS), "Items: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No aisle");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_DOCK_MISALIGNED), "Crane turned");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_RAILS), "No rails");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_IDLE), "Idle");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_STORING), "Storing");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_RETRIEVING), "Retrieving");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_SUPPLYING), "Supplying");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_PAUSED), "Paused");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_JOB), "%1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_TARGET), "To %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_HOLDING), "Holding %1$s");
+
         for (RequestRejection rejection : RequestRejection.values()) {
             lang.accept(WareworksLang.key(rejection.langKey()), switch (rejection) {
                 case NO_CONTROLLER -> "not part of an aisle with a controller";

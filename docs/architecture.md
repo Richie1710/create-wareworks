@@ -34,7 +34,9 @@ dev.wareworks
 ├── registry                   WareworksBlocks, WareworksBlockEntityTypes, WareworksCreativeTabs,
 │                              WareworksCapabilities, WareworksTags, WareworksStress, WareworksMenuTypes;
 │                              WareworksArmInteractionPoints (Create mechanical arm interaction point types of the
-│                              stations, registered into Create's registry, M12, ADR-025)
+│                              stations, registered into Create's registry, M12, ADR-025);
+│                              WareworksDisplaySources (the four Create display link sources and the transformer that
+│                              binds two of them to one block in a fixed order, M14, ADR-026)
 │                              (WareworksItems only if plain items are ever added)
 ├── config                     WareworksConfig (SERVER ModConfigSpec + safe typed getters)
 ├── core                       ── pure logic, no Minecraft world access ──
@@ -79,7 +81,7 @@ dev.wareworks
 │   │   │                      CraneServerHooks (resets the once-per-server warning state on ServerStartingEvent, M5)
 │   │   └── head               HandlingHead (API), HeldItems, InventoryGrabber (MVP impl), TransferContext /
 │   │                          TransferContexts (storage interface, input, output) (M3)
-│   └── station                WarehouseStationBlock / BlockEntity (base), WarehouseInputBlock / BE,
+│   ├── station                WarehouseStationBlock / BlockEntity (base), WarehouseInputBlock / BE,
 │                              WarehouseOutputBlock / BE, RequestFilterBehaviour, StationBuffer, StationGoggleSummary (M2);
 │                              WarehouseDeliveryStationBlockEntity (shared base of the stations a crane delivers into),
 │                              WarehouseTerminalBlock / BE, TerminalStockEntry, TerminalStatus (M6, ADR-018);
@@ -94,6 +96,10 @@ dev.wareworks
 │                              StationArmPointType (the arm interaction point type of exactly one station block),
 │                              WarehouseInputArmPoint (deposit only), DeliveryStationArmPoint (take only: output,
 │                              terminal, production station) (M12, ADR-025)
+│   └── display                the four Create display link sources a player may read off a Wareworks block
+│                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
+│                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
+│                              FilteredStockDisplaySource, CraneStatusDisplaySource. Common code, server side only
 ├── network                    WareworksNetwork (payload registration), the terminal screen payloads:
 │                              TerminalStockPayload, TerminalStatusPayload (server → client),
 │                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019),
@@ -126,7 +132,9 @@ dev.wareworks
 │                              ProductionGameTests: patterns, supply jobs, the full loop with the test playing the
 │                              player's machine, refusal, cancel, timeout and persistence, M11;
 │                              MechanicalArmGameTests: arm interaction point types, their fixed modes and real
-│                              powered arms at the stations, M12)
+│                              powered arms at the stations, M12;
+│                              DisplayLinkGameTests: the four display sources, read through real display links on
+│                              lecterns, nixie tubes, a display board and a sign, M14)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -141,7 +149,9 @@ dev.wareworks
 │                              BlocksVisualScenario (static block close-ups, creative tab check, item screen),
 │                              PonderVisualScenario (opens the real Ponder UI per item and shoots every scene, M5),
 │                              RobustnessVisualScenario (chunk unload, save + quit + rejoin, blocks broken mid job)
-│                              with SceneItemCensus (item census of the whole scene, M5), CameraView,
+│                              with SceneItemCensus (item census of the whole scene, M5),
+│                              DisplayVisualScenario (a wall of display boards and a nixie row fed by real display
+│                              links, asserted against the controller's own numbers, M14), CameraView,
 │                              VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the system
 │                              property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -183,7 +193,7 @@ Naming notes (M1):
 * Goggle data of block entities is derived state that the server keeps small, compares by value and syncs only through `write(..., clientPacket = true)` when it changed (throttled); it is not saved to disk (warehouse interface, `warehouse-system.md` §3.1.1).
   * Its size must be bounded independently of inventory contents, because the update tag is part of every chunk packet and clients read block entity tags there with a 2 MB NBT quota. Never sync item data components for display; sync item ids (item types) instead.
   * It is refreshed and synced only while a player observes the block through goggles (`util.GoggleObservers`, per player, one ray pick per interval). Block entities implement `GoggleObservers.Observable` and need no ticker for this.
-* Initialisation order in the `Wareworks` constructor: `registerEventListeners` → `defaultCreativeTab(WareworksCreativeTabs.BASE_KEY)` → config → creative tab register → `WareworksBlocks` → `WareworksBlockEntityTypes` → `WareworksMenuTypes` → `WareworksArmInteractionPoints` (M12; its `DeferredRegister` goes on the mod bus, and its types reference blocks) → capability, network and datagen listeners. No static field of `Wareworks` references a registry class.
+* Initialisation order in the `Wareworks` constructor: `registerEventListeners` → `defaultCreativeTab(WareworksCreativeTabs.BASE_KEY)` → config → creative tab register → `WareworksDisplaySources` (M14; the block builders reference its entries, so it comes first) → `WareworksBlocks` → `WareworksBlockEntityTypes` → `WareworksMenuTypes` → `WareworksArmInteractionPoints` (M12; its `DeferredRegister` goes on the mod bus, and its types reference blocks) → capability, network and datagen listeners. No static field of `Wareworks` references a registry class.
 
 ## Key design decisions (ADR log)
 
@@ -894,6 +904,81 @@ face, an arm also works on a station under the next rack level; only the claw's 
 above. Renaming or removing one of the four ids later would silently drop that point from every saved arm
 (`ArmInteractionPoint.deserialize` returns null for an unknown type), which is why the ids are named after the blocks
 and treated as a save format.
+
+### ADR-026 — Stock displays are four read-only Display Link sources over state the warehouse already keeps (M14)
+*Context:* Create's **Display Link** is the established way to get a machine's numbers onto nixie tubes, a display
+board, a sign or a lectern, and up to M13 no Wareworks block offered anything to read. A player who wanted the stock of
+an aisle on a wall had no option at all; "stock display / Display Link sources" had been on the roadmap's "After MVP"
+list since the MVP. A link reads its source block through a registered `DisplaySource`
+(`CreateRegistries.DISPLAY_SOURCE`, a NeoForge-built registry like the arm point registry of M12) and pulls **on its own
+schedule** — every `getPassiveRefreshTicks()` while it is unpowered, once more when a redstone signal ends — so the
+source decides both what is shown and what a pull costs. The hard rules are unchanged: no per-tick inventory scans, no
+world searches, storage only through `Capabilities.ItemHandler.BLOCK`. A controller already keeps everything a stock
+display could want (the stock index, the membership counts, the aisle letter and status), and the dock republishes its
+`CraneGoggleInfo` on every state change.
+
+*Decision:*
+* **Four sources, all read-only, all answering from existing state.** `wareworks:aisle_summary` and
+  `wareworks:stock_list` on the **warehouse controller** and the **warehouse terminal**, `wareworks:filtered_stock` on
+  the **warehouse output** and the **warehouse interface**, `wareworks:crane_status` on the **stacker crane dock**
+  (`warehouse-system.md` §10). No source starts a scan, reads an inventory or searches the world; the most expensive
+  one is a single pass over the aisle's distinct item types. **Nothing is pushed** from a Wareworks tick either: a
+  display link is a puller, and making the warehouse notify it would have added work to every transfer for a block
+  that may not exist.
+* **Block, not block entity.** The bindings go through `DisplaySource.BY_BLOCK` (Registrate transforms on the block
+  builders), so a source is offered by what a player sees, in every block state.
+* **Two sources on one block are bound in one callback** (`WareworksDisplaySources#bind`). Registrate defers
+  `onRegisterAfter` callbacks through a `HashMultimap`, whose iteration order is not reproducible, and the link's
+  screen preselects the **first** source a block offers — two separate `.transform(...)` calls could therefore
+  preselect a different source after a restart.
+* **Registered with Registrate, not with a `DeferredRegister`.** `DisplaySource.displaySource(...)` needs a Registrate
+  `RegistryEntry`, which a `DeferredHolder` is not, so `registry.WareworksDisplaySources` builds the four entries with
+  `CreateRegistrate#displaySource(name, supplier)` — the path Create's own `AllDisplaySources` uses, which also wires
+  `BY_BLOCK` and `BY_BLOCK_ENTITY`. This is a deliberate deviation from ADR-025, where the arm point types went through
+  a plain `DeferredRegister`; the class still lives in `registry` with the same `register()`-forces-class-loading
+  shape, and the `Wareworks` constructor calls it **before** `WareworksBlocks`.
+* **Stored amounts, never available ones.** The filtered stock and the stock list report what the aisle holds. The
+  available amount moves with every reservation, so a display of it would count down and back up while the crane works.
+* **The filter item is the configuration.** The filtered stock source adds no setting beyond Create's generic "Label"
+  text box: the output's request filter and the interface's store filter already say which item a player cares about.
+* **Lines are cut to `maxRows()` and never clipped to `maxColumns()`.** Clipping needs `Component#getString()` on the
+  server, which resolves the line against the server's own language, so every player would be shown that one language
+  instead of their own. Targets clip themselves.
+* **The crane status refreshes five times as often** (20 ticks against Create's default 100), because a crane changes
+  state far faster than a warehouse fills up. Create's own stopwatch source uses 20 as well.
+* **Common code, server side, no client imports.** A link gathers its text on the server and sends the finished lines
+  to its target.
+
+*Reason:* Every one of these numbers already exists somewhere in the mod — on a goggle tooltip, in the terminal screen
+or in the controller's own bookkeeping — so the honest shape of this feature is a *view*, not a new subsystem. That is
+also what keeps the hard rules intact: a pull that only reads fields and one map cannot become a per-tick scan, however
+many links a player hangs on one controller, and a source that never writes cannot move an item. The four subjects are
+the four questions a warehouse wall is built to answer (how full is it, what is in it, how much of *this*, and what is
+the machine doing right now), and each is bound to the block a player would naturally point a link at. Binding by block
+rather than by block entity type keeps the terminal's multipart states and the output's `powered` state from mattering.
+The deviation from ADR-025 on registration is forced by Create's own API: `displaySource(...)` takes a Registrate entry,
+so using a `DeferredRegister` would have meant reimplementing the binding by hand for no gain. Reporting stored rather
+than available amounts is the difference between a display a player can read at a glance and one that flickers whenever
+the crane picks something up. The column rule is the one place where a visibly imperfect result was chosen over a broken
+one: an unclipped line that a nixie row cuts is still translated on the client, while a server-clipped line would be
+frozen to the server's own language for everyone.
+
+*Consequences:* Four new registry ids that are now a save-visible format — a display link stores the id of its source,
+so renaming one would silently reset every link built with it. 21 new lang keys (English generated, German
+hand-written), among them the four names the Display Link screen shows. Two small additions to the pure core made the
+pull O(1): `StockView#occupiedLocations()`, maintained incrementally in `StockIndex`, and a
+`KeyCount#largestFirst(map, n, tieBreak)` overload, because the index's `HashSet` iteration order is not reproducible
+and a display must not swap two equally stocked lines; `WarehouseControllerBlockEntity#countedStorageLocationCount()`
+(the membership's storage count minus `SharedInventories#aliasCount()`) keeps "used / total" from building the location
+record list **and** from mixing populations — an alias of a shared inventory is never occupied, so counting it in the
+total would stop the line from ever reading full. That tie-break is `ItemKey#ORDER` and compares values, never
+`ItemKey#hashCode`: the hash mixes in `Item`'s identity hash and differs after every restart. A sign flattens the component on the server, so it freezes the server's own
+translation — English on a dedicated server, because NeoForge loads every mod's `en_us.json` into the default language
+(`LanguageHook#loadModLanguages`); Create's own sources behave identically, and GameTest `displaylinkonsign` pins it.
+Lecterns, nixie tubes and display boards keep the component and are translated per player. `gametest.DisplayLinkGameTests` and the visual scenario `display` (`dev.DisplayVisualScenario`) cover the
+feature; the interface gains a second reason for its filter slot to be read, which `warehouse-system.md` §10 states
+next to ADR-021's storing rule. No Ponder scene was added: the teaching pass of M13 covered the blocks, and a display
+link is Create's own mechanic, taught by Create's own scene.
 
 ## Persistence & sync
 

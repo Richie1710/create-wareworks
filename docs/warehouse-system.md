@@ -1381,3 +1381,199 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `maxProductionOrders`, `productionOrderTimeoutTicks` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–64, 200–72000 |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
+
+## 10. Stock displays (Display Link sources, M14)
+
+> Decision and reasons: **ADR-026**.
+
+Classes: `registry.WareworksDisplaySources` (the four registered sources and the `bind` transformer),
+`content.display.WarehouseDisplays` (shared plumbing) with `AisleSummaryDisplaySource`, `StockListDisplaySource`,
+`FilteredStockDisplaySource` and `CraneStatusDisplaySource`.
+
+A player's Create **Display Link** reads one of these sources off a Wareworks block and writes the text onto nixie
+tubes, a display board, a sign or a lectern. Wareworks adds no display block of its own and pushes nothing: the link
+pulls on its own schedule, and every pull answers from state the controller and the crane already maintain.
+
+| Source id | Name in the link's screen | Offered by | What it writes |
+|---|---|---|---|
+| `wareworks:aisle_summary` | Aisle Summary | warehouse controller, warehouse terminal | four lines: aisle and status, storage locations in use, item types, items |
+| `wareworks:stock_list` | Stock List | warehouse controller, warehouse terminal | the most stocked item types with their amounts, one per line |
+| `wareworks:filtered_stock` | Stock of the Filtered Item | warehouse output, warehouse interface | one number: how many of the item in the block's filter slot the aisle holds |
+| `wareworks:crane_status` | Crane Status | stacker crane dock | what the crane is doing, the item and amount of its job, its target address, what the head holds |
+
+A block that offers two sources lists them in exactly this order, and the link's screen preselects the first one
+(`WareworksDisplaySources#bind`, §10.4). The **warehouse rail**, the **warehouse input** and the **warehouse production
+station** offer none, which GameTest `displaysourcesregistered` asserts, so it stays a decision rather than an
+oversight: a rail carries no state at all, and what an input or a production station holds is its own buffer, which its
+goggle tooltip shows and any funnel can read. A production station's **orders** are aisle state and belong to the
+controller; a source for them is a possible follow-up, not part of M14. Neither the output nor the interface reports
+its own contents: both give the whole aisle's stock of the item in their filter slot. What is special about the
+interface is only that its filter slot now has a second reason to be read.
+
+### 10.1 What each source shows
+
+**Aisle Summary** (controller, terminal):
+
+```text
+Aisle A: Ready          the aisle letter and the short controller status
+Locations: 3 / 30       inventories holding at least one item, of all inventories the aisle counts
+Item types: 3           distinct item keys in the stock index
+Items: 176              total stored amount
+```
+
+Both numbers of the "used / total" line are drawn from the same population, the **counted** inventories: locations that
+read an inventory another location already counts (§3.1.1 — a double chest behind two interfaces, an item vault behind
+several) are aliases, are indexed with empty counts and can therefore never be occupied. Counting them in the total
+would make the line unable to reach full on such an aisle, so `WarehouseControllerBlockEntity#countedStorageLocationCount()`
+subtracts them. The goggle line `Storage locations: 30` is a different number on purpose: it says how many locations
+the aisle *has*.
+
+The statuses are deliberately shorter than their goggle sentences (`Ready`, `No crane`, `Crane turned`, `No rails`),
+because a row of four nixie tubes shows eight characters. German shortens them the same way but keeps the block's own
+name (`Kein Regalbediengerät`, `Regalbediengerät verdreht` against the goggle sentences `Kein Regalbediengerät davor`
+and `Das Regalbediengerät davor zeigt in eine andere Richtung`): the mod uses no abbreviation for the stacker crane
+anywhere else, and "crane" is a short form English has but German has not.
+
+**Stock List** (controller, terminal): one line per item type, amount first, then the item name, largest first —
+Create's own `ItemListDisplaySource` layout. It lists what is **stored**, never what the aisle could produce: an item a
+production station has a pattern for but no stock of appears in a terminal's offer list (§3.5.2) and not here. Two item
+types with the same amount are ordered by `ItemKey.ORDER` — the item id, then the key's text (item id plus component
+patch) — the rule `TerminalStockEntry.ORDER` also ends with: the stock index keeps its keys in a `HashSet`, so without
+a tie-break a display would swap two equally stocked lines for no reason. The tie-break is **value-based** on purpose.
+`ItemKey#hashCode` is `ItemStack.hashItemAndComponents`, which mixes in `Item#hashCode()` — an identity hash that
+differs after every restart — so falling back to it would reorder two equally stocked keys of the *same* item (two
+named shulker boxes, two enchanted books) across launches, which is what the tie-break exists to prevent.
+
+**Stock of the Filtered Item** (output, interface): the aisle-wide **stored** total of the item in the block's own
+filter slot — the output's request filter (§3.2), the interface's store filter (§3.1). It is deliberately not the
+*available* amount, which moves with every reservation and would make a display count down and back up while the crane
+works. The filter item is the whole configuration; the source adds no setting of its own beyond Create's generic
+"Label" text box.
+
+**Crane Status** (dock):
+
+```text
+Storing                 Idle · Storing · Retrieving · Supplying · Paused (pausing wins over a job: a paused crane stands still)
+Iron Ingot x64          item and amount of the current job, omitted while there is none
+To A-01-04R             the job's target address, omitted while there is none
+Holding Iron Ingot x64  what the handling head carries, or "Empty"
+```
+
+### 10.2 Refresh, rows and columns
+
+* A link that is **not** powered pulls every `getPassiveRefreshTicks()`: 100 ticks (5 s) for the three warehouse
+  sources, Create's default, and **20 ticks** for the crane status, because a crane changes state far faster than a
+  warehouse fills up (Create's own fast source, the stopwatch, uses 20 as well). A **powered** link does not refresh at
+  all and pulls once when the signal ends — Create's behaviour, unchanged here.
+* Lines are cut to the target's `maxRows()` and **not** clipped to `maxColumns()`. Clipping would need
+  `Component#getString()` on the server, which resolves the line against the **server's** language, so every player
+  would be shown that one language and no client could translate the line any more. Targets clip themselves: a nixie
+  tube shows two characters, a display board cuts to its flap count, a sign to its own width
+  (`WarehouseDisplays#limit`).
+* A **sign** is the one target that **flattens** the component when the text is written, on the server. What it keeps
+  is therefore the server's own translation: on a dedicated server NeoForge loads every mod's `en_us.json` into the
+  default language (`LanguageHook#loadModLanguages`), so a sign reads **English** for every player whatever their own
+  language, and in single player it reads the host client's language. A key the English lang file does not carry would
+  land there raw. Create's own sources behave identically. Lecterns, nixie tubes and display boards keep the component
+  and are translated per player, so they are the targets to use when the language matters.
+
+### 10.3 Degraded cases
+
+| Situation | Aisle Summary | Stock List | Filtered Stock | Crane Status |
+|---|---|---|---|---|
+| Source block belongs to no aisle, or its controller's chunk is not loaded | one line `No aisle` | nothing | `0` | — |
+| Controller without a dock, or with a turned dock (`NO_DOCK`, `DOCK_MISALIGNED`) | only the status line | nothing: such a controller has no layout and no indexed location | its aisle is not registered either, so an output or interface beside it reads `0` | — |
+| Aisle indexed but empty | `Locations: 0 / 30`, `Item types: 0`, `Items: 0` | no line at all | `0` | — |
+| Filter slot empty, or holding a Create list, attribute or package filter | — | — | `0` | — |
+| Dock without a job | — | — | — | `Idle` plus `Empty` |
+
+A display therefore cannot tell "none in stock" from "not configured": keeping the filtered stock line numeric is what
+lets a display board use its number layout. Whether a block is part of no aisle at all or of one whose controller is
+merely unloaded is likewise not distinguished: both read `No aisle` / `0`. Telling them apart would need a
+`WarehouseRegistry` query of its own ("a registered layout contains this position, but its controller is not loaded"),
+and a stale number would be the worse answer in either case.
+
+### 10.4 Implementation notes
+
+* **Registration** (`registry.WareworksDisplaySources`, loaded from the `Wareworks` constructor **before**
+  `WareworksBlocks`, whose builders reference the entries): the four sources go into Create's registry
+  `CreateRegistries.DISPLAY_SOURCE` through `CreateRegistrate#displaySource(name, supplier)`, the path Create's own
+  `AllDisplaySources` uses, not through a NeoForge `DeferredRegister` like the arm interaction point types of M12
+  (ADR-025). Binding a source to a block needs a Registrate `RegistryEntry`, which a `DeferredHolder` is not
+  (ADR-026).
+* **The order of two sources on one block is fixed by hand.** Registrate defers every `onRegisterAfter` callback
+  through a `HashMultimap`, whose iteration order is not reproducible, so two separate
+  `.transform(DisplaySource.displaySource(...))` calls on one block could swap between launches — and the link's screen
+  preselects the first entry. `WareworksDisplaySources#bind(first, second)` adds both inside **one** callback instead.
+* **Resolving the controller** (`WarehouseDisplays#controller`): a controller answers for itself; every other source
+  block goes through `WarehouseRegistry#findController` (§4), the same lookup a station uses, so a block that lies in
+  two aisles is read by exactly the aisle that serves it.
+* **Cost of one pull.** Aisle summary, filtered stock and crane status are field and map reads; the stock list is one
+  pass over the distinct item types. `occupiedLocations()` is maintained incrementally in `StockIndex`, and
+  `countedStorageLocationCount()` is the membership's storage count minus `SharedInventories#aliasCount()` (two field
+  reads, no location record list), so "used / total" costs nothing either. Only the
+  controller lookup scales, with the number of registered controllers **of that level**. A player may therefore hang
+  many links on one warehouse; nothing runs per tick.
+* **Number formatting** follows the goggles and the terminal (`WareworksLang#number`, catnip's `LangNumberFormat`,
+  grouping separators included) for the aisle summary, the crane status and the filtered stock. The stock list keeps
+  Create's `ValueListDisplaySource` formatting, because the player's own "shortened / full number" option and the
+  two-column flap layout depend on it.
+* **Common code, server side.** A link gathers its text on the server and sends the finished lines to its target, so
+  none of the five classes imports a client class; the dedicated server loads them like any other content class.
+* **21 lang keys**, English generated, German hand-written. Create builds a source's name as
+  `<namespace>.display_source.<registry path>` (`DisplaySource#getName`), so the path of the registry entry and the
+  tail of the key are the same string; `WareworksLang` says so at the four name keys.
+
+### 10.5 Tests
+
+JUnit: `KeyCountTest` (the new `largestFirst(map, n, tieBreak)` overload — reproducible order, the tie-break never
+outranking the count, `n` clamping, unmodifiable result), `StockIndexTest#occupiedLocationsFollowStock` (a location
+filling and emptying, a second key not counting twice, an empty shared-inventory alias, removal, restore from a save)
+and `SharedInventoriesTest#aliasCountIsTheLocationsMinusTheInventories`.
+
+GameTests (`gametest.DisplayLinkGameTests`, `empty_7x5x7` for the registration test, `aisle_16x10x7` for the rest).
+Each test places a real `AllBlocks.DISPLAY_LINK` on a face of the source block, points it at a real target and calls
+`updateGatheredData()`, which is what an unpowered link does on its own schedule — so the whole chain runs, including
+the check that the source block really offers the source. A **lectern** keeps the components as the source built them
+and is therefore the target for line-by-line assertions by lang key and argument; a **nixie tube row** serializes the
+line to JSON and parses it back, which is the path of a display in a real world; a **display board** is the only target
+that goes through `provideFlapDisplayText`; a **sign** is the one that flattens the text on the server.
+
+* `displaysourcesregistered`: the four ids resolve in `CreateBuiltInRegistries.DISPLAY_SOURCE`, each name uses the
+  generated lang key, and `DisplaySource.getAll` returns the expected list, in the expected order, for all eight
+  Wareworks blocks — including the empty list for rail, input and production station.
+* `aislesummaryoncontroller` / `aislesummaryonterminal`: the four lines by key and arguments, on a lectern, plus line 0
+  on an eight-tube nixie row; the terminal resolves its controller through `WarehouseRegistry.findController`. Both
+  fixtures keep the four numbers pairwise different (one stocked location out of three, holding two item types), so no
+  two arguments of the summary can be swapped without a failure.
+* `aislesummarysharedinventory`: two interfaces on one double chest plus a third location read `1 / 2`, not `1 / 3` —
+  an alias is not in the total.
+* `aislesummarydegraded`: a controller without a dock shows exactly the status line, a terminal outside any aisle
+  exactly the `No aisle` line.
+* `sourcesoutsideaisle`: beside a **stocked** aisle, a terminal and an output that belong to none of it list nothing
+  and read `0` — the Stock List and Filtered Stock half of the first row of §10.3.
+* `stocklistoncontroller`, `stocklistemptywarehouse`, `stocklistonflapdisplay`: the largest-first list cut to the
+  target's rows, an indexed but empty aisle listing nothing without crashing, and a display board (driven by a creative
+  motor through a cogwheel) whose flap sections carry amount and item name.
+* `stocklistdeterministicties`: two types with equal amounts keep one order over five consecutive pulls, and it is the
+  documented one (smaller item id first); for two keys of the *same* item, which a display renders identically, the
+  order is asserted on `ItemKey.ORDER` itself.
+* `filteredstockonoutput` / `filteredstockoninterface`: the request filter and the store filter each give the aisle's
+  stored total, `0` once the filter is cleared and `0` for a Create list filter.
+* `cranestatusidle` / `cranestatusonjob`: a parked crane reports exactly `Idle` and `Empty`; a store job reports
+  activity, item with amount, target address and grabber before the pick, after it, and `Paused` once the rotation
+  stops.
+* `displaylinkonsign`: all four aisle summary lines reach a sign as the server-side flattening of the components the
+  source built, cut to the sign's own line width, and line 0 is the server's English text (`Aisle A: Ready`) — the
+  documented caveat of §10.2, pinned rather than merely survived. This test is what showed the caveat had been worded
+  wrongly in the first place (M14 review fix): NeoForge does load a mod's `en_us.json` on a dedicated server, so a sign
+  freezes the **English** line, not a raw lang key.
+
+The client side runs in the visual scenario `display` (`./gradlew runVisualTest -Pwareworks.visualTest=display`,
+`dev.DisplayVisualScenario`): a powered aisle with a wall of four display boards (crane status on the dock, aisle
+summary on the controller, stock list on the terminal, and aisle summary on a stray terminal that belongs to no aisle)
+plus a nixie row on the output's filtered stock. Five real display links pull on their own passive schedule; before
+every shot the scenario compares each line against the controller's own numbers read in the same tick and checks that
+every flap section fits its flap count, then the warehouse changes under the displays and the same views are shot
+again. It photographs the boards at 192 RPM, above Create's 128 RPM instant-flip threshold, so no shot catches
+half-turned flaps.
