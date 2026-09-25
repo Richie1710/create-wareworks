@@ -12,10 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mechanical Arms can take items from the warehouse output, terminal and production station, and put items into the
   warehouse input
 - The license file is included in the mod jar
+- Ponder scenes for placing a warehouse terminal, requesting items at it, feeding your machines from a warehouse, and
+  dedicating storage locations with filters
+- The warehouse terminal and the production station now appear in the Ponder index, under "Automated Warehouses" and
+  Create's "Item Transportation"
 
 ### Changed
 
 - License changed from MIT to GPL-3.0-only. Version 0.1.0-alpha remains available under MIT
+- The Ponder scenes for storing and retrieving now name Mechanical Arms alongside belts, funnels, chutes and hoppers
+- The funnels in the Ponder scenes are now shown in the state that really does what the scene describes: attached to
+  the station below them, and extracting where items are pulled out of one
 
 ## [0.1.0-alpha] - 2026-09-17
 

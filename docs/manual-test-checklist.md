@@ -171,14 +171,41 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 
 ## H. Ponder
 
-42. Hover any of the six items and hold **W**: a scene opens. Crane and rail show "Moving Items with a Stacker Crane";
-    controller and interface have two scenes each (arrow keys or scroll switch them).
+42. Hover any of the **eight** items and hold **W**: a scene opens. Crane and rail show "Moving Items with a Stacker
+    Crane"; the controller and the **warehouse terminal** have two scenes each, the **interface has three** and the
+    **production station** one (arrow keys or scroll switch them).
 43. `/ponder index` and the Ponder tag screen list **"Automated Warehouses"** with the stacker crane as its icon and all
-    six blocks inside; the dock also appears under Create's "Kinetic Appliances", and interface, input and output under
-    "Item Transportation".
-44. In the *overview*, *storing* and *retrieving* scenes the crane travels, lifts and reaches into a rack or station, and
-    the items it carries ride on the arm. The *interface* scene teaches addressing and deliberately shows the crane
-    parked, with no rotation — nothing moves there. No line shows a raw key such as `wareworks.ponder.…`.
+    **eight** blocks inside — terminal and production station included since M13; the dock also appears under Create's
+    "Kinetic Appliances", and interface, input, output, terminal and production station under "Item Transportation".
+44. In the *overview*, *storing*, *retrieving*, *requesting*, *production* and *filters* scenes the crane travels, lifts
+    and reaches into a rack or station, and the items it carries ride on the arm. The *interface* and *terminal* scenes
+    teach addressing and placement and deliberately show the crane parked, with no rotation — nothing moves there. No
+    line shows a raw key such as `wareworks.ponder.…`.
+
+The six checks below are the M13 scenes. The screenshot run (`runVisualTest -Pwareworks.visualTest=ponder`) only proves
+that each scene compiles, is registered for the right item and looks right in three frozen frames; whether a scene
+*reads* while it plays is exactly what it cannot judge.
+
+44a. **"Placing a Warehouse Terminal".** The screen (brass frame, dark display, tray below) is readable in every beat,
+    not edge-on. When the controller corrects the port, the change is visible: the arm port appears on the face
+    towards the aisle. The wrench beat clicks three times and the screen ends on the face it started on — it must read
+    as "the screen walks around the block", not as flicker.
+44b. **"Requesting Items at a Terminal".** The order of the beats matches how you really use the screen (open, search,
+    click, click again, crane, delivery, pull out). The funnel above the terminal flaps when the items arrive, and the
+    text about the terminal's own slots is on screen while the crane actually drops them.
+44c. **"Feeding Machines from a Warehouse".** The three-block tower reads as production station → funnel → Mechanical
+    Crafter, and the crafter is recognisable as *your* machine standing next to the station, not as part of Wareworks.
+    The sentence "Wareworks delivers and collects; it never crafts anything itself" arrives while the machine is in
+    view. The crane's mast crossing the tower while it delivers is expected; it must not hide the crafter.
+44d. **"Dedicating Storage Locations".** The filter item is visible **on the block**, in the slot on the aisle face, and
+    visibly changes from the iron ingot to the gold ingot when the location is re-dedicated. The crane must be seen
+    driving **past** the nearer unfiltered location to reach the dedicated one — that is the beat's whole point.
+44e. **Pacing.** In every new scene each line can be read to the end before it disappears, at normal speed and without
+    the arrow keys. The four scenes run about 26 s, 37 s, 51 s and 60 s; if one feels rushed, note which text.
+44f. **German client (`de_de`).** The lines of the four new scenes are translated and **fit their boxes** — German is
+    the longer language and the screenshot run only ever renders English, so overflowing or clipped text can only show
+    up here. Check the wording in context as well: the storing and retrieving scenes must name "Mechanische Arme"
+    alongside Trichter, Rutschen and Hopper.
 
 ## I. Robustness (worth one pass before shipping)
 

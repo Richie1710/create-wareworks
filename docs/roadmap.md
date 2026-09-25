@@ -17,6 +17,7 @@
 | **M10** | Terminal redesign | Separate display side (chosen at placement, turned with the wrench) and crane intake side (derived from the aisle) | Done |
 | **M11** | Production patterns, stage 1 | Production station with 3 x 3 patterns: the warehouse delivers ingredients to the player's machines and stores the result | Done |
 | **M12** | Mechanical Arm interaction points | Create Mechanical Arms put items into the warehouse input and take them out of the output, terminal and production station | Done |
+| **M13** | Ponder scenes for terminal, production station and storage filters | Four new scenes: placing a terminal, requesting at a terminal, feeding machines from a warehouse, and dedicating storage locations with filters; terminal and production station appear in the Ponder index | Done |
 
 ## Planned
 

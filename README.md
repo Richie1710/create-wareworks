@@ -56,8 +56,8 @@ can watch it happen.
 output, terminal and production station only as a source to take items from. Clicking a station again with the arm
 does not switch that. The warehouse interface, controller, crane dock and rails are not arm targets.
 
-Also included: goggle information on every block, Create-style item descriptions, Ponder scenes, English and German
-translations, and recipes at mid-game Create tier.
+Also included: goggle information on every block, Create-style item descriptions, a Ponder scene for every block,
+English and German translations, and recipes at mid-game Create tier.
 
 Items only ever move in the crane's grabber, and nothing is lost or duplicated when blocks break, chunks unload or the
 server restarts.
@@ -96,8 +96,10 @@ The build *is* the configuration; there is no setup screen.
 8. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
-Hold **W** over the crane, rail, controller, interface, input or output item for a Ponder scene that shows the same
-steps.
+Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Every block has one: the crane and the
+rail share the overview, the controller shows storing and retrieving, the interface adds addressing and storage
+filters, and the terminal and the production station have their own scenes (placing and requesting, and feeding a
+machine from the warehouse).
 
 ## Requesting items
 

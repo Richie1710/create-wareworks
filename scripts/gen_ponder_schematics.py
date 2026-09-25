@@ -44,12 +44,16 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 #   aisle along +X at z = 4, controller x = 0, dock x = 1, six rails x = 2..7,
 #   rack plane LEFT  z = 3 with its inventories at z = 2,
 #   rack plane RIGHT z = 5 with its inventories at z = 6.
-# The interface close-up uses a smaller 7 x 6 x 7 stage (square 7 base plate) with the aisle at z = 3.
+# The interface and terminal close-ups use a smaller 7 x 6 x 7 stage (square 7 base plate) with the aisle at z = 3.
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/interface": (7, 6, 7),
+    "warehouse/filters": (9, 7, 9),
     "warehouse/storing": (9, 7, 9),
     "warehouse/retrieving": (9, 7, 9),
+    "warehouse/terminal": (7, 6, 7),
+    "warehouse/requesting": (9, 7, 9),
+    "warehouse/production": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

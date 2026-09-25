@@ -75,9 +75,11 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("crane", WareworksBlocks.STACKER_CRANE, 1),
             new Subject("rail", WareworksBlocks.WAREHOUSE_RAIL, 1),
             new Subject("controller", WareworksBlocks.WAREHOUSE_CONTROLLER, 2),
-            new Subject("interface", WareworksBlocks.WAREHOUSE_INTERFACE, 2),
+            new Subject("interface", WareworksBlocks.WAREHOUSE_INTERFACE, 3),
             new Subject("input", WareworksBlocks.WAREHOUSE_INPUT, 1),
-            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 1));
+            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 1),
+            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 2),
+            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 1));
 
     @Override
     public String name() {

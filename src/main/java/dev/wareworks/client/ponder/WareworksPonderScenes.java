@@ -5,6 +5,8 @@ import com.tterrag.registrate.util.entry.ItemProviderEntry;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.client.ponder.scenes.CraneScenes;
+import dev.wareworks.client.ponder.scenes.ProductionScenes;
+import dev.wareworks.client.ponder.scenes.TerminalScenes;
 import dev.wareworks.client.ponder.scenes.WarehouseScenes;
 import dev.wareworks.registry.WareworksBlocks;
 import net.createmod.ponder.api.registration.PonderSceneRegistrationHelper;
@@ -31,10 +33,12 @@ import net.minecraft.resources.ResourceLocation;
  *   <caption>Scenes per component</caption>
  *   <tr><th>Component</th><th>Scenes</th></tr>
  *   <tr><td>stacker_crane, warehouse_rail</td><td>stacker_crane/overview</td></tr>
- *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/storing</td></tr>
+ *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_input</td><td>warehouse/storing</td></tr>
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving</td></tr>
+ *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting</td></tr>
+ *   <tr><td>warehouse_production</td><td>warehouse/production</td></tr>
  * </table>
  */
 public final class WareworksPonderScenes {
@@ -52,6 +56,10 @@ public final class WareworksPonderScenes {
                 .addStoryBoard("warehouse/interface", WarehouseScenes::warehouseInterface,
                         WareworksPonderTags.WAREHOUSE);
 
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_INTERFACE)
+                .addStoryBoard("warehouse/filters", WarehouseScenes::storageFilters,
+                        WareworksPonderTags.WAREHOUSE);
+
         scenes.forComponents(WareworksBlocks.WAREHOUSE_INPUT, WareworksBlocks.WAREHOUSE_CONTROLLER,
                         WareworksBlocks.WAREHOUSE_INTERFACE)
                 .addStoryBoard("warehouse/storing", WarehouseScenes::storing,
@@ -59,6 +67,18 @@ public final class WareworksPonderScenes {
 
         scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT, WareworksBlocks.WAREHOUSE_CONTROLLER)
                 .addStoryBoard("warehouse/retrieving", WarehouseScenes::retrieving,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_TERMINAL)
+                .addStoryBoard("warehouse/terminal", TerminalScenes::placing,
+                        WareworksPonderTags.WAREHOUSE);
+
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_TERMINAL)
+                .addStoryBoard("warehouse/requesting", TerminalScenes::requesting,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_PRODUCTION)
+                .addStoryBoard("warehouse/production", ProductionScenes::production,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

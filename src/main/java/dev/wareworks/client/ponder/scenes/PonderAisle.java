@@ -4,13 +4,17 @@ import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.logistics.funnel.AbstractDirectionalFunnelBlock;
+import com.simibubi.create.content.logistics.funnel.FunnelBlock;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
+import dev.wareworks.content.station.WarehouseProductionBlock;
+import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.registry.WareworksBlocks;
@@ -132,6 +136,31 @@ public record PonderAisle(int aisleZ, int dockX, int lastRailX, int plateSize) {
                 .setValue(WarehouseInputBlock.FACING, outward(side).getOpposite()), false);
     }
 
+    /** A warehouse terminal whose intake port already faces the aisle, with its screen on {@code display}. */
+    public void placeTerminal(CreateSceneBuilder scene, SceneBuildingUtil util, int position, int level, Side side,
+            TerminalDisplaySide display) {
+        placeTerminal(scene, util, position, level, side, outward(side).getOpposite(), display);
+    }
+
+    /**
+     * A warehouse terminal with an explicit intake port, for the scene that shows a misaligned port being corrected.
+     * Unlike the other stations the terminal has two independent directions: {@code intake} is the face the crane
+     * reaches through and {@code display} places the screen relative to it (ADR-022).
+     */
+    public void placeTerminal(CreateSceneBuilder scene, SceneBuildingUtil util, int position, int level, Side side,
+            Direction intake, TerminalDisplaySide display) {
+        scene.world().setBlock(rack(util, position, level, side), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
+                .setValue(WarehouseTerminalBlock.FACING, intake)
+                .setValue(WarehouseTerminalBlock.DISPLAY, display), false);
+    }
+
+    /** A production station; its opening faces the aisle. */
+    public void placeProduction(CreateSceneBuilder scene, SceneBuildingUtil util, int position, int level, Side side) {
+        scene.world().setBlock(rack(util, position, level, side), WareworksBlocks.WAREHOUSE_PRODUCTION
+                .getDefaultState()
+                .setValue(WarehouseProductionBlock.FACING, outward(side).getOpposite()), false);
+    }
+
     /** An output station; its opening faces the aisle. */
     public void placeOutput(CreateSceneBuilder scene, SceneBuildingUtil util, int position, int level, Side side) {
         scene.world().setBlock(rack(util, position, level, side), WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
@@ -139,12 +168,34 @@ public record PonderAisle(int aisleZ, int dockX, int lastRailX, int plateSize) {
     }
 
     /**
-     * An andesite funnel pointing straight down onto {@code below}. Put directly above a station it is both the visible
-     * connection to the rest of a factory and the funnel that {@code createItemOnBeltLike} and {@code flapFunnel} animate
-     * (they look at {@code position.above()}).
+     * An andesite funnel standing on {@code below} and putting items <b>into</b> it: the inventory a funnel is attached
+     * to is {@code pos.relative(FACING.getOpposite())}, so a funnel that fills the block underneath points <b>up</b>,
+     * exactly like one a player drops onto the top of a chest ({@code FunnelBlock#getStateForPlacement} turns the
+     * player's look direction around the same way). It is the visible connection to the rest of a factory and the
+     * funnel {@code createItemOnBeltLike} looks for, which is always {@code position.above()}.
+     * <p>
+     * <b>A vertical funnel has no flap.</b> {@code FunnelBlockEntity#hasFlap()} is true only while the funnel faces
+     * horizontally, and both render paths leave immediately without it ({@code FunnelRenderer#renderSafe},
+     * {@code FunnelVisual}), so {@code flapFunnel} on this block plays the funnel sound and moves nothing. A beat that
+     * needs to be seen therefore needs an overlay or an effect of its own.
      */
-    public void placeFunnelAbove(CreateSceneBuilder scene, BlockPos below) {
+    public void placeInsertingFunnelAbove(CreateSceneBuilder scene, BlockPos below) {
         scene.world().setBlock(below.above(), AllBlocks.ANDESITE_FUNNEL.getDefaultState()
-                .setValue(AbstractDirectionalFunnelBlock.FACING, Direction.DOWN), false);
+                .setValue(AbstractDirectionalFunnelBlock.FACING, Direction.UP)
+                .setValue(FunnelBlock.EXTRACTING, false), false);
+    }
+
+    /**
+     * An andesite funnel standing on {@code below} and pulling items <b>out</b> of it: the same upward mouth as
+     * {@link #placeInsertingFunnelAbove}, because both are attached to the block underneath, but in extracting mode
+     * ({@code FunnelBlockEntity#determineCurrentMode}), which is the state that really empties a station.
+     * <p>
+     * It has no flap either (see {@link #placeInsertingFunnelAbove}). Note that an extracting funnel drops what it takes
+     * as an item entity and never inserts into a neighbouring block, so it may not stand directly under a machine.
+     */
+    public void placeExtractingFunnelAbove(CreateSceneBuilder scene, BlockPos below) {
+        scene.world().setBlock(below.above(), AllBlocks.ANDESITE_FUNNEL.getDefaultState()
+                .setValue(AbstractDirectionalFunnelBlock.FACING, Direction.UP)
+                .setValue(FunnelBlock.EXTRACTING, true), false);
     }
 }

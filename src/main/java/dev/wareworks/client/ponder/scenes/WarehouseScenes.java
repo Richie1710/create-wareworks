@@ -1,9 +1,13 @@
 package dev.wareworks.client.ponder.scenes;
 
+import java.util.List;
+
 import com.simibubi.create.AllItems;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
+import dev.wareworks.content.storage.StorageFilterValueBox;
+import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
@@ -20,12 +24,20 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LeverBlock;
 import net.minecraft.world.level.block.state.properties.AttachFace;
+import net.minecraft.world.phys.Vec3;
 
 /**
- * Ponder scenes of the warehouse itself: storage locations, storing and retrieving.
+ * Ponder scenes of the warehouse itself: storage locations, storage filters, storing and retrieving.
  * <p>
  * As in {@link CraneScenes}, storyboards must stay level-free: they also run with {@code level == null} during lang
  * datagen. The order of the {@code .text(...)} calls defines the {@code text_1 … text_n} lang keys of each scene id.
+ * <p>
+ * <b>Which faces the viewer sees</b> (derived in {@link TerminalScenes}): Ponder's camera draws the <b>north</b> face of
+ * a block on the left half of the screen and the <b>west</b> face on the right half, so south and east point away. The
+ * {@link Side#LEFT} rack plane is therefore the one <i>nearest</i> the camera and its aisle face — the face that carries
+ * the store filter slot — looks away from the viewer. {@link #storageFilters} consequently builds its storage row on the
+ * {@link Side#RIGHT} plane, where the aisle face is north and its filter slot is readable, and leaves the left plane
+ * empty so that nothing stands in front of the row.
  */
 public final class WarehouseScenes {
     private static final int TEXT_TICKS = 70;
@@ -36,8 +48,20 @@ public final class WarehouseScenes {
     private static final int CONTROL_TICKS = 40;
     /** Amount the retrieving scene requests; also the number shown in the output's filter. */
     private static final int REQUEST_AMOUNT = 16;
+    /** Amount the filter scene feeds into its input per trip, twice: enough to fill the grabber visibly. */
+    private static final int STORE_AMOUNT = 32;
 
     private WarehouseScenes() {
+    }
+
+    /**
+     * The store filter slot of a storage location as a scene vector: centred on the interface's aisle face, but
+     * {@link StorageFilterValueBox#CENTER_Y_PIXELS} px above the block's bottom edge instead of at the face's centre,
+     * so an arrow or a text line points at the box a player really clicks (§3.1.1, ADR-021).
+     */
+    private static Vec3 filterSlot(SceneBuildingUtil util, BlockPos rack, Direction aisleFace) {
+        double belowCenter = (8.0 - StorageFilterValueBox.CENTER_Y_PIXELS) / 16.0;
+        return util.vector().blockSurface(rack, aisleFace).subtract(0, belowCenter, 0);
     }
 
     // --- storage locations -------------------------------------------------------------------------------------------
@@ -127,6 +151,181 @@ public final class WarehouseScenes {
         scene.markAsFinished();
     }
 
+    // --- storage filters -------------------------------------------------------------------------------------------
+
+    /**
+     * What the filter slot on a storage location's aisle face is for: it dedicates that location to an item (M8,
+     * ADR-021). A scene of its own rather than a beat inside {@link #warehouseInterface}, because a text inserted into
+     * an existing scene renumbers every later {@code text_n} key in both lang files.
+     * <p>
+     * The storage row stands on the {@link Side#RIGHT} plane (see the class comment) and the left plane stays empty, so
+     * the filter slots face the viewer and nothing is drawn in front of them.
+     */
+    public static void storageFilters(SceneBuilder builder, SceneBuildingUtil util) {
+        CreateSceneBuilder scene = new CreateSceneBuilder(builder);
+        scene.title("warehouse_filters", "Dedicating Storage Locations");
+
+        PonderAisle aisle = PonderAisle.WIDE;
+        scene.configureBasePlate(0, 0, aisle.plateSize());
+        scene.scaleSceneView(0.9f);
+
+        // Position 1 is left empty: the parked crane stands in front of it and would hide whatever is there.
+        int inputPosition = 2;
+        int freePosition = 4;
+        int dedicatedPosition = 5;
+        int lastRack = 6;
+        // The face a storage location on the right-hand rack plane turns towards the aisle, which is the only face a
+        // player can use and therefore the one that carries the filter slot.
+        Direction aisleFace = PonderAisle.outward(Side.RIGHT).getOpposite();
+
+        BlockPos dock = aisle.dock(util);
+        BlockPos input = aisle.rack(util, inputPosition, 0, Side.RIGHT);
+        BlockPos free = aisle.rack(util, freePosition, 0, Side.RIGHT);
+        BlockPos dedicated = aisle.rack(util, dedicatedPosition, 0, Side.RIGHT);
+        BlockPos dedicatedInventory = aisle.inventory(util, dedicatedPosition, 0, Side.RIGHT);
+        ItemStack dedication = new ItemStack(Items.IRON_INGOT);
+        ItemStack rededication = new ItemStack(Items.GOLD_INGOT);
+
+        aisle.placeAisle(scene, util);
+        aisle.placeInput(scene, util, inputPosition, 0, Side.RIGHT);
+        aisle.placeInsertingFunnelAbove(scene, input);
+        for (int position = freePosition; position <= lastRack; position++)
+            aisle.placeStorage(scene, util, position, 0, Side.RIGHT);
+        scene.world().setKineticSpeed(util.select().everywhere(), CraneScript.PONDER_RPM);
+
+        Selection aisleLine = util.select().fromTo(aisle.dockX() - 1, PonderAisle.FLOOR_Y, aisle.aisleZ(),
+                aisle.lastRailX(), PonderAisle.FLOOR_Y, aisle.aisleZ());
+        Selection storage = util.select().fromTo(aisle.dockX() + freePosition, PonderAisle.FLOOR_Y,
+                aisle.aisleZ() + 1, aisle.dockX() + lastRack, PonderAisle.FLOOR_Y, aisle.aisleZ() + 2);
+        Selection inputColumn = util.select().fromTo(input.getX(), input.getY(), input.getZ(), input.getX(),
+                input.getY() + 1, input.getZ());
+
+        scene.showBasePlate();
+        scene.idle(10);
+        scene.world().showSection(aisleLine, Direction.DOWN);
+        scene.world().showSection(storage, Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.world().showSection(inputColumn, Direction.DOWN);
+        scene.idle(FADE_IDLE);
+
+        // The two opening beats follow each other without a breath, and the dedication below is held longer than a
+        // normal beat: that is what puts the visual test's 20 % moment on the click instead of between two texts.
+        scene.overlay().showFilterSlotInput(filterSlot(util, free, aisleFace), aisleFace, TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Every storage location has a filter slot on its aisle side")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(filterSlot(util, free, aisleFace));
+        scene.idle(TEXT_TICKS);
+
+        scene.overlay().showFilterSlotInput(filterSlot(util, free, aisleFace), aisleFace, TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("An empty slot accepts everything, which is how every warehouse starts")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(free, Direction.WEST));
+        scene.idle(TEXT_TICKS);
+
+        // Writes the filtering behaviour's NBT; the filter item itself is drawn by WarehouseInterfaceRenderer.
+        scene.world().setFilterData(util.select().position(dedicated), WarehouseInterfaceBlockEntity.class, dedication);
+        scene.overlay().showControls(filterSlot(util, dedicated, aisleFace), Pointing.UP, CONTROL_TICKS)
+                .rightClick()
+                .withItem(dedication);
+        scene.idle(7);
+        scene.overlay().showOutline(PonderPalette.GREEN, "dedicated", util.select().position(dedicated),
+                TEXT_TICKS + 40);
+        scene.overlay().showText(TEXT_TICKS + 40)
+                .text("Click it with an item, and only that item is stored here")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(filterSlot(util, dedicated, aisleFace));
+        scene.idle(TEXT_IDLE + 40);
+
+        scene.overlay().showText(TEXT_TICKS + 30)
+                .text("List, attribute and package filters work the same way")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(dedicated, Direction.WEST));
+        // The three Create filter items of ADR-021, shown in turn rather than named only in the text.
+        for (ItemStack filterItem : List.of(AllItems.FILTER.asStack(), AllItems.ATTRIBUTE_FILTER.asStack(),
+                AllItems.PACKAGE_FILTER.asStack())) {
+            scene.overlay().showControls(filterSlot(util, dedicated, aisleFace), Pointing.UP, 30)
+                    .rightClick()
+                    .withItem(filterItem);
+            scene.idle(30);
+        }
+
+        // Inserts through the input's DirectBeltInputBehaviour and flaps the funnel above it.
+        scene.world().createItemOnBeltLike(input, Direction.UP, new ItemStack(Items.IRON_INGOT, STORE_AMOUNT));
+        scene.idle(15);
+        // Outline and text both stay up for the whole trip below, which is far longer than one text beat, so the
+        // location the crane drives past its nearer neighbour for stays marked while it does it.
+        scene.overlay().showOutline(PonderPalette.OUTPUT, "target", util.select().position(dedicated),
+                TEXT_TICKS + 150);
+        scene.overlay().showText(TEXT_TICKS + 150)
+                .text("Dedicated locations fill before any unfiltered one")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(dedicated));
+        CraneScript crane = CraneScript.parkedAt(scene, dock);
+        crane.moveTo(CranePose.at(inputPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_SOURCE);
+        crane.moveTo(new CranePose(inputPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_SOURCE);
+        crane.hold(Items.IRON_INGOT, STORE_AMOUNT);
+        crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
+        crane.moveTo(CranePose.at(inputPosition, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
+        // Drives past the nearer, unfiltered location: that is the whole point of this beat.
+        crane.moveTo(CranePose.at(dedicatedPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
+        crane.moveTo(new CranePose(dedicatedPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.dwell(CranePhase.DROP, 10);
+        crane.release();
+        crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        scene.effects().indicateSuccess(dedicated);
+        crane.moveTo(CranePose.at(dedicatedPosition, 0, Side.RIGHT), CranePhase.RETRACT_TARGET);
+        // Parks again, so the filter beat below is not read past the crane's mast.
+        crane.moveTo(CranePose.at(0, 0, Side.LEFT), CranePhase.IDLE);
+        scene.idle(10);
+
+        scene.world().setFilterData(util.select().position(dedicated), WarehouseInterfaceBlockEntity.class,
+                rededication);
+        scene.overlay().showControls(filterSlot(util, dedicated, aisleFace), Pointing.UP, CONTROL_TICKS)
+                .rightClick()
+                .withItem(rededication);
+        scene.idle(7);
+        scene.overlay().showOutline(PonderPalette.GREEN, "kept", util.select().position(dedicated)
+                .add(util.select().position(dedicatedInventory)), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Changing a filter moves nothing, and what is inside can always be retrieved")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(dedicatedInventory));
+        scene.idle(TEXT_IDLE);
+
+        scene.world().createItemOnBeltLike(input, Direction.UP, new ItemStack(Items.COPPER_INGOT, STORE_AMOUNT));
+        scene.idle(15);
+        scene.overlay().showOutline(PonderPalette.OUTPUT, "free", util.select().position(free), TEXT_TICKS + 170);
+        scene.overlay().showText(TEXT_TICKS + 170)
+                .text("An item that matches no filter needs a location without one")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(free));
+        crane.moveTo(CranePose.at(inputPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_SOURCE);
+        crane.moveTo(new CranePose(inputPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_SOURCE);
+        crane.hold(Items.COPPER_INGOT, STORE_AMOUNT);
+        crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
+        crane.moveTo(CranePose.at(inputPosition, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
+        crane.moveTo(CranePose.at(freePosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
+        crane.moveTo(new CranePose(freePosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.dwell(CranePhase.DROP, 10);
+        crane.release();
+        crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        scene.effects().indicateSuccess(free);
+        crane.moveTo(CranePose.at(freePosition, 0, Side.RIGHT), CranePhase.RETRACT_TARGET);
+        crane.moveTo(CranePose.at(0, 0, Side.LEFT), CranePhase.IDLE);
+        scene.idle(20);
+
+        scene.markAsFinished();
+    }
+
     // --- storing ---------------------------------------------------------------------------------------------------
 
     /** Items enter through an input station; the controller plans a job and the crane stores them. */
@@ -150,7 +349,7 @@ public final class WarehouseScenes {
 
         aisle.placeAisle(scene, util);
         aisle.placeInput(scene, util, inputPosition, 0, Side.RIGHT);
-        aisle.placeFunnelAbove(scene, input);
+        aisle.placeInsertingFunnelAbove(scene, input);
         for (int position = firstRack; position <= lastRack; position++) {
             aisle.placeStorage(scene, util, position, 0, Side.LEFT);
             aisle.placeStorage(scene, util, position, 0, Side.RIGHT);
@@ -180,7 +379,7 @@ public final class WarehouseScenes {
         scene.world().createItemOnBeltLike(input, Direction.UP, new ItemStack(Items.COPPER_INGOT, 32));
         scene.idle(10);
         scene.overlay().showText(TEXT_TICKS)
-                .text("Belts, funnels, chutes and hoppers can put items in; nothing can be taken back out")
+                .text("Belts, funnels, chutes, hoppers and Mechanical Arms can put items in; nothing comes back out")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().topOf(input.above()));
@@ -256,7 +455,8 @@ public final class WarehouseScenes {
 
         aisle.placeAisle(scene, util);
         aisle.placeOutput(scene, util, outputPosition, 0, Side.RIGHT);
-        aisle.placeFunnelAbove(scene, output);
+        // Extracting, because that is the funnel text_6 talks about: the one that really empties the output.
+        aisle.placeExtractingFunnelAbove(scene, output);
         scene.world().setBlock(lever, Blocks.LEVER.defaultBlockState()
                 .setValue(LeverBlock.FACE, AttachFace.FLOOR)
                 .setValue(LeverBlock.FACING, Direction.SOUTH), false);
@@ -334,7 +534,7 @@ public final class WarehouseScenes {
         scene.idle(10);
 
         scene.overlay().showText(TEXT_TICKS)
-                .text("and drops them into the output, where funnels, chutes and hoppers pull them out")
+                .text("and drops them into the output, where funnels, chutes, hoppers and Mechanical Arms pull them out")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(output, Direction.WEST));
@@ -346,7 +546,11 @@ public final class WarehouseScenes {
         crane.moveTo(CranePose.at(outputPosition, 0, Side.RIGHT), CranePhase.RETRACT_TARGET);
         crane.moveTo(CranePose.at(0, 0, Side.LEFT), CranePhase.IDLE);
 
+        // Only the funnel sound: a vertical funnel has no flap geometry (see PonderAisle#placeInsertingFunnelAbove),
+        // so the beat is carried by the outline and the success particles, not by the funnel itself.
         scene.world().flapFunnel(output.above(), true);
+        scene.overlay().showOutline(PonderPalette.OUTPUT, "pickup", util.select().position(output)
+                .add(util.select().position(output.above())), TEXT_TICKS);
         scene.effects().indicateSuccess(output);
         scene.idle(TEXT_IDLE);
 

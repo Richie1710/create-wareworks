@@ -251,9 +251,18 @@
   "wareworks.ponder.warehouse_interface.text_4": "Zusammen mit dem Gang des Geräts bekommt jeder Lagerplatz eine Adresse: Gangbuchstabe, Ebene und Position",
   "wareworks.ponder.warehouse_interface.text_5": "Die Ingenieursbrille zeigt diese Adresse, das angeschlossene Inventar und seinen Inhalt",
 
+  "wareworks.ponder.warehouse_filters.header": "Lagerplätze einem Gegenstand zuweisen",
+  "wareworks.ponder.warehouse_filters.text_1": "Jeder Lagerplatz hat ein Filterfeld auf seiner Gangseite",
+  "wareworks.ponder.warehouse_filters.text_2": "Ein leeres Feld nimmt alles an; so beginnt jedes Lager",
+  "wareworks.ponder.warehouse_filters.text_3": "Klicke es mit einem Gegenstand an, und nur dieser wird hier eingelagert",
+  "wareworks.ponder.warehouse_filters.text_4": "Listen-, Attribut- und Paketfilter funktionieren genauso",
+  "wareworks.ponder.warehouse_filters.text_5": "Zugewiesene Lagerplätze füllen sich vor jedem Platz ohne Filter",
+  "wareworks.ponder.warehouse_filters.text_6": "Ein geänderter Filter bewegt nichts, und was drin ist, lässt sich immer auslagern",
+  "wareworks.ponder.warehouse_filters.text_7": "Ein Gegenstand, auf den kein Filter passt, braucht einen Lagerplatz ohne Filter",
+
   "wareworks.ponder.warehouse_storing.header": "Gegenstände in einem Lager einlagern",
   "wareworks.ponder.warehouse_storing.text_1": "Gegenstände gelangen über einen Lagereingang in ein Lager",
-  "wareworks.ponder.warehouse_storing.text_2": "Förderbänder, Trichter, Rutschen und Hopper können einfügen; herausholen kann niemand",
+  "wareworks.ponder.warehouse_storing.text_2": "Förderbänder, Trichter, Rutschen, Hopper und Mechanische Arme können einfügen; herausholen kann niemand",
   "wareworks.ponder.warehouse_storing.text_3": "Die Lagersteuerung sucht einen freien Lagerplatz und erteilt einen Auftrag",
   "wareworks.ponder.warehouse_storing.text_4": "Das Regalbediengerät fährt zum Eingang und sein Greifer nimmt die Gegenstände auf",
   "wareworks.ponder.warehouse_storing.text_5": "Es bringt sie zum gewählten Lagerplatz und legt sie in das Inventar dahinter",
@@ -265,5 +274,31 @@
   "wareworks.ponder.warehouse_retrieving.text_3": "Halte Rechtsklick darauf, um die Menge einzustellen, höchstens einen Stapel",
   "wareworks.ponder.warehouse_retrieving.text_4": "Jeder Redstone-Impuls fordert diese Menge bei der Lagersteuerung an",
   "wareworks.ponder.warehouse_retrieving.text_5": "Das Regalbediengerät holt die Gegenstände vom Lagerplatz, der sie enthält",
-  "wareworks.ponder.warehouse_retrieving.text_6": "und legt sie in den Ausgang, aus dem Trichter, Rutschen und Hopper sie abziehen"
+  "wareworks.ponder.warehouse_retrieving.text_6": "und legt sie in den Ausgang, aus dem Trichter, Rutschen, Hopper und Mechanische Arme sie abziehen",
+
+  "wareworks.ponder.warehouse_terminal.header": "Ein Lagerterminal platzieren",
+  "wareworks.ponder.warehouse_terminal.text_1": "Ein Lagerterminal wird so gesetzt, dass sein Bildschirm zu dir zeigt",
+  "wareworks.ponder.warehouse_terminal.text_2": "Von der Regalseite gesetzt, dreht die Lagersteuerung seine Greiferöffnung von selbst zum Gang",
+  "wareworks.ponder.warehouse_terminal.text_3": "Stelle dich dorthin, wo du es ablesen willst: Der Bildschirm behält seine Seite, nur die Greiferöffnung wandert",
+  "wareworks.ponder.warehouse_terminal.text_4": "Der Schraubenschlüssel dreht den Bildschirm auf die nächste Seite, nie auf die Greiferöffnung und weg von der Gangseite",
+  "wareworks.ponder.warehouse_terminal.text_5": "Die Ingenieursbrille zeigt seine Adresse, was hierher geliefert wurde und warum eine Anforderung abgelehnt wurde",
+
+  "wareworks.ponder.warehouse_requesting.header": "Gegenstände am Lagerterminal anfordern",
+  "wareworks.ponder.warehouse_requesting.text_1": "Rechtsklicke den Bildschirm mit leerer Hand, um das Terminal zu öffnen",
+  "wareworks.ponder.warehouse_requesting.text_2": "Es listet alles auf, was der Gang auf Lager hat, und das Suchfeld findet einen Gegenstand am Namen",
+  "wareworks.ponder.warehouse_requesting.text_3": "Klick fordert die Menge aus dem Feld an, Umschalt einen Stapel, Strg alles",
+  "wareworks.ponder.warehouse_requesting.text_4": "Ein weiterer Klick auf denselben Gegenstand vergrößert die offene Anforderung, statt eine zweite Fahrt zu starten",
+  "wareworks.ponder.warehouse_requesting.text_5": "Das Regalbediengerät holt die Gegenstände von den Lagerplätzen, die sie enthalten",
+  "wareworks.ponder.warehouse_requesting.text_6": "und legt sie in die eigenen Plätze des Terminals",
+  "wareworks.ponder.warehouse_requesting.text_7": "Trichter, Rutschen, Hopper und Mechanische Arme können sie von dort abziehen",
+
+  "wareworks.ponder.warehouse_production.header": "Maschinen aus dem Lager versorgen",
+  "wareworks.ponder.warehouse_production.text_1": "Eine Produktionsstation versorgt die Maschinen, die du daneben baust",
+  "wareworks.ponder.warehouse_production.text_2": "Ihr Muster sagt nur, was ein Durchlauf deiner Maschine braucht und herstellt; verbraucht wird nichts",
+  "wareworks.ponder.warehouse_production.text_3": "Ein Lagerterminal bietet dieses Ergebnis an, auch wenn das Lager keines davon hat",
+  "wareworks.ponder.warehouse_production.text_4": "Die Lagersteuerung reserviert die Zutaten, und das Regalbediengerät bringt sie zur Station",
+  "wareworks.ponder.warehouse_production.text_5": "Dein eigener Trichter, deine Rutsche, dein Förderband oder dein Mechanischer Arm trägt sie in die Maschine",
+  "wareworks.ponder.warehouse_production.text_6": "Wareworks liefert und sammelt ein; es stellt selbst nie etwas her",
+  "wareworks.ponder.warehouse_production.text_7": "Das Produkt kommt über einen gewöhnlichen Lagereingang zurück, wie jeder andere Gegenstand",
+  "wareworks.ponder.warehouse_production.text_8": "Das Regalbediengerät lagert es ein, und deine wartende Anforderung wird daraus bedient"
 }

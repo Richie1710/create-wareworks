@@ -62,6 +62,7 @@ A-03-07R    aisle A · level 03 · position 07 · rack side R
   * **Ranking:** a location whose filter **selects** the item ranks **above** every unfiltered location, so dedicated chests fill first; the existing rules (exact-item consolidation, item-type grouping, travel time) decide within that (§7.1, §7.4). A **deny** list (or a deny-mode attribute filter) merely does not exclude the item, which is not a dedication: such a location ranks like an unfiltered one (`FilterMatch.ALLOWED`, **M8 review fix** — before, one "anything but iron" chest outranked consolidation and item-type grouping for *every* item in the warehouse and filled with a mix of everything, the exact mixing item-type grouping was added in M3 to prevent).
   * An item that matches no filter needs an unfiltered location. Without one the input keeps the items, exactly as for a full warehouse, and the controller reports **`NO_MATCHING_FILTER`** — its own planning reason since the **M8 review**, because a retrieval frees space but never makes a filter match: the player's fix is an unfiltered location, not more room, and a stuck "no storage location accepts the input items" must not mask a later, genuine full warehouse. It arms the same `fullBackoffTicks` back-off as `WAREHOUSE_FULL` (§7.4).
   * **Changing or clearing a filter never moves, drops or deletes stored items**, and nothing is re-shuffled retroactively. Re-balancing an existing warehouse is a post-MVP idea.
+  * **In-game teaching (M13):** the Ponder scene `warehouse/filters` ("Dedicating Storage Locations", `client.ponder.scenes.WarehouseScenes#storageFilters`) shows, in this order: the slot on the aisle face, an empty slot accepting everything, a dedication by right-click, the three Create filter items, the crane driving **past** a nearer unfiltered location to fill the dedicated one, a re-dedication that moves nothing and leaves the stock retrievable, and an unmatched item going to the location without a filter. The one ranking rule it deliberately leaves out is the deny-list case above — a scene cannot show that a location does *not* rank higher — so its text speaks of **dedicated** locations, never of "locations with a filter" (**M13 review fix**: the German line said the latter and so claimed the wider, wrong rule). It is registered for the warehouse interface, which therefore has three scenes (ADR-016). Until M13 a player who learns the mod through Ponder saw no filter slot at all; the Shift tooltip and the README were the only teaching.
 * Goggles: address (or "not part of an aisle"), the store filter (or "Accepts everything"), attached block name, used/total slots, top 3 item types with counts, reserved amounts. Goggle data is kept fresh only while a player looks at the interface through goggles (§3.1.1).
 
 #### 3.1.1 Implementation (M1)
@@ -250,6 +251,11 @@ Classes: `registry.WareworksArmInteractionPoints` (the four registered types), `
 * **Client safety.** The type and point classes are common code without client imports: Create creates points on the
   client while a player selects targets with the arm item, and again on the server from the placement packet and from
   saves.
+* **In-game teaching (M13).** The two Ponder texts that list what can feed or empty a station name Mechanical Arms as
+  well (`warehouse_storing.text_2`, `warehouse_retrieving.text_6`), and so do the new terminal and production scenes
+  (`warehouse_requesting.text_7`, `warehouse_production.text_5`). The two existing lines were reworded **in place**, so
+  no `text_n` key of a shipped scene moved (ADR-016). Until M13 the station tooltips were the only place in the game
+  that named arms.
 * **Tests** (`gametest.MechanicalArmGameTests`, `empty_7x5x7`):
   * `stationarmpointtypes`: each station is registered as `wareworks:<block>`, is in
     `ArmInteractionPointType.SORTED_TYPES_VIEW` (so the deferred registration really reached Create's sorted list),
@@ -392,6 +398,22 @@ The player-facing request station of an aisle: a screen instead of a filter slot
   as destination, the same `RequestQueue`, the same `ReservationLedger`, the same clamping to `availableStock` and the
   same rejection reasons. A terminal request is **indistinguishable downstream** from a redstone request: the planner,
   the reroute rules, the crane's transfer contexts and the persistence formats see only `LocationKind.OUTPUT`.
+* **In-game teaching (M13):** two Ponder scenes in `client.ponder.scenes.TerminalScenes`, both registered for the
+  terminal item. `warehouse/terminal` ("Placing a Warehouse Terminal") covers §3.4.3: the screen is placed facing the
+  player, a terminal placed **from beside the rack** has its port turned onto the aisle by the controller, and a wrench
+  walks the screen around the three faces that are **not** the port and back. (**M13 review fix:** its second line
+  first said the correction happened whichever side the terminal was placed from, which is exactly the case
+  `alignToAisle` refuses — a player standing in the aisle puts the screen on the aisle face and stays misaligned. The
+  line now names the precondition and the wrench line names the way out. The wrench beat turns the scene by half a turn
+  while it runs, because only the west face of a terminal with a northward port is drawn, so every click would
+  otherwise move the screen out of sight.) `warehouse/requesting` ("Requesting Items at a Terminal") covers the screen
+  and §7.2: the stock list and the search, the click rules of §3.4.2 (click, Shift, Ctrl), the M7 batching (a second
+  click grows the open request instead of starting a second trip), the crane fetching from the locations that hold the
+  items and delivering into the terminal's **own** slots, and funnels, chutes, hoppers or Mechanical Arms pulling them
+  out from there. The terminal joined the Ponder tag `wareworks:warehouse` and Create's "Item Transportation" in the
+  same pass. The screen itself is never opened in a scene: `openScreen` needs a `ServerPlayer` and a `PonderLevel` is
+  client-side, so both scenes represent it with control icons and text, the click wording following
+  `wareworks.gui.terminal.amount_hint` (ADR-016). Until M13 the terminal had no scene and was in no Ponder tag.
 
 #### 3.4.1 Implementation (M6, terminal block and server API)
 Classes: `content.station.WarehouseTerminalBlock` / `WarehouseTerminalBlockEntity`, `TerminalStockEntry`,
@@ -753,6 +775,20 @@ terminal order ─▶ production order ─▶ SUPPLY jobs ─▶ production stat
   machinery the player hooked up to *this* block. No controller-side mapping, no second configuration surface.
 * **Nothing is teleported and nothing is crafted**: every item movement is a real crane job through the handling head,
   and the result is only ever *observed* arriving in the stock index.
+* **In-game teaching (M13):** the Ponder scene `warehouse/production` ("Feeding Machines from a Warehouse",
+  `client.ponder.scenes.ProductionScenes#production`) walks the whole loop of the diagram above and exists to make
+  ADR-024 unmistakable — its sixth line is "Wareworks delivers and collects; it never crafts anything itself". The
+  staging carries the sentence as much as the text does: the only block that changes items is a **Create Mechanical
+  Crafter the scene builds next to the station**, with its own shaft and its own **Mechanical Arm** carrying the
+  ingredients across, and the scene orders the product at a terminal at zero stock, has the crane deliver three oak
+  logs to the station, and brings twelve planks back through an ordinary warehouse input to be stored.
+  (**M13 review fix:** the scene first showed an extracting funnel between the station and a crafter stacked on top of
+  it. That build moves nothing — `FunnelBlockEntity#activateExtractor` only ever drops an item entity and a crafter
+  never picks one up — so it was replaced by the arm, which is what §3.2 made possible and what the scene's text has
+  always named first among the working options.) The production station joined the Ponder tag
+  `wareworks:warehouse` and Create's "Item Transportation" in the same pass; until M13 it had no scene and was in no
+  Ponder tag. As for the terminal, the pattern screen is never opened in a scene (a `PonderLevel` is client-side), so
+  it is represented with control icons and text (ADR-016).
 
 #### 3.5.1 Patterns
 
