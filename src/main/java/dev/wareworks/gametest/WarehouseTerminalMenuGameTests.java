@@ -36,6 +36,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.TerminalAmounts;
 import dev.wareworks.network.TerminalOrdersPayload;
@@ -563,6 +564,19 @@ public final class WarehouseTerminalMenuGameTests {
         TerminalStockPayload gone = roundTrip(helper, new TerminalStockPayload(3, false,
                 List.of(StockCount.gone(GOLD))), TerminalStockPayload.STREAM_CODEC);
         helper.assertTrue(gone.entries().getFirst().isGone(), "an item type that left the index");
+
+        // What a stock rule says about an item travels as an ordinal plus one, so "no rule" and the last status of
+        // the enum both have to survive the round trip (M15, issue #3). A ruled entry at zero stock is not gone.
+        StockCount<ItemKey> ruled = new StockCount<>(DIAMOND, 64L, 40L, false, 0L,
+                Optional.of(StockRuleStatus.AT_RESERVE), 10L);
+        StockCount<ItemKey> ruledAtZero = new StockCount<>(GOLD, 0L, 0L, false, 0L,
+                Optional.of(StockRuleStatus.values()[StockRuleStatus.values().length - 1]), 0L);
+        TerminalStockPayload rules = roundTrip(helper, new TerminalStockPayload(3, false, List.of(ruled, ruledAtZero)),
+                TerminalStockPayload.STREAM_CODEC);
+        helper.assertValueEqual(rules.entries(), List.of(ruled, ruledAtZero), "the rule part of an entry");
+        helper.assertFalse(rules.entries().get(1).isGone(), "a ruled entry at zero stock keeps its row");
+        helper.assertValueEqual(rules.entries().getFirst().availableToAutomation(), 30L,
+                "and the reserve is still a part of what the player may claim");
 
         TerminalScreenStatus status = new TerminalScreenStatus(true, ControllerStatus.READY, 'C', 12, 3456L, 4, 2, 64L,
                 16L, true, CranePhase.TRAVEL_TO_TARGET, CranePauseReason.OVERSTRESSED);

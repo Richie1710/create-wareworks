@@ -99,20 +99,91 @@ public final class ProductionOrders<K, L> {
     }
 
     /**
+     * What one observation did: the orders it changed, and how many result items it credited in total.
+     *
+     * @param changed  the orders whose state or counters changed (filter for {@link ProductionOrderState#COMPLETE} to
+     *                 find the finished ones)
+     * @param credited result items this observation counted towards those orders, over all of them
+     */
+    public record Observation<K, L>(List<ProductionOrder<K, L>> changed, long credited) {
+        public Observation {
+            changed = List.copyOf(Objects.requireNonNull(changed, "changed"));
+            credited = Math.max(0L, credited);
+        }
+
+        /** Nothing changed and nothing was credited. */
+        public static <K, L> Observation<K, L> none() {
+            return new Observation<>(List.of(), 0L);
+        }
+
+        public boolean isEmpty() {
+            return changed.isEmpty();
+        }
+    }
+
+    /**
+     * Credits {@code amount} result items of {@code key} that really arrived in the warehouse — the crane stored them
+     * out of one of the aisle's own warehouse inputs ({@link ProductionOrder#withStored}).
+     * <p>
+     * This is the channel an <b>automatic</b> order is completed by, and the only one, which is what makes a rule's
+     * safety stop mean something (M15 part 2). Ordinary orders are credited here too, and the caller then keeps the
+     * credited amount off the stock-level channel, so the same physical batch is never counted twice
+     * ({@link #observeResult}).
+     * <p>
+     * One arrival is credited <b>once</b>, to the open orders in creation order: the oldest takes what it still waits
+     * for, the next only what is left.
+     */
+    public Observation<K, L> observeStored(K key, long amount, long now, long timeoutTicks) {
+        Objects.requireNonNull(key, "key");
+        if (amount <= 0L)
+            return Observation.none();
+        List<ProductionOrder<K, L>> changed = new ArrayList<>();
+        long left = amount;
+        for (ProductionOrder<K, L> order : List.copyOf(orders.values())) {
+            if (left <= 0L || !order.result().equals(key) || !order.countsArrivals())
+                continue;
+            ProductionOrder<K, L> next = order.withStored(left, now, timeoutTicks);
+            if (next == order)
+                continue;
+            left -= next.produced() - order.produced();
+            orders.put(next.id(), next);
+            changed.add(next);
+        }
+        return new Observation<>(changed, amount - Math.max(0L, left));
+    }
+
+    /**
      * Lets every open order waiting for {@code key} observe its current stock level; orders that have seen enough
      * become {@link ProductionOrderState#COMPLETE}.
      * <p>
      * It returns every order this call <b>changed</b>, not only the completed ones, because the caller has to know
      * whether anything was written at all: observing an unchanged stock level must not mark the controller dirty on
      * every dispatch interval for as long as an order is open.
+     * <p>
+     * <b>Automatic orders are not counted here</b> ({@link ProductionOrder#countsStockLevels()}): a level rise says
+     * nothing about where the items came from, and for an automatic order that is the difference between "the machine
+     * works" and "the machine ate the batch" (M15 part 2).
      *
      * @return the orders whose state or counters changed in this call (filter for
      * {@link ProductionOrderState#COMPLETE} to find the finished ones)
      */
     public List<ProductionOrder<K, L>> observeResult(K key, long stockNow, long now, long timeoutTicks) {
+        return observeResult(key, stockNow, now, timeoutTicks, 0L);
+    }
+
+    /**
+     * {@link #observeResult(Object, long, long, long)} with the part of the rise that {@link #observeStored} has
+     * already credited since the last observation of {@code key}. Those items are in the level too, so counting them
+     * again would complete an order nothing was made for.
+     *
+     * @param alreadyCredited result items of {@code key} already counted through the arrival channel; negative counts
+     *                        as 0
+     */
+    public List<ProductionOrder<K, L>> observeResult(K key, long stockNow, long now, long timeoutTicks,
+            long alreadyCredited) {
         Objects.requireNonNull(key, "key");
         List<ProductionOrder<K, L>> changed = new ArrayList<>();
-        long credited = 0L;
+        long credited = Math.max(0L, alreadyCredited);
         for (ProductionOrder<K, L> order : List.copyOf(orders.values())) {
             if (!order.isOpen() || !order.result().equals(key))
                 continue;
@@ -322,6 +393,33 @@ public final class ProductionOrders<K, L> {
 
     public int openCount() {
         return open().size();
+    }
+
+    /**
+     * Open orders the warehouse started by itself to refill a stock rule (M15 part 2,
+     * {@link ProductionOrder#isRestock()}) — what {@code maxRestockOrders} bounds.
+     */
+    public int openRestockCount() {
+        int count = 0;
+        for (ProductionOrder<K, L> order : orders.values()) {
+            if (order.isOpen() && order.isRestock())
+                count++;
+        }
+        return count;
+    }
+
+    /**
+     * Open automatic orders for {@code key} — what {@code maxRestockOrdersPerRule} bounds, and what stops one rule
+     * from ordering the same thing twice while the first run is still in a machine.
+     */
+    public int openRestockCountFor(K key) {
+        Objects.requireNonNull(key, "key");
+        int count = 0;
+        for (ProductionOrder<K, L> order : orders.values()) {
+            if (order.isOpen() && order.isRestock() && order.result().equals(key))
+                count++;
+        }
+        return count;
     }
 
     public int size() {

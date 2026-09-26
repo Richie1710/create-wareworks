@@ -2,6 +2,7 @@ package dev.wareworks.client.gui;
 
 import java.util.Optional;
 
+import dev.wareworks.network.TerminalConfirmPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalResultPayload;
 import dev.wareworks.network.TerminalStatusPayload;
@@ -41,6 +42,15 @@ public final class TerminalScreenUpdates {
     /** The production orders of the open screen's aisle (M11, ADR-024). */
     public static void onOrders(TerminalOrdersPayload payload) {
         screen(payload.containerId()).ifPresent(screen -> screen.onOrders(payload));
+    }
+
+    /**
+     * What a request of the open screen would cross, which the server answered instead of making it (M15 part 2). A
+     * question that arrives after the screen was closed is dropped like every other late payload — and because nothing
+     * was requested, dropping it loses nothing.
+     */
+    public static void onConfirm(TerminalConfirmPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onConfirm(payload));
     }
 
     /** The open terminal screen of the menu {@code containerId}, if that is what the player is looking at. */

@@ -14,6 +14,7 @@ import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockDiff;
 import dev.wareworks.network.TerminalOrdersPayload;
@@ -57,7 +58,10 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * <b>Requests</b> arrive as {@code TerminalRequestPayload} and are resolved through {@link #submitRequest}: the menu
  * the sending player really has open decides which terminal is asked, that terminal validates player, amount, aisle
  * and item against the server's own state, and at most {@value #MAX_REQUESTS_PER_TICK} of them are answered per tick.
- * The client is never trusted.
+ * The client is never trusted. A request that would cross a stock keeper's reserve or maximum is answered with the
+ * terminal's <b>question</b> instead of being made ({@link TerminalRequestOutcome}, {@code warehouse-system.md}
+ * §3.6.6); asking costs one click of the same per-tick budget, so a crafted flood cannot make the server measure more
+ * often than a clicking player could.
  * <p>
  * <b>Slot count.</b> The number of buffer slots is the one the server announced in the menu's extra data, on both
  * sides. The handler behind them is wrapped in a {@link FixedSlotsItemHandler} of exactly that size, because a
@@ -205,23 +209,45 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      */
     public static Optional<RequestResult> submitRequest(@Nullable Player player, int containerId, ItemKey key,
             int amount) {
-        if (player == null || player.level() == null || player.level().isClientSide || key == null)
+        return submitRequest(player, containerId, key, amount, RequestAcknowledgement.ANY)
+                .map(outcome -> outcome.result().orElseThrow());
+    }
+
+    /**
+     * Server: {@link #submitRequest(Player, int, ItemKey, int)} with what the player has already agreed to pay for the
+     * request ({@code docs/warehouse-system.md} §3.6.6, M15 part 2). This is the path the payload handler takes.
+     * <p>
+     * A click the player has not agreed to yet answers with the terminal's <b>question</b> and requests nothing
+     * ({@link TerminalRequestOutcome}). Asking costs one click of the same per-tick budget a request costs: the server
+     * measures what the click would cross, which is bounded work, and a crafted flood can therefore not make it
+     * measure more often than a clicking player could.
+     */
+    public static Optional<TerminalRequestOutcome> submitRequest(@Nullable Player player, int containerId, ItemKey key,
+            int amount, RequestAcknowledgement acknowledged) {
+        if (player == null || player.level() == null || player.level().isClientSide || key == null
+                || acknowledged == null)
             return Optional.empty();
         if (!(player.containerMenu instanceof WarehouseTerminalMenu menu) || menu.containerId != containerId)
             return Optional.empty();
         if (!menu.takeRequestBudget())
             return Optional.empty();
-        return Optional.of(menu.request(player, key, amount));
+        return Optional.of(menu.request(player, key, amount, acknowledged));
     }
 
-    /** Server: asks this menu's terminal for items; every check happens there. */
+    /** Server: asks this menu's terminal for items, accepting every boundary; every check happens in the terminal. */
     public RequestResult request(Player requester, ItemKey key, int amount) {
+        return request(requester, key, amount, RequestAcknowledgement.ANY).result().orElseThrow();
+    }
+
+    /** Server: asks this menu's terminal for items; every check, and the question, happens in the terminal. */
+    public TerminalRequestOutcome request(Player requester, ItemKey key, int amount,
+            RequestAcknowledgement acknowledged) {
         if (contentHolder == null || contentHolder.isRemoved())
-            return RequestResult.rejected(RequestRejection.NO_CONTROLLER);
-        RequestResult result = contentHolder.requestFromTerminal(requester, key, amount);
-        if (result.isAccepted())
+            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
+        TerminalRequestOutcome outcome = contentHolder.requestFromTerminal(requester, key, amount, acknowledged);
+        if (outcome.result().filter(RequestResult::isAccepted).isPresent())
             markDirty(); // the availability changed: push it with the next tick instead of waiting for the interval
-        return result;
+        return outcome;
     }
 
     /**
@@ -356,7 +382,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         List<StockCount<ItemKey>> counts = new ArrayList<>();
         for (TerminalStockEntry entry : contentHolder.stockSnapshot())
             counts.add(new StockCount<>(entry.key(), entry.total(), entry.available(), entry.producible(),
-                    entry.producibleAmount()));
+                    entry.producibleAmount(), entry.rule(), entry.ruleReserved(), entry.ruleMaximum()));
         return counts;
     }
 

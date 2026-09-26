@@ -9,6 +9,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import dev.wareworks.core.stock.StockRuleStatus;
+
 /** The list, search, sort and paging behaviour behind the warehouse terminal screen. */
 class StockListModelTest {
     private static final int COLUMNS = 4;
@@ -37,6 +39,13 @@ class StockListModelTest {
         return new StockLine<>(key, total, available, true, producibleAmount, name, "minecraft");
     }
 
+    /** A line of an item a stock rule governs (M15, issue #3). */
+    private static StockLine<String> ruled(String key, long total, long available, StockRuleStatus status,
+            long reserved, String name) {
+        return new StockLine<>(key, total, available, false, 0L, Optional.of(status), reserved,
+                dev.wareworks.core.stock.StockRule.UNSET, name, "minecraft");
+    }
+
     @Test
     void anItemAtZeroStockIsKeptWhileAPatternCanMakeIt() {
         StockListModel<String> model = new StockListModel<>();
@@ -47,6 +56,32 @@ class StockListModelTest {
         assertTrue(model.find("plank").orElseThrow().isProducibleOnly());
         assertEquals(64L, model.find("plank").orElseThrow().producibleAmount());
         assertEquals(Optional.empty(), model.find("gone"));
+    }
+
+    /** A rule keeps a row alive at zero stock (M15, issue #3), and losing the rule drops it again. */
+    @Test
+    void anItemAtZeroStockIsKeptWhileARuleGovernsIt() {
+        StockListModel<String> model = new StockListModel<>();
+        model.replaceAll(List.of(line("iron", 10, 10, "Iron Ingot", "minecraft"),
+                ruled("steel", 0, 0, StockRuleStatus.BELOW_MINIMUM, 0, "Steel Ingot")));
+        assertEquals(2, model.size(), "the warehouse is calling for steel: its row stays");
+        assertTrue(model.find("steel").orElseThrow().ruled());
+        assertFalse(model.find("steel").orElseThrow().isProducibleOnly(), "no pattern makes it");
+        // The player deleted the rule: nothing is left to show.
+        model.apply(List.of(line("steel", 0, 0, "Steel Ingot", "minecraft")));
+        assertEquals(Optional.empty(), model.find("steel"));
+    }
+
+    /** The reserve is a part of what a player may claim, so a ruled row is not hidden by "only what is available". */
+    @Test
+    void aReservedItemStaysVisibleWhileSomethingIsAvailable() {
+        StockListModel<String> model = new StockListModel<>();
+        model.replaceAll(List.of(ruled("iron", 64, 64, StockRuleStatus.AT_RESERVE, 64, "Iron Ingot")));
+        model.setInStockOnly(true);
+        assertEquals(1, model.visible().size(), "a player may still take the reserve");
+        StockLine<String> line = model.visible().get(0);
+        assertEquals(0L, line.availableToAutomation(), "but a redstone request gets nothing");
+        assertEquals(64L, line.fromReserve(64L), "and the row can say how far a click goes below it");
     }
 
     @Test

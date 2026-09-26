@@ -4,8 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+
+import dev.wareworks.core.stock.StockRuleStatus;
 
 /** What a terminal actually sends to an open screen after the first full list. */
 class StockDiffTest {
@@ -146,5 +149,40 @@ class StockDiffTest {
         StockCount<String> promised = count("iron", 10, 40);
         assertEquals(10L, promised.available(), "available is never above the total");
         assertEquals(0L, promised.reserved());
+    }
+
+    /** A rule keeps a row alive at zero stock, exactly as a production pattern does (M15, issue #3). */
+    @Test
+    void aRuledItemAtZeroStockIsAnEntry() {
+        StockDiff<String> diff = new StockDiff<>();
+        StockCount<String> ruled = new StockCount<>("iron", 0L, 0L, false, 0L,
+                Optional.of(StockRuleStatus.BELOW_MINIMUM), 0L);
+        assertEquals(List.of(ruled), diff.commit(List.of(ruled)));
+        assertEquals(1, diff.size(), "the warehouse is calling for it: the row stays");
+        // The same key without a rule is the marker that deletes the row.
+        assertEquals(List.of(StockCount.gone("iron")), diff.commit(List.of(count("iron", 0, 0))));
+        assertEquals(0, diff.size());
+    }
+
+    /** Only the reserve moved: the amounts are the same, and the screen still has to be told (M15). */
+    @Test
+    void aChangedReserveAloneIsSent() {
+        StockDiff<String> diff = new StockDiff<>();
+        StockCount<String> before = new StockCount<>("iron", 64L, 64L, false, 0L,
+                Optional.of(StockRuleStatus.SATISFIED), 10L);
+        StockCount<String> after = new StockCount<>("iron", 64L, 64L, false, 0L,
+                Optional.of(StockRuleStatus.AT_RESERVE), 32L);
+        diff.commit(List.of(before));
+        assertEquals(List.of(after), diff.commit(List.of(after)));
+        assertTrue(diff.commit(List.of(after)).isEmpty(), "and only once");
+    }
+
+    /** A rule a player deleted leaves the row alive while the item is in stock, and only drops the badge. */
+    @Test
+    void aRemovedRuleIsSentAsAPlainEntry() {
+        StockDiff<String> diff = new StockDiff<>();
+        diff.commit(List.of(new StockCount<>("iron", 64L, 64L, false, 0L, Optional.of(StockRuleStatus.SATISFIED), 8L)));
+        assertEquals(List.of(count("iron", 64, 64)), diff.commit(List.of(count("iron", 64, 64))));
+        assertEquals(1, diff.size(), "the item is still in stock, so the row is not gone");
     }
 }

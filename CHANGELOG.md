@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Stock rules: the new **Warehouse Stock Keeper** holds one item plus a minimum, a maximum and a reserve per row, and
+  the three numbers govern three different directions — what comes in, what may be stored, and what may go out to the
+  warehouse's own automation
+- A warehouse keeps itself stocked: when an item falls below its minimum and a warehouse production station of the same
+  aisle has a pattern for it, the warehouse orders it by itself, without ever spending what a reserve protects
+- If a machine swallows a batch of ingredients and nothing comes back, that rule stops ordering and waits for you, with
+  a differently coloured lamp on the keeper and a paused state in its screen, on the controller, on the terminal and on
+  an aisle display. Clicking the rule's mark, or re-editing the rule, lets it order again
+- The warehouse terminal asks before a click of yours goes below a reserve, spends a reserved item as the ingredient of
+  something it has to make for you, or would leave more in the racks than a maximum allows — naming the number and the
+  item every time; hold Alt while clicking to skip the question
+- A stock keeper's row now says what automatic restocking last decided about it, and names the ingredient a rule is
+  waiting for you to supply
+- Two Ponder scenes for the stock keeper: "Stock Rules of a Warehouse" (what each of the three numbers governs) and
+  "A Warehouse that Restocks Itself" (the warehouse ordering for itself, and what happens when a machine eats a batch)
+- New server setting `maxRestockIngredientItems` (64): the most ingredient items one automatic order may spend, which is
+  what bounds how much a broken machine can be given before the warehouse stops ordering for that rule
+
 ## [0.2.1-alpha] - 2026-09-25
 
 ### Added

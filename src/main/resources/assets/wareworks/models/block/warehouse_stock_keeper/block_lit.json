@@ -1,0 +1,7 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "wareworks:block/warehouse_stock_keeper/block",
+	"textures": {
+		"lamp": "create:block/rose_quartz_lamp"
+	}
+}

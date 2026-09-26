@@ -352,6 +352,68 @@ class ProductionOrderTest {
         assertEquals(order.deadlineTick(), nothing.deadlineTick(), "and does not extend its timeout");
     }
 
+    // --- automatic orders: how their result is counted (M15 part 2) -------------------------------------------------
+
+    /**
+     * <b>The safety stop's foundation.</b> A rise of the result's stock level says nothing about where the items came
+     * from, so it may never complete an automatic order: an unrelated farm, a barrel tipped into a rack or a player
+     * taking the product out and putting it back would otherwise complete an order whose ingredients a machine had
+     * swallowed, and the rule would go on feeding that machine for ever (M15 review fix).
+     */
+    @Test
+    void anAutomaticOrderIsNeverCompletedByARiseOfTheStockLevel() {
+        ProductionOrder<String, String> order = restocking(planks(), 1);
+        assertTrue(order.isRestock());
+        assertFalse(order.countsStockLevels());
+        UUID logs = order.lines().getFirst().id();
+        order = order.withDelivered(logs, 1, START, TIMEOUT);
+        assertEquals(0L, order.observableGain(1000L), "however much of the item turns up in the aisle");
+        ProductionOrder<String, String> observed = order.withResultStock(1000L, START + 5, TIMEOUT);
+        assertSame(order, observed, "nothing is counted and nothing is even written");
+        assertEquals(0L, observed.produced());
+        // The order therefore ends as what it is: a batch handed over with nothing coming back.
+        ProductionOrder<String, String> ended = observed.timedOutAt(START + TIMEOUT + 1);
+        assertEquals(ProductionOrderState.TIMED_OUT, ended.state());
+        assertTrue(ended.endedWithLostIngredients(), "which is exactly when a rule stops ordering");
+    }
+
+    /** An ordinary order somebody is waiting for keeps counting the level, which is a documented feature (§3.5.3). */
+    @Test
+    void anOrdinaryOrderStillCountsTheStockLevel() {
+        ProductionOrder<String, String> order = order(planks(), 1, 0L);
+        assertTrue(order.countsStockLevels());
+        assertEquals(ProductionOrderState.COMPLETE, order.withResultStock(4L, START + 5, TIMEOUT).state());
+    }
+
+    /** What really arrived: the crane stored items out of a warehouse input, which is the machine's own route back. */
+    @Test
+    void anArrivalCompletesAnAutomaticOrderOnceItsIngredientsWereDelivered() {
+        ProductionOrder<String, String> order = restocking(planks(), 1);
+        assertFalse(order.countsArrivals(), "nothing was given to a machine yet, so nothing can have come back");
+        assertSame(order, order.withStored(4L, START + 1, TIMEOUT), "and an arrival before that counts for nothing");
+
+        order = order.withDelivered(order.lines().getFirst().id(), 1, START + 2, TIMEOUT);
+        assertTrue(order.countsArrivals());
+        ProductionOrder<String, String> partial = order.withStored(3L, START + 3, TIMEOUT);
+        assertEquals(3L, partial.produced());
+        assertTrue(partial.isOpen());
+        assertEquals(START + 3 + TIMEOUT, partial.deadlineTick(), "real progress pushes the deadline out");
+        ProductionOrder<String, String> done = partial.withStored(5L, START + 4, TIMEOUT);
+        assertEquals(ProductionOrderState.COMPLETE, done.state());
+        assertEquals(4L, done.produced(), "never more than the order waits for");
+        assertFalse(done.endedWithLostIngredients(), "a machine that gave its batch back pauses nothing");
+    }
+
+    @Test
+    void anArrivalOfNothingAndAFinishedOrderChangeNothing() {
+        ProductionOrder<String, String> order = restocking(planks(), 1);
+        order = order.withDelivered(order.lines().getFirst().id(), 1, START, TIMEOUT);
+        assertSame(order, order.withStored(0L, START, TIMEOUT));
+        assertSame(order, order.withStored(-3L, START, TIMEOUT));
+        ProductionOrder<String, String> cancelled = order.cancelled(START + 1);
+        assertSame(cancelled, cancelled.withStored(4L, START + 2, TIMEOUT));
+    }
+
     @Test
     void stateNamesRoundTripForSaves() {
         for (ProductionOrderState state : ProductionOrderState.values())
@@ -366,7 +428,13 @@ class ProductionOrderTest {
                 0, lineIds, START, TIMEOUT, 0L, null));
         assertThrows(IllegalArgumentException.class,
                 () -> new ProductionOrder<>(UUID.randomUUID(), STATION, PLANK, 1, List.of(),
-                        ProductionOrderState.WAITING_FOR_INGREDIENTS, START, 0L, 0L, Optional.empty(), 0L));
+                        ProductionOrderState.WAITING_FOR_INGREDIENTS, START, 0L, 0L, Optional.empty(), 0L,
+                        false));
+    }
+
+    /** An automatic order the warehouse started for itself (M15 part 2). */
+    private ProductionOrder<String, String> restocking(ProductionPattern<String> pattern, int runs) {
+        return ProductionOrder.restock(UUID.randomUUID(), STATION, pattern, runs, lineIds, START, TIMEOUT);
     }
 
     /** An order with every line served, for the tests that start after the delivery. */

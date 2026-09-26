@@ -171,12 +171,13 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 
 ## H. Ponder
 
-42. Hover any of the **eight** items and hold **W**: a scene opens. Crane and rail show "Moving Items with a Stacker
-    Crane"; the controller and the **warehouse terminal** have two scenes each, the **interface has three** and the
-    **production station** one (arrow keys or scroll switch them).
+42. Hover any of the **nine** items and hold **W**: a scene opens. Crane and rail show "Moving Items with a Stacker
+    Crane"; the controller, the **warehouse terminal** and the **stock keeper** have two scenes each, the **interface
+    has three** and the **production station** one (arrow keys or scroll switch them).
 43. `/ponder index` and the Ponder tag screen list **"Automated Warehouses"** with the stacker crane as its icon and all
-    **eight** blocks inside — terminal and production station included since M13; the dock also appears under Create's
-    "Kinetic Appliances", and interface, input, output, terminal and production station under "Item Transportation".
+    **nine** blocks inside — terminal and production station since M13, the stock keeper since M15; the dock also
+    appears under Create's "Kinetic Appliances", and interface, input, output, terminal, production station and stock
+    keeper under "Item Transportation".
 44. In the *overview*, *storing*, *retrieving*, *requesting*, *production* and *filters* scenes the crane travels, lifts
     and reaches into a rack or station, and the items it carries ride on the arm. The *interface* and *terminal* scenes
     teach addressing and placement and deliberately show the crane parked, with no rotation — nothing moves there. No
@@ -206,6 +207,21 @@ that each scene compiles, is registered for the right item and looks right in th
     the longer language and the screenshot run only ever renders English, so overflowing or clipped text can only show
     up here. Check the wording in context as well: the storing and retrieving scenes must name "Mechanische Arme"
     alongside Trichter, Rutschen and Hopper.
+
+The two checks below are the M15 scenes of the stock keeper (both open from its item; arrow keys switch them).
+
+44g. **"Stock Rules of a Warehouse"** (968 ticks, about 48 s). Each of the three numbers gets its own beat and each beat points at
+    a different block. For the **minimum**, the comparator behind the keeper and the redstone lamp behind it visibly
+    turn on — that pair is the whole point of the beat, so check it reads as "the keeper is calling for the item" and
+    not as scenery. For the **maximum**, only the outline and the text say that the input is backing up (a station's
+    buffer has no renderer): judge whether that lands, and note it if it does not. For the **reserve**, the crane must
+    be seen fetching *less* than was asked for and leaving the rack with items in it. The terminal at the end of the
+    row must show its **screen** (it stands one position clear of the output so the camera can see that face).
+44h. **"A Warehouse that Restocks Itself"** (1051 ticks, about 53 s). It must read as *the warehouse deciding*, not as somebody
+    ordering: nothing is clicked before the crane sets off. The arm and the Mechanical Crafter are recognisable as
+    **your** machine, as in "Feeding Machines from a Warehouse". At the end the keeper's lamp goes **out** when the
+    product is stored, and then the paused beat shows the **other** lamp — look at whether the two lamp states can be
+    told apart at Ponder's distance, which is the same question as check 106 in a smaller picture.
 
 ## I. Robustness (worth one pass before shipping)
 
@@ -622,3 +638,179 @@ that each scene compiles, is registered for the right item and looks right in th
     are the flattened components cut to the sign's line width, line 0 being the English `Aisle A: Ready`, and the
     stray terminal's board reads exactly the `No aisle` line. **By eye:** that a German client really sees the sign in
     English and the lectern in German, so the note in `warehouse-system.md` §10.2 is worded honestly.
+
+## R. Stock rules (M15)
+
+Build one aisle with a **warehouse input**, a **warehouse output**, a **warehouse terminal**, a **warehouse production
+station** with a machine of your own beside it, and a **warehouse stock keeper**. Everything below is about the three
+numbers of one rule, so keep the keeper's screen open on a second monitor if you can.
+
+99. **The block and its screen.** Stand in the aisle and place the keeper into a rack: its panel faces you. Right-click
+    it with an **empty hand** — the rule screen opens; right-click it with an item in hand and nothing opens, and the
+    wrench still rotates it. Click a row's cell with an item on the cursor: the row takes the item and **nothing is
+    consumed**. Scroll on each of the three numbers (Shift for whole stacks), right-click one to switch it off, and
+    left-click an off number to switch it on at 0. Shift-click an item in your own inventory: it fills the first free
+    row.
+
+    **Automated** (`StockKeeperGameTests`, and the `keeper` visual scenario, which shows five rules in five different
+    states in one screenshot and edits them through the real payload path): the rows, the clamping, the payload path and
+    the persistence; the `restock` scenario clicks a row's **status mark** with a real mouse button, so the mark is at
+    least big enough for the screen's own hit test. **By eye:** whether the three columns read as three different
+    things without the tooltip, whether the numbers are legible at every GUI scale, and whether the mark is big enough
+    for a *hand* to aim at.
+100. **Minimum.** Set "keep 64" on an item the aisle holds none of. The keeper's **lamp** lights and a comparator next
+    to it reads **1**. Put 64 of the item in through the input: the lamp goes out and the comparator drops to 0 within
+    a second. Add a second rule for another missing item: the comparator reads **2**.
+
+    **Automated** (`StockKeeperGameTests`, `StockRuleEnforcementGameTests`): the lamp state, the comparator value and
+    that it is not saved across a restart. **By eye:** that the lamp is readable from the aisle and that a comparator
+    on the back of the keeper is where a player would look for it.
+101. **Maximum.** Set "store at most 32" on an item and drop 64 of it into the input on a belt. Exactly 32 are stored,
+    the rest **stay in the input on purpose** and the belt backs up. Look at the **controller** through goggles: "At
+    maximum: 1". Raise the maximum: the rest is stored within a second.
+
+    **Automated** (`stockrulemaximumreachedinflight`, `stockrulechangedmidjob`): the in-flight trip finishing, the next
+    plan refused with `AT_MAXIMUM`, and storing resuming when the rule goes. **By eye:** whether a backed-up belt reads
+    as "the rule is working" rather than as a jam, which is exactly what the goggle line and the display line exist to
+    answer.
+102. **Reserve, and who it protects.** Set "reserve 16" on an item the aisle holds 32 of. Pulse a **warehouse output**
+    with that item in its request filter: it delivers 16 and then refuses, and the controller's goggles say the rule
+    keeps the rest in reserve — never "not in stock". Now ask for the same item at the **terminal**: you are served
+    down to the last one, and the row's tooltip says your request goes below the reserve.
+
+    **Automated** (`stockrulereserveraisedkeepspromises`, `stockruleterminalreportsrules`): the clamp, the
+    `RESERVED` refusal, the badge and the tooltip numbers. **By eye:** that the terminal row makes it obvious which of
+    the two cases you are in, and that the badge colour is distinguishable from the producible tint.
+103. **The confirmation.** With that reserve still set, click the item in the terminal so that the request would reach
+    into it: a short panel asks, naming the number ("This takes 10 of the 64 items held in reserve."), and **nothing is
+    requested yet** — the status line stays as it was and the crane does not move. **Escape** and **Cancel** drop it,
+    **Enter** and **Confirm** carry it out, and while the panel is up the grid behind it does nothing. Hold **Alt** and
+    click: no question at all. Then two more cases:
+    * put the reserve on the **ingredient** instead (the logs) and order **planks** at the terminal: the panel names the
+      log by name — "Making it takes 1 of the 8 reserved Oak Log." — although no rule governs planks at all;
+    * set a **maximum of 2** on the planks and order **one** plank: a run makes four, three of them stay in the racks,
+      and the panel names the one that has nowhere to go ("1 of the 4 items this makes cannot be stored: the maximum is
+      2."). Now order **four** planks with the same cap: **no question at all**, because every plank the run makes goes
+      to you and the cap is never really exceeded. That distinction is the point — the question is about what stays.
+
+    **Automated** (`TerminalConfirmationGameTests`; the `rules` scenario shoots the reserve panel, and the `restock`
+    scenario shoots **all three** questions and answers them through the screen's own input path — Escape drops two of
+    them and the server is checked to be untouched afterwards, the third is confirmed by a real click on the panel's
+    **Confirm** button, and a fourth click takes the skip's branch): that the server asks, that asking queues nothing,
+    that a confirmed request is measured **again** before it is carried out, and that a skipped one is not asked about.
+    **By eye:** whether the sentence reads without the tooltip, whether "Hold Alt while clicking to skip this question"
+    is discoverable, and whether the dim behind the panel is strong enough that nobody clicks through it by accident. The
+    **physical Alt and Ctrl keys** are yours to test: no harness can hold a modifier, because `Screen#hasAltDown` polls
+    the real keyboard. Check in particular that **Alt alone** asks for the selected amount and skips the question, that
+    **Ctrl alone** asks for everything and still asks, and that **Ctrl+Alt** does both — the two used to be one key, and
+    a skip that silently asked for everything available was the worst of both. Also worth trying once with the game
+    language set to **German**, where the ingredient sentence is the longest line the panel can get: it must wrap inside
+    the window rather than run past it.
+104. **The warehouse restocks itself.** Give the production station a pattern (1 log → 4 planks), put logs in the
+    warehouse, and set "keep 64 planks" on the keeper. Within a second the crane fetches logs to the station **without
+    anyone asking for planks**; your machine makes them, they come back through the input and are stored, and the rule
+    settles a little **above** 64, because a pattern makes whole runs. Look at the keeper through goggles while it
+    runs: "Being made now: 1". Take the logs away and the line reads "Waiting for ingredients: 1" instead.
+
+    **Automated** (`restockfullloop`, `restockreserveblocksanorder`): one order with no backing request, the whole
+    loop, no second order while one is open, and a reserve on the ingredient stopping it. The `restock` visual
+    scenario runs the same loop through a **real Create Mechanical Arm and Mechanical Crafter** in a live world and
+    counts every item of the scene around it. **By eye:** whether the warehouse feels like it is *helping* rather than
+    running away with your logs, and whether one number ("keep 64") really is enough to explain what happened.
+105. **The reserve binds the restock.** Put a reserve on the **ingredient** (the logs) equal to what you have. The rule
+    for planks does **not** order and reads "Waiting for ingredients"; the logs are untouched. Lower the reserve by one
+    run's worth and it orders on the next pass.
+
+    **Automated** (`restockreserveblocksanorder`, `stockrulereserveboundsproduction`, and the `restock` scenario,
+    which shoots the goggle tooltip and the keeper row of exactly this state before it lowers the reserve). **By eye:**
+    that the goggle line and the keeper row make it clear the warehouse is *choosing* not to spend the logs, rather
+    than failing.
+105a. **The last few items a run cannot make.** Set the **same** number as minimum and maximum on the planks, e.g.
+    "keep 10, store at most 10", with a pattern that makes four. The warehouse orders the two whole runs that fit (8
+    planks) and then **stops**: the keeper's lamp keeps saying "below the minimum", and the row's tooltip says why
+    nothing is being made — "A whole run would go past the maximum". Nothing is ever stored above 10.
+
+    **Automated** (`restockneverovershootsamaximum`, `RestockPlannerTest`): the run count, the stock never passing the
+    cap and the outcome the row shows. **By eye:** whether that pair of numbers reads as *your* configuration to fix
+    rather than as the warehouse being broken — raising the maximum by three, or choosing a minimum a run divides, is
+    the cure, and the row's line has to make that guessable.
+106. **The safety stop.** Let a restock order run, then **break or unpower your machine** so the ingredients sit in the
+    station and nothing comes back. After `productionOrderTimeoutTicks` (5 minutes by default) the keeper's lamp turns
+    to its **paused** colour, its goggles read "Paused after a lost batch: 1" with the hint underneath, the
+    controller's goggles count it, the terminal row's badge turns, and an aisle summary display gains a "Rules paused"
+    line. **The warehouse orders nothing more for that rule**, however long you wait. Open the keeper: the row says
+    what it cost in ingredient items, and the status line at the bottom says how to resume. Fix the machine and click
+    the row's **mark**: it orders again. (Clearing or re-editing the rule resumes it too.)
+
+    **Automated** (`restockpausesafteralostbatch`, `restockpausesalthoughtheresultturnsup`,
+    `restockpausesurvivesareload`, `restockruleeditedwhileordering`): the pause, what it names, the block state, that
+    nothing is ordered while paused, that a **second source of the same product** cannot mask the loss, that a shadowed
+    duplicate row neither wears the pause nor lifts it, that it survives a save, and both ways back. The `restock` visual scenario does it with a **real machine that swallows the batch** — a Mechanical
+    Crafter with no recipe for what it is given — and shoots the paused keeper block, both goggle tooltips, the
+    terminal row and the keeper's row, then clicks the mark and watches it order again. **By eye:** whether the paused
+    lamp is unmistakably *different* from the ordinary one at a glance and **in the dark** (the shots are taken at
+    noon), and whether a player who was away for an hour can tell what happened from the block alone.
+106a. **The one case the warehouse cannot see.** With a rule paused (check 106), fix nothing — instead let a **second
+    source of the same product** feed the same aisle: a farm of yours, or simply drop stacks of it into the warehouse
+    input by hand. Resume the rule and watch it order once more. The order will now **complete** on those items, because
+    they really did arrive through the warehouse's own door and nothing inside it can say which machine made them. This
+    is the documented residual of the safety stop (§3.6.4), and it is worth seeing once so it is not mistaken for a bug
+    later: everything that does *not* come in through an input — a barrel emptied straight into a rack, the product taken
+    out and put back — is excluded, and the rule pauses as it should.
+
+    **Automated** (`restockpausesalthoughtheresultturnsup`) for the excluded half. **By eye only** for this one, and
+    only to confirm the boundary is where the docs say it is.
+107. **It really is stopped after a restart.** With a rule paused, **quit to the title screen and rejoin**. The lamp is
+    still paused, the goggles still count it, and no new order is started. This is the one that matters: a restart must
+    not quietly feed the broken machine again.
+
+    **Automated** (`restockpausesurvivesareload`) at the block-entity level. **By eye:** the same thing through a real
+    save and rejoin, which is the path a player takes.
+108. **Switching it off.** Set `maxRestockOrders = 0` in the server config and reload the world. Rules still cap
+    storing and still hold their reserve, the keeper's lamp and comparator still call for items, and the warehouse
+    never orders anything by itself.
+
+    **By eye only** (the config path is a player's, not a test's).
+108a. **Two rules keeping each other busy.** Set "keep 64" on **iron ingots** and "keep 64" on **iron blocks** in the
+    same aisle, give a production station both patterns (9 ingots → 1 block and 1 block → 9 ingots), and put about 200
+    ingots' worth in. Nothing may happen: both rules report **"The ingredients are not available"** and name the item the
+    other one is asking for, because a minimum holds items back from other rules' automation too. Before that fix the
+    aisle converted the same iron back and forth for ever — the crane never idle, both machines running, neither minimum
+    ever met.
+
+    **Automated** (`RestockPlannerTest.aRuleNeverSpendsWhatAnotherRuleIsItselfShortOf`). **By eye:** that the two rows
+    read as "waiting for each other" rather than as a fault, and that the named ingredient tells you which number to
+    lower.
+109. **A ruled item the warehouse holds none of.** Set "keep 64" on an item the aisle has **zero** of and open the
+    terminal. The cell shows a dimmed plain **`0`**, not an empty corner: read it cold and say whether it lands as
+    "none, and the warehouse wants some" rather than as a glitch. (An item a production station can make keeps its blue
+    **`+`**, which says more; both must not appear at once.) Then hover the row: the tooltip names the rule's state, its
+    maximum and the reserve. Also check the badge in the corner opposite the number — gold below the minimum, red at the
+    maximum, blue down to the reserve — and, with a rule **paused** (check 106), that the badge's **tooltip** says so
+    even though its colour stays neutral. That is deliberate (§3.4.2), but you are the one who can say whether a paused
+    rule is then too quiet in the grid.
+
+    **Automated** (`stockruleterminalreportsrules`, `StockListModelTest`, `StockCountTest`): that the `0`, the badge and
+    the tooltip numbers are the server's. **By eye only:** whether they *read*.
+110. **German (`de_de`), the whole feature in one pass.** Switch the language and walk the surfaces: the keeper's screen
+    (the three column headers, the number and item hints, every status sentence, the correction line after an
+    out-of-range edit), its Shift tooltip and its goggle lines, the controller's rule lines, an aisle summary display's
+    "Rules: … " and "Rules paused: …", the terminal's badge tooltip and its **confirmation panel**, and both Ponder
+    scenes. Nothing may show a raw key, run out of its box or be cut off — German is the longer language and the
+    screenshot runs only ever render English, so this is the only place clipping shows up. The longest lines to watch are
+    the panel's reserved-ingredient sentence and, in the scenes, `warehouse_stock_rules.text_7` and `text_5` (119 and
+    115 characters in German, the two longest the milestone added).
+
+    The plural wart this check used to excuse is **fixed** (M15 Definition of Done): `gui.keeper.paused_lost` now reads
+    "Ingredient items not recovered: %1$s" / "Nicht zurückgeholte Zutaten: %1$s", a label-and-number line that is right
+    at every count and needs no singular key. Both languages should read correctly at a count of **1**. Note anything
+    else.
+
+    The lines M15 part 2's review added and German therefore has to fit: the keeper row's **restock outcome** (ten
+    sentences, `gui.keeper.restock.*`, the longest being "A whole run would go past the maximum"), the status line after
+    an edit lifted a safety stop ("The warehouse orders this item again"), the panel's reworded maximum sentence and its
+    Alt hint, and the amount hint under the scroll input, which now names four things and is the widest single line of
+    the terminal window.
+
+    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
+    nothing about how they look.

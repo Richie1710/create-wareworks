@@ -38,6 +38,12 @@ class ProductionOrdersTest {
                 START, TIMEOUT, 0L, null);
     }
 
+    /** An automatic order the warehouse started for itself (M15 part 2). */
+    private ProductionOrder<String, String> restocking(String station, int runs) {
+        return ProductionOrder.restock(UUID.randomUUID(), station, ProductionPattern.of(LOG, 1, PLANK, 4), runs,
+                lineIds, START, TIMEOUT);
+    }
+
     @Test
     void openOrdersPromiseTheirIngredients() {
         ProductionOrder<String, String> order = newOrder(STATION_A, 3);
@@ -200,6 +206,47 @@ class ProductionOrdersTest {
         assertEquals(ProductionOrderState.COMPLETE, completed.getFirst().state());
         assertTrue(orders.observeResult(PLANK, 8L, START, TIMEOUT).isEmpty(), "a finished order is not observed again");
         assertTrue(orders.observeResult(LOG, 100L, START, TIMEOUT).isEmpty(), "another item never completes it");
+    }
+
+    /**
+     * One arrival is credited <b>once</b>, and an automatic order is credited by nothing else (M15 part 2): the level
+     * channel skips it, so the physical batch that raised the level and the arrival that reported it cannot both count.
+     */
+    @Test
+    void anArrivalIsCreditedOnceAndAnAutomaticOrderOnlyByIt() {
+        ProductionOrder<String, String> automatic = restocking(STATION_A, 1);
+        orders.add(automatic);
+        orders.deliver(automatic.lines().getFirst().id(), 1, START, TIMEOUT);
+        assertTrue(orders.observeResult(PLANK, 100L, START, TIMEOUT).isEmpty(),
+                "a level rise never completes an automatic order, whatever it is");
+
+        ProductionOrders.Observation<String, String> none = orders.observeStored(PLANK, 0L, START, TIMEOUT);
+        assertTrue(none.isEmpty());
+        assertEquals(0L, none.credited());
+
+        ProductionOrders.Observation<String, String> observed = orders.observeStored(PLANK, 6L, START + 1, TIMEOUT);
+        assertEquals(1, observed.changed().size());
+        assertEquals(4L, observed.credited(), "only what the order still waited for is credited");
+        assertEquals(ProductionOrderState.COMPLETE, observed.changed().getFirst().state());
+        assertTrue(orders.observeStored(PLANK, 4L, START + 2, TIMEOUT).isEmpty(),
+                "a finished order counts no further arrival");
+        assertTrue(orders.observeStored(LOG, 100L, START + 2, TIMEOUT).isEmpty(), "and another item never does");
+    }
+
+    /** Two open orders for the same result split one arrival in creation order, exactly as they split a level rise. */
+    @Test
+    void twoOrdersSplitOneArrivalInsteadOfBothTakingIt() {
+        ProductionOrder<String, String> first = restocking(STATION_A, 1);
+        ProductionOrder<String, String> second = restocking(STATION_B, 1);
+        orders.add(first);
+        orders.add(second);
+        orders.deliver(first.lines().getFirst().id(), 1, START, TIMEOUT);
+        orders.deliver(second.lines().getFirst().id(), 1, START, TIMEOUT);
+
+        ProductionOrders.Observation<String, String> observed = orders.observeStored(PLANK, 5L, START + 1, TIMEOUT);
+        assertEquals(5L, observed.credited());
+        assertEquals(ProductionOrderState.COMPLETE, orders.get(first.id()).orElseThrow().state());
+        assertEquals(1L, orders.get(second.id()).orElseThrow().produced(), "and the second one only takes the rest");
     }
 
     /** A cancelled order is forgotten a retention after the cancellation, not after its original timeout. */

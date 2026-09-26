@@ -50,6 +50,7 @@ public final class AisleMembership {
     private int inputs;
     private int outputs;
     private int productions;
+    private int keepers;
     private boolean fullScanPending;
     private boolean dropUnverified;
     @Nullable
@@ -184,7 +185,7 @@ public final class AisleMembership {
                 removeMember(position, removed);
                 misaligned.add(position);
             }
-            case STORAGE, INPUT, OUTPUT, PRODUCTION -> {
+            case STORAGE, INPUT, OUTPUT, PRODUCTION, KEEPER -> {
                 misaligned.remove(position);
                 LocationKind kind = result.kind().orElseThrow();
                 LocationKind existing = members.get(position);
@@ -194,6 +195,9 @@ public final class AisleMembership {
                 addMember(position, kind);
                 added.add(new LocationRecord(position, kind));
             }
+            // A switch statement over an enum is not checked for exhaustiveness, so a probe result added later would
+            // silently never become a member. It fails loudly instead.
+            default -> throw new IllegalStateException("unhandled rack probe result: " + result);
         }
     }
 
@@ -209,6 +213,10 @@ public final class AisleMembership {
             case INPUT -> inputs++;
             case OUTPUT -> outputs++;
             case PRODUCTION -> productions++;
+            case KEEPER -> keepers++;
+            // Not exhaustiveness-checked (a switch statement, not an expression): a kind added later would keep a
+            // counter at 0 for ever, and a count of 0 is what switches whole features off.
+            default -> throw new IllegalStateException("unhandled location kind: " + kind);
         }
     }
 
@@ -221,6 +229,9 @@ public final class AisleMembership {
             case INPUT -> inputs--;
             case OUTPUT -> outputs--;
             case PRODUCTION -> productions--;
+            case KEEPER -> keepers--;
+            // See addMember: the compiler does not demand every kind here either.
+            default -> throw new IllegalStateException("unhandled location kind: " + kind);
         }
         removed.add(new LocationRecord(position, kind));
     }
@@ -265,6 +276,7 @@ public final class AisleMembership {
         inputs = 0;
         outputs = 0;
         productions = 0;
+        keepers = 0;
         fullScanPending = false;
         dropUnverified = false;
         roundRobinCursor = null;
@@ -324,6 +336,11 @@ public final class AisleMembership {
     /** Aligned warehouse production stations ({@code docs/warehouse-system.md} §3.5). */
     public int productionCount() {
         return productions;
+    }
+
+    /** Aligned warehouse stock keepers ({@code docs/warehouse-system.md} §3.6, M15). */
+    public int keeperCount() {
+        return keepers;
     }
 
     public int misalignedCount() {

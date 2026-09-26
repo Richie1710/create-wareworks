@@ -84,6 +84,7 @@ public final class MechanicalArmGameTests {
     /** An arm without rotation and without targets: only the owner the point API asks for, it never moves. */
     private static final BlockPos IDLE_ARM = new BlockPos(3, BASE_Y, 3);
     private static final BlockPos INTERFACE = new BlockPos(5, BASE_Y, 3);
+    private static final BlockPos STOCK_KEEPER = new BlockPos(6, BASE_Y, 3);
     private static final BlockPos CONTROLLER = new BlockPos(0, BASE_Y, 5);
     private static final BlockPos DOCK = new BlockPos(2, BASE_Y, 5);
     private static final BlockPos RAIL = new BlockPos(4, BASE_Y, 5);
@@ -164,7 +165,10 @@ public final class MechanicalArmGameTests {
         helper.setBlock(CONTROLLER, WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState());
         helper.setBlock(DOCK, WareworksBlocks.STACKER_CRANE.getDefaultState());
         helper.setBlock(RAIL, WareworksBlocks.WAREHOUSE_RAIL.getDefaultState());
-        for (BlockPos pos : List.of(INTERFACE, CONTROLLER, DOCK, RAIL))
+        // The stock keeper is an aisle member like the stations, but it holds no items at all, so it must stay a
+        // non-target: an arm placed against it, never selecting it (M15).
+        helper.setBlock(STOCK_KEEPER, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState());
+        for (BlockPos pos : List.of(INTERFACE, CONTROLLER, DOCK, RAIL, STOCK_KEEPER))
             helper.assertTrue(primaryType(helper, pos) == null, "no mechanical arm can target "
                     + level.getBlockState(helper.absolutePos(pos)));
         helper.succeed();

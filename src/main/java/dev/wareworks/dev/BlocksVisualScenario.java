@@ -15,6 +15,7 @@ import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.registry.WareworksBlocks;
@@ -131,7 +132,13 @@ public final class BlocksVisualScenario implements VisualScenario {
                     .getDefaultState().setValue(WarehouseTerminalBlock.FACING, Direction.NORTH))),
             // The production station faces the aisle like input and output, so its opening looks at the front camera.
             new Exhibit("production", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_PRODUCTION
-                    .getDefaultState().setValue(WarehouseProductionBlock.FACING, Direction.SOUTH))));
+                    .getDefaultState().setValue(WarehouseProductionBlock.FACING, Direction.SOUTH))),
+            // The stock keeper faces the aisle like the stations, so its panel looks at the front camera. Its lamp is
+            // shown lit, which is the only state that differs from the item model (M15).
+            new Exhibit("stock_keeper", (level, pos) -> level.setBlockAndUpdate(pos,
+                    WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
+                            .setValue(WarehouseStockKeeperBlock.FACING, Direction.SOUTH)
+                            .setValue(WarehouseStockKeeperBlock.LIT, true))));
 
     /** The creative tab contents as checked on the client; the chest screen shows them in this order. */
     private volatile List<Item> tabItems = List.of();
@@ -256,7 +263,8 @@ public final class BlocksVisualScenario implements VisualScenario {
         List<Item> expected = List.of(WareworksBlocks.STACKER_CRANE.asItem(), WareworksBlocks.WAREHOUSE_RAIL.asItem(),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), WareworksBlocks.WAREHOUSE_INTERFACE.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
-                WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem());
+                WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem());
         if (!shown.equals(expected) || icon != WareworksBlocks.STACKER_CRANE.asItem())
             throw new VisualTestException("unexpected creative tab: icon " + icon + ", items " + shown);
         tabItems = shown;

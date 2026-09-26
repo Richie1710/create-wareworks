@@ -5,6 +5,7 @@ import com.tterrag.registrate.util.entry.MenuEntry;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.station.ProductionMenu;
+import dev.wareworks.content.station.StockKeeperMenu;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 
 /**
@@ -30,6 +31,12 @@ public final class WareworksMenuTypes {
     public static final MenuEntry<ProductionMenu> WAREHOUSE_PRODUCTION = REGISTRATE
             .menu("warehouse_production", ProductionMenu::new,
                     () -> dev.wareworks.client.gui.WarehouseProductionScreen::new)
+            .register();
+
+    /** The warehouse stock keeper's rule screen ({@code docs/warehouse-system.md} §3.6, M15). */
+    public static final MenuEntry<StockKeeperMenu> WAREHOUSE_STOCK_KEEPER = REGISTRATE
+            .menu("warehouse_stock_keeper", StockKeeperMenu::new,
+                    () -> dev.wareworks.client.gui.WarehouseStockKeeperScreen::new)
             .register();
 
     private WareworksMenuTypes() {

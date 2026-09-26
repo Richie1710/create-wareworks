@@ -12,6 +12,7 @@ import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
+import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 
@@ -90,6 +91,15 @@ public final class WareworksBlockEntityTypes {
     public static final BlockEntityEntry<WarehouseProductionBlockEntity> WAREHOUSE_PRODUCTION = REGISTRATE
             .blockEntity("warehouse_production", WarehouseProductionBlockEntity::new)
             .validBlocks(WareworksBlocks.WAREHOUSE_PRODUCTION)
+            .register();
+
+    /**
+     * Warehouse stock keeper: no renderer (a static block model with a lit variant; the rules are edited in a GUI, not
+     * drawn on the block) and <b>no capability at all</b> — it holds no items.
+     */
+    public static final BlockEntityEntry<WarehouseStockKeeperBlockEntity> WAREHOUSE_STOCK_KEEPER = REGISTRATE
+            .blockEntity("warehouse_stock_keeper", WarehouseStockKeeperBlockEntity::new)
+            .validBlocks(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
             .register();
 
     private WareworksBlockEntityTypes() {

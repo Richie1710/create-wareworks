@@ -93,6 +93,18 @@ public final class WarehouseRegistry {
         return notifyContaining(level, member, WarehouseControllerBlockEntity::onStorageFilterChanged);
     }
 
+    /**
+     * The rules of the warehouse stock keeper at {@code member} changed, or that keeper was loaded or removed
+     * ({@code docs/warehouse-system.md} §3.6, M15): every loaded controller whose aisle contains the position re-reads
+     * that one keeper at once, so the next plan and the next request already obey the new rule. Entries of controllers
+     * that are loaded but gone are dropped.
+     *
+     * @return the number of controllers notified
+     */
+    public static int stockRulesChanged(Level level, BlockPos member) {
+        return notifyContaining(level, member, WarehouseControllerBlockEntity::onStockRulesChanged);
+    }
+
     private static int notifyContaining(Level level, BlockPos member,
                                         BiConsumer<WarehouseControllerBlockEntity, RackPosition> notification) {
         Objects.requireNonNull(member, "member");

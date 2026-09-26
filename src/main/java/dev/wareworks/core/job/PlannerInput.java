@@ -8,6 +8,7 @@ import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
+import java.util.function.ToLongFunction;
 
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.inventory.StockView;
@@ -55,6 +56,14 @@ import dev.wareworks.core.inventory.StockView;
  *                             reroutes into storage), never for retrieval; on a {@code RETRIEVE} reroute a rejected
  *                             location is ranked last rather than dropped, so leftovers can go back where they came
  *                             from
+ * @param storeHeadroom        how many more items of a key the warehouse may still <b>store</b> (M15, issue #3): a
+ *                             stock rule's maximum, minus what is stored and on its way in, plus what an open
+ *                             production order is still expected to bring back. Consulted once per key in the store
+ *                             plan, before the candidate ranking, the estimate and any live call, so a capped item is
+ *                             strictly cheaper to refuse than to accept; the default is {@link Long#MAX_VALUE} for
+ *                             every key, which is what an aisle without rules answers, so the planner behaves exactly
+ *                             as it did before M15. Never consulted by {@link JobPlanner#planReroute}: items already
+ *                             in the handling head must always find a target, or the crane holds for ever
  * @param liveSimulationBudget maximum number of live callback calls per planner run (bounds the cost of a full
  *                             warehouse or a long fall-through)
  * @param <K>                  item key type
@@ -68,7 +77,14 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         JobPlanner.InsertEstimate<K, L> insertEstimate, JobPlanner.LiveExtract<K, L> liveExtract,
         JobPlanner.LiveInsert<K, L> liveInsert, BiPredicate<? super L, ? super K> insertRefused,
         BiPredicate<? super L, ? super K> extractRefused,
-        BiFunction<? super L, ? super K, FilterMatch> storeFilter, int liveSimulationBudget) {
+        BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToLongFunction<? super K> storeHeadroom,
+        int liveSimulationBudget) {
+    /**
+     * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
+     * the builder's default, so an aisle without rules plans exactly as it did before M15.
+     */
+    public static final ToLongFunction<Object> UNLIMITED_HEADROOM = key -> Long.MAX_VALUE;
+
     public PlannerInput {
         if (!Double.isFinite(craneX) || !Double.isFinite(craneY))
             throw new IllegalArgumentException("crane position must be finite: " + craneX + ", " + craneY);
@@ -92,6 +108,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         Objects.requireNonNull(insertRefused, "insertRefused");
         Objects.requireNonNull(extractRefused, "extractRefused");
         Objects.requireNonNull(storeFilter, "storeFilter");
+        Objects.requireNonNull(storeHeadroom, "storeHeadroom");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
     }
@@ -146,8 +163,9 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
     /**
      * A builder with safe defaults: crane at (0, 0), stopped, no transfer time, no requests or locations, everything
      * available, every key its own item type, unknown capacity estimates, live callbacks that accept and give nothing, no
-     * known refusals, no store filters ({@link FilterMatch#UNFILTERED} everywhere), and
-     * {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}. The carry limit has no default.
+     * known refusals, no store filters ({@link FilterMatch#UNFILTERED} everywhere), unlimited store headroom
+     * ({@link #UNLIMITED_HEADROOM}, i.e. no stock rule) and {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}. The
+     * carry limit has no default.
      */
     public static <K, L> Builder<K, L> builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
         return new Builder<>(stock, reservations);
@@ -177,6 +195,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         private BiPredicate<? super L, ? super K> insertRefused = (location, key) -> false;
         private BiPredicate<? super L, ? super K> extractRefused = (location, key) -> false;
         private BiFunction<? super L, ? super K, FilterMatch> storeFilter = (location, key) -> FilterMatch.UNFILTERED;
+        private ToLongFunction<? super K> storeHeadroom = UNLIMITED_HEADROOM;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
         private Builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
@@ -280,6 +299,15 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
             return this;
         }
 
+        /**
+         * How many more items of a key the warehouse may still store ({@link PlannerInput#storeHeadroom()}). Left
+         * out, it is {@link PlannerInput#UNLIMITED_HEADROOM} — the answer of an aisle that has no stock rules.
+         */
+        public Builder<K, L> storeHeadroom(ToLongFunction<? super K> storeHeadroom) {
+            this.storeHeadroom = storeHeadroom;
+            return this;
+        }
+
         public Builder<K, L> liveSimulationBudget(int liveSimulationBudget) {
             this.liveSimulationBudget = liveSimulationBudget;
             return this;
@@ -289,7 +317,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
             return new PlannerInput<>(craneX, craneY, speeds, transferTicks, carryLimit, itemType, stock, reservations,
                     requests, supplies, storageLocations, inputs, outputs, inputBuffers, inputCursor, available,
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter,
-                    liveSimulationBudget);
+                    storeHeadroom, liveSimulationBudget);
         }
     }
 }

@@ -21,6 +21,9 @@ import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
 import dev.wareworks.core.production.SupplyLine;
+import dev.wareworks.core.stock.StockRule;
+import dev.wareworks.core.stock.StockRulePause;
+import dev.wareworks.core.stock.StockRules;
 import dev.wareworks.core.warehouse.AisleMembership;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
@@ -41,7 +44,13 @@ import net.minecraft.util.Mth;
  * Misaligned: int[] (x, y, side ordinal) per position
  * Requests:   [ { Id: UUID, Item: &lt;ItemKey&gt;, Requested: int, Remaining: int,
  *                 Destination: int[3] (offset from the controller) } ]        (queue order)
+ * StockRules: [ { X: int, Y: int, Side: "L"|"R",
+ *                 Rules: [ { Item: &lt;ItemKey&gt;, Min: long, Max: long, Reserve: long } ] } ]  (keeper order)
  * </pre>
+ * The stock rules are the controller's own copy of what the aisle's warehouse stock keepers hold. They are saved
+ * <b>here</b> rather than only in the keepers, because a rule gates item movement in both directions and a keeper's
+ * chunk can be unloaded while the controller plans: after a load the copy is there before the first tick
+ * ({@link AisleStockRules}).
  * Items are stored as count-less {@link ItemKey}s next to a {@code long} count, so {@code ItemStack.save} is never
  * called with a count above 99 or with an empty stack. Request destinations are stored relative to the controller, so
  * they stay right when a structure is moved without rotation. Writing never throws (an entry that fails is skipped and
@@ -53,6 +62,16 @@ final class ControllerPersistence {
     static final String MISALIGNED_TAG = "Misaligned";
     static final String REQUESTS_TAG = "Requests";
     static final String PRODUCTION_ORDERS_TAG = "ProductionOrders";
+    static final String STOCK_RULES_TAG = "StockRules";
+    static final String STOCK_PAUSES_TAG = "StockPauses";
+    private static final String CAUSE = "Cause";
+    private static final String UNRECOVERED = "Unrecovered";
+    private static final String RULES = "Rules";
+    private static final String MINIMUM = "Min";
+    private static final String MAXIMUM = "Max";
+    private static final String RESERVE = "Reserve";
+    /** Bound on keepers one save may list, whatever the aisle geometry allows. */
+    private static final int MAX_SAVED_KEEPERS = 256;
     private static final String ID = "Id";
     private static final String STATION = "Station";
     private static final String RESULT = "Result";
@@ -65,6 +84,8 @@ final class ControllerPersistence {
     private static final String REQUIRED = "Required";
     private static final String DELIVERED = "Delivered";
     private static final String REQUEST = "Request";
+    /** Marks an order the warehouse started by itself to refill a stock rule (M15 part 2). */
+    private static final String RESTOCK = "Restock";
     /** Bound on the production orders one save may contain, whatever {@code maxProductionOrders} allows. */
     private static final int MAX_SAVED_ORDERS = 256;
     private static final String REQUESTED = "Requested";
@@ -249,7 +270,7 @@ final class ControllerPersistence {
      * <pre>
      * ProductionOrders: [ { Id: UUID, Station: {X, Y, Side}, Result: &lt;ItemKey&gt;, ResultAmount: int,
      *                       State: "WAITING_FOR_RESULT", Produced: long, StockSeen: long, Request?: UUID,
-     *                       Promised: long,
+     *                       Promised: long, Restock?: boolean,
      *                       Lines: [ { Id: UUID, Item: &lt;ItemKey&gt;, Required: int, Delivered: int } ] } ]
      * </pre>
      * <b>The deadline is deliberately not saved.</b> A world that was closed for an hour would otherwise time out
@@ -291,6 +312,10 @@ final class ControllerPersistence {
                 entry.putLong(STOCK_SEEN, order.resultStockSeen());
                 entry.putLong(PROMISED, order.promisedToRequest());
                 order.backingRequest().ifPresent(id -> entry.putUUID(REQUEST, id));
+                // Only for the automatic orders, so a save from before M15 part 2 — and every ordinary order —
+                // reads back as "a request asked for this", which is what it was.
+                if (order.isRestock())
+                    entry.putBoolean(RESTOCK, true);
                 entry.put(LINES, lines);
                 list.add(entry);
             } catch (RuntimeException e) {
@@ -348,7 +373,125 @@ final class ControllerPersistence {
         long promised = entry.contains(PROMISED, Tag.TAG_LONG) ? entry.getLong(PROMISED) : resultAmount;
         return Optional.of(new ProductionOrder<>(entry.getUUID(ID), station.get(), result.get(), resultAmount, lines,
                 state, 0L, Math.max(0L, entry.getLong(PRODUCED)), Math.max(0L, entry.getLong(STOCK_SEEN)), request,
-                promised));
+                promised, entry.getBoolean(RESTOCK)));
+    }
+
+    /**
+     * Writes the controller's copy of the stock rules of its aisle's keepers, keeper by keeper in aisle order. A
+     * keeper with no rule at all is left out, so an aisle without rules saves one empty list. Never throws.
+     */
+    static void writeStockRules(CompoundTag tag, Map<RackPosition, List<StockRule<ItemKey>>> perKeeper,
+                                HolderLookup.Provider registries) {
+        ListTag keepers = new ListTag();
+        for (Map.Entry<RackPosition, List<StockRule<ItemKey>>> entry : perKeeper.entrySet()) {
+            if (entry.getValue().isEmpty())
+                continue;
+            try {
+                ListTag rules = new ListTag();
+                for (StockRule<ItemKey> rule : entry.getValue()) {
+                    Tag keyTag = rule.key().save(registries);
+                    if (keyTag instanceof CompoundTag compound && compound.isEmpty())
+                        continue; // unencodable key, already logged by ItemKey
+                    CompoundTag ruleTag = new CompoundTag();
+                    ruleTag.put(ITEM, keyTag);
+                    ruleTag.putLong(MINIMUM, rule.minimum());
+                    ruleTag.putLong(MAXIMUM, rule.maximum());
+                    ruleTag.putLong(RESERVE, rule.reserve());
+                    rules.add(ruleTag);
+                }
+                if (rules.isEmpty())
+                    continue;
+                CompoundTag keeperTag = writeRack(entry.getKey());
+                keeperTag.put(RULES, rules);
+                keepers.add(keeperTag);
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Could not save the stock rules of the keeper at {}", entry.getKey(), e);
+            }
+        }
+        tag.put(STOCK_RULES_TAG, keepers);
+    }
+
+    /**
+     * Reads the stock rules written by {@link #writeStockRules}. Never throws; an entry whose rack position or whose
+     * item cannot be read is skipped, and every number is clamped by {@link StockRule} itself. Bounded by
+     * {@value #MAX_SAVED_KEEPERS} keepers and {@code StockRules.MAX_RULES} rules per keeper, so crafted save data
+     * cannot make the copy unbounded.
+     */
+    static Map<RackPosition, List<StockRule<ItemKey>>> readStockRules(CompoundTag tag,
+                                                                     HolderLookup.Provider registries) {
+        Map<RackPosition, List<StockRule<ItemKey>>> perKeeper = new LinkedHashMap<>();
+        ListTag keepers = tag.getList(STOCK_RULES_TAG, Tag.TAG_COMPOUND);
+        for (int i = 0; i < keepers.size() && i < MAX_SAVED_KEEPERS; i++) {
+            CompoundTag keeperTag = keepers.getCompound(i);
+            try {
+                Optional<RackPosition> rack = readRack(keeperTag);
+                if (rack.isEmpty())
+                    continue;
+                ListTag rules = keeperTag.getList(RULES, Tag.TAG_COMPOUND);
+                List<StockRule<ItemKey>> read = new ArrayList<>(Math.min(rules.size(), StockRules.MAX_RULES));
+                for (int r = 0; r < rules.size() && r < StockRules.MAX_RULES; r++) {
+                    CompoundTag ruleTag = rules.getCompound(r);
+                    ItemKey.load(registries, ruleTag.get(ITEM)).ifPresent(key -> read.add(new StockRule<>(key,
+                            ruleTag.getLong(MINIMUM), ruleTag.getLong(MAXIMUM), ruleTag.getLong(RESERVE))));
+                }
+                if (!read.isEmpty())
+                    perKeeper.put(rack.get(), List.copyOf(read));
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Skipping unreadable stock rules {}", keeperTag, e);
+            }
+        }
+        return perKeeper;
+    }
+
+    /**
+     * Writes the rules the <b>safety stop</b> is holding (M15 part 2, issue #3):
+     * {@code StockPauses: [ { Item: <ItemKey>, Cause: "TIMED_OUT", Unrecovered: long } ]}.
+     * <p>
+     * A pause is saved with the controller for the same reason the rule copy is: it is the one thing that must be
+     * known <b>before</b> the first evaluation after a world load, or a restart would quietly resume ordering into a
+     * machine that already swallowed a batch. Never throws; an unencodable item is skipped, and losing a pause that
+     * way is the safe direction only because the very next lost batch pauses the rule again.
+     */
+    static void writeStockPauses(CompoundTag tag, Map<ItemKey, StockRulePause> pauses,
+                                 HolderLookup.Provider registries) {
+        ListTag list = new ListTag();
+        for (Map.Entry<ItemKey, StockRulePause> entry : pauses.entrySet()) {
+            try {
+                Tag keyTag = entry.getKey().save(registries);
+                if (keyTag instanceof CompoundTag compound && compound.isEmpty())
+                    continue; // unencodable key, already logged by ItemKey
+                CompoundTag pauseTag = new CompoundTag();
+                pauseTag.put(ITEM, keyTag);
+                pauseTag.putString(CAUSE, entry.getValue().cause().name());
+                pauseTag.putLong(UNRECOVERED, entry.getValue().unrecovered());
+                list.add(pauseTag);
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Could not save the stock rule pause of {}", entry.getKey(), e);
+            }
+        }
+        tag.put(STOCK_PAUSES_TAG, list);
+    }
+
+    /**
+     * Reads the pauses written by {@link #writeStockPauses}, in saved order. Never throws; an entry whose item cannot
+     * be read is skipped, an unknown cause reads as {@link StockRulePause.Cause#TIMED_OUT} (a pause whose reason is
+     * unreadable is still a pause), and the list is bounded by {@code StockRules.MAX_RULES}, because at most one rule
+     * governs an item.
+     */
+    static Map<ItemKey, StockRulePause> readStockPauses(CompoundTag tag, HolderLookup.Provider registries) {
+        Map<ItemKey, StockRulePause> pauses = new LinkedHashMap<>();
+        ListTag list = tag.getList(STOCK_PAUSES_TAG, Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size() && pauses.size() < StockRules.MAX_RULES; i++) {
+            CompoundTag pauseTag = list.getCompound(i);
+            try {
+                ItemKey.load(registries, pauseTag.get(ITEM)).ifPresent(key -> pauses.put(key,
+                        new StockRulePause(StockRulePause.Cause.byName(pauseTag.getString(CAUSE))
+                                .orElse(StockRulePause.Cause.TIMED_OUT), pauseTag.getLong(UNRECOVERED))));
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Skipping unreadable stock rule pause {}", pauseTag, e);
+            }
+        }
+        return pauses;
     }
 
     /** NBT form of a rack position: {@code {X: int, Y: int, Side: "L"|"R"}}. */

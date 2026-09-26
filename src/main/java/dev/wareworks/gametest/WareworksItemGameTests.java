@@ -79,6 +79,7 @@ public final class WareworksItemGameTests {
     private static final String BRASS_FUNNEL = "brass_funnel";
     private static final String BRASS_HAND = "brass_hand";
     private static final String BRASS_NUGGET = "brass_nugget";
+    private static final String COMPARATOR = "comparator";
     private static final String ELECTRON_TUBE = "electron_tube";
     private static final String INDUSTRIAL_IRON_BLOCK = "industrial_iron_block";
     private static final String IRON_SHEET = "iron_sheet";
@@ -99,6 +100,11 @@ public final class WareworksItemGameTests {
     private record IngredientSpec(ResourceLocation item, TagKey<Item> tag) {
         static IngredientSpec of(String createPath) {
             return new IngredientSpec(createId(createPath), null);
+        }
+
+        /** A vanilla item, for the one ingredient that is not Create's ({@code minecraft:comparator}). */
+        static IngredientSpec ofVanilla(String path) {
+            return new IngredientSpec(ResourceLocation.withDefaultNamespace(path), null);
         }
 
         static IngredientSpec ofTag(TagKey<Item> tag) {
@@ -216,7 +222,9 @@ public final class WareworksItemGameTests {
         assertCrafts(helper, recipes, level, controller, WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), ONE);
         assertCrafts(helper, recipes, level, terminal, WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), ONE);
         assertCrafts(helper, recipes, level, rail, WareworksBlocks.WAREHOUSE_RAIL.asItem(), RAILS_PER_CRAFT);
+        CraftingInput keeper = grid(3, 3, none, vanilla(COMPARATOR), none, tube, brass, tube, none, alloy, none);
         assertCrafts(helper, recipes, level, production, WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(), ONE);
+        assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
 
         // The crane is mechanical crafting. MechanicalCraftingRecipe#matches rejects every input that is not a
         // MechanicalCraftingInput, so the grid has to be built the way a crafter tower builds it.
@@ -277,7 +285,8 @@ public final class WareworksItemGameTests {
         helper.assertValueEqual(shown, List.of(WareworksBlocks.STACKER_CRANE.asItem(), WareworksBlocks.WAREHOUSE_RAIL.asItem(),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), WareworksBlocks.WAREHOUSE_INTERFACE.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
-                WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem()),
+                WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem()),
                 "creative tab order");
         helper.assertTrue(tab.getIconItem().is(WareworksBlocks.STACKER_CRANE.asItem()), "creative tab icon: " + tab.getIconItem());
         helper.succeed();
@@ -319,6 +328,10 @@ public final class WareworksItemGameTests {
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_PRODUCTION, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(BRASS_FUNNEL), IngredientSpec.of(BRASS_FUNNEL),
                                 IngredientSpec.of(BRASS_CASING), IngredientSpec.of(BRASS_FUNNEL),
+                                IngredientSpec.of(ANDESITE_ALLOY))),
+                new ExpectedRecipe(WareworksBlocks.WAREHOUSE_STOCK_KEEPER, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofVanilla(COMPARATOR), IngredientSpec.of(ELECTRON_TUBE),
+                                IngredientSpec.of(BRASS_CASING), IngredientSpec.of(ELECTRON_TUBE),
                                 IngredientSpec.of(ANDESITE_ALLOY))));
     }
 
@@ -433,6 +446,11 @@ public final class WareworksItemGameTests {
 
     private static ItemStack stack(String createPath) {
         return new ItemStack(BuiltInRegistries.ITEM.get(createId(createPath)));
+    }
+
+    /** A vanilla item stack, for the one ingredient that is not Create's ({@code minecraft:comparator}). */
+    private static ItemStack vanilla(String path) {
+        return new ItemStack(BuiltInRegistries.ITEM.get(ResourceLocation.withDefaultNamespace(path)));
     }
 
     private static ResourceLocation createId(String path) {

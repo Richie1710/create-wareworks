@@ -127,6 +127,96 @@ public final class WareworksLang {
     public static final String GOGGLES_PRODUCTION_AWAITED = "gui.goggles.production_awaited";
     /** {@code "Production stations: %1$s"}: production stations of an aisle (controller). */
     public static final String GOGGLES_PRODUCTION_STATIONS = "gui.goggles.production_stations";
+    /** {@code "Stock rules: %1$s"}: rules of the aisle's stock keepers that govern an item (controller, M15). */
+    public static final String GOGGLES_STOCK_RULES = "gui.goggles.stock_rules";
+    /** {@code "Below minimum: %1$s"}: governing rules of the aisle whose item the warehouse is short of. */
+    public static final String GOGGLES_RULES_BELOW_MINIMUM = "gui.goggles.rules_below_minimum";
+    /** {@code "At maximum: %1$s"}: governing rules of the aisle that stop their item from being stored. */
+    public static final String GOGGLES_RULES_AT_MAXIMUM = "gui.goggles.rules_at_maximum";
+    /** {@code "Paused: %1$s"}: rules of the aisle the safety stop is holding (controller, M15 part 2). */
+    public static final String GOGGLES_RULES_PAUSED = "gui.goggles.rules_paused";
+    /** {@code "Warehouse Stock Keeper:"}: goggle header of a warehouse stock keeper (M15). */
+    public static final String GOGGLES_WAREHOUSE_STOCK_KEEPER = "gui.goggles.warehouse_stock_keeper";
+    /** {@code "Rules: %1$s"}: rows of a keeper that hold a rule. */
+    public static final String GOGGLES_KEEPER_RULES = "gui.goggles.keeper_rules";
+    /** {@code "No rules set"}: a keeper that governs nothing yet. */
+    public static final String GOGGLES_KEEPER_NO_RULES = "gui.goggles.keeper_no_rules";
+    /** {@code "Not part of a warehouse"}: a keeper no loaded controller reads. */
+    public static final String GOGGLES_KEEPER_NO_WAREHOUSE = "gui.goggles.keeper_no_warehouse";
+    /** {@code "Below minimum: %1$s"}: governing rules whose item the warehouse is short of. */
+    public static final String GOGGLES_KEEPER_BELOW_MINIMUM = "gui.goggles.keeper_below_minimum";
+    /** {@code "At maximum: %1$s"}: governing rules whose item is not accepted any more. */
+    public static final String GOGGLES_KEEPER_AT_MAXIMUM = "gui.goggles.keeper_at_maximum";
+    /** {@code "Down to the reserve: %1$s"}: governing rules that hold the rest back from automation. */
+    public static final String GOGGLES_KEEPER_AT_RESERVE = "gui.goggles.keeper_at_reserve";
+    /** {@code "Being made now: %1$s"}: rules the warehouse is restocking by itself (M15 part 2). */
+    public static final String GOGGLES_KEEPER_ORDERING = "gui.goggles.keeper_ordering";
+    /** {@code "Waiting for ingredients: %1$s"}: rules that are short and cannot order (M15 part 2). */
+    public static final String GOGGLES_KEEPER_WAITING = "gui.goggles.keeper_waiting";
+    /** {@code "Paused after a lost batch: %1$s"}: rules the safety stop is holding (M15 part 2). */
+    public static final String GOGGLES_KEEPER_PAUSED = "gui.goggles.keeper_paused";
+    /** The one-line "what to do about it" under {@link #GOGGLES_KEEPER_PAUSED}. */
+    public static final String GOGGLES_KEEPER_PAUSED_HINT = "gui.goggles.keeper_paused_hint";
+    /** {@code "Without effect: %1$s"}: rules shadowed by an earlier one or beyond the aisle's rule limit. */
+    public static final String GOGGLES_KEEPER_WITHOUT_EFFECT = "gui.goggles.keeper_without_effect";
+    /** {@code "Everything within its limits"}: no rule of this keeper bites. */
+    public static final String GOGGLES_KEEPER_SATISFIED = "gui.goggles.keeper_satisfied";
+    /** {@code "Rules"}: label above the rule rows of a keeper's screen. */
+    public static final String KEEPER_RULES = "gui.keeper.rules";
+    /** {@code "Empty row"}: a rule row without an item. */
+    public static final String KEEPER_EMPTY_ROW = "gui.keeper.empty_row";
+    /** {@code "Minimum"}: tooltip title of the first number column. */
+    public static final String KEEPER_MINIMUM = "gui.keeper.minimum";
+    /** {@code "Maximum"}: tooltip title of the second number column. */
+    public static final String KEEPER_MAXIMUM = "gui.keeper.maximum";
+    /** {@code "Reserve"}: tooltip title of the third number column. */
+    public static final String KEEPER_RESERVE = "gui.keeper.reserve";
+    /** {@code "Min"}: column header of the minimum. */
+    public static final String KEEPER_MINIMUM_SHORT = "gui.keeper.minimum_short";
+    /** {@code "Max"}: column header of the maximum. */
+    public static final String KEEPER_MAXIMUM_SHORT = "gui.keeper.maximum_short";
+    /** {@code "Res"}: column header of the reserve. */
+    public static final String KEEPER_RESERVE_SHORT = "gui.keeper.reserve_short";
+    /** What the minimum governs: what comes in. */
+    public static final String KEEPER_MINIMUM_HINT = "gui.keeper.minimum_hint";
+    /** What the maximum governs: what may be stored. */
+    public static final String KEEPER_MAXIMUM_HINT = "gui.keeper.maximum_hint";
+    /** What the reserve governs: what may go out to the warehouse's own automation. */
+    public static final String KEEPER_RESERVE_HINT = "gui.keeper.reserve_hint";
+    /** How a number is changed (number tooltip). */
+    public static final String KEEPER_NUMBER_HINT = "gui.keeper.number_hint";
+    /** How a rule's item is set (item cell tooltip). */
+    public static final String KEEPER_ITEM_HINT = "gui.keeper.item_hint";
+    /** The status line of the keeper screen while nothing had to be corrected. */
+    public static final String KEEPER_HINT = "gui.keeper.hint";
+    /** The status line while no controller reads these rules. */
+    public static final String KEEPER_NO_WAREHOUSE = "gui.keeper.no_warehouse";
+    /** {@code "Min %1$s \u00b7 Max %2$s \u00b7 Reserve %3$s"}: the exact numbers of a rule, also when a field is compacted. */
+    public static final String KEEPER_LIMITS = "gui.keeper.limits";
+    /** {@code "In stock: %1$s"}: what the aisle holds of a rule's item. */
+    public static final String KEEPER_IN_STOCK = "gui.keeper.in_stock";
+    /** {@code "Available: %1$s"}: what a player could still ask for at a terminal. */
+    public static final String KEEPER_AVAILABLE = "gui.keeper.available";
+    /** {@code "Held back from automation: %1$s"}: what the reserve keeps from redstone requests. */
+    public static final String KEEPER_HELD_BACK = "gui.keeper.held_back";
+    /** {@code "Short of the minimum: %1$s"}. */
+    public static final String KEEPER_SHORTFALL = "gui.keeper.shortfall";
+    /** Prefix of the rule status texts, {@code gui.keeper.status.<status>} ({@link #keeperStatusKey}). */
+    public static final String KEEPER_STATUS_PREFIX = "gui.keeper.status.";
+    /** Prefix of the correction texts, {@code gui.keeper.adjustment.<adjustment>} ({@link #keeperAdjustmentKey}). */
+    public static final String KEEPER_ADJUSTMENT_PREFIX = "gui.keeper.adjustment.";
+    /** Prefix of the restocking texts, {@code gui.keeper.restock.<outcome>} ({@code RestockOutcome#langKey}). */
+    public static final String KEEPER_RESTOCK_PREFIX = "gui.keeper.restock.";
+    /** {@code "Ingredient items not recovered: %1$s"}: what a paused rule's lost batch cost (M15 part 2). */
+    public static final String KEEPER_PAUSED_LOST = "gui.keeper.paused_lost";
+    /** How a player lets a paused rule order again (row tooltip and status line, M15 part 2). */
+    public static final String KEEPER_RESUME_HINT = "gui.keeper.resume_hint";
+    /** The status line while the safety stop is holding a rule of this keeper (M15 part 2). */
+    public static final String KEEPER_PAUSED_LINE = "gui.keeper.paused_line";
+    /** {@code "Missing: %1$s"}: the ingredient a waiting rule needs a player to supply (M15 part 2). */
+    public static final String KEEPER_MISSING_INGREDIENT = "gui.keeper.missing_ingredient";
+    /** The status line after an edit lifted a rule's safety stop (M15 part 2). */
+    public static final String KEEPER_RESUMED = "gui.keeper.resumed";
     /** Hint under {@link #GOGGLES_MISALIGNED} for stations. */
     public static final String GOGGLES_STATION_MISALIGNED_HINT = "gui.goggles.station_misaligned_hint";
     /** Hint under {@link #GOGGLES_MISALIGNED} for terminals, whose screen must not sit on the aisle side. */
@@ -204,6 +294,34 @@ public final class WareworksLang {
     public static final String TERMINAL_AVAILABLE = "gui.terminal.available";
     /** {@code "Promised: %1$s"}: item tooltip line of the terminal grid. */
     public static final String TERMINAL_RESERVED = "gui.terminal.reserved";
+    /** {@code "Stock rule: %1$s"}: what a rule says about this item, with a {@code StockRuleStatus} text (M15). */
+    public static final String TERMINAL_RULE = "gui.terminal.rule";
+    /** {@code "Kept back from automation: %1$s"}: the reserve, which this player may still take. */
+    public static final String TERMINAL_RULE_RESERVED = "gui.terminal.rule_reserved";
+    /** {@code "Stored at most: %1$s"}: the rule's storage cap, the third of its numbers a row can name (M15 part 2). */
+    public static final String TERMINAL_RULE_MAXIMUM = "gui.terminal.rule_maximum";
+    /** {@code "A request of yours goes below the reserve"}: the hint that tells a player which case they are in. */
+    public static final String TERMINAL_BELOW_RESERVE = "gui.terminal.below_reserve";
+    /** Title of the terminal's confirmation panel (M15 part 2). */
+    public static final String TERMINAL_CONFIRM_TITLE = "gui.terminal.confirm.title";
+    /** {@code "This takes %1$s of the %2$s items held in reserve."}: the reserve case (M15 part 2). */
+    public static final String TERMINAL_CONFIRM_RESERVE = "gui.terminal.confirm.reserve";
+    /** {@code "%1$s of these %2$s go past the maximum of %3$s."}: the maximum case (M15 part 2). */
+    public static final String TERMINAL_CONFIRM_MAXIMUM = "gui.terminal.confirm.maximum";
+    /**
+     * {@code "Making it takes %1$s of the %2$s reserved %3$s."}: an ingredient of the production order the request
+     * would start, held back by a reserve of its own (M15 part 2). Only the server can name this, because only it has
+     * the aisle's patterns.
+     */
+    public static final String TERMINAL_CONFIRM_INGREDIENT = "gui.terminal.confirm.ingredient";
+    /** {@code "The warehouse has changed since you were asked:"}: the re-check found a higher cost (M15 part 2). */
+    public static final String TERMINAL_CONFIRM_CHANGED = "gui.terminal.confirm.changed";
+    /** {@code "Confirm"}: the button that carries the request out. */
+    public static final String TERMINAL_CONFIRM_YES = "gui.terminal.confirm.yes";
+    /** {@code "Cancel"}: the button that drops it. */
+    public static final String TERMINAL_CONFIRM_NO = "gui.terminal.confirm.no";
+    /** How to skip the confirmation next time (Ctrl), shown under the two buttons. */
+    public static final String TERMINAL_CONFIRM_SKIP = "gui.terminal.confirm.skip";
     /** {@code "Delivered here"}: label above the terminal's own buffer slots. */
     public static final String TERMINAL_BUFFER = "gui.terminal.buffer";
     /** {@code "+%1$s not shown"}: item types the aisle holds beyond {@code maxTerminalStockEntries}. */
@@ -264,6 +382,15 @@ public final class WareworksLang {
     public static final String DISPLAY_AISLE_LINE_ITEM_TYPES = "display_source.aisle.line_item_types";
     /** {@code "Items: %1$s"}. */
     public static final String DISPLAY_AISLE_LINE_ITEMS = "display_source.aisle.line_items";
+    /**
+     * {@code "Rules: %1$s · below min %2$s · at max %3$s"}: the aisle's governing stock rules, how many call for their
+     * item and how many refuse it at their maximum (M15). The last number is the one that explains a warehouse input
+     * standing still, so a board that watches the aisle has to be able to show it; the wording follows the goggle lines
+     * ({@link #GOGGLES_RULES_BELOW_MINIMUM}, {@link #GOGGLES_RULES_AT_MAXIMUM}), shortened for a display row.
+     */
+    public static final String DISPLAY_AISLE_LINE_RULES = "display_source.aisle.line_rules";
+    /** {@code "Rules paused: %1$s"}: rules of the aisle the safety stop is holding (M15 part 2). */
+    public static final String DISPLAY_AISLE_LINE_RULES_PAUSED = "display_source.aisle.line_rules_paused";
     /** {@code "No aisle"}: the source block belongs to no loaded aisle. */
     public static final String DISPLAY_AISLE_NO_AISLE = "display_source.aisle.no_aisle";
     /**
@@ -304,6 +431,26 @@ public final class WareworksLang {
     /** Relative lang key of a crane phase text, e.g. {@code gui.goggles.crane_phase.travel_to_source}. */
     public static String cranePhaseKey(CranePhase phase) {
         return GOGGLES_CRANE_PHASE_PREFIX + phase.name().toLowerCase(Locale.ROOT);
+    }
+
+    /** Relative lang key of a stock rule status, e.g. {@code gui.keeper.status.below_minimum}. */
+    public static String keeperStatusKey(dev.wareworks.core.stock.StockRuleStatus status) {
+        return KEEPER_STATUS_PREFIX + status.name().toLowerCase(Locale.ROOT);
+    }
+
+    /** Relative lang key of a correction a rule edit needed, e.g. {@code gui.keeper.adjustment.value_clamped}. */
+    public static String keeperAdjustmentKey(dev.wareworks.core.stock.StockRuleAdjustment adjustment) {
+        return KEEPER_ADJUSTMENT_PREFIX + adjustment.name().toLowerCase(Locale.ROOT);
+    }
+
+    /** Relative lang key of a restocking outcome, e.g. {@code gui.keeper.restock.waiting_for_ingredients}. */
+    public static String keeperRestockKey(dev.wareworks.core.stock.RestockOutcome outcome) {
+        return outcome.langKey();
+    }
+
+    /** Relative lang key of why a rule was paused, e.g. {@code gui.keeper.paused.timed_out}. */
+    public static String keeperPausedKey(dev.wareworks.core.stock.StockRulePause.Cause cause) {
+        return cause.langKey();
     }
 
     /** Relative lang key of a planning result text, e.g. {@code gui.goggles.no_job_reason.warehouse_full}. */

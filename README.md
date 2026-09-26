@@ -51,6 +51,8 @@ can watch it happen.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Wareworks
   never crafts anything itself.
+* **Warehouse Stock Keeper**: holds the warehouse's stock rules — one item per row plus a **minimum**, a **maximum** and
+  a **reserve**. It holds no items itself; a row's item is only a name, and nothing you click into it is used up.
 
 **Mechanical Arms** can use the stations directly: the warehouse input only as a target to put items into, and the
 output, terminal and production station only as a source to take items from. Clicking a station again with the arm
@@ -63,6 +65,11 @@ types, items) or a **stock list** of the most stocked item types; on a warehouse
 carries and which address it is heading for. Nixie tubes, display boards and lecterns show the text in your own
 language. A sign accepts it too, but it keeps whatever language the server writes it in — English on a dedicated
 server, for everyone — because a sign stores plain text. Create's own display sources behave the same way.
+
+**Stock rules** let you tell a warehouse how much of something it should hold. One row of a **Warehouse Stock Keeper**
+carries an item and three numbers: a **minimum** the warehouse tries to keep (a comparator on the keeper calls for the
+item, and the warehouse even orders it from your own machines), a **maximum** it stores at most, and a **reserve** it
+never hands to your automation. Details are in the **Stock rules** section below.
 
 Also included: goggle information on every block, Create-style item descriptions, a Ponder scene for every block,
 English and German translations, and recipes at mid-game Create tier.
@@ -106,8 +113,9 @@ The build *is* the configuration; there is no setup screen.
 
 Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Every block has one: the crane and the
 rail share the overview, the controller shows storing and retrieving, the interface adds addressing and storage
-filters, and the terminal and the production station have their own scenes (placing and requesting, and feeding a
-machine from the warehouse).
+filters, the terminal and the production station have their own scenes (placing and requesting, and feeding a machine
+from the warehouse), and the stock keeper has two (what each of its three numbers governs, and a warehouse that restocks
+itself).
 
 ## Requesting items
 
@@ -117,7 +125,8 @@ never onto the port. Right-click with an empty hand to open it.
 
 * Type to search; `@create` matches a mod id.
 * **Click** to request the amount in the scroll input, **shift-click** for a stack, **ctrl-click** for everything
-  available.
+  available. Holding **Alt** skips the confirmation a stock rule would ask for (see **Stock rules**), and combines with
+  either of the other two.
 * Repeated clicks on the same item are merged into one request and one crane trip.
 * Delivered items land in the terminal's own slots. Take them by hand, or let a funnel, chute or Mechanical Arm pull
   them onward.
@@ -166,6 +175,49 @@ Practical notes:
 * **Wareworks does not check patterns against recipes.** A pattern whose machine cannot make the result never produces
   anything, and the order times out.
 
+## Stock rules
+
+A **Warehouse Stock Keeper** is where you tell a warehouse how much of something it should hold. Place it into a rack
+like any other station and right-click it with an empty hand: each row takes one item and up to three numbers. Scroll a
+number to change it, Shift-scroll for whole stacks, right-click it to switch it off. The row's item is only a name —
+nothing you click in is used up, and the keeper itself never holds an item.
+
+The three numbers do three different things:
+
+* **Minimum — what comes in.** "Keep 256 planks." While the warehouse holds fewer, the **comparator** on the keeper
+  calls for the item, so a farm or a hand-built line runs exactly as long as it is needed. And if a Warehouse Production
+  Station in the same aisle has a pattern for the item, the warehouse **orders it by itself**: the crane fetches the
+  ingredients to the station, your machine makes the product, and it comes back through an ordinary warehouse input. One
+  number is all of it — no second setting, no schedule. The warehouse usually settles a little above your number,
+  because a pattern makes whole runs — but never above a maximum you also set, and never by spending something another
+  rule is itself short of. If your numbers leave no room for a whole run ("keep exactly 64, made four at a time"), the
+  row says so instead of ordering.
+* **Maximum — what may be stored.** "Store at most 2048 cobblestone." Above it the crane stops accepting the item, and a
+  warehouse input holding it **backs up on purpose**: that is the rule working, not a jam. The controller's goggles and
+  an aisle display say so ("At maximum: 1"), and nothing that is already stored is ever thrown away or moved out.
+* **Reserve — what may go out to automation.** "Never let the last 64 andesite alloy go to a machine." A redstone request
+  at a Warehouse Output stops at the reserve, and so do the ingredients of anything the warehouse makes for itself.
+  **You are never stopped:** a request at a terminal is served down to the last item, and the row tells you that you are
+  going below the reserve.
+
+**If a machine eats a batch, the warehouse stops.** Ingredients that have gone into one of your machines cannot be
+recovered. So the first time an automatic order ends with the ingredients delivered and nothing coming back — a broken
+machine, an unpowered one, a pattern that machine cannot make — that rule **stops ordering** and waits for you: a
+differently coloured lamp on the keeper, a paused line in its goggles, on the controller and on an aisle display, and the
+row in its screen tells you what the loss cost. Check the machine, then click the row's mark (or simply edit the rule
+again) and it orders once more. It never retries by itself, because it cannot tell a fixed machine from a broken one.
+
+**The terminal asks before one of your own clicks crosses a line you drew.** A click that reaches into a reserve, spends
+a reserved item as the **ingredient** of something the warehouse has to make for you, or would leave more in the racks
+than a maximum allows, opens a short question naming the exact number and item. Hold **Alt** while clicking to skip it.
+Nothing is requested until you confirm, and what the answer costs is measured again at that moment, so a warehouse that
+moved in the meantime asks you again rather than acting on an old yes.
+
+An aisle may hold several keepers; their rows together are the aisle's rules, up to `maxStockRules` (32 by default). A
+second rule for the same item is ignored and says so, so you can always see which row is in charge. Setting
+`maxRestockOrders` to 0 in the server config switches the automatic ordering off, while every rule keeps capping and
+reserving.
+
 ## Building from source
 
 Requires a JDK 21 (`JAVA_HOME` must point to it).
@@ -187,7 +239,8 @@ start `./gradlew runClient` and pick **"Wareworks Showcase"**.
 ## Documentation
 
 * [Architecture](docs/architecture.md): layers, package tree, design decisions
-* [Warehouse system](docs/warehouse-system.md): interface, controller, addressing, stock index, jobs, reservations, config
+* [Warehouse system](docs/warehouse-system.md): interface, controller, addressing, stock index, jobs, reservations, stock
+  rules, config
 * [Stacker crane](docs/stacker-crane.md): block, state machine, kinetics, rendering, sounds
 * [Dependencies](docs/dependencies.md): versions, Create APIs in use, known harmless log warnings
 * [Roadmap](docs/roadmap.md): milestones and planned features

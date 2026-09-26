@@ -15,6 +15,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.job.RequestQueue;
+import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.core.BlockPos;
@@ -143,7 +144,10 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
             return RequestResult.rejected(RequestRejection.NO_CONTROLLER);
         // The cap is passed to the controller rather than applied here: repeated pulses for one item are merged into
         // the open request, so it must bound the merged remaining amount, not this pulse (§7.2, ADR-020).
-        return controller.get().request(worldPosition, ItemKey.of(filter), requestAmount(), maxRequestAmount());
+        // A redstone pulse is the warehouse's own automation, so a stock rule's reserve holds items back from it: an
+        // output must not be able to empty a buffer a player set aside overnight (M15, issue #3).
+        return controller.get().request(worldPosition, ItemKey.of(filter), requestAmount(), maxRequestAmount(),
+                StockAccess.AUTOMATION);
     }
 
     // --- station -------------------------------------------------------------------------------------------------

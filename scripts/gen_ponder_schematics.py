@@ -54,6 +54,8 @@ TEMPLATES = {
     "warehouse/terminal": (7, 6, 7),
     "warehouse/requesting": (9, 7, 9),
     "warehouse/production": (9, 7, 9),
+    "warehouse/stock_rules": (9, 7, 9),
+    "warehouse/restocking": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

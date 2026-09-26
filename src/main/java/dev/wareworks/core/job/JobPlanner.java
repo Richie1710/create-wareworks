@@ -39,14 +39,19 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       {@link NoJobReason#PRODUCTION_FULL} when it accepts nothing. It comes after the requests (a player waiting at
  *       a terminal is served first) and before storing, so ingredients move while new items are still arriving.</li>
  *   <li><b>STORE</b> otherwise, round robin over the input stations from the cursor, skipping empty buffers. Item = the
- *       first non-empty slot. Candidates are the available storage locations whose store filter accepts the item and
- *       whose estimate exceeds their reserved capacity, ranked by (a0) a filter that <b>selects</b> the item
- *       ({@link FilterMatch#DEDICATED}; a deny list that merely does not exclude it is {@link FilterMatch#ALLOWED} and
- *       ranks like an unfiltered location), then (a) already holding the item, then (a2) holding nothing or only items
- *       of the same type ({@link PlannerInput#itemType()}), then (b) travel time crane → input → location. Amount =
- *       {@code min(buffered, carryLimit, liveInsertable − reservedCapacity)}. When an input's items fit nowhere, the
- *       reason distinguishes "no room" ({@link NoJobReason#WAREHOUSE_FULL}) from "no filter accepts them"
- *       ({@link NoJobReason#NO_MATCHING_FILTER}).</li>
+ *       first non-empty slot. A stock rule's maximum is consulted first ({@link PlannerInput#storeHeadroom()}, M15):
+ *       an item with no headroom left is skipped before any candidate work and reported as
+ *       {@link NoJobReason#AT_MAXIMUM}, and a headroom smaller than the buffered amount bounds the planned amount, so
+ *       the rest stays in the input on purpose. Candidates are the available storage locations whose store filter
+ *       accepts the item and whose estimate exceeds their reserved capacity, ranked by (a0) a filter that
+ *       <b>selects</b> the item ({@link FilterMatch#DEDICATED}; a deny list that merely does not exclude it is
+ *       {@link FilterMatch#ALLOWED} and ranks like an unfiltered location), then (a) already holding the item, then
+ *       (a2) holding nothing or only items of the same type ({@link PlannerInput#itemType()}), then (b) travel time
+ *       crane → input → location. Amount =
+ *       {@code min(buffered, storeHeadroom, carryLimit, liveInsertable − reservedCapacity)}. When an input's items fit
+ *       nowhere, the reason distinguishes "no room" ({@link NoJobReason#WAREHOUSE_FULL}) from "no filter accepts them"
+ *       ({@link NoJobReason#NO_MATCHING_FILTER}) and from "a rule holds enough already"
+ *       ({@link NoJobReason#AT_MAXIMUM}).</li>
  * </ol>
  * Candidates are tried in rank order and fall through when the live result leaves nothing (§5).
  * <p>
@@ -61,10 +66,11 @@ import dev.wareworks.core.warehouse.LocationKind;
  * ({@link PlannerInput#storeFilter()}) is skipped even earlier, before the capacity estimate, so a filtered warehouse
  * spends neither live simulations nor remembered refusals on locations that could never take the item (ADR-021).
  * <p>
- * <b>{@link #planReroute}</b> follows the §8 table: store leftovers go to another storage location (same ranking as
- * STORE, from the crane's position), else to an input buffer; retrieve leftovers go back to a storage location, else to
- * another output station (refinement: an output that did not request the items only as the last resort); otherwise the
- * result is empty (the crane holds). The station fallback has a live simulation budget of its own, so storage
+ * <b>{@link #planReroute}</b> follows the §8 table and never consults {@link PlannerInput#storeHeadroom()} (M15): the
+ * items are already in the handling head, so they must always find a target or the crane holds for ever. Store
+ * leftovers go to another storage location (same ranking as STORE, from the crane's position), else to an input
+ * buffer; retrieve leftovers go back to a storage location, else to another output station (refinement: an output
+ * that did not request the items only as the last resort); otherwise the result is empty (the crane holds). The station fallback has a live simulation budget of its own, so storage
  * candidates that used up the budget never hide a station that accepts the items.
  * <p>
  * <b>Store filters and the retrieve reroute</b> (M8 review fix, §8): a {@code RETRIEVE} reroute puts items back that
@@ -197,7 +203,17 @@ public final class JobPlanner<K, L> {
             // for the player, and only the first is relieved by a retrieval (ADR-021, §7.4).
             StoreSurvey survey = new StoreSurvey();
             for (K key : buffer.keys()) {
-                int limit = limit(buffer.count(key), input.carryLimit().applyAsInt(key));
+                // A stock rule's maximum decides before anything else costs something: one lookup, no candidate walk,
+                // no estimate, no live call and no remembered refusal (M15, issue #3). Partial storing is normal and
+                // exact — stock 1990, maximum 2048 and a buffer of 64 store 58 and leave 6 in the input on purpose.
+                long headroom = input.storeHeadroom().applyAsLong(key);
+                if (headroom <= 0) {
+                    // Skips this KEY, not the input: the buffer's other item types and then the next input are still
+                    // tried, so one capped item never blocks a station.
+                    survey.atMaximum = true;
+                    continue;
+                }
+                int limit = limit(Math.min(buffer.count(key), headroom), input.carryLimit().applyAsInt(key));
                 if (limit < 1)
                     continue;
                 Optional<Selection<L>> selection = selectStorage(input, key, limit, null, stationPos.x(),
@@ -481,20 +497,34 @@ public final class JobPlanner<K, L> {
     /**
      * Why one input station's items fit nowhere, so {@link #plan} can tell {@link NoJobReason#WAREHOUSE_FULL} ("no
      * room", relieved by a retrieval) from {@link NoJobReason#NO_MATCHING_FILTER} ("no filter accepts them", which
-     * needs an unfiltered location instead). Collected over all item types of that input.
+     * needs an unfiltered location instead) and from {@link NoJobReason#AT_MAXIMUM} ("a stock rule says the warehouse
+     * holds enough of this", which is not a fault at all). Collected over all item types of that input.
      */
     private static final class StoreSurvey {
         /** At least one location entered the ranking: its filter allowed the key and its estimate had room. */
         private boolean ranked;
         /** At least one location was skipped because its store filter rejects the key. */
         private boolean filterRejected;
+        /**
+         * At least one item type was skipped because a stock rule left no headroom for it (M15). Set at the skip site
+         * in {@link #plan}, not through {@link #note}: such a key never reaches {@link #selectStorage}, so an input
+         * holding only a capped item would otherwise report {@link NoJobReason#WAREHOUSE_FULL} while eleven empty
+         * chests stand behind it.
+         */
+        private boolean atMaximum;
         /** At least one location was skipped for another reason (unavailable, known refusal, no estimated room). */
         private boolean otherSkip;
 
-        /** Only a run in which <b>every</b> skip was a filter mismatch reports one. */
+        /**
+         * Only a run in which <b>every</b> skip was a maximum or a filter mismatch reports one of those, and a
+         * maximum wins over a filter mismatch: it is the more specific answer, and the one the player can act on.
+         */
         NoJobReason reason() {
-            return !ranked && filterRejected && !otherSkip ? NoJobReason.NO_MATCHING_FILTER
-                    : NoJobReason.WAREHOUSE_FULL;
+            if (ranked || otherSkip)
+                return NoJobReason.WAREHOUSE_FULL;
+            if (atMaximum)
+                return NoJobReason.AT_MAXIMUM;
+            return filterRejected ? NoJobReason.NO_MATCHING_FILTER : NoJobReason.WAREHOUSE_FULL;
         }
     }
 

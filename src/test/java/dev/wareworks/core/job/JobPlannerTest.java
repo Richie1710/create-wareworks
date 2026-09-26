@@ -737,6 +737,150 @@ class JobPlannerTest {
         assertFalse(live.insertCalls.contains(dedicatedToDiamonds), "and is never simulated");
     }
 
+    // --- stock rules: the maximum (M15, issue #3) -----------------------------------------------------------------
+
+    /** A warehouse without stock rules answers "unlimited", so every other test in this class plans as before M15. */
+    @Test
+    void storeHeadroomIsUnlimitedByDefault() {
+        assertEquals(Long.MAX_VALUE, input().build().storeHeadroom().applyAsLong(IRON));
+        assertThrows(NullPointerException.class, () -> input().storeHeadroom(null).build());
+    }
+
+    /**
+     * Partial storing is the normal case of a maximum, and it is exact: 64 buffered items with 58 of headroom left
+     * store 58, and the remaining 6 stay in the input on purpose.
+     */
+    @Test
+    void storeHeadroomBoundsThePlannedAmount() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, STACK));
+
+        TransportJob<String, RackPosition> job = planner.plan(base.storeHeadroom(key -> 58).build()).job()
+                .orElseThrow().job();
+        assertEquals(IRON, job.key());
+        assertEquals(58, job.plannedAmount());
+        assertEquals(STACK, planner.plan(base.storeHeadroom(key -> 4096).build()).job().orElseThrow().job()
+                .plannedAmount(), "headroom above the buffered amount changes nothing");
+    }
+
+    /**
+     * An item with no headroom left is skipped before the candidate walk — no ranking, no estimate, no live call —
+     * and the input is told it is at a maximum rather than that the warehouse is full.
+     */
+    @Test
+    void anItemAtItsMaximumIsSkippedBeforeAnyCandidateWork() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        PlanResult<String, RackPosition> result = planner.plan(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, 5))
+                .storeHeadroom(key -> 0).build());
+        assertFalse(result.hasJob());
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), result.reasons());
+        assertEquals(NoJobReason.AT_MAXIMUM, result.primaryReason().orElseThrow());
+        assertEquals(List.of(), live.insertCalls, "nothing was even simulated");
+        assertEquals(0, result.nextInputCursor(), "the cursor stays when nothing was planned");
+    }
+
+    /** One capped item blocks neither the buffer's other item types nor the next input. */
+    @Test
+    void aCappedItemDoesNotBlockTheOthers() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        Map<String, Long> headroom = Map.of(IRON, 0L);
+
+        PlanResult<String, RackPosition> sameInput = planner.plan(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, 1, DIAMOND, 5))
+                .storeHeadroom(key -> headroom.getOrDefault(key, Long.MAX_VALUE)).build());
+        assertEquals(DIAMOND, sameInput.job().orElseThrow().job().key(), "the next item type of the same input");
+        assertEquals(Set.of(), sameInput.reasons());
+
+        Map<RackPosition, InventorySnapshot<String>> buffers = Map.of(IN_A, slots(0, IRON, 1), IN_B,
+                slots(0, DIAMOND, 5));
+        PlanResult<String, RackPosition> nextInput = planner.plan(input().inputs(List.of(IN_A, IN_B))
+                .storageLocations(List.of(chest)).inputBuffers(buffers::get)
+                .storeHeadroom(key -> headroom.getOrDefault(key, Long.MAX_VALUE)).build());
+        assertEquals(IN_B, nextInput.job().orElseThrow().job().source());
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), nextInput.reasons());
+    }
+
+    /**
+     * A maximum is the more specific answer than a filter mismatch, so it wins over one; but a skip that really is a
+     * lack of room wins over both, or a player would be told "at maximum" while their warehouse is genuinely full.
+     */
+    @Test
+    void atMaximumBeatsAFilterMismatchButNotAFullWarehouse() {
+        RackPosition dedicated = rack(1, 0, Side.LEFT);
+        stock.update(dedicated, slots(27));
+        live.insertable.put(dedicated, STACK);
+        filter(dedicated, SHULKER);
+        Map<String, Long> headroom = Map.of(IRON, 0L);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, IRON, 3, DIAMOND, 3))
+                .storeHeadroom(key -> headroom.getOrDefault(key, Long.MAX_VALUE));
+
+        PlanResult<String, RackPosition> capped = planner.plan(base.storageLocations(List.of(dedicated)).build());
+        assertFalse(capped.hasJob());
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), capped.reasons());
+
+        // A location that may take the diamonds but gives nothing is a genuinely full warehouse again.
+        RackPosition full = rack(2, 0, Side.LEFT);
+        stock.update(full, slots(27));
+        PlanResult<String, RackPosition> outOfRoom = planner.plan(base.storageLocations(List.of(dedicated, full))
+                .build());
+        assertFalse(outOfRoom.hasJob());
+        assertEquals(Set.of(NoJobReason.WAREHOUSE_FULL), outOfRoom.reasons());
+    }
+
+    /**
+     * The ledger's per-key capacity aggregate is what stops two trips planned one after the other from both seeing
+     * the same headroom and together storing past the maximum.
+     */
+    @Test
+    void reservedCapacityBoundsTheNextTripAtAMaximum() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, 256);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, STACK))
+                .storeHeadroom(key -> 100 - stock.count(key) - ledger.reservedCapacityFor(key));
+
+        TransportJob<String, RackPosition> first = planner.plan(base.build()).job().orElseThrow().job();
+        assertEquals(STACK, first.plannedAmount());
+        ledger.track(first);
+        assertEquals(STACK, ledger.reservedCapacityFor(IRON));
+
+        TransportJob<String, RackPosition> second = planner.plan(base.build()).job().orElseThrow().job();
+        assertEquals(36, second.plannedAmount(), "the first trip's items are already promised against the maximum");
+        ledger.track(second);
+        PlanResult<String, RackPosition> third = planner.plan(base.build());
+        assertFalse(third.hasJob());
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), third.reasons());
+    }
+
+    /**
+     * A reroute never consults the headroom (§8): the items are already in the handling head, so they must find a
+     * target or the crane holds for ever.
+     */
+    @Test
+    void reroutesIgnoreStoreHeadroom() {
+        RackPosition failed = rack(2, 0, Side.LEFT);
+        RackPosition chest = rack(4, 0, Side.LEFT);
+        stock.update(failed, slots(27));
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        PlannerInput<String, RackPosition> in = input().crane(2, 0).storageLocations(List.of(failed, chest))
+                .inputs(List.of(IN_A)).outputs(List.of(OUT_A)).storeHeadroom(key -> 0).build();
+        for (JobType type : List.of(JobType.STORE, JobType.RETRIEVE, JobType.SUPPLY)) {
+            assertEquals(chest, planner.planReroute(in, IRON, 10, type, failed).orElseThrow().location(),
+                    "a " + type + " reroute is not bound by a maximum");
+        }
+    }
+
     // --- reroute -------------------------------------------------------------------------------------------------
 
     @Test

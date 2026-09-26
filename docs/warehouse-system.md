@@ -398,6 +398,10 @@ The player-facing request station of an aisle: a screen instead of a filter slot
   as destination, the same `RequestQueue`, the same `ReservationLedger`, the same clamping to `availableStock` and the
   same rejection reasons. A terminal request is **indistinguishable downstream** from a redstone request: the planner,
   the reroute rules, the crane's transfer contexts and the persistence formats see only `LocationKind.OUTPUT`.
+  * **Since M15 the clamp is `StockAvailability`, not `availableStock` alone** (§3.6.1): the same wrapper bounds every
+    request, but it subtracts a rule's reserve only for `StockAccess.AUTOMATION`. A request made *at this screen* is a
+    player's and is served down to the last item; the row and, since part 2, a confirmation panel say that it goes below
+    the reserve (§3.6.6). Downstream nothing changed — the queue, the ledger and the job still see one `OUTPUT` request.
 * **In-game teaching (M13):** two Ponder scenes in `client.ponder.scenes.TerminalScenes`, both registered for the
   terminal item. `warehouse/terminal` ("Placing a Warehouse Terminal") covers §3.4.3: the screen is placed facing the
   player, a terminal placed **from beside the rack** has its port turned onto the aisle by the controller, and a wrench
@@ -435,13 +439,18 @@ Classes: `content.station.WarehouseTerminalBlock` / `WarehouseTerminalBlockEntit
   are described in §3.4.3.
 * **Server API for the screen** (the GUI itself is the next task; all of it is called on demand, never per tick):
   * `stockSnapshot()` → `List<TerminalStockEntry>` (item key, total, available; `reserved()` is the difference), ordered
-    by `TerminalStockEntry.ORDER` and cut off at `maxTerminalStockEntries`.
-    * **Order** (M6 review): the largest **stored** amount first, then the most available, then the item id, then the
-      key's component hash — language independent and the same for the same warehouse. The stored amount leads because
-      this order decides the **cut**, not the display (the screen sorts what it shows itself): `available` moves as soon
-      as anything is promised to a request, so leading with it made item types drop out of the reported window and back
-      in while the crane worked. The last tie-break is the hash rather than the key's text, which would render the whole
-      component patch on every comparison.
+    by `TerminalStockEntry.ORDER` and cut off at `maxTerminalStockEntries`. Since M11 an entry also carries whether the
+    aisle can **produce** the item and how many of it right now (§3.5.2), and since M15 what a **stock rule** says about
+    it: the governing rule's `StockRuleStatus`, how many of the available items its reserve holds back, and its maximum
+    (§3.6.5). Only a *governing* rule is reported — a shadowed or inert row applies nothing, and a row that claimed
+    otherwise would tell a player their stock is capped when it is not.
+    * **Order** (M6 review): the largest **stored** amount first, then the most available, then `ItemKey.ORDER` — the
+      item id, then the key's text — language independent and the same for the same warehouse. The stored amount leads
+      because this order decides the **cut**, not the display (the screen sorts what it shows itself): `available` moves
+      as soon as anything is promised to a request, so leading with it made item types drop out of the reported window
+      and back in while the crane worked. The last tie-break is **value-based** on purpose (M14 review fix): it first was
+      `ItemKey#hashCode`, which mixes in `Item`'s identity hash and therefore swapped two equally stocked keys of the
+      same item after every restart (§10.1).
     * **The cut is not a removal.** `holdsInStock(key)` answers whether the index still holds an item type that is not
       in the snapshot, and the menu asks it before it tells a screen that one is gone (§3.4.2).
     * **Cost:** one pass over the stock index's item types plus one over the open requests, whose promised amounts are
@@ -459,6 +468,11 @@ Classes: `content.station.WarehouseTerminalBlock` / `WarehouseTerminalBlockEntit
     output-style member (`NO_CONTROLLER`, which also covers a misaligned terminal and one outside every aisle); and the
     item must be held by **the server's own stock index** (`NOT_IN_STOCK`). The controller then clamps to
     `availableStock` and applies the queue caps (`NOT_IN_STOCK`, `OUTPUT_FULL`, `QUEUE_FULL`).
+  * **Since M15 part 2 there is a four-argument form** that takes a `RequestAcknowledgement` and answers
+    `TerminalRequestOutcome`, because a click now has **three** endings: accepted, refused, or *asked about* (§3.6.6).
+    The question is measured after every check above has passed and before anything is queued, so asking costs nothing
+    but the measurement. The three-argument form still exists and means "accept every boundary": it is what the ~25
+    GameTests and harness call sites about the *request* use, and it is the path with no player to ask.
   * **Never trust a client-sent stack:** a request is only ever *matched* against the controller's stock index
     (`countOf(key) > 0`), never taken as a description of what exists. `ItemKey` compares item **and** components, so an
     accepted key is value-identical to the indexed one.
@@ -569,11 +583,30 @@ Networking decision and reasons: **ADR-019**.
   shows the same view.
 * **Requesting** (`core.terminal.TerminalAmounts`): the amount input is a Create `ScrollInput` (scroll to modify, shift
   scrolls faster) limited to `maxTerminalRequestAmount`; **click** requests that amount, **shift-click** one stack and
-  **ctrl-click** everything that is possible — available plus producible since M11 (bullet above). Every amount is
+  **ctrl-click** everything that is possible — available plus producible since M11 (bullet above). **Alt** is not an
+  amount at all: it skips the confirmation of §3.6.6 and composes with either of the other two. Every amount is
   clamped to that total, unless nothing at all is orderable — then the raw amount is sent so the *server* answers with
   the real reason instead of the screen inventing one. The answer appears in the status line for four seconds ("Requested Andesite x64" in green, or
   "Request refused: …" in red, with the same reasons a warehouse output shows in its goggles), and while requests are
   open the line shows "Waiting for N, delivered M".
+  * **Since M15 a click has a third possible answer: a question** (§3.6.6). The status line is untouched by it — the
+    question is a panel of its own, the request is not made, and the four-second feedback only ever reports something
+    that really happened.
+* **What a stock rule adds to the grid** (M15, §3.6): a cell of an item a **governing** rule covers carries a 3 px
+  **badge** in the corner opposite the amount — gold below the minimum, red at the maximum, blue down to the reserve,
+  and a quiet blue-grey while the rule is simply there. It is a square rather than a glyph so that it survives every GUI
+  scale and every language; the words are in the tooltip ("Rule: Below the minimum", gold while the rule bites), together
+  with the rule's maximum, how many of the available items its reserve holds back, and a hint when the amount in the
+  scroll input would reach into the **reserve**. That line is a **hint from the row's own numbers**; what a click really
+  costs is measured on the server (§3.6.6). There is deliberately **no** row hint for the maximum (review fix): what a
+  request would leave above a cap is the whole-run surplus of a pattern, and the size of a run is not something a screen
+  is ever told — a client estimate that disagreed with the server's panel was worse than no hint.
+  * A ruled item the warehouse holds **none** of shows a dimmed plain **`0`** rather than an empty cell, because an empty
+    cell reads as "nothing here" while the truth is "none, and the warehouse wants 64". A producible item keeps its more
+    informative `+`, which says the same thing and more.
+  * The badge's **colour** distinguishes the three numbers only. `ORDERING`, `WAITING_FOR_INGREDIENTS` and `PAUSED`
+    (§3.6.5) all keep the neutral square and are named in the tooltip instead, so the safety stop is readable in the
+    terminal but not at a glance across the grid; the keeper's own lamp and screen are where that state is loud.
 * **Width budget of the status row** (M7, binding): the status line is the only text of the window whose width
   nothing bounds — it carries an item name, up to two amounts and a translation — so it gets **the whole row**
   (`WIDTH − 2 × MARGIN` = 216 pixels), and "Open requests: N" moved one row down, right-aligned beside the player
@@ -854,6 +887,14 @@ Ordering a producible item that is not (fully) in stock creates a **production o
 * **Open orders promise their ingredients.** `availableStock` subtracts what the open orders still owe, exactly as it
   subtracts what open requests promise, so a second order sees them as taken and refuses instead of promising the same
   items twice.
+* **Since M15 part 2 an order may have no player behind it** (§3.6.3). A rule's minimum starts the same order with **no
+  backing request**, and `ProductionOrder` carries an explicit `restock` flag for it rather than deriving "automatic"
+  from "has no request": an ordinary order *loses* its request when that request is served or cancelled
+  (`withoutBackingRequest()`), so the derived form would have let a player's own cancellation trip the safety stop of a
+  rule that never ordered anything. The flag is saved as `Restock` and written only when true, so an order saved before
+  M15 reads back as "a request asked for this". Everything else about such an order — the runs, the supply lines, the
+  reservations, the states, the timeout, the retention — is bit-for-bit the M11 order, and only its **ending** is read by
+  one more reader: a restock order that ends with ingredients delivered and no result is the safety stop (§3.6.4).
 
 **States** (`ProductionOrderState`, a pure and unit-tested state machine):
 
@@ -1048,6 +1089,448 @@ Classes:
   inside their `thenWaitUntil` conditions, where a failing check is only retried on the next tick, so it counted only
   once the items had arrived.)
 
+### 3.6 Warehouse Stock Keeper (`content.station`, M15)
+
+> Decision and reasons: **ADR-027**.
+
+The keeper is the block a player writes the warehouse's **stock rules** into. A rule is one item and three numbers, and
+**the three numbers govern three different directions** — that is the one sentence the whole feature is built to keep
+true:
+
+| Value | Governs | Never touches |
+|---|---|---|
+| **minimum** | what comes **in**: the keeper's comparator calls for the item, and the warehouse restocks it by itself (§3.6.3) | storing, requests |
+| **maximum** | what may be **stored**: above it the crane stops accepting the item and a warehouse input backs up on purpose | requests, reroutes, what is already stored |
+| **reserve** | what may go **out to automation**: a redstone request stops at it, a player at a terminal may take it and is told so | storing, a player's own requests |
+
+The block holds **no items at all**: no buffer, no item capability, no belt input, no mechanical arm point, and the crane
+never visits it. The rows are ghost items like a production pattern's cells, so editing a rule can never consume,
+duplicate or swallow anything. It is therefore a `LocationKind.KEEPER` and not a station. A right-click with an empty
+hand opens its screen; the comparator on it reads how many of its rules are below their minimum, and its lamp burns
+while any of its rules bites. An aisle may hold **several** keepers, which is why there is no separate one-rule block:
+a keeper with a single rule is the cheap per-item variant.
+
+**Off is a value.** Each number is either an amount or unset ("–"). For the maximum `0` is a real setting ("accept none
+of this any more") and unset means "no cap at all"; for the minimum and the reserve `0` and unset behave the same and
+only read differently.
+
+**Nothing ever throws on a number.** `StockRule`'s canonical constructor clamps whatever it is given into
+`-1 … 1 000 000` and resolves the two contradictions a player can express: a minimum above the maximum raises the
+maximum, a reserve above the maximum lowers the reserve. `StockRule.checked` reports which correction it had to make
+(`StockRuleAdjustment`), which is the line the screen shows. Crafted save data, a schematic and a hostile payload can
+therefore only ever produce a sane rule.
+
+#### 3.6.1 Who the reserve protects (the decision the feature rests on)
+
+A reserve holds the last items of a key back **from the warehouse's own automation**, not from the player who wrote it
+(`core.stock.StockAccess`):
+
+* **`AUTOMATION`** — a redstone-triggered request at a warehouse output, the **ingredients** of a production order such
+  a request starts, and automatic restocking (§3.6.3). All of them stop at the reserve. That is what keeps a hand-built
+  line from draining the last 32 andesite alloy overnight, and it holds whether the automation asks for the reserved
+  item itself or for something a pattern would make out of it.
+* **`PLAYER`** — a request a player makes at a warehouse terminal. It is served immediately, down to the last item, and
+  the terminal row says that it is going below the reserve. A player is never told "not in stock" about items they can
+  see.
+
+This is the **inverse of the first design study**, and it is deliberate: a reserve a player has to fight against is a
+reserve they delete. Both surfaces make clear which of the two cases a player is in — the goggles count the rules that
+are down to their reserve, the terminal row names the held-back amount as a *part* of what is available, and a request
+from automation that the reserve refuses is answered with `RequestRejection.RESERVED` rather than `NOT_IN_STOCK`.
+
+**The reserve enters the request path in exactly one place**: `StockAvailability.of` wraps the controller's
+`availableStock` and is handed to `RequestQueue#add`. That keeps three guarantees intact — the **merged** total is what
+is clamped (ADR-020), so ten clicks can never promise away a reserve that one click could not; **every** key goes
+through it, not only the requested one; and **nothing is reserved by reserving**, because it is a constant subtracted
+at the entry point and not an entry in the reservation ledger, so it cannot interact with the double-subtraction rule
+of §7.4 and never claws back a request that was already accepted.
+
+#### 3.6.2 Where the rules live, and why they are copied
+
+The keeper is where a player edits the rules and where they are saved. **Everything that gates item movement asks the
+controller's own copy** (`content.controller.AisleStockRules`, `WarehouseControllerBlockEntity#stockRules()`), never a
+keeper's block entity, because a keeper's chunk can be unloaded while the controller plans and a miss read as "no rule"
+would store past a maximum (nothing is ever moved back out) and hand out a reserve (nothing is ever recalled). That copy
+is therefore **saved with the controller**, unlike `AisleFilters`, which may re-read an interface on demand.
+
+For the same reason the copy is **never thrown away wholesale** — not when the aisle is lost, not when its dock moves,
+not when the layout is replaced. Only the two operations that name one rack drop anything: a keeper that was read again,
+and a rack a *loaded* block proved to be no aligned keeper any more. Every keeper of the aisle is re-probed on the first
+tick after a load and on every `geometryRefreshTicks` re-link check, and a single edit is applied at once, so the plan
+and the request in the same tick already obey the new rule.
+
+**Order is meaning.** The aisle's rules are the keepers' rows concatenated in `RackPosition.ORDER`, so the same build
+always produces the same rule set. `core.stock.StockRules` then decides which rule governs an item and which one applies
+nothing, and the two ways of applying nothing say different things to a player: **shadowed** (an earlier rule already
+governs the same item — remove the duplicate; merging them is deliberately not done, because it can produce a minimum
+above a maximum and a player cannot see which row produced the number) and **inert** (beyond `maxStockRules` — raise the
+cap; lowering it is reversible, because nothing is ever written back into a keeper). An **empty** rule (an item with no
+number switched on) governs nothing and also shadows nothing: a row a player started and abandoned must not disable the
+rule they then wrote further down.
+
+Where the numbers are applied:
+
+* the **maximum** in `PlannerInput#storeHeadroom`, one map lookup per (input, item key) taken *before* the candidate
+  ranking, the estimate and any live simulation, so a capped key is strictly cheaper to reject than to accept. A
+  refused store reports `NoJobReason.AT_MAXIMUM`, never "warehouse full", and that reason deliberately does **not** arm
+  the dispatcher's `fullBackoffTicks`: there is no expensive scan to protect, and holding storing back for every other
+  input because one item is capped would be a real fault caused by a working rule;
+* the **reserve** in `WarehouseControllerBlockEntity#request`, through `StockAvailability`;
+* the **minimum** in the keeper's comparator and in restocking (§3.6.3).
+
+The headroom formula is `max(0, maximum + expected − stocked − inbound)`. The `+ expected` allowance is load-bearing: a
+production pattern makes whole runs, so an order for 32 regularly comes back as 36, and without the allowance the
+surplus would be refused at the input, never reach the stock index and strand the order. **The warehouse always takes
+back what it sent out for.** Partial storing is normal and exact: stock 1990, maximum 2048, a buffer of 64 gives a
+headroom of 58, and the remaining 6 stay in the input on purpose.
+
+#### 3.6.3 The minimum drives production (M15 part 2)
+
+When an item a rule governs falls below its minimum and a **warehouse production station of the same aisle** holds a
+pattern for it, the warehouse orders the product **by itself**: the very same production order M11 already runs (§3.5),
+with **no backing request**. The crane delivers the ingredients, the player's machine works, the result comes back
+through an ordinary warehouse input and is stored by an ordinary `STORE` job. No new job kind, no new crane behaviour,
+no new reservation kind. One number does all of it — "keep 256" refills back to 256, usually a little past, because a
+pattern makes whole runs.
+
+The decision is pure (`core.stock.RestockPlanner`, one branch per answer, all unit tested) and is taken inside the
+controller's rule tick, every `stockRuleIntervalTicks`:
+
+1. the rules are evaluated once for the whole aisle (the same pass the lamps and the counters use);
+2. **if no governing rule is short, none is paused and no automatic order is open, the pass stops here** — a satisfied
+   warehouse resolves no production station and builds no availability snapshot at all;
+3. otherwise the aisle's patterns are resolved **once** and the availability of the ingredients is measured **once**,
+   through `StockAvailability.of(..., AUTOMATION, ...)`;
+4. `RestockPlanner.plan` answers for every rule and starts **at most one** order per pass. Every order promises its
+   ingredients and therefore changes what the next one could pay with; a second order planned against the same, now
+   stale, snapshot would promise the same items twice. A rule that would have ordered reports `DEFERRED` and is
+   reconsidered one second later.
+
+What stops an order, in the order the planner tests it (`RestockOutcome`): the rule governs nothing; it is **paused**
+(§3.6.4); its minimum is met — counting what is already on its way and what an open order will bring back
+(`StockLevels#pipeline()`), which is the whole hysteresis and is why a rule cannot order the same thing twice;
+restocking is **switched off** (`maxRestockOrders` or `maxRestockOrdersPerRule` is 0); this rule already has
+`maxRestockOrdersPerRule` orders open (1 by default, which is "never order while one is open for the same rule"); the
+aisle has reached `maxRestockOrders` or its production queue is full; **no pattern** of the aisle makes the item; the
+rule's own maximum leaves **no room for a whole run** (`NO_ROOM`, below); or the **ingredients are not available to
+automation** — missing, promised elsewhere, held back by a reserve, or called for by another rule's minimum (below). The
+last case is the normal, healthy state of a line that has run out of feedstock: nothing is consumed, no order is
+created, the lamp and the comparator keep calling for the item, and `ProduciblePlanner.firstMissingIngredient` names the
+item the player has to supply.
+
+**Stage 1 stays stage 1.** `ProduciblePlanner` is used unchanged, so an ingredient that is itself only producible counts
+for nothing and an order that waits for another order stays unrepresentable. A rule never triggers production of an
+ingredient; a player expresses that with a second rule, visibly.
+
+**A minimum holds items back from other rules, too** (review fix). An automatic order never spends an ingredient that a
+**governing rule of the same aisle is itself below its minimum on**: it reports `WAITING_FOR_INGREDIENTS` and names that
+item instead. Without it, two rules whose patterns are inverses of each other — iron ingot to iron block and back, both
+plain vanilla recipes a Mechanical Crafter performs — convert the same items back and forth for as long as the world
+runs, with neither minimum ever met and the crane never idle; a lossy pair drains to zero. It is the sentence the
+reserve already says, one level up: what a rule is asking for is not free for another rule's automation. A paused rule
+counts as asking, because the safety stop stops only its ordering.
+
+**An order never overshoots the rule's own maximum** (review fix). The shortfall is still rounded **up** to whole runs —
+a pattern cannot be cut, which is why "keep 256" settles a little above 256 — but never past the whole runs the rule's
+`headroom` leaves room for. A surplus stored above a cap never leaves the warehouse again, so the rule that ordered it
+would report `AT_MAXIMUM` for ever, its lamp would stay lit and a warehouse input holding the item would back up on
+purpose — the state §3.6 teaches a player to read as *the rule working*. A shortfall no whole run fits into is therefore
+reported as `NO_ROOM` and **not** ordered: "keep exactly 64 planks, made four at a time" leaves a last gap of two that
+only the player can resolve, by raising the maximum or by choosing a minimum a run divides. The lamp keeps saying
+`BELOW_MINIMUM`; the outcome line on the keeper's screen says why nothing is being made (§3.6.5).
+
+**Two numbers bound what one order can lose**, and they measure different things. `maxRestockOrderAmount` (512) caps the
+**product** and turns a minimum of 100 000 into a sequence of orders. `maxRestockIngredientItems` (64) caps the
+**ingredient items** one order may spend, which is the number the safety stop's first loss is really bounded by: a
+pattern of nine ingots to one block would otherwise turn "at most 512 blocks" into 4608 ingots, bounded only by what the
+reserves leave free (review fix). One run is always allowed even when that single run costs more — a pattern cannot be
+cut in half — and `maxRestockOrdersPerRule` then sequences a large shortfall one order at a time, with the safety stop in
+between. The run count the planner arrives at is carried in the decision (`RestockDecision#runs`) and **used**, never
+derived a second time: two roundings of one number are two different orders.
+
+#### 3.6.4 The safety stop (not negotiable)
+
+Ingredients a player's machine has swallowed are **unrecoverable** (§3.5.4). An automatic order that ends with items
+delivered and no result therefore means one of two things, and the warehouse cannot tell them apart: the machine is
+broken, or the pattern is wrong. Both get worse the more often they are repeated.
+
+> **The first time an automatic order ends with ingredients delivered and nothing coming back — a timeout or a cancel
+> with `deliveredIngredients() > 0` — that rule stops ordering.**
+
+An order that gave up while the crane was still fetching is **not** a pause: nothing left the warehouse, and the usual
+cause is a stopped crane or an unpowered kinetic network, which must not pause every rule in a base whose network was
+off overnight. A cancel *with* delivered items pauses whatever the state, because cancelling has to mean *stop*.
+
+**What "nothing coming back" means, exactly** (review fix). The rule above is only worth anything if *completing* an
+automatic order is evidence that the machine gave something back — and a rise of the aisle's stock index is not. The
+index rises for any reason at all: a second farm of the player's, a barrel emptied into a rack, a player taking the
+product out and putting it back. An automatic order completed by such a rise never times out, so the safety stop never
+fires, and the next dip hands the same broken machine another batch — silently, for as long as the foreign source keeps
+up. An **automatic** order is therefore counted through a different channel from an ordinary one:
+
+* an order a player or a redstone request is waiting for keeps being counted by the **stock level** it watches
+  (`ProductionOrder#withResultStock`). "From any source" is a feature there: somebody is waiting, and an item that turns
+  up satisfies them however it arrived (§3.5.3);
+* an **automatic** order is counted only by items the warehouse itself **stored out of one of its warehouse inputs** —
+  the route the product of a pattern takes back into the racks (`ProductionOrder#withStored`, reported by the crane's own
+  `onCraneDelivered` for a `STORE` job). Nothing is counted before the crane has dropped an ingredient at the machine,
+  because a machine cannot have made anything before it was given anything (`countsArrivals()`). The same physical batch
+  is never counted twice: what the arrival channel credited is kept off the level channel for that key.
+
+The residual is written down rather than guarded: a **second source of the same product feeding the same warehouse
+through an input** is indistinguishable from the ordered machine's output. The warehouse really did receive the items, and
+no bookkeeping inside it can say which machine made them. What is excluded is everything that never came in through the
+warehouse's own door.
+
+**A pause stops the orders that are already out, too** (review fix). With `maxRestockOrdersPerRule` above 1 a second
+batch may be on its way to the very machine that swallowed the first, so pausing a rule cancels its other open automatic
+orders. Cancelling reroutes what the crane is still carrying back into storage (`cancelSupplyJobsOf`), so only what a
+machine already took is lost, and each cancelled sibling adds its own unrecovered items to the pause: what a player has
+to be told is the whole cost.
+
+A pause stops **ordering and nothing else**: the maximum still caps, the reserve still holds back, the comparator still
+calls for the item and the player's own farm goes on running. It is shown everywhere the rule is:
+
+* the keeper's lamp has a **third** state: `create:block/rose_quartz_lamp_dim` while no rule bites, `rose_quartz_lamp`
+  for `LIT`, and `rose_quartz_lamp_powered` for `PAUSED` — three models over the two boolean properties, with `paused`
+  winning over `lit` in every variant, so a paused keeper never shows the ordinary lamp. Honest about
+  what that buys: in the side-by-side crop the harness took, lit is a dark wine-red and paused a bright rose — really
+  different, but not loud, and a lamp on a panel in a one-block-wide aisle is a small thing. Whether it is unmistakable
+  *in the dark* and at a glance is manual check 106, and the keeper's screen and goggles are where the state is
+  unambiguous;
+* the keeper's goggles get a red line with the count, and its screen shows the row as paused, names what the loss cost
+  in ingredient items and shows the way back;
+* the controller's goggles and the aisle summary display count the paused rules — the display on a **line of its own**,
+  because it is the only rule state that asks a player to go and look at a machine;
+* the terminal row reports `PAUSED`, which outranks every status the three numbers would give, because it is the one a
+  player has to act on. It is the row's **tooltip** that says it, in gold ("Rule: Paused: an order lost its
+  ingredients"); the badge square itself keeps its neutral colour, so a paused rule is legible in the terminal but does
+  not shout across the grid — deliberately, because the keeper is the block a player has to walk to anyway, and a fourth
+  badge colour for a state the three numbers do not describe would make the other three harder to read (§3.4.2).
+
+**The way back is a click, and there are two of them.** Clicking a paused row's **status mark** in the keeper's screen
+resumes it (`StockKeeperRules.FIELD_RESUME`), and **re-editing or clearing the rule** resumes it as well — a player who
+rewrites a rule has looked at it. It is deliberately not a timer: the warehouse cannot tell a fixed machine from a
+broken one, and retrying by itself would feed the same machine a second batch. The status mark is the row's own
+affordance and the only control on that line that means nothing otherwise, which is why it carries the action.
+
+**Only from the row that really governs the item** (review fix). A pause is held per item, and a keeper may hold a
+second, **shadowed** row for the same item — a row that applies nothing at all. Without the check, scrolling the reserve
+of such an abandoned duplicate re-armed automatic ordering into the unfixed machine within one
+`stockRuleIntervalTicks`, with nothing said anywhere. The keeper therefore asks the controller whether the edited row is
+the governing one (`stockRuleGoverns`, answered from the rule set alone so that an edit never freezes the tick's
+evaluation), and a resume that really happened is reported back to the screen (`StockKeeperRules.Edit#resumed`), which
+says "The warehouse orders this item again" in its status line. Re-arming an automatic order is never silent.
+
+The pause is kept **in the controller**, keyed by item (at most one rule governs an item) and **saved with it**, for the
+same reason the rule copy is: it has to be known before the first evaluation after a world load, or a restart would
+quietly resume ordering into a machine that already swallowed a batch. It is not kept in the keeper, whose chunk may be
+unloaded exactly when an order fails. Deleting the rule takes the pause with it (`pruneStockPauses`), because a rule
+that is gone governs nothing to resume.
+
+#### 3.6.5 What a player is shown
+
+`StockRuleStatus` is the single value the lamp, the goggle line, the keeper's screen row and the terminal badge all
+read. Its first values come from the three numbers alone (`BELOW_MINIMUM`, `AT_MAXIMUM`, `AT_RESERVE`, `SATISFIED`, plus
+the structural `NO_ITEM`, `NO_WAREHOUSE`, `INERT`, `SHADOWED`, `NO_LIMITS`); M15 part 2 **refines** three of them
+(`RestockOutcome#refine`):
+
+* `ORDERING` — the warehouse is making more of it right now. It replaces `BELOW_MINIMUM` *and* `SATISFIED`, because a
+  rule whose minimum is met only by an order that is still running is not "within its limits" in any way a player would
+  recognise: the racks are empty and the crane is working;
+* `WAITING_FOR_INGREDIENTS` — short, a pattern exists, and the ingredients are not available to automation;
+* `PAUSED` — the safety stop, which outranks everything.
+
+**What a rule counts as is always taken from the unrefined status.** The keeper's comparator, the controller's
+below-minimum count and the aisle display read `StockRuleEvaluation#status()`, while every surface a player looks at
+reads `#displayStatus()`. That is what lets a paused rule keep calling for its item exactly as it did before it was
+paused.
+
+Where that status surfaces — the whole list, so nothing is reported in one place only:
+
+| Surface | What it says |
+|---|---|
+| the keeper's **lamp** (block state) | `LIT` while any of its rules bites, `PAUSED` while any is held by the safety stop. Two block states, so the model shows the colour without a block entity read |
+| the keeper's **comparator** | how many of its rules are **below their minimum**, capped at 15 like every comparator — the unrefined count, so an ordering or a paused rule still calls for its item, which is what makes a farm run exactly as long as it is needed. The number is a field the rule tick refreshes, so reading the comparator costs no stock lookup |
+| the keeper's **goggles** | "Stock rules: N" and one line per state that is not empty: below minimum, at maximum, down to the reserve, being made now, waiting for ingredients, paused after a lost batch (with the resume hint underneath), without effect; or "Everything within its limits" / "No rules set" / "Not part of a warehouse". The **paused** count is split where it overlaps: the rules that are also counted under "below minimum" are printed indented under that line, the rest as a group of their own, so a reader never counts the same rule twice (review fix — a paused rule keeps counting as whatever its three numbers say, which is what the comparator needs) |
+| the keeper's **screen** | per row: the status in words, what the last edit had to correct, in stock / available / held back from automation, **what automatic restocking last decided** and the missing ingredient of a waiting rule, and for a paused one what the loss cost in ingredient items plus the way back. The outcome line matters because the status folds several different answers into a bare "below the minimum" — switched off, no pattern, the queue busy, no room for a whole run — and each of them needs a different thing from the player (review fix) |
+| the **controller's** goggles | the same four counts as one block of lines, so a player who is at the controller anyway sees that rules exist and which of them bite; a count only, never the rules themselves, so the synced tag stays bounded |
+| an **aisle summary display** | "Rules: N · below min N · at max N", and "Rules paused: N" on a line of its own (§10.1) |
+| a **terminal** row | the badge, its tooltip, the reserve and maximum numbers, the reserve click hint and the plain `0` of a ruled item at zero stock (§3.4.2) |
+| the terminal's **confirmation panel** | what a click of the player's own would cross, before it is carried out (§3.6.6) |
+
+Every one of these reads state the controller already keeps: the evaluation is cached per tick from the rule pass
+(`stockRuleIntervalTicks`), the counts are fields, and no surface walks the stock index or the rules again. The one
+exception is deliberate: a **terminal request** measures the levels itself and only asks the controller to refine the
+status of that one key, because a row that came out of the per-tick cache was one tick stale and the request path must not
+depend on display state (found by `stockruleterminalreportsrules`, which reads a row in the same tick as its request).
+
+**In-game teaching (M15):** the keeper is the one block whose effect is invisible — it moves nothing and only gates
+what everything else may move — so it got **two** Ponder scenes (`client.ponder.scenes.StockRuleScenes`, ADR-016),
+which is ten in the mod:
+
+* **`warehouse/stock_rules`** ("Stock Rules of a Warehouse") is the three numbers, one beat each, every beat pointing
+  at the thing that number moves: a **vanilla comparator and redstone lamp** the scene builds behind the keeper light
+  up for the minimum, a warehouse input is filled and outlined for the maximum, and a lever-pulsed **warehouse
+  output** is served with only what lies above the reserve while the rack keeps the rest. It closes on the terminal
+  ("you are never stopped"), which is §3.6.1 in one sentence.
+* **`warehouse/restocking`** ("A Warehouse that Restocks Itself") is what the minimum does on its own: a short rule
+  with a pattern in the aisle, the ingredients fetched (never out of a reserve), the player's own Mechanical Arm and
+  Mechanical Crafter, the product returning through an ordinary input, the lamp going out — and then the **safety
+  stop** and the click that resumes it.
+
+Two scenes rather than one, for pacing: told as a single story the keeper needed about a minute in which the three
+numbers were over after the first third, and looking up "what does the reserve do" meant sitting through a production
+loop. The two now run 968 and 1051 ticks, about 48 s and 53 s. Two things a scene cannot show are worth knowing when
+reading it: a station's buffer
+has no renderer, so the items an input *really* holds while the maximum refuses them are carried by the outline and
+the text rather than by a visible pile; and the keeper's own lamp is a small part of its panel, which is exactly why
+the minimum beat borrows a redstone lamp a player would build themselves.
+
+#### 3.6.6 The terminal's confirmation (M15 part 2)
+
+**The terminal asks before it crosses a line the player drew.** A click that would take items out of a **reserve**, or
+whose production would leave items the **maximum** cannot hold, opens a short panel naming the number ("This takes 10 of
+the 64 items held in reserve.") instead of being carried out. **Alt skips it**, and Alt does nothing else: Shift is "a
+stack", Ctrl is "everything available", and the three compose. The skip was Ctrl in the first draft and that was a
+mistake the panel's own hint made worse (review fix) — it sent a player to a key that silently replaced the amount with
+everything the aisle could grant, which is precisely the kind of click a confirmation exists to slow down. While the
+question is up the grid behind it is deliberately out of reach, so the click a player was about to make cannot answer
+it; Enter confirms and Escape drops it. A request that stays *above* the reserve is served immediately, with the
+tooltip line part 1 already shows.
+
+**Three costs are worth asking about, and one of them a screen could never find.**
+
+| Cost | What it is | Who can know it |
+|---|---|---|
+| the item's own reserve | items of the clicked key that come out of its reserve | the row's numbers would do |
+| a **reserved ingredient** | items of **another** key that a production order this click starts would spend out of *that* key's reserve | only the server: the patterns and their promises live there |
+| more than the **maximum** can hold | result items that would be **left** in the racks above the cap once the request has been served, i.e. the whole-run surplus nobody asked for | only the server: the size of a run is a property of a pattern |
+
+**What "past the maximum" is measured as** (review fix). It is what **stays**, not the level the racks pass through. The
+items a request asked for are promised to that request and leave again (`ProductionOrder#promisedToRequest`), so
+measuring the transient asked a player about a state their own click undoes: "2 of these 4 go past the maximum of 2" was
+raised by an ordinary request for a capped item that ended exactly where it started, and every such question spends the
+credibility of the one about the reserve. The question now names
+`stocked + inbound − takenFromStock + (whatTheRunMakes − whatWasAskedFor) − maximum`, i.e. the surplus a pattern makes
+and nobody asked for. A request for exactly what a run yields is not asked about at all. The **row hint** for the
+maximum is gone with the same fix: a screen cannot know the size of a run, so it cannot answer this question, and a
+client estimate that disagrees with the server's panel is worse than no hint — the cap itself is still on the row's
+"Stored at most" line.
+
+The middle row is the reason the whole decision is **server-side**: a click for four planks can cost a log a rule
+protects, and the screen has never been told either the pattern or what its ingredients are promised to. It is also
+where part 1's reserve boundary bites in the player's direction — automation is *refused* those ingredients (§3.6.1),
+a player is *asked* about them.
+
+**The server decides, and it decides again.** The flow is one payload in each direction:
+
+1. a click sends `TerminalRequestPayload` with what the player has accepted so far — nothing, or "whatever it costs"
+   when Alt was held;
+2. the request itself measures the cost, from the **one snapshot** it would then start the order against
+   (`WarehouseControllerBlockEntity#request(…, RequestAcknowledgement)` measures, the pure
+   `core.terminal.RequestConfirmation` decides): one walk of the aisle's patterns, one availability lookup, one set of
+   levels. Asking and requesting through one call is what makes the question and the order agree by construction, and it
+   halves what a click costs (review fix; `confirmationFor` remains for asking without requesting, and resolves the
+   patterns only for a request that reaches past the racks);
+3. a cost the acknowledgement does not cover answers with `TerminalConfirmPayload` and **nothing else** — nothing
+   queued, no order started, and the station's remembered rejection untouched, because a question is not a refusal
+   (`content.station.TerminalRequestOutcome` keeps the third ending out of `RequestResult`);
+4. confirming sends the same request again with `RequestConfirmation#acknowledgement()`, and the server **measures the
+   cost once more**. A warehouse moves between the question and the answer — a crane promises the items, somebody
+   raises a reserve, somebody rewrites a pattern — so the answer carries the *numbers* it was given rather than a flag:
+   a question that has grown is asked again instead of being paid for with an old yes.
+
+**What the acknowledgement is, honestly.** It is consent, not permission. Nothing in it unlocks anything a player could
+not reach anyway — a reserve never holds items back from the player standing at the terminal, and the maximum is their
+own cap — which is exactly why a client may send the blanket "do not ask me" for an Alt-click. What the server keeps to
+itself is the decision that a question is **needed** and the numbers it names: a client can neither invent a reassuring
+question nor have a crossing request carried out without stating, in numbers, that its player accepted at least that
+cost. A payload that accepts too little buys nothing (GameTest
+`terminalconfirmationpayloadcannotskipthequestion`), and an acknowledgement tag an older build does not know reads as
+"nothing accepted", so it asks rather than acts.
+
+**One residual bound, written down rather than guarded.** The reserved ingredients are re-checked as one **total**, not
+per item. A pattern rewritten in the few ticks between question and answer could therefore substitute a different
+reserved ingredient of the same amount. The cost stays bounded by what the player already accepted spending out of
+reserves, and carrying up to nine item keys back to the server for every confirmation is not worth that; if it ever
+matters, the acknowledgement grows the keys.
+
+#### 3.6.7 Implementation
+
+* `core.stock` (pure Java, no Minecraft types, all unit tested): `StockRule` (the three numbers and every question
+  about them), `StockRuleAdjustment`, `StockRules` (one aisle's rules, shadowing and the cap), `StockLevels` (stocked,
+  inbound, expected, available — and `pipeline()`, the number a minimum is compared with), `StockAccess`,
+  `StockAvailability` (the one place a reserve enters the request path), `StockRuleStatus`, `StockRuleEvaluation`; and
+  for part 2 `RestockPlanner`, `RestockInput`, `RestockDecision`, `RestockPlan`, `RestockOutcome`, `RestockLimits`,
+  `StockRulePause`.
+* `core.terminal` (also pure): `RequestConfirmation` (what a click would cross, and the arithmetic that decides it) and
+  `RequestAcknowledgement` (what the player accepted, and whether it covers a question).
+* `content.station`: `WarehouseStockKeeperBlock` (`LIT` and `PAUSED`, the comparator, the empty-hand right-click),
+  `WarehouseStockKeeperBlockEntity` (the rules, the summary, the screen state, the two resume paths),
+  `StockKeeperRules` (the editable rows and their NBT), `StockKeeperGoggleSummary`, `StockKeeperScreenState`,
+  `StockKeeperMenu`, `StockKeeperMenuLayout`; and `TerminalRequestOutcome`, the third ending of a terminal click.
+* `content.controller`: `AisleStockRules` (the saved copy), and in `WarehouseControllerBlockEntity` the rule tick, the
+  cached per-tick evaluation, the restock pass, the pauses and their persistence (`ControllerPersistence`).
+* `client.gui`: `WarehouseStockKeeperScreen`, `ClientStockKeepers`, `StockKeeperScreenUpdates`, and the terminal's
+  badge, tooltip lines and confirmation panel.
+* `network`: `StockKeeperScreenPayload` (server → client) and `StockKeeperRulePayload` (client → server, which moves no
+  item and is resolved against the menu the sending player really has open, with a per-tick edit budget); the
+  confirmation adds `TerminalConfirmPayload` (server → client) and the acknowledgement field of
+  `TerminalRequestPayload`, whose plain click costs one zero byte. `WareworksNetwork.VERSION` is `"5"` for the whole of
+  M15: part 1 raised it from `"4"`, `"5"` has never been released, and both parts ship together, so one string covers
+  the milestone. Two rules keep that safe — `StockRuleStatus` and `RequestRejection` values go on the wire **by
+  ordinal** and are therefore only ever *appended*, while `RestockOutcome` and `StockRulePause.Cause`, which the
+  controller saves, go by **name**.
+* **Config** (defaults and ranges in §9): `stockKeeperRows` (the rows a newly placed keeper offers, world restart),
+  `maxStockRules` (rules one aisle applies over all its keepers), `stockRuleIntervalTicks` (how often the controller
+  judges its rules **and runs the restock pass**, which is also how often it may start an automatic order at all — at
+  most one per pass), and for part 2 `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount` and
+  `maxRestockIngredientItems` — the four that bound how much the warehouse may ever have in a machine at once, with `0`
+  in either order count as the **off switch** for automatic ordering while every rule keeps capping and reserving. Read
+  only through the `WareworksConfig` getters; `restockLimits()` hands the planner all four as one `RestockLimits`. The
+  confirmation deliberately has **no** key of its own: it is bounded by the rules a player wrote themselves, costs
+  nothing on an aisle with no keeper, and Alt already skips it per click.
+
+**Tests.** JUnit: `StockRuleTest`, `StockRulesTest`, `StockLevelsTest`, `StockAvailabilityTest`, `StockCountTest`,
+`RestockPlannerTest` (every branch of the decision, the reserve binding the ingredients, one order per pass, and how an
+outcome is shown), `RequestConfirmationTest` (the three costs and the bound on what a question may name) and
+`RequestAcknowledgementTest` (an answer covers the question it was given and never a bigger one). GameTests:
+`StockKeeperGameTests` (the block, its persistence, the two enforcement rules in their settled state),
+`StockRuleEnforcementGameTests` (rules that change while items are moving, a keeper broken while its rules bite, a save
+and reload with both rules in force, the terminal row, the controller's counts, a reserve refusing an order through a
+pattern, and an aisle lost and rebuilt), `StockRestockGameTests` (the full automatic loop with no request behind it, a
+reserve blocking an order, the safety stop after a lost batch — including one that a **foreign** arrival of the product
+tries to mask, and one that a shadowed duplicate row must not lift — a restock that stops short of its own maximum and
+says why, that pause surviving a reload, and a rule edited or deleted while its order runs) and
+`TerminalConfirmationGameTests` (asked and not asked, confirmed, skipped, the reserved ingredient, a whole-run surplus a
+maximum cannot hold — and a request for exactly what a run makes, which is asked about nothing — and the re-check when
+the reserve moves under a question).
+
+**In the real game.** Three dev-harness scenarios play the whole feature in a live world and assert every claim on the
+server before the shot that shows it (`./gradlew runVisualTest -Pwareworks.visualTest=<name>`):
+
+* `keeper` — the block and its screen: one aisle with a keeper and four stocked racks, five rules deliberately in five
+  different states (below its minimum, at its maximum, down to its reserve, satisfied, and shadowed by an earlier rule
+  for the same item), so one screenshot shows every colour the screen can draw while the server has asserted each state
+  first. The rows are then edited through the real payload path, which is what proves that the numbers on screen are the
+  server's and not the client's guess;
+* `rules` — the three numbers of part 1 enforced in one aisle: 128 iron fed against a maximum of 32 until the belt in
+  front of the input backs up, a redstone request clamped at a reserve while the player at the terminal is served out
+  of it, and the keeper's comparator driving a lamp that goes out when the minimum is met;
+* `restock` — part 2, in five chapters: a rule that may **not** order because a reserve protects its ingredients; the
+  terminal's three questions (the item's own reserve, producing past a maximum, and the reserved **ingredient** of
+  something that has to be made) answered through the screen's own mouse and key input; the whole restocking loop
+  through a real **Mechanical Arm and Mechanical Crafter**, with one order from start to finish and an item census
+  around it; the **safety stop** after the player's arm is re-aimed at a basin that nothing works, with the paused
+  lamp, both goggle tooltips, the terminal row and the keeper's row; and the click on the row's mark that lets it
+  order again.
+
+One thing no harness can do is hold a modifier key: `Screen#hasControlDown` and `hasAltDown` poll GLFW's key state
+rather than reading the modifiers of a click, so the *skip* is driven through the branch `mouseClicked` takes with Ctrl
+and Alt held (everything after that — the amount, the acknowledgement, the payload and the server's decision — is the
+real path), and the physical keys stay a question for manual check 103.
+
 ## 4. Discovery and membership (no permanent world searches)
 
 * **`WarehouseRegistry`** (server-side, per `ServerLevel` via catnip `WorldAttached`, in-memory) maps controller position to `AisleBounds`. A controller registers in `onLoad()` (bounds become known after its first tick) and whenever its geometry changes. It unregisters in `invalidate()`/`remove()` (Create's `setRemoved` is final).
@@ -1067,9 +1550,14 @@ Classes:
   * Full scans run after load, geometry changes and layout changes.
   * Reason: otherwise, building a rack wall one interface at a time would rescan up to 2 · (L+1) · H positions per placement.
 * **Members** implement `content.controller.WarehouseMember`: `locationKind()`, `facing()`, `isAlignedWith(layout, side)` and, since M10, `alignToAisle(controller, layout, side)` — a hook the probe calls immediately before `isAlignedWith` for a member whose block state depends on *where the aisle is*. Its only implementation is the warehouse terminal's intake port (§3.4.3, ADR-022); the contract is that it writes the block state only when it really changes **and only when `WarehouseRegistry#ownsMemberState(level, member, controller)` names this controller**, so the probe stays a read for every other member and two aisles sharing a rack plane cannot fight over one block state (M10 review fix). A write from inside the probe marks that position dirty again; `core.warehouse.AisleMembership#reconcile` snapshots and clears its dirty set *before* the probe loop, so the mark is kept for the next pass rather than lost or probed twice, and the cost is one further reconcile in which nothing is written. Storage members also implement `StorageMember` (`attachedPos()`, `snapshot()`).
-  * `core.warehouse.LocationKind`: `STORAGE` faces away from the aisle; `INPUT`, `OUTPUT` and (since M11)
-    `PRODUCTION` face the aisle. `OUTPUT` and `PRODUCTION` are the two **delivery targets** a crane drops at on behalf
-    of something that asked (`isDeliveryTarget()`, §3.5, ADR-024); only `OUTPUT` is a retrieval destination.
+  * `core.warehouse.LocationKind`: `STORAGE` faces away from the aisle; `INPUT`, `OUTPUT`, (since M11) `PRODUCTION` and
+    (since M15) `KEEPER` face the aisle. `OUTPUT` and `PRODUCTION` are the two **delivery targets** a crane drops at on
+    behalf of something that asked (`isDeliveryTarget()`, §3.5, ADR-024); only `OUTPUT` is a retrieval destination.
+    `KEEPER` is neither, and it is the first kind that holds **no inventory at all**: the crane never visits a stock
+    keeper, nothing is ever planned to or from it, and the only thing the controller wants from that rack position is
+    the block entity's list of rules (§3.6.2). Because of it, `isStation()` is now the explicit list
+    `INPUT | OUTPUT | PRODUCTION` instead of "everything that is not `STORAGE`" — the same trap a fourth aisle-facing
+    kind would fall into again, so the enum says why.
   * The warehouse input and output implement `WarehouseMember` (kinds `INPUT` / `OUTPUT`, §3.2.1); the controller needed no change for them. A `STORAGE` member that is not a `StorageMember` is ignored.
 * **Deviation: members notify in `remove()`, not in `invalidate()`.**
   * `SmartBlockEntity#setRemoved` calls `remove()` for every real removal, while `invalidate()` also runs on chunk unload.
@@ -1146,6 +1634,7 @@ Dispatch runs only when a crane exists, is idle, has no held items and has speed
 ### 7.2 Requests
 * On a rising edge, the output station calls `controller.request(outputPos, item, amount)`.
 * The amount is clamped to `available = indexCount(item) − reserved`. If 0, the request is rejected, and the station shows "not in stock".
+  * **Since M15 a stock rule's reserve is part of that clamp for automation only** (§3.6.1): `StockAvailability.of(rules, access, availableStock)` wraps the function the queue is handed, and subtracts the reserve for `StockAccess.AUTOMATION` — a redstone request at an output and the ingredients of a production order it starts. A refusal by the reserve is answered with `RequestRejection.RESERVED`, not `NOT_IN_STOCK`, because the items are visibly there. `StockAccess.PLAYER` (a terminal click, §3.4) passes through unchanged.
 * Requests are persisted, served by successive RETRIEVE jobs, and removed when `remaining == 0`. Delivered amounts count only after a successful drop into the output buffer.
 * Max open requests per controller: `maxOpenRequests` (default 16).
 
@@ -1370,6 +1859,13 @@ The table above is covered by automated tests. What only a running game can reac
 | `maxProductionPatterns` | 4 | pattern slots of one production station; a pattern is a 3x3 grid plus one result (M11) |
 | `maxProductionOrders` | 8 | production orders one controller runs at the same time; each promises its ingredients (M11) |
 | `productionOrderTimeoutTicks` | 6000 | ticks an order may make no progress before it gives up (5 minutes). Every delivery, state change and arriving result pushes the deadline out, so only a genuinely stuck order times out (§3.5.3) |
+| `stockKeeperRows` | 6 | rule rows a newly placed warehouse stock keeper offers (M15, world restart). A keeper saved with more rows keeps them all: lowering the value governs the keepers placed from now on, and `maxStockRules` is the knob that bounds what an existing build applies (§3.6) |
+| `maxStockRules` | 32 | stock rules one aisle applies, over all its keepers; the rules beyond it are inert and say so. Lowering it is reversible, because nothing is written back into a keeper (§3.6.2) |
+| `stockRuleIntervalTicks` | 20 | how often a controller judges its stock rules and runs its restocking pass. It drives the keepers' lamps, their comparator output and the automatic orders only; the maximum and the reserve are applied where a job is planned or a request is made (§3.6.2) |
+| `maxRestockOrders` | 4 | production orders one aisle may run **for itself**, to refill the minimums of its rules (M15 part 2). **0 switches automatic restocking off** while every rule keeps capping and reserving. They also count against `maxProductionOrders`, so the smaller of the two wins (§3.6.3) |
+| `maxRestockOrdersPerRule` | 1 | automatic orders **one rule** may have open at a time. At the default a rule waits for its own order before it asks for more, which is what keeps a slow machine from collecting a queue of identical runs; 0 switches restocking off as well (§3.6.3) |
+| `maxRestockOrderAmount` | 512 | the largest amount of the **product** one automatic order may ask for, so a minimum of 100 000 is refilled in several bounded orders instead of one with hundreds of crane trips. The pattern rounds it up to whole runs, which is why a warehouse settles a little above its minimum — but never past the whole runs the rule's own maximum leaves room for (§3.6.3) |
+| `maxRestockIngredientItems` | 64 | the largest number of **ingredient items** one automatic order may spend — the bound that really limits what a broken machine can swallow before the safety stop fires, because the amount above counts the product and a pattern of nine ingots to one block would turn 512 blocks into 4608 ingots. One run is always allowed even when it costs more; `maxRestockOrdersPerRule` then sequences the rest (§3.6.3) |
 
 Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (`1/384 = 0.0026041666…`). The TOML file groups the keys into sections, so the full path of a key is `<section>.<key>`:
 
@@ -1377,8 +1873,8 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 |---|---|---|
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks` | 1–128, 1–64, 1–1200 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 1–200, 1–27, 1–1728 |
-| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxProductionPatterns` | 1–27 each; 1–65536; 16–4096; 1–8 |
-| `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `maxProductionOrders`, `productionOrderTimeoutTicks` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–64, 200–72000 |
+| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–8 |
+| `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–64, 200–72000, 1–256, 5–1200, 0–64, 0–16, 1–65536 |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 
@@ -1419,7 +1915,16 @@ Aisle A: Ready          the aisle letter and the short controller status
 Locations: 3 / 30       inventories holding at least one item, of all inventories the aisle counts
 Item types: 3           distinct item keys in the stock index
 Items: 176              total stored amount
+Rules: 4 · below min 1 · at max 1    only while the aisle really applies stock rules (M15)
+Rules paused: 1                      only while the safety stop holds a rule (M15 part 2)
 ```
+
+The two rule lines are **left out entirely** unless they say something: a display has few rows, and
+"Rules: 0 · below min 0 · at max 0" would push a number a player asked for off a four-tube board. The at-maximum count is
+what explains a warehouse input backing up (§3.6.2), so a board watching the aisle can show it rather than only the
+goggles. The **paused** count gets a line of its own rather than a fourth number on the first one, because it is the only
+rule state that asks a player to go and look at a machine (§3.6.4). All four counts are the controller's own cached
+numbers, so a pull stays a handful of field reads.
 
 Both numbers of the "used / total" line are drawn from the same population, the **counted** inventories: locations that
 read an inventory another location already counts (§3.1.1 — a double chest behind two interfaces, an item vault behind

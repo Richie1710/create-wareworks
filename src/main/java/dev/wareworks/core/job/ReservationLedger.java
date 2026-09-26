@@ -54,6 +54,7 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
     private final Map<UUID, EnumMap<Reservation.Kind, Reservation<K, L>>> byJob = new LinkedHashMap<>();
     private final Map<L, Map<K, Long>> capacityAt = new HashMap<>();
     private final Map<L, Long> capacityTotalAt = new HashMap<>();
+    private final Map<K, Long> capacityByKey = new HashMap<>();
     private final Map<L, Map<K, Long>> stockAt = new HashMap<>();
     private final Map<K, Long> stockByKey = new HashMap<>();
     private final Map<K, Long> stockNotBackingByKey = new HashMap<>();
@@ -236,6 +237,7 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
         byJob.clear();
         capacityAt.clear();
         capacityTotalAt.clear();
+        capacityByKey.clear();
         stockAt.clear();
         stockByKey.clear();
         stockNotBackingByKey.clear();
@@ -262,6 +264,11 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
     @Override
     public long reservedCapacity(L location, K key) {
         return nested(capacityAt, location, key);
+    }
+
+    @Override
+    public long reservedCapacityFor(K key) {
+        return capacityByKey.getOrDefault(Objects.requireNonNull(key, "key"), 0L);
     }
 
     @Override
@@ -399,6 +406,7 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
             case CAPACITY -> {
                 addNested(capacityAt, reservation.location(), key, delta);
                 add(capacityTotalAt, reservation.location(), delta);
+                add(capacityByKey, key, delta);
                 totalCapacity += delta;
             }
             case STOCK -> {
@@ -454,6 +462,11 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
         @Override
         public long reservedCapacity(L location, K key) {
             return ledger.reservedCapacity(location, key);
+        }
+
+        @Override
+        public long reservedCapacityFor(K key) {
+            return ledger.reservedCapacityFor(key);
         }
 
         @Override

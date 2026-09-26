@@ -175,6 +175,9 @@ final class CraneDispatch {
             lastReason = result.primaryReason().orElse(NoJobReason.NO_WORK);
             // Both mean "this input's items fit nowhere right now", and re-running the full candidate scan every
             // dispatch interval would cost the most in exactly the warehouse that produces them (ADR-021, §7.4).
+            // NoJobReason.AT_MAXIMUM deliberately does not belong here (M15): a stock rule's maximum is answered by
+            // one lookup before any candidate work, so there is no expensive scan to protect, and backing off would
+            // stop storing for every other input of the aisle because a single item type is capped on purpose.
             if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
                     || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER))
                 backoffUntilTick = now + Math.max(1, WareworksConfig.fullBackoffTicks());
@@ -221,6 +224,9 @@ final class CraneDispatch {
                 // Store filters decide before the estimate and before any live call, so a location that may not take the
                 // item costs neither a live simulation nor a remembered refusal (ADR-021).
                 .storeFilter(controller::storeFilterMatch)
+                // A stock rule's maximum decides even earlier, per item type instead of per location: one lookup that
+                // costs nothing while no rule governs the key (M15, issue #3).
+                .storeHeadroom(controller::storeHeadroom)
                 .insertRefused((rack, key) -> insertRefusals.isRefused(rack, key, now))
                 .extractRefused((rack, key) -> extractRefusals.isRefused(rack, key, now))
                 .liveExtract((rack, key, max) -> simulate(level, layout, rack, true, key, max, now))

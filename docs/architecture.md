@@ -56,11 +56,22 @@ dev.wareworks
 │   ├── terminal               the terminal screen's pure logic (M6): StockCount / StockLine (one item line),
 │   │                          StockListModel (list, search, sort, paging), TerminalSearch, TerminalSort,
 │   │                          TerminalAmounts (click → amount), CountFormat (compact cell amounts),
-│   │                          StockDiff (what a terminal still has to send)
-│   └── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
-│                              (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
-│                              owes), ProductionOrder / ProductionOrderState (the order state machine),
-│                              ProductionOrders (a controller's orders), ProduciblePlanner (what an aisle could make)
+│   │                          StockDiff (what a terminal still has to send); RequestConfirmation (what a click would
+│   │                          cross: the item's reserve, a reserved ingredient, the maximum) and
+│   │                          RequestAcknowledgement (what the player accepted, and whether it covers a question)
+│   │                          (M15 part 2, ADR-027)
+│   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
+│   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
+│   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
+│   │                          ProductionOrders (a controller's orders), ProduciblePlanner (what an aisle could make)
+│   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
+│                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
+│                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
+│                              available and pipeline()), StockAccess (automation vs. player), StockAvailability
+│                              (the one place a reserve enters the request path), StockRuleStatus,
+│                              StockRuleEvaluation; and for automatic restocking (part 2) RestockPlanner,
+│                              RestockInput, RestockDecision, RestockPlan, RestockOutcome, RestockLimits,
+│                              StockRulePause (the safety stop)
 ├── content
 │   ├── item                   ItemKey (item + components, count-less), ItemHandlerSnapshots, ItemTypeSummaries
 │   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views)
@@ -73,7 +84,9 @@ dev.wareworks
 │   │                          RequestRejection, RequestResult (M2); CraneDispatch (M3: planning, ledger, reroutes);
 │   │                          LocationReservationSummary (bounded goggle data of a location's reservations, M4);
 │   │                          WarehouseRegistry.StorageObservation (assignment + reservations in one scan, M4 review);
-│   │                          AisleFilters (store filters of the aisle's storage locations, cached for planning, M8)
+│   │                          AisleFilters (store filters of the aisle's storage locations, cached for planning, M8);
+│   │                          AisleStockRules (the controller's own, saved copy of its keepers' stock rules, M15,
+│   │                          ADR-027; the pauses of the safety stop live in the controller beside it)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock, RailScan (M2); CraneExecution,
 │   │   │                      CranePersistence, CraneGoggleInfo, CraneJobSummary, CranePauseReason, CranePauseDecision
 │   │                      (M3; the pause priority became a pure, unit-tested function in M5); CraneSounds
@@ -95,7 +108,13 @@ dev.wareworks
 │                              ProductionScreenState (M11, ADR-024);
 │                              StationArmPointType (the arm interaction point type of exactly one station block),
 │                              WarehouseInputArmPoint (deposit only), DeliveryStationArmPoint (take only: output,
-│                              terminal, production station) (M12, ADR-025)
+│                              terminal, production station) (M12, ADR-025);
+│                              WarehouseStockKeeperBlock / BlockEntity (the aisle member that holds the stock rules;
+│                              no items, no capability, no arm point), StockKeeperRules (its editable rows and their
+│                              NBT), StockKeeperGoggleSummary, StockKeeperScreenState, StockKeeperMenu,
+│                              StockKeeperMenuLayout (M15, ADR-027);
+│                              TerminalRequestOutcome (the third ending of a terminal click: accepted, refused, or
+│                              asked about — kept out of RequestResult on purpose) (M15 part 2, ADR-027)
 │   └── display                the four Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -105,12 +124,18 @@ dev.wareworks
 │                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019),
 │                              TerminalOrdersPayload (server → client: the aisle's production orders, M11),
 │                              and the three production station payloads: ProductionScreenPayload (server → client),
-│                              ProductionPatternPayload, ProductionCancelPayload (client → server) (M11, ADR-024).
+│                              ProductionPatternPayload, ProductionCancelPayload (client → server) (M11, ADR-024);
+│                              the two stock keeper payloads: StockKeeperScreenPayload (server → client),
+│                              StockKeeperRulePayload (client → server, moves no item) (M15, ADR-027);
+│                              TerminalConfirmPayload (server → client: what a click would cross, and nothing was
+│                              requested) (M15 part 2, ADR-027).
 │                              Everything else syncs through block entity update packets
 ├── client
 │   ├── gui                    WarehouseTerminalScreen (the terminal's screen) and TerminalScreenUpdates (where the
 │   │                          terminal payloads land on the client) (M6, ADR-019); WarehouseProductionScreen (the
-│   │                          pattern grid), ClientProductionStations, ProductionScreenUpdates (M11, ADR-024)
+│   │                          pattern grid), ClientProductionStations, ProductionScreenUpdates (M11, ADR-024);
+│   │                          WarehouseStockKeeperScreen (the rule rows), ClientStockKeepers,
+│   │                          StockKeeperScreenUpdates (M15, ADR-027)
 │   ├── render                 StackerCraneRenderer (animated crane, SafeBlockEntityRenderer without Flywheel visual),
 │   │                          WareworksPartialModels (crane partials), CraneModelLayout (model dimensions, pose math) (M4)
 │   └── ponder                 WareworksPonderPlugin (the one PonderPlugin), WareworksPonderScenes (which scene belongs
@@ -118,11 +143,13 @@ dev.wareworks
 │       │                      WareworksPonderLang (ponder lang inside the Registrate LANG generator) (M5)
 │       └── scenes             PonderAisle (shared stage layout), CraneScript (crane animation through the client pose
 │                              API), CraneScenes (stacker_crane/overview), WarehouseScenes (interface, storing,
-│                              retrieving, M5; filters, M13), TerminalScenes (terminal, requesting) and
-│                              ProductionScenes (production) (M13)
+│                              retrieving, M5; filters, M13), TerminalScenes (terminal, requesting),
+│                              ProductionScenes (production) (M13) and StockRuleScenes (stock_rules: the three
+│                              numbers; restocking: the minimum ordering by itself and the safety stop) (M15)
 ├── data                       WareworksDatagen (GatherDataEvent hooks), WareworksLangGen (English lang),
 │                              WareworksBlockStateGen (the blockstate generators Create's BlockStateGen does not cover:
-│                              the terminal's multipart state, M10, ADR-022)
+│                              the terminal's multipart state, M10, ADR-022; the stock keeper's three lamp models over
+│                              LIT and PAUSED, with paused winning, M15, ADR-027)
 ├── gametest                   @GameTestHolder classes (WareworksItemGameTests: recipes and creative tab, M4;
 │                              CraneSoundGameTests: server-played crane sounds through PlayLevelSoundEvent, M4 review;
 │                              RobustnessGameTests: aisle shrink, two aisles, config extremes, M5;
@@ -134,7 +161,10 @@ dev.wareworks
 │                              MechanicalArmGameTests: arm interaction point types, their fixed modes and real
 │                              powered arms at the stations, M12;
 │                              DisplayLinkGameTests: the four display sources, read through real display links on
-│                              lecterns, nixie tubes, a display board and a sign, M14)
+│                              lecterns, nixie tubes, a display board and a sign, M14;
+│                              StockKeeperGameTests, StockRuleEnforcementGameTests, StockRestockGameTests and
+│                              TerminalConfirmationGameTests: the stock rules, what they do to a moving warehouse,
+│                              automatic restocking with its safety stop, and the terminal's confirmation, M15)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -151,9 +181,16 @@ dev.wareworks
 │                              RobustnessVisualScenario (chunk unload, save + quit + rejoin, blocks broken mid job)
 │                              with SceneItemCensus (item census of the whole scene, M5),
 │                              DisplayVisualScenario (a wall of display boards and a nixie row fed by real display
-│                              links, asserted against the controller's own numbers, M14), CameraView,
-│                              VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the system
-│                              property wareworks.visualTest is set, referenced only from WareworksClient
+│                              links, asserted against the controller's own numbers, M14),
+│                              StockKeeperVisualScenario (the keeper block and five rules in five states, its screen
+│                              edited through the real payload path), StockRulesVisualScenario (the three numbers of a
+│                              stock rule enforced in a real aisle, M15 part 1) and RestockVisualScenario (the warehouse
+│                              ordering for itself through a real Mechanical Arm and Mechanical Crafter, the terminal's
+│                              three questions and the safety stop, M15 part 2), the last two through ScreenInput (mouse
+│                              and key input into an open screen) and GoggleShots (shared goggle-tooltip shots and the
+│                              player reach they need),
+│                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
+│                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
                                GoggleObservers (server-side, per player: notifies the block entity a
                                goggle-wearing player looks at), SyncThrottle (shared goggle sync throttle),
@@ -347,8 +384,10 @@ iron sheets already require a press and its brass casing already requires brass.
 * **One plugin, registered twice on purpose.** `client.ponder.WareworksPonderPlugin` is handed to `PonderIndex.addPlugin` in `WareworksClient#onClientSetup` (runtime, before Ponder's `FMLLoadCompleteEvent` calls `registerAll()`) and again inside the Registrate LANG generator (`client.ponder.WareworksPonderLang`), because `FMLClientSetupEvent` does not fire during `runData`. A second *runtime* registration would list every scene twice. All Ponder code lives under `client.ponder` and is never referenced from common code.
 * **Four scenes, one per teaching goal:** `stacker_crane/overview` (rails, dock, racks, controller, rotation from below, the crane travelling, lifting and reaching into a rack, mast height), `warehouse/interface` (inventories become addressable storage locations), `warehouse/storing` (input → controller plans → crane stores) and `warehouse/retrieving` (filter + amount + redstone pulse → crane fetches → funnel pulls out). Every one of the six items is a component of at least one scene, so each has "Hold [W] to Ponder".
   * *Extended in M13 to eight scenes* (terminal, requesting, production, filters), which also gave the terminal and the production station their first scene. See the M13 block below; each one has its own stage in `scripts/gen_ponder_schematics.py`.
+  * *Extended in M15 to ten scenes* (`warehouse/stock_rules`, `warehouse/restocking`), the stock keeper's two. See the M15 block below.
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
+  * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
 * **Schematics are empty stages.** `scripts/gen_ponder_schematics.py` writes nothing but a checkerboard base plate plus an explicit `minecraft:air` entry for every position above it. A `PonderLevel`'s bounds are the bounding box of the blocks the template actually places (not the `size` tag), and instructions silently skip positions outside them, so the air entries are what lets the scenes build themselves with `setBlock`. Consequence: no Wareworks block state or block entity data lives in a `.nbt` file, so block changes never require regenerating them.
 * **The crane is animated through the client pose API, not frame by frame.** `client.ponder.scenes.CraneScript` calls `StackerCraneBlockEntity#showClientPose(pose, target, phase, held)` and then idles for exactly as many ticks as the pure `CraneMotion` needs to reach that target, simulated ahead of time at the same kinetic speed the scene sets. The block entity's own client tick does the moving, so the arm retracts before travel and extends at the target exactly as in a real job, and rendering interpolates between ticks. Only blocking instructions add to a scene's total time, so these `idle` calls keep the progress bar honest.
 * **Lang:** English from `provideLang` inside the LANG generator (`wareworks.ponder.*`), German hand-written; `LangConsistencyTest` enforces that they match. The `text_n` numbering follows the order of the `.text(...)` calls within a scene, so inserting a line renumbers every later key and both files must be regenerated together.
@@ -360,7 +399,13 @@ iron sheets already require a press and its brass casing already requires brass.
 * **A Wareworks screen can never be opened in Ponder.** `openScreen` needs a `ServerPlayer` and a `PonderLevel` is client-side (Create's own stock ticker scenes have the same limitation), so the terminal and production screens are *represented* with `showControls` icons plus text, and the wording of the click rules follows `wareworks.gui.terminal.amount_hint` so that scene and screen say the same thing.
 * **Mechanical Arms (M12) are named in the two texts that list what feeds or empties a station** (`warehouse_storing.text_2`, `warehouse_retrieving.text_6`). Both are value-only edits inside existing `.text(...)` calls: no key was added, removed or renumbered in either shipped scene.
 
-*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye.
+*Extended in M15 — the stock keeper (GitHub issue #3):* the keeper is the one block whose effect is invisible — three numbers that gate what every other block may move — so it needs Ponder more than any block before it. It got **two** scenes, which is **ten** in total:
+* **`warehouse/stock_rules`** ("Stock Rules of a Warehouse"): what a rule is, then one beat per number pointing at the block that number moves — a vanilla comparator and lamp the scene builds behind the keeper for the minimum, a warehouse input that backs up for the maximum, a lever-pulsed warehouse output whose delivery stops at the reserve, and the terminal that is not stopped.
+* **`warehouse/restocking`** ("A Warehouse that Restocks Itself"): the same aisle ordering for itself — a short rule, the ingredients fetched (never out of a reserve), the player's own arm and Mechanical Crafter, the product returning through an input, the lamp going out, and then the safety stop and the click that resumes it.
+* **Two scenes rather than one, for pacing.** Told as one story the keeper came to about a minute in which the three numbers — the part a player needs first — were over after the first third, and a player who only wanted to look up "what does the reserve do" had to sit through a production loop. The two now run **968** and **1051** ticks (about 48 s and 53 s) and each is watchable on its own, exactly as the terminal's placing/requesting pair is (`StockRuleScenes` carries the reason). The `text_n` renumbering rule above is why the split was made *before* release rather than later.
+* **The redstone in a scene is real block states.** A `PonderLevel` (`SchematicLevel`) runs no block ticks and no neighbour updates, so a comparator, a redstone lamp and a lever keep whatever state a scene sets, and `toggleRedstonePower` flips exactly their `POWERED`/`POWER`/`LIT`. The keeper is never in such a selection: its own `LIT` is a rule lamp and is written on its own, together with `PAUSED` for the safety stop — the same two block states the controller's rule tick writes in a real world.
+
+*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye. *M15:* keeper 2.
 
 *Reason:* Scenes built entirely from instructions keep the binary assets trivial and stable, and reusing the crane's own motion means the Ponder crane can never drift from how the machine really behaves.
 
@@ -979,6 +1024,122 @@ Lecterns, nixie tubes and display boards keep the component and are translated p
 feature; the interface gains a second reason for its filter slot to be read, which `warehouse-system.md` §10 states
 next to ADR-021's storing rule. No Ponder scene was added: the teaching pass of M13 covered the blocks, and a display
 link is Create's own mechanic, taught by Create's own scene.
+
+### ADR-027 — Stock rules live in one block with three numbers per item; the reserve protects the warehouse from itself, and the minimum drives production behind a safety stop (M15, issue #3)
+*Context:* Up to M14 a Wareworks warehouse had no opinion about **how much** of anything it should hold. It stored
+whatever an input was given until it ran out of room, handed out whatever a request asked for until the racks were
+empty, and had no way to say "keep 256 planks" or "never let the last 32 andesite alloy go to a machine". Every
+comparable mod answers this with per-item levels, and the request came in as issue #3. The pieces to build it on were
+already there: a controller that keeps an exact stock index and plans every job (§3.3), a production station that turns
+an order into ingredients delivered to a player's own machine (§3.5, ADR-024), and a terminal that already reports what
+an aisle holds (§3.4). The hard rules are unchanged: no per-tick inventory scans, no world searches, no item
+teleportation, storage only through `Capabilities.ItemHandler.BLOCK`.
+
+*Decision:*
+* **One block, a list of rules.** The **Warehouse Stock Keeper** is an aisle member that holds rows of "item +
+  minimum + maximum + reserve", and an aisle may hold several keepers. It holds **no items at all** — no buffer, no
+  item capability, no arm point, and the crane never visits it — so editing a policy can never consume, duplicate or
+  swallow anything. The first design study put the rules in a **column of one-item blocks above the controller**; that
+  is rejected, because a column is a second kind of geometry to scan, to bound, to persist and to explain, and because
+  a keeper with a single rule already *is* the cheap per-item variant.
+* **The three numbers govern three different directions** (in: the minimum, stored: the maximum, out to automation: the
+  reserve), and nothing else. Each is either an amount or unset; `0` is a real maximum and unset means "no cap".
+  Contradictions a player can express are resolved on the way in, never at the point of use.
+* **The reserve protects the warehouse from its own automation, not from the player.** A redstone request at an output,
+  the ingredients of a production order it starts, and automatic restocking all stop at the reserve; a player at a
+  terminal is served down to the last item and the row says so. This is the **inverse of the first design study** and
+  is the user's decision. The corollary matters as much: because automation is what is held back, the reserve also
+  governs the **ingredients** an automatic order would spend — reaching a reserved item through a pattern is still
+  automation taking it, one step removed.
+* **The controller owns the copy that is enforced, and saves it.** A keeper's chunk can be unloaded while the
+  controller plans, and reading a miss as "no rule" would store past a maximum (nothing is ever moved back out) and
+  hand out a reserve (nothing is ever recalled). The copy is therefore persisted with the controller and never dropped
+  wholesale — only a keeper that was read again, or a rack a *loaded* block proved to be no keeper, changes it.
+* **The minimum drives production, as an ordinary production order with no backing request.** When a governed item is
+  below its minimum and a production station of the same aisle has a pattern for it, the warehouse orders it itself:
+  the same `SUPPLY` jobs, the same machine, the same return through a warehouse input. No new job kind, no new crane
+  behaviour, no new reservation kind. At most one order is started per evaluation, because every order changes what
+  the next one could pay with.
+* **One number does the refilling, not two.** "Keep 256" is both the level that triggers an order and the level it
+  refills to; there is no separate "refill to" target, no batch size and no hysteresis band to set. This is the user's
+  decision, and it is what makes the feature explainable in one sentence. The hysteresis that a second number usually
+  exists for comes from the **pipeline** instead: the minimum is judged against stocked + inbound + what an open order
+  will bring back (`StockLevels#pipeline()`), so a rule cannot order the same thing twice while the first order runs.
+  The only overshoot is the one the player's own pattern causes — a pattern makes whole runs, so a warehouse settles a
+  little above its minimum — and it is bounded in both directions: never past the whole runs the rule's **own maximum**
+  leaves room for (a surplus stored above a cap never leaves the warehouse again, so the alternative is a rule that
+  reports `AT_MAXIMUM` for ever), and never more than `maxRestockOrderAmount` of product or
+  `maxRestockIngredientItems` of ingredients per order. The product cap alone does not bound the loss: nine ingots to one
+  block turns "at most 512 blocks" into 4608 ingots.
+* **What one rule is asking for is not free for another rule's automation.** An automatic order never spends an
+  ingredient that a governing rule of the same aisle is itself below its minimum on. Without it a pair of inverse
+  patterns — ingot to block and back — converts the same items back and forth for ever, with neither minimum met.
+* **A rule stops ordering the first time one of its automatic orders ends with ingredients delivered and no result.**
+  The pause stops ordering and nothing else, cancels the rule's other open automatic orders, is reported on every
+  surface the rule has (a third lamp colour, its own goggle line on keeper and controller, its own line on an aisle
+  display, the rule's row in the keeper's screen and the terminal row's tooltip), is **saved with the controller**, and
+  is lifted only by a player — by clicking the paused row's status mark, or by re-editing or clearing the rule **from the
+  row that really governs the item**, never from a shadowed duplicate.
+* **An automatic order is completed only by items the warehouse stored out of one of its own inputs**, and never by a
+  rise of the stock index. The guard above is worth nothing otherwise: the index rises for any reason at all — a second
+  farm, a barrel emptied into a rack, a player putting the product back — and an order completed that way never times
+  out, so the safety stop never fires and the next dip feeds the same broken machine again. An ordinary order somebody is
+  waiting for keeps being counted from the level, where "from any source" is a feature.
+* **The terminal asks before a player's own click crosses a line they drew** (into a reserve, into the reserve of an
+  **ingredient** a production order would spend for it, or leaving more in the racks than a maximum can hold), naming
+  the number; **Alt skips the question**, and Alt does nothing else, because Shift already means "a stack" and Ctrl
+  "everything available" — a skip on a key that also changes the amount is not a skip a hint can honestly describe.
+* **That question is the server's, and it is asked again when it is answered.** A screen cannot decide it: only the
+  server knows the aisle's patterns and what their ingredients are promised to, so only it can see that four planks
+  cost a log a rule protects. A click whose cost the payload's acknowledgement does not cover is answered with the
+  question and **nothing else** — nothing queued, no order started, no refusal remembered. The acknowledgement carries
+  the **numbers** the question named rather than a flag, and the confirmed request is measured a second time, so a
+  warehouse that moved in between (a crane promised the items, somebody raised a reserve or rewrote a pattern) is asked
+  about again instead of being paid for with an old "yes". The acknowledgement is **consent, not permission**: it
+  unlocks nothing a player could not reach anyway, which is exactly why a client may send the blanket form for an
+  alt-click.
+* **Everything that decides anything is pure.** `core.stock` has no Minecraft types: the three numbers, the rule set
+  with its shadowing and its cap, the levels a rule is judged against, the availability a reserve produces, and the
+  whole restocking decision. The content layer only carries the answers out.
+
+*Reason:* The feature's real risk is not the arithmetic, it is that **both directions it gates are irreversible**.
+Nothing that was stored is ever moved back out, and nothing that was handed to automation can be recalled, so a rule
+that is forgotten for a single tick has already done permanent damage — which is why the enforced copy is saved with
+the controller and never thrown away on a hint. Making the reserve protect against automation rather than against the
+player is what keeps it usable: a reserve a player has to fight against is a reserve they delete, and the case it
+really exists for is the overnight drain by a hand-built line. Building restocking on the existing production order is
+what keeps ADR-024 true — *Wareworks delivers and collects; it never crafts* — and means the crane, the reservation
+ledger and the save format all stay exactly as they were. The safety stop is not a convenience: §3.5.4 already states
+that ingredients a machine has swallowed are gone, and an automatic loop that retries a broken machine turns that
+documented one-off into an unbounded drain while a player is asleep. Stopping on the **first** loss and requiring a
+human to resume is the only rule that cannot be tuned into that failure, and it costs a player one click in exactly the
+case where they had to go and look at their machine anyway.
+
+*Consequences:* One new block, one new menu, three new payloads (the two keeper ones and `TerminalConfirmPayload`), one
+new field on `TerminalRequestPayload` and a network version bump to `"5"` for the whole of M15. Three new
+`StockRuleStatus` values and one new `RequestRejection` (`RESERVED`) go on the wire by ordinal, so they are appended and
+never reordered; the same holds for `RestockOutcome` and `StockRulePause.Cause`, which the controller saves by name. A
+click at a terminal now has **three** possible endings instead of two, so the terminal answers with
+`TerminalRequestOutcome` and `RequestResult` keeps meaning "accepted or refused" — a question is neither, and folding it
+in would have made every reader of a rejection handle a case that is not one. The reserved ingredients of a confirmation
+are re-checked as one total rather than per item, which leaves one bounded gap (a pattern rewritten between question and
+answer could substitute another reserved ingredient of the same amount); it is written down in §3.6.6 rather than
+guarded, because carrying up to nine item keys back for every confirmation is not worth it. `ProductionOrder` gains an
+explicit `restock` flag rather than deriving it from "has no backing request": an ordinary order loses its request when
+that request is served or cancelled, and deriving it would let a player's own cancellation trip the safety stop of a rule
+that never ordered anything. `NoJobReason.AT_MAXIMUM` is the
+one skip reason that must **not** arm the dispatcher's back-off, because a maximum is answered by a single map lookup
+before any candidate walk and holding storing back for every other input would be a real fault caused by a working
+rule. The pause is kept in the controller and keyed by item, not in the keeper: the keeper's chunk may be unloaded
+exactly when an order fails, and at most one rule governs an item anyway. `ProductionOrder` gains a second counting
+channel rather than a second kind of order: `withStored` counts an attributed arrival and `withResultStock` a level, and
+which of the two an order listens to follows from its `restock` flag. The residual is written down rather than guarded —
+a second source of the same product feeding the same warehouse **through an input** is indistinguishable from the ordered
+machine's output, and no bookkeeping inside the warehouse can say which machine made items it really received. Seven new
+config keys, four of which (`maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`,
+`maxRestockIngredientItems`) bound how much the warehouse may ever have in a machine at once, with `0` in either order
+count as the off switch for automatic ordering while every rule keeps capping and reserving. A warehouse from before M15 has no keeper, so every new path is guarded by "does a rule govern
+this key", which answers no, and the behaviour is bit-for-bit what it was.
 
 ## Persistence & sync
 

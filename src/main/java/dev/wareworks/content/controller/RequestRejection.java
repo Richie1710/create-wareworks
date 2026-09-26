@@ -48,7 +48,18 @@ public enum RequestRejection {
      * there, and what the player has to do is wait for an order to finish or give one up — not go looking for an item
      * the warehouse is not missing. This mirrors {@code NoJobReason.PRODUCTION_FULL} on the planner side.
      */
-    PRODUCTION_BUSY;
+    PRODUCTION_BUSY,
+    /**
+     * A stock rule keeps the rest of this item back from the warehouse's <b>own automation</b> (M15, issue #3): the
+     * items are in stock, but they are below the reserve a warehouse stock keeper set for them, so a
+     * redstone-triggered request at a warehouse output gets nothing more of them.
+     * <p>
+     * It is told apart from {@link #NOT_IN_STOCK} for the same reason {@link #PRODUCTION_BUSY} is: the cure is a
+     * different one. Without it a player would read "not in stock" while standing in front of 412 iron ingots — the
+     * masking defect M8 fixed for storage filters. A player at a terminal never sees it, because a reserve does not
+     * hold anything back from them ({@code StockAccess}).
+     */
+    RESERVED;
 
     private static final String LANG_PREFIX = "gui.goggles.request_rejection.";
 

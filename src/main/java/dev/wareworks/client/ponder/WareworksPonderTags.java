@@ -46,7 +46,8 @@ public final class WareworksPonderTags {
                 .add(WareworksBlocks.WAREHOUSE_INPUT)
                 .add(WareworksBlocks.WAREHOUSE_OUTPUT)
                 .add(WareworksBlocks.WAREHOUSE_TERMINAL)
-                .add(WareworksBlocks.WAREHOUSE_PRODUCTION);
+                .add(WareworksBlocks.WAREHOUSE_PRODUCTION)
+                .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER);
 
         // The dock is a kinetic appliance: it consumes rotational force and its speed depends on the RPM.
         entries.addToTag(AllCreatePonderTags.KINETIC_APPLIANCES)
@@ -57,6 +58,8 @@ public final class WareworksPonderTags {
                 .add(WareworksBlocks.WAREHOUSE_INPUT)
                 .add(WareworksBlocks.WAREHOUSE_OUTPUT)
                 .add(WareworksBlocks.WAREHOUSE_TERMINAL)
-                .add(WareworksBlocks.WAREHOUSE_PRODUCTION);
+                .add(WareworksBlocks.WAREHOUSE_PRODUCTION)
+                // The keeper moves nothing itself, but its three numbers gate what everything else here may move.
+                .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER);
     }
 }

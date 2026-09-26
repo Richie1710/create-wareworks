@@ -14,6 +14,7 @@ import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.Side;
@@ -159,6 +160,16 @@ public record PonderAisle(int aisleZ, int dockX, int lastRailX, int plateSize) {
         scene.world().setBlock(rack(util, position, level, side), WareworksBlocks.WAREHOUSE_PRODUCTION
                 .getDefaultState()
                 .setValue(WarehouseProductionBlock.FACING, outward(side).getOpposite()), false);
+    }
+
+    /**
+     * A warehouse stock keeper; its panel faces the aisle, like every other member that looks into it (M15, ADR-027).
+     * It holds no items at all, so a scene only ever reads its lamp.
+     */
+    public void placeStockKeeper(CreateSceneBuilder scene, SceneBuildingUtil util, int position, int level, Side side) {
+        scene.world().setBlock(rack(util, position, level, side), WareworksBlocks.WAREHOUSE_STOCK_KEEPER
+                .getDefaultState()
+                .setValue(WarehouseStockKeeperBlock.FACING, outward(side).getOpposite()), false);
     }
 
     /** An output station; its opening faces the aisle. */

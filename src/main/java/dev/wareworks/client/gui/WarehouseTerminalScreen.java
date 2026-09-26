@@ -21,7 +21,10 @@ import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalScreenStatus;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.CountFormat;
+import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockLine;
 import dev.wareworks.core.terminal.StockListModel;
@@ -29,6 +32,7 @@ import dev.wareworks.core.terminal.TerminalAmounts;
 import dev.wareworks.core.terminal.TerminalSearch;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.network.ProductionCancelPayload;
+import dev.wareworks.network.TerminalConfirmPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalRequestPayload;
 import dev.wareworks.network.TerminalResultPayload;
@@ -48,6 +52,7 @@ import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvents;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
@@ -113,8 +118,30 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int COLOR_PRODUCIBLE_CELL = 0x3389C7F1;
     /** A production order that ended with ingredients already handed to a machine ({@code §3.5}). */
     private static final int COLOR_LOST = 0xFFFFAA33;
+    /**
+     * The badge of a cell a stock rule governs (M15, issue #3), in the corner opposite the amount: gold while the
+     * warehouse is short of the item, red while it accepts no more of it, and a quiet blue-grey while the rule is
+     * simply there. It is a square rather than a glyph so that it reads at every GUI scale and in every language.
+     */
+    private static final int RULE_BADGE_SIZE = 3;
+    private static final int COLOR_RULE = 0xFF9FB4C7;
+    private static final int COLOR_RULE_BELOW_MINIMUM = 0xFFFBDC7D;
+    private static final int COLOR_RULE_AT_MAXIMUM = 0xFFFF8080;
+    private static final int COLOR_RULE_AT_RESERVE = 0xFF89C7F1;
     /** The cancel affordance at the end of an open order line: a plain glyph, so every font and language has it. */
     private static final String CANCEL_MARK = "x";
+
+    // --- the confirmation panel (M15 part 2, issue #3) -------------------------------------------------------------
+    /** Dim behind the panel, so the grid underneath is visibly out of reach while the question is up. */
+    private static final int COLOR_CONFIRM_SHADE = 0xC0101014;
+    private static final int COLOR_CONFIRM_BG = 0xFF2A2A31;
+    private static final int COLOR_CONFIRM_BORDER = 0xFFFF8040;
+    private static final int COLOR_CONFIRM_BUTTON = 0xFF3C3C46;
+    private static final int COLOR_CONFIRM_BUTTON_HOVER = 0xFF56565F;
+    private static final int CONFIRM_PADDING = 6;
+    private static final int CONFIRM_BUTTON_HEIGHT = 14;
+    private static final int CONFIRM_BUTTON_PADDING = 8;
+    private static final int CONFIRM_BUTTON_GAP = 6;
 
     /** Search, order and filter survive closing the screen, like a storage mod's terminal. */
     private static String rememberedQuery = "";
@@ -135,6 +162,26 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private Component feedback;
     private int feedbackColor = COLOR_TEXT;
     private int feedbackTicks;
+    /**
+     * The question the <b>server</b> put up, or {@code null} while it is asking nothing (M15 part 2, issue #3). While it
+     * is set the grid is out of reach and every click and key belongs to the question.
+     */
+    @Nullable
+    private RequestConfirmation<ItemKey> confirming;
+    /**
+     * The question the player has just answered, kept until the server has answered in turn. A second question for the
+     * same item means the warehouse moved in between and the request now costs more than was accepted, which the panel
+     * says in a line of its own instead of silently asking the same thing twice.
+     */
+    @Nullable
+    private RequestConfirmation<ItemKey> confirmed;
+    private boolean costChanged;
+    /**
+     * The wrapped text and the geometry of {@link #confirming}, built once and dropped whenever anything it is built
+     * from changes: the question itself, {@link #costChanged}, and the window layout ({@link #init()}).
+     */
+    @Nullable
+    private ConfirmPanel panel;
 
     private EditBox searchBox;
     private IconButton sortButton;
@@ -155,6 +202,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         setWindowSize(TerminalMenuLayout.WIDTH, layout.height());
         super.init();
         clearWidgets();
+        panel = null; // the panel's rectangles are relative to the window, which has just been laid out again
 
         int searchWidth = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN - AMOUNT_WIDTH - 2 * BUTTON_SIZE
                 - 3 * WIDGET_GAP;
@@ -235,6 +283,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * player clicking the same item repeatedly watches one request grow instead of reading the same line ten times.
      */
     public void onResult(TerminalResultPayload payload) {
+        // The answer to a confirmed request: whatever it says, the question is settled (M15 part 2).
+        confirmed = null;
+        costChanged = false;
         if (payload.isAccepted()) {
             feedback = acceptedLine(payload);
             feedbackColor = COLOR_SUCCESS;
@@ -332,19 +383,50 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * @return whether a request was sent
      */
     public boolean requestVisible(int index, TerminalAmounts.Click click) {
+        return requestVisible(index, click, false);
+    }
+
+    /**
+     * Requests the entry at {@code index} of the visible grid, optionally skipping the confirmation (Alt).
+     *
+     * @return whether a request was sent
+     */
+    public boolean requestVisible(int index, TerminalAmounts.Click click, boolean skipQuestion) {
         List<StockLine<ItemKey>> visible = visibleEntries();
         if (index < 0 || index >= visible.size())
             return false;
-        request(visible.get(index), click);
+        request(visible.get(index), click, skipQuestion);
         return true;
     }
 
     private void request(StockLine<ItemKey> line, TerminalAmounts.Click click) {
+        request(line, click, false);
+    }
+
+    /**
+     * Requests one item.
+     * <p>
+     * Whether the click crosses a boundary a player set themselves is decided on the server, which alone knows what a
+     * production order would spend (M15 part 2). The screen only says what the player has agreed to so far: nothing on
+     * a plain click, "whatever it costs" when they held the skip modifier.
+     * <p>
+     * <b>The skip is Alt, and not Ctrl.</b> Ctrl already means "everything available" here, so a hint that sent a player
+     * to it would quietly change the amount as well as skipping the question — two things from one key, one of them
+     * unmentioned (M15 review fix). Alt does one thing, Shift and Ctrl keep doing theirs, and the three combine.
+     *
+     * @param skipQuestion whether the player held the skip modifier, i.e. said "do not ask" in advance
+     */
+    private void request(StockLine<ItemKey> line, TerminalAmounts.Click click, boolean skipQuestion) {
         // "Everything" is what is available plus what the aisle could still make of it, both numbers computed on the
         // server and only reported here (M11, ADR-024): the screen knows neither the patterns nor their promises.
         int amount = TerminalAmounts.amountFor(click, selectedAmount, line.key().getMaxStackSize(), line.available(),
                 line.producibleAmount(), maxRequestAmount());
-        PacketDistributor.sendToServer(new TerminalRequestPayload(menu.containerId, line.key(), amount));
+        send(line.key(), amount, skipQuestion ? RequestAcknowledgement.ANY : RequestAcknowledgement.NONE);
+    }
+
+    /** Sends a request with what the player has accepted for it; the server decides what that is worth. */
+    private void send(ItemKey key, int amount, RequestAcknowledgement acknowledged) {
+        PacketDistributor.sendToServer(new TerminalRequestPayload(menu.containerId, key, amount, acknowledged));
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
     }
 
@@ -393,6 +475,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // The question owns every click while it is up: the grid behind it is deliberately out of reach, so a player
+        // cannot answer it by accident with the click they were about to make (M15 part 2).
+        if (confirming != null) {
+            if (button == 0 && isOverConfirmButton(mouseX, mouseY, true))
+                confirmRequest();
+            else if (button == 0 && isOverConfirmButton(mouseX, mouseY, false))
+                cancelConfirmation();
+            return true;
+        }
         if (button == 1 && searchBox.isMouseOver(mouseX, mouseY)) {
             searchBox.setValue("");
             searchBox.setFocused(true);
@@ -403,7 +494,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (cell >= 0 && button == 0) {
             TerminalAmounts.Click click = hasShiftDown() ? TerminalAmounts.Click.STACK
                     : hasControlDown() ? TerminalAmounts.Click.ALL : TerminalAmounts.Click.SELECTED;
-            if (requestVisible(cell, click))
+            // Alt is the skip and nothing else, so it composes with either amount modifier (M15 review fix).
+            if (requestVisible(cell, click, hasAltDown()))
                 return true;
         }
         int order = orderAt(mouseX, mouseY);
@@ -423,6 +515,14 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // Enter confirms, Escape drops it — and Escape must not close the whole screen while a question is up.
+        if (confirming != null) {
+            if (keyCode == InputConstants.KEY_RETURN || keyCode == InputConstants.KEY_NUMPADENTER)
+                confirmRequest();
+            else if (keyCode == InputConstants.KEY_ESCAPE)
+                cancelConfirmation();
+            return true;
+        }
         if (hoveredSlot != null && minecraft != null && getFocused() == searchBox && isSlotHotkey(keyCode, scanCode)) {
             searchBox.setFocused(false);
             setFocused(null);
@@ -552,11 +652,37 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         graphics.renderItemDecorations(font, stack, x, y, ""); // durability and cooldown, but not the stack's own count
         pose.popPose();
         // An item the aisle can produce but does not hold shows a "+" instead of a "0": it can be ordered, and the
-        // warehouse will make it (M11, ADR-024).
+        // warehouse will make it (M11, ADR-024). An item a stock rule governs shows a plain, dimmed "0", because an
+        // empty cell reads as "nothing here" while the truth is "none, and the warehouse wants some" (M15 part 2).
         if (line.total() > 0L)
             renderCount(graphics, CountFormat.compact(line.total()), x, y, COLOR_TEXT);
         else if (line.producible())
             renderCount(graphics, "+", x, y, COLOR_PRODUCIBLE);
+        else if (line.ruled())
+            renderCount(graphics, "0", x, y, COLOR_RULE);
+        line.rule().ifPresent(status -> renderRuleBadge(graphics, status, x, y));
+    }
+
+    /**
+     * The stock rule badge in the cell's upper left corner — the opposite corner from the amount, so the two never
+     * overlap however wide the number is. The colour says which of the three numbers is biting; the tooltip says it
+     * in words (M15, issue #3).
+     */
+    private void renderRuleBadge(GuiGraphics graphics, StockRuleStatus status, int x, int y) {
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(0, 0, COUNT_SHIFT_Z + 1);
+        graphics.fill(x, y, x + RULE_BADGE_SIZE, y + RULE_BADGE_SIZE, ruleColor(status));
+        pose.popPose();
+    }
+
+    private static int ruleColor(StockRuleStatus status) {
+        return switch (status) {
+            case BELOW_MINIMUM -> COLOR_RULE_BELOW_MINIMUM;
+            case AT_MAXIMUM -> COLOR_RULE_AT_MAXIMUM;
+            case AT_RESERVE -> COLOR_RULE_AT_RESERVE;
+            default -> COLOR_RULE;
+        };
     }
 
     /**
@@ -812,6 +938,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     @Override
     protected void renderForeground(GuiGraphics graphics, int mouseX, int mouseY, float partialTicks) {
         super.renderForeground(graphics, mouseX, mouseY, partialTicks);
+        if (confirming != null) {
+            renderConfirmation(graphics, mouseX, mouseY);
+            return; // no tooltip from the grid underneath: it is not what the player is answering
+        }
         int cell = cellAt(mouseX, mouseY);
         List<StockLine<ItemKey>> visible = visibleEntries();
         if (cell >= 0 && cell < visible.size()) {
@@ -824,8 +954,258 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             graphics.renderComponentTooltip(font, orderTooltip(shownOrders.get(order)), mouseX, mouseY);
     }
 
-    /** The exact amounts behind a cell's compacted number, and what the aisle could make of the item. */
-    private List<Component> itemTooltip(StockLine<ItemKey> line) {
+    // --- the confirmation panel (M15 part 2, issue #3) -------------------------------------------------------------
+
+    /**
+     * The server sent the question a click raised: nothing was requested, and the panel goes up (M15 part 2).
+     * <p>
+     * A question for the item the player has just confirmed means the cost <b>changed</b> between the answer and the
+     * re-check — the server measures every confirmed request again — so the panel says so rather than putting the same
+     * dialog up twice for what looks like no reason.
+     */
+    public void onConfirm(TerminalConfirmPayload payload) {
+        RequestConfirmation<ItemKey> question = payload.question();
+        costChanged = confirmed != null && confirmed.key().equals(question.key());
+        confirmed = null;
+        confirming = question;
+        panel = null;
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
+    }
+
+    /**
+     * What the terminal is currently asking about, as one line of text with every number it names (the dev harness and
+     * the tests of the client side), or {@code null} while it is asking nothing.
+     */
+    @Nullable
+    public Component confirmationQuestion() {
+        RequestConfirmation<ItemKey> question = confirming;
+        if (question == null)
+            return null;
+        Component joined = null;
+        for (Component cost : confirmationCosts(question))
+            joined = joined == null ? cost : joined.copy().append(" ").append(cost);
+        return joined == null ? Component.empty() : joined;
+    }
+
+    /** The question the terminal is asking, for the dev harness and the tests of the client side. */
+    @Nullable
+    public RequestConfirmation<ItemKey> confirmation() {
+        return confirming;
+    }
+
+    /**
+     * Carries the pending request out (the Confirm button and Enter): the same request again, now saying what the player
+     * accepted. The server measures the cost once more before it acts on it, so this is a statement of consent and not
+     * a command.
+     */
+    public void confirmRequest() {
+        RequestConfirmation<ItemKey> question = confirming;
+        confirming = null;
+        costChanged = false;
+        panel = null;
+        if (question == null)
+            return;
+        confirmed = question;
+        send(question.key(), (int) Math.min(Integer.MAX_VALUE, question.amount()), question.acknowledgement());
+    }
+
+    /** Drops the pending request without making it (the Cancel button and Escape). Nothing was ever requested. */
+    public void cancelConfirmation() {
+        if (confirming == null)
+            return;
+        confirming = null;
+        confirmed = null;
+        costChanged = false;
+        panel = null;
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
+    }
+
+    /**
+     * The title, the sentences with the numbers, and the line that says how to skip the question next time. The numbers
+     * are named rather than described: "this takes 10 of the 64 items held in reserve" is a fact a player can act on,
+     * while "are you sure?" alone is not.
+     */
+    private List<Component> confirmationLines(RequestConfirmation<ItemKey> question) {
+        List<Component> lines = new ArrayList<>(4 + question.ingredients().size());
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_TITLE).copy()
+                .withStyle(ChatFormatting.GOLD));
+        if (costChanged)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
+                    .withStyle(ChatFormatting.GOLD));
+        for (Component cost : confirmationCosts(question))
+            lines.add(cost.copy().withStyle(ChatFormatting.WHITE));
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_SKIP).copy()
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        return lines;
+    }
+
+    /**
+     * One sentence per boundary the request crosses, in the order a player meets them: what leaves the reserve of the
+     * item itself, what a production order would spend out of <b>another</b> item's reserve — which only the server can
+     * know, because it alone has the patterns — and what would be stored above the maximum.
+     */
+    private List<Component> confirmationCosts(RequestConfirmation<ItemKey> question) {
+        List<Component> costs = new ArrayList<>(2 + question.ingredients().size());
+        if (question.fromReserve() > 0L)
+            costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_RESERVE,
+                    Component.literal(LangNumberFormat.format(question.fromReserve())),
+                    Component.literal(LangNumberFormat.format(question.reserved()))));
+        for (RequestConfirmation.ReservedIngredient<ItemKey> ingredient : question.ingredients())
+            costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_INGREDIENT,
+                    Component.literal(LangNumberFormat.format(ingredient.fromReserve())),
+                    Component.literal(LangNumberFormat.format(ingredient.reserved())),
+                    ingredient.key().toStack().getHoverName()));
+        if (question.pastMaximum() > 0L)
+            costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_MAXIMUM,
+                    Component.literal(LangNumberFormat.format(question.pastMaximum())),
+                    Component.literal(LangNumberFormat.format(question.made())),
+                    Component.literal(LangNumberFormat.format(question.maximum()))));
+        return costs;
+    }
+
+    /** Widest a line of the panel may be: the window without its margins and the panel's own padding. */
+    private int confirmTextWidth() {
+        return TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN - 2 * CONFIRM_PADDING;
+    }
+
+    /**
+     * The panel as it is drawn: the wrapped rows and every rectangle derived from them.
+     * <p>
+     * It is built <b>once per question</b> and not per frame ({@link #panel}). Before that the geometry helpers called
+     * each other, and one frame rebuilt the text about twenty times and re-wrapped it about ten — thousands of
+     * components, item stacks and resolved item names a second for a dialog whose content changes only when a new
+     * payload arrives (M15 review fix).
+     *
+     * @param rows     the wrapped lines, in order
+     * @param x        left edge of the panel
+     * @param y        top edge of the panel
+     * @param width    outer width
+     * @param height   outer height
+     * @param confirmX left edge of the Confirm button
+     * @param cancelX  left edge of the Cancel button
+     * @param buttonY  top edge of both buttons
+     * @param confirmWidth  width of the Confirm button
+     * @param cancelWidth   width of the Cancel button
+     */
+    private record ConfirmPanel(List<FormattedCharSequence> rows, int x, int y, int width, int height, int confirmX,
+                                int cancelX, int buttonY, int confirmWidth, int cancelWidth) {
+        int buttonX(boolean confirm) {
+            return confirm ? confirmX : cancelX;
+        }
+
+        int buttonWidth(boolean confirm) {
+            return confirm ? confirmWidth : cancelWidth;
+        }
+    }
+
+    /** The panel of {@link #confirming}, built on demand and dropped whenever anything it is built from changes. */
+    @Nullable
+    private ConfirmPanel panel() {
+        RequestConfirmation<ItemKey> question = confirming;
+        if (question == null)
+            return null;
+        if (panel != null)
+            return panel;
+        List<Component> lines = confirmationLines(question);
+        List<FormattedCharSequence> rows = new ArrayList<>();
+        int text = 0;
+        for (Component line : lines) {
+            text = Math.max(text, Math.min(font.width(line), confirmTextWidth()));
+            rows.addAll(font.split(line, confirmTextWidth()));
+        }
+        int confirmWidth = confirmButtonWidth(true);
+        int cancelWidth = confirmButtonWidth(false);
+        int buttons = confirmWidth + cancelWidth + CONFIRM_BUTTON_GAP;
+        int width = Math.max(text, buttons) + 2 * CONFIRM_PADDING;
+        int height = confirmHeight(rows);
+        int x = leftPos + (TerminalMenuLayout.WIDTH - width) / 2;
+        int y = topPos + Math.max(TerminalMenuLayout.MARGIN, (layout.height() - height) / 2);
+        int buttonStart = x + (width - buttons) / 2;
+        panel = new ConfirmPanel(List.copyOf(rows), x, y, width, height, buttonStart,
+                buttonStart + confirmWidth + CONFIRM_BUTTON_GAP, y + height - CONFIRM_PADDING - CONFIRM_BUTTON_HEIGHT,
+                confirmWidth, cancelWidth);
+        return panel;
+    }
+
+    private void renderConfirmation(GuiGraphics graphics, int mouseX, int mouseY) {
+        ConfirmPanel shown = panel();
+        if (shown == null)
+            return;
+        // The whole window is dimmed, not only the grid: while the question is up nothing else on this screen can be
+        // clicked, and the shade is what says so.
+        graphics.fill(0, 0, this.width, this.height, COLOR_CONFIRM_SHADE);
+        graphics.fill(shown.x() - 1, shown.y() - 1, shown.x() + shown.width() + 1, shown.y() + shown.height() + 1,
+                COLOR_CONFIRM_BORDER);
+        graphics.fill(shown.x(), shown.y(), shown.x() + shown.width(), shown.y() + shown.height(), COLOR_CONFIRM_BG);
+        int textY = shown.y() + CONFIRM_PADDING;
+        for (FormattedCharSequence line : shown.rows()) {
+            graphics.drawString(font, line, shown.x() + CONFIRM_PADDING, textY, COLOR_TEXT, false);
+            textY += font.lineHeight + 2;
+        }
+        renderConfirmButton(graphics, shown, mouseX, mouseY, true);
+        renderConfirmButton(graphics, shown, mouseX, mouseY, false);
+    }
+
+    private void renderConfirmButton(GuiGraphics graphics, ConfirmPanel shown, int mouseX, int mouseY,
+            boolean confirm) {
+        Component label = WareworksLang.translateDirect(
+                confirm ? WareworksLang.TERMINAL_CONFIRM_YES : WareworksLang.TERMINAL_CONFIRM_NO);
+        int x = shown.buttonX(confirm);
+        int y = shown.buttonY();
+        int width = shown.buttonWidth(confirm);
+        boolean hovered = isOverConfirmButton(mouseX, mouseY, confirm);
+        graphics.fill(x, y, x + width, y + CONFIRM_BUTTON_HEIGHT,
+                hovered ? COLOR_CONFIRM_BUTTON_HOVER : COLOR_CONFIRM_BUTTON);
+        graphics.drawString(font, label, x + (width - font.width(label)) / 2,
+                y + (CONFIRM_BUTTON_HEIGHT - font.lineHeight) / 2 + 1,
+                confirm ? COLOR_CONFIRM_BORDER : COLOR_TEXT, false);
+    }
+
+    private int confirmHeight(List<FormattedCharSequence> lines) {
+        return 2 * CONFIRM_PADDING + lines.size() * (font.lineHeight + 2) + CONFIRM_BUTTON_HEIGHT + CONFIRM_PADDING;
+    }
+
+    private int confirmButtonWidth(boolean confirm) {
+        Component label = WareworksLang.translateDirect(
+                confirm ? WareworksLang.TERMINAL_CONFIRM_YES : WareworksLang.TERMINAL_CONFIRM_NO);
+        return font.width(label) + 2 * CONFIRM_BUTTON_PADDING;
+    }
+
+    /**
+     * The centre of one of the panel's two buttons, in window coordinates, for the dev harness's real mouse input; -1
+     * while nothing is being asked. It is a method of the screen rather than something the harness reflects together
+     * out of three private ones, because the panel's geometry is built once and kept ({@link ConfirmPanel}).
+     *
+     * @param confirm {@code true} for "Confirm", {@code false} for "Cancel"
+     */
+    public int confirmButtonCenterX(boolean confirm) {
+        ConfirmPanel shown = panel();
+        return shown == null ? -1 : shown.buttonX(confirm) + shown.buttonWidth(confirm) / 2;
+    }
+
+    /** The vertical centre of both buttons; -1 while nothing is being asked ({@link #confirmButtonCenterX}). */
+    public int confirmButtonCenterY() {
+        ConfirmPanel shown = panel();
+        return shown == null ? -1 : shown.buttonY() + CONFIRM_BUTTON_HEIGHT / 2;
+    }
+
+    /** Whether the mouse is over one of the two buttons; false while nothing is being asked. */
+    public boolean isOverConfirmButton(double mouseX, double mouseY, boolean confirm) {
+        ConfirmPanel shown = panel();
+        if (shown == null)
+            return false;
+        int x = shown.buttonX(confirm);
+        int y = shown.buttonY();
+        return mouseX >= x && mouseX < x + shown.buttonWidth(confirm) && mouseY >= y
+                && mouseY < y + CONFIRM_BUTTON_HEIGHT;
+    }
+
+    /**
+     * The exact amounts behind a cell's compacted number, what the aisle could make of the item, and what a stock
+     * rule says about it. Public because it is the only place several of those numbers are ever put into words, and a
+     * tooltip is drawn only while a mouse hovers: the visual harness reads it instead of photographing it.
+     */
+    public List<Component> itemTooltip(StockLine<ItemKey> line) {
         List<Component> tooltip = new ArrayList<>(getTooltipFromItem(minecraft, line.key().toStack()));
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_STORED,
                 LangNumberFormat.format(line.total())).copy().withStyle(ChatFormatting.GRAY));
@@ -834,6 +1214,32 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (line.reserved() > 0)
             tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_RESERVED,
                     LangNumberFormat.format(line.reserved())).copy().withStyle(ChatFormatting.DARK_GRAY));
+        // What a stock rule says about this item, and which of the two reserve cases the player is in (M15, issue #3).
+        // "Available" above is a player's own number — a reserve holds items back from the warehouse's automation, not
+        // from the player standing here — so the reserve is named as a part of it and never subtracted from it.
+        line.rule().ifPresent(status -> {
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_RULE,
+                    WareworksLang.translateDirect(WareworksLang.keeperStatusKey(status))).copy()
+                    .withStyle(status.bites() ? ChatFormatting.GOLD : ChatFormatting.GRAY));
+            if (line.ruleMaximum() >= 0L)
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_RULE_MAXIMUM,
+                        LangNumberFormat.format(line.ruleMaximum())).copy().withStyle(ChatFormatting.AQUA));
+            if (line.ruleReserved() > 0)
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_RULE_RESERVED,
+                        LangNumberFormat.format(line.ruleReserved())).copy().withStyle(ChatFormatting.AQUA));
+            // Both hints are measured against the amount a plain click asks for, which is the one the screen can name
+            // before it is clicked; a shift- or control-click asks for at least as much and therefore reaches at least
+            // as deep. They are hints, not decisions: what a click really costs is measured on the server when it is
+            // made, and named in the confirmation panel (M15 part 2, §3.6.6).
+            int clicked = TerminalAmounts.amountFor(TerminalAmounts.Click.SELECTED, selectedAmount,
+                    line.key().getMaxStackSize(), line.available(), line.producibleAmount(), maxRequestAmount());
+            if (line.fromReserve(clicked) > 0)
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_BELOW_RESERVE).copy()
+                        .withStyle(ChatFormatting.GOLD));
+            // No hint about the maximum here: what a request would leave above a cap is the whole-run surplus of a
+            // pattern, and the size of a run is not something this screen knows. The server asks exactly, before the
+            // request is made (M15 review fix); the cap itself is on the "Stored at most" line above.
+        });
         if (line.producible()) {
             tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PRODUCIBLE).copy()
                     .withStyle(ChatFormatting.AQUA));

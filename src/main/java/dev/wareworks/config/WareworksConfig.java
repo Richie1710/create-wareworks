@@ -4,6 +4,7 @@ import org.apache.commons.lang3.tuple.Pair;
 
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
+import dev.wareworks.core.stock.RestockLimits;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
@@ -142,6 +143,11 @@ public final class WareworksConfig {
         return get(SERVER.maxProductionPatterns);
     }
 
+    /** Rule rows one warehouse stock keeper offers ({@code docs/warehouse-system.md} §3.6, M15). */
+    public static int stockKeeperRows() {
+        return get(SERVER.stockKeeperRows);
+    }
+
     // --- controller ----------------------------------------------------------------------------------------------
 
     public static int snapshotIntervalTicks() {
@@ -184,6 +190,45 @@ public final class WareworksConfig {
         return get(SERVER.productionOrderTimeoutTicks);
     }
 
+    /** How many stock rules one aisle applies at most; the rules beyond it are inert (M15). */
+    public static int maxStockRules() {
+        return get(SERVER.maxStockRules);
+    }
+
+    /** How often a controller judges its stock rules against the current stock (M15). */
+    public static int stockRuleIntervalTicks() {
+        return get(SERVER.stockRuleIntervalTicks);
+    }
+
+    /** Automatic restock orders one aisle may run at once; 0 switches automatic restocking off (M15 part 2). */
+    public static int maxRestockOrders() {
+        return get(SERVER.maxRestockOrders);
+    }
+
+    /** Automatic restock orders one stock rule may have open at once (M15 part 2). */
+    public static int maxRestockOrdersPerRule() {
+        return get(SERVER.maxRestockOrdersPerRule);
+    }
+
+    /** The largest amount of the product one automatic restock order may ask for (M15 part 2). */
+    public static int maxRestockOrderAmount() {
+        return get(SERVER.maxRestockOrderAmount);
+    }
+
+    /**
+     * The largest number of ingredient items one automatic restock order may spend (M15 part 2) — the bound that
+     * really limits what a broken machine can swallow before the safety stop fires.
+     */
+    public static int maxRestockIngredientItems() {
+        return get(SERVER.maxRestockIngredientItems);
+    }
+
+    /** The bounds automatic restocking obeys, as one value for the planner (M15 part 2). */
+    public static RestockLimits restockLimits() {
+        return new RestockLimits(maxRestockOrdersPerRule(), maxRestockOrders(), maxRestockOrderAmount(),
+                maxRestockIngredientItems());
+    }
+
     /** The config values. Read them through the static getters of {@link WareworksConfig}. */
     public static final class Server {
         public final ModConfigSpec.IntValue maxAisleLength;
@@ -206,6 +251,7 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxTerminalStockEntries;
         public final ModConfigSpec.IntValue productionBufferSlots;
         public final ModConfigSpec.IntValue maxProductionPatterns;
+        public final ModConfigSpec.IntValue stockKeeperRows;
 
         public final ModConfigSpec.IntValue snapshotIntervalTicks;
         public final ModConfigSpec.IntValue dispatchIntervalTicks;
@@ -217,6 +263,12 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxSnapshotsPerTick;
         public final ModConfigSpec.IntValue maxProductionOrders;
         public final ModConfigSpec.IntValue productionOrderTimeoutTicks;
+        public final ModConfigSpec.IntValue maxStockRules;
+        public final ModConfigSpec.IntValue stockRuleIntervalTicks;
+        public final ModConfigSpec.IntValue maxRestockOrders;
+        public final ModConfigSpec.IntValue maxRestockOrdersPerRule;
+        public final ModConfigSpec.IntValue maxRestockOrderAmount;
+        public final ModConfigSpec.IntValue maxRestockIngredientItems;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -301,10 +353,20 @@ public final class WareworksConfig {
                             "A pattern is a 3x3 grid of ingredient slots plus one result, like a crafting recipe. "
                                     + "Wareworks never crafts it; it only delivers the ingredients here and waits for "
                                     + "the result to come back through a warehouse input.",
-                            "Lowering this hides the patterns in the dropped slots; it never deletes them, and raising "
-                                    + "the value again brings them back.")
+                            "Applies to stations placed from now on. A station that already holds more patterns keeps "
+                                    + "them all, so lowering this never loses a pattern.")
                     .worldRestart()
                     .defineInRange("maxProductionPatterns", 4, 1, 8);
+            stockKeeperRows = builder
+                    .comment("Rule rows of a warehouse stock keeper: how many different items one keeper governs.",
+                            "A row is one item plus a minimum, a maximum and a reserve; an aisle may hold several "
+                                    + "keepers, and their rows are applied in the order the blocks stand in the aisle.",
+                            "Applies to keepers placed from now on. A keeper that already holds more rows keeps them "
+                                    + "all, so lowering this never loses a rule and never switches one off; use "
+                                    + "maxStockRules to limit how many rules an aisle applies.",
+                            "The screen shows six rows without scrolling, so the default costs no scrollbar.")
+                    .worldRestart()
+                    .defineInRange("stockKeeperRows", 6, 1, 16);
             builder.pop();
 
             builder.comment("Warehouse controller").push("controller");
@@ -349,6 +411,51 @@ public final class WareworksConfig {
                                     + "times out. A timed-out order releases what it still promised; ingredients your "
                                     + "machine has already taken are not recovered.")
                     .defineInRange("productionOrderTimeoutTicks", 6000, 200, 72000);
+            maxStockRules = builder
+                    .comment("Maximum number of stock rules one aisle applies, over all its warehouse stock keepers.",
+                            "Rules beyond it are inert and say so; lowering the value is reversible, because nothing "
+                                    + "is ever written back into a keeper.")
+                    .defineInRange("maxStockRules", 32, 1, 256);
+            stockRuleIntervalTicks = builder
+                    .comment("[in Ticks] How often a controller judges its stock rules against the current stock.",
+                            "This drives the keepers' lamps and their comparator output; the maximum and the "
+                                    + "reserve are applied when a job is planned or a request is made, not on this "
+                                    + "interval.",
+                            "It is also how often the warehouse may start an automatic restock order - at most one per "
+                                    + "pass - so a large value makes restocking slow even when the ingredients are "
+                                    + "there.")
+                    .defineInRange("stockRuleIntervalTicks", 20, 5, 1200);
+            maxRestockOrders = builder
+                    .comment("Maximum number of production orders a warehouse may start BY ITSELF to refill the "
+                            + "minimums of its stock rules.",
+                            "Set it to 0 to switch automatic restocking off completely: your rules then still cap "
+                                    + "storing and still hold their reserve back, the warehouse just never orders "
+                                    + "anything on its own.",
+                            "These orders also count against maxProductionOrders, so the smaller of the two wins.")
+                    .defineInRange("maxRestockOrders", 4, 0, 64);
+            maxRestockOrdersPerRule = builder
+                    .comment("Maximum number of automatic restock orders ONE stock rule may have open at a time.",
+                            "At the default of 1 a rule waits for its own order before it asks for more, which is "
+                                    + "what keeps a slow machine from collecting a queue of identical runs. 0 "
+                                    + "switches automatic restocking off, like maxRestockOrders.")
+                    .defineInRange("maxRestockOrdersPerRule", 1, 0, 16);
+            maxRestockOrderAmount = builder
+                    .comment("The largest amount of the PRODUCT one automatic restock order may ask for.",
+                            "A rule that is short by more than this is refilled in several orders instead of one, so "
+                                    + "a minimum of 100000 cannot turn into a single order with hundreds of crane "
+                                    + "trips. An order never asks for more than its rule's own maximum leaves room "
+                                    + "for, and it makes whole runs only, so a shortfall smaller than one run is "
+                                    + "reported instead of overshooting the maximum.")
+                    .defineInRange("maxRestockOrderAmount", 512, 1, 65536);
+            maxRestockIngredientItems = builder
+                    .comment("The largest number of INGREDIENT items one automatic restock order may spend.",
+                            "This is what really bounds what a broken machine can swallow before the safety stop "
+                                    + "fires: the amount above counts the product, and a pattern of nine ingots to "
+                                    + "one block would turn 512 blocks into 4608 ingots.",
+                            "One run is always allowed, even when that single run costs more than this: a pattern "
+                                    + "cannot be cut in half. The bound is about repeats, and "
+                                    + "maxRestockOrdersPerRule then sequences a large shortfall one order at a time.")
+                    .defineInRange("maxRestockIngredientItems", 64, 1, 65536);
             builder.pop();
         }
     }

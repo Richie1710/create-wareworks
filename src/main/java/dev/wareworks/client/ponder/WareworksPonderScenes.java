@@ -6,6 +6,7 @@ import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.client.ponder.scenes.CraneScenes;
 import dev.wareworks.client.ponder.scenes.ProductionScenes;
+import dev.wareworks.client.ponder.scenes.StockRuleScenes;
 import dev.wareworks.client.ponder.scenes.TerminalScenes;
 import dev.wareworks.client.ponder.scenes.WarehouseScenes;
 import dev.wareworks.registry.WareworksBlocks;
@@ -39,6 +40,7 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production</td></tr>
+ *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking</td></tr>
  * </table>
  */
 public final class WareworksPonderScenes {
@@ -79,6 +81,14 @@ public final class WareworksPonderScenes {
 
         scenes.forComponents(WareworksBlocks.WAREHOUSE_PRODUCTION)
                 .addStoryBoard("warehouse/production", ProductionScenes::production,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
+                .addStoryBoard("warehouse/stock_rules", StockRuleScenes::stockRules,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
+                .addStoryBoard("warehouse/restocking", StockRuleScenes::restocking,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

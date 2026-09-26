@@ -5,9 +5,11 @@ import com.tterrag.registrate.providers.RegistrateBlockstateProvider;
 import com.tterrag.registrate.util.nullness.NonNullBiConsumer;
 
 import dev.wareworks.content.station.TerminalDisplaySide;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
+import net.neoforged.neoforge.client.model.generators.ConfiguredModel;
 import net.neoforged.neoforge.client.model.generators.ModelFile;
 import net.neoforged.neoforge.client.model.generators.MultiPartBlockStateBuilder;
 
@@ -62,6 +64,31 @@ public final class WareworksBlockStateGen {
                     }
                 }
             }
+        };
+    }
+
+    /**
+     * The warehouse stock keeper's blockstate ({@code docs/warehouse-system.md} §3.6, M15): the hand-made
+     * {@code block} model turned onto {@code FACING}, with {@code block_lit} in its place while the lamp burns.
+     * <p>
+     * Create's {@code BlockStateGen.horizontalBlockProvider} would give every {@code LIT} value the same model — which
+     * is right for the warehouse output, whose {@code POWERED} is only a stored edge, and wrong here, where the lamp
+     * is the whole point of the property.
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            stockKeeperBlockProvider() {
+        return (context, provider) -> {
+            String folder = "block/" + context.getName() + "/";
+            ModelFile dark = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+            ModelFile lit = provider.models().getExistingFile(provider.modLoc(folder + "block_lit"));
+            ModelFile paused = provider.models().getExistingFile(provider.modLoc(folder + "block_paused"));
+            provider.getVariantBuilder(context.getEntry()).forAllStates(state -> ConfiguredModel.builder()
+                    // The safety stop outranks the ordinary lamp, exactly as it does in every other surface: a paused
+                    // rule is the one state a player has to act on (M15 part 2).
+                    .modelFile(state.getValue(WarehouseStockKeeperBlock.PAUSED) ? paused
+                            : state.getValue(WarehouseStockKeeperBlock.LIT) ? lit : dark)
+                    .rotationY(rotationOnto(state.getValue(WarehouseStockKeeperBlock.FACING)))
+                    .build());
         };
     }
 

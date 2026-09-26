@@ -293,6 +293,14 @@ class AisleMembershipTest {
         assertFalse(LocationKind.OUTPUT.facesAwayFromAisle());
         assertFalse(LocationKind.STORAGE.isStation());
         assertTrue(LocationKind.OUTPUT.isStation());
+        // A stock keeper faces the aisle like a station but holds no items, so it is no station and no delivery
+        // target: a crane can never have anything to do there (M15).
+        assertFalse(LocationKind.KEEPER.facesAwayFromAisle());
+        assertFalse(LocationKind.KEEPER.isStation());
+        assertFalse(LocationKind.KEEPER.isDeliveryTarget());
+        assertEquals(Optional.of(LocationKind.KEEPER), LocationKind.byName("KEEPER"));
+        assertEquals(RackProbe.KEEPER, RackProbe.member(LocationKind.KEEPER));
+        assertEquals(Optional.of(LocationKind.KEEPER), RackProbe.KEEPER.kind());
         for (LocationKind kind : LocationKind.values()) {
             assertEquals(Optional.of(kind), LocationKind.byName(kind.name()));
             assertEquals(Optional.of(kind), RackProbe.member(kind).kind());

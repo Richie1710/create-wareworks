@@ -23,7 +23,16 @@ public enum LocationKind {
      * never the destination of a retrieval request, and retrieve leftovers must never be dumped into one, which is
      * exactly what reusing {@code OUTPUT} would allow (ADR-024).
      */
-    PRODUCTION(false);
+    PRODUCTION(false),
+    /**
+     * A warehouse stock keeper: the aisle member that holds the stock rules of the warehouse (M15, issue #3).
+     * <p>
+     * It is a member so that a player builds it into a rack like every other station and so that a controller finds it
+     * through the ordinary membership probe, but it is <b>not</b> a station: it holds no items, exposes no item
+     * capability, is never the source or the target of a transport job and is no mechanical arm target. The only thing
+     * a controller reads from it is its list of rules.
+     */
+    KEEPER(false);
 
     private final boolean facesAwayFromAisle;
 
@@ -39,9 +48,15 @@ public enum LocationKind {
         return facesAwayFromAisle;
     }
 
-    /** Whether this kind is a station (input, output or production). */
+    /**
+     * Whether this kind is a <b>station</b>: a member with a buffer a crane fills or empties (input, output or
+     * production station).
+     * <p>
+     * Deliberately no longer "everything that is not storage": a {@link #KEEPER} is a member without any buffer, so a
+     * crane never has anything to do there (M15).
+     */
     public boolean isStation() {
-        return this != STORAGE;
+        return this == INPUT || this == OUTPUT || this == PRODUCTION;
     }
 
     /**

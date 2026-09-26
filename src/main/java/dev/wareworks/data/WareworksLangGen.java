@@ -8,6 +8,10 @@ import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.stock.RestockOutcome;
+import dev.wareworks.core.stock.StockRuleAdjustment;
+import dev.wareworks.core.stock.StockRulePause;
+import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import dev.wareworks.util.WareworksLang;
@@ -82,6 +86,26 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_MISSING), "Ingredients still to fetch: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_AWAITED), "Waiting for results: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_STATIONS), "Production stations: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STOCK_RULES), "Stock rules: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_BELOW_MINIMUM), "Below minimum: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_AT_MAXIMUM), "At maximum: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_PAUSED), "Paused after a lost batch: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_STOCK_KEEPER), "Warehouse Stock Keeper:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_RULES), "Rules: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_NO_RULES), "No rules set");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_NO_WAREHOUSE), "Not part of a warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_BELOW_MINIMUM), "Below minimum: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_AT_MAXIMUM), "At maximum: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_AT_RESERVE), "Down to the reserve: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_ORDERING), "Being made now: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_WAITING),
+                "Waiting for ingredients: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_PAUSED),
+                "Paused after a lost batch: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_PAUSED_HINT),
+                "Check the machine, then open the rule and click its mark to resume");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_WITHOUT_EFFECT), "Without effect: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_SATISFIED), "Everything within its limits");
         for (ProductionOrderState state : ProductionOrderState.values()) {
             lang.accept(WareworksLang.key(state.langKey()), switch (state) {
                 case WAITING_FOR_INGREDIENTS -> "waiting for ingredients";
@@ -143,6 +167,7 @@ public final class WareworksLangGen {
             lang.accept(WareworksLang.key(WareworksLang.noJobReasonKey(reason)), switch (reason) {
                 case WAREHOUSE_FULL -> "no storage location accepts the input items";
                 case NO_MATCHING_FILTER -> "no storage location has a filter that accepts the input items";
+                case AT_MAXIMUM -> "a stock rule for the input items is at its maximum";
                 case OUTPUT_FULL -> "an output is full";
                 case PRODUCTION_FULL -> "a production station cannot take more ingredients";
                 case NOT_IN_STOCK -> "a requested item is not in stock";
@@ -162,7 +187,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_ONLY_IN_STOCK), "Showing only what is available");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SHOW_ALL), "Showing everything the aisle holds");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_AMOUNT_HINT),
-                "Click an item for this amount, Shift for a stack, Ctrl for everything");
+                "Click an item for this amount, Shift for a stack, Ctrl for everything, Alt to skip the question");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_EMPTY), "The aisle holds nothing");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NO_MATCH), "No item matches the search");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LOADING), "Reading the stock...");
@@ -177,6 +202,23 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_STORED), "In stock: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_AVAILABLE), "Available: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_RESERVED), "Promised to other requests: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_RULE), "Stock rule: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_RULE_RESERVED), "Kept back from automation: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_RULE_MAXIMUM), "Stored at most: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_BELOW_RESERVE), "Your request goes below the reserve");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_TITLE), "Are you sure?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_RESERVE),
+                "This takes %1$s of the %2$s items held in reserve.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_MAXIMUM),
+                "%1$s of the %2$s items this makes cannot be stored: the maximum is %3$s.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_INGREDIENT),
+                "Making it takes %1$s of the %2$s reserved %3$s.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_CHANGED),
+                "The warehouse has changed since you were asked:");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_YES), "Confirm");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_NO), "Cancel");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_SKIP),
+                "Hold Alt while clicking to skip this question");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_BUFFER), "Delivered here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NOT_SHOWN), "+%1$s not shown");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_PATTERNS), "Patterns");
@@ -193,6 +235,87 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_CANCEL_HINT), "Click to give up on this order");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_INGREDIENTS_LOST),
                 "Ingredients your machine already took are not recovered");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_RULES), "Rules");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_EMPTY_ROW), "Empty row");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM), "Minimum");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_MAXIMUM), "Maximum");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_RESERVE), "Reserve");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM_SHORT), "Min");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_MAXIMUM_SHORT), "Max");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_RESERVE_SHORT), "Res");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM_HINT),
+                "How many the warehouse tries to keep: below it the comparator calls for the item");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_MAXIMUM_HINT),
+                "The most the warehouse stores: above it the crane stops accepting the item");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_RESERVE_HINT),
+                "The last items, kept from redstone requests; you can still take them at a terminal");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_NUMBER_HINT),
+                "Scroll to change, Shift for whole stacks, Right-click to switch it off");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_ITEM_HINT),
+                "Click with an item to set it, with an empty hand to clear the row");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_HINT), "Click an item in, scroll a number");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_NO_WAREHOUSE), "Not part of a warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_LIMITS),
+                "Minimum %1$s \u00b7 Maximum %2$s \u00b7 Reserve %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_IN_STOCK), "In stock: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_AVAILABLE), "Available: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_HELD_BACK), "Held back from automation: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_SHORTFALL), "Short of the minimum: %1$s");
+        for (StockRuleStatus status : StockRuleStatus.values()) {
+            lang.accept(WareworksLang.key(WareworksLang.keeperStatusKey(status)), switch (status) {
+                case NO_ITEM -> "No item set";
+                case NO_WAREHOUSE -> "Not part of a warehouse";
+                case INERT -> "Without effect: this aisle already applies its limit of rules";
+                case SHADOWED -> "Without effect: an earlier rule already governs this item";
+                case NO_LIMITS -> "No limit set yet";
+                case BELOW_MINIMUM -> "Below the minimum";
+                case AT_MAXIMUM -> "At the maximum: no more is stored";
+                case AT_RESERVE -> "Down to the reserve: automation gets no more";
+                case SATISFIED -> "Within its limits";
+                case ORDERING -> "Below the minimum: the warehouse is making more";
+                case WAITING_FOR_INGREDIENTS -> "Below the minimum: waiting for ingredients";
+                case PAUSED -> "Paused: an order lost its ingredients";
+            });
+        }
+        for (RestockOutcome outcome : RestockOutcome.values()) {
+            lang.accept(WareworksLang.key(WareworksLang.keeperRestockKey(outcome)), switch (outcome) {
+                case NOT_GOVERNING -> "This rule applies nothing";
+                case PAUSED -> "Paused: the warehouse stopped ordering this";
+                case SATISFIED -> "Enough in stock";
+                case DISABLED -> "Automatic restocking is switched off";
+                case ORDER_OPEN -> "An order for this is already running";
+                case ORDERS_BUSY -> "Too many orders are running; this one waits";
+                case NO_PATTERN -> "No production station here makes this";
+                case NO_ROOM -> "A whole run would go past the maximum";
+                case WAITING_FOR_INGREDIENTS -> "The ingredients are not available";
+                case DEFERRED -> "Will be ordered next";
+                case ORDERED -> "Ordered from a production station";
+            });
+        }
+        for (StockRulePause.Cause cause : StockRulePause.Cause.values()) {
+            lang.accept(WareworksLang.key(WareworksLang.keeperPausedKey(cause)), switch (cause) {
+                case TIMED_OUT -> "the last order timed out";
+                case CANCELLED -> "the last order was given up";
+            });
+        }
+        // Label-and-number rather than "%1$s ingredient items", which reads "1 ingredient items" at the count that
+        // fires the safety stop most often (M15 DoD). The same shape as the goggle lines "Below minimum: N".
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_PAUSED_LOST),
+                "Ingredient items not recovered: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_RESUME_HINT),
+                "Click the mark to order again, once the machine works");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_PAUSED_LINE),
+                "Paused: %1$s. Click the mark to resume");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_MISSING_INGREDIENT), "Missing: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_RESUMED), "The warehouse orders this item again");
+        for (StockRuleAdjustment adjustment : StockRuleAdjustment.values()) {
+            lang.accept(WareworksLang.key(WareworksLang.keeperAdjustmentKey(adjustment)), switch (adjustment) {
+                case NONE -> "Stored";
+                case VALUE_CLAMPED -> "Number out of range, corrected";
+                case MAXIMUM_RAISED_TO_MINIMUM -> "Maximum raised to the minimum";
+                case RESERVE_CLAMPED_TO_MAXIMUM -> "Reserve lowered to the maximum";
+            });
+        }
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PRODUCIBLE), "Can be produced here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PRODUCIBLE_AMOUNT), "Can be made now: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PRODUCTION), "Production");
@@ -213,6 +336,9 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS), "Locations: %1$s / %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES), "Item types: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEMS), "Items: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_RULES),
+                "Rules: %1$s · below min %2$s · at max %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_RULES_PAUSED), "Rules paused: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No aisle");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");
@@ -238,6 +364,7 @@ public final class WareworksLangGen {
                 case PRODUCTION_BUSY -> "too many production orders are running; wait for one or give one up";
                 case OUT_OF_REACH -> "you are too far away from the terminal";
                 case INVALID_AMOUNT -> "the requested amount must be at least 1";
+                case RESERVED -> "a stock rule keeps the rest of it in reserve";
             });
         }
 
@@ -319,6 +446,36 @@ public final class WareworksLangGen {
                 "When looked at with Goggles",
                 "Shows its _address_, its _patterns_, the running _production orders_ with their _state_ and the "
                         + "_buffered items_.");
+
+        tooltip(lang, "block.wareworks.warehouse_stock_keeper",
+                "Holds the _stock rules_ of a warehouse _aisle_: one _item_ per row plus a _minimum_, a _maximum_ and "
+                        + "a _reserve_. The three numbers govern three different directions, and an aisle may hold "
+                        + "several keepers.",
+                "When placed",
+                "The _panel_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle, like every "
+                        + "other station.",
+                "When setting a rule",
+                "_Right-Click_ with an _empty hand_ to open it. Click a _row_ with an item to set what it governs, and "
+                        + "_scroll_ on one of its three numbers to change it (_Shift_ for whole stacks, _Right-Click_ "
+                        + "to switch it off). Nothing is used up: a row's item is only a name.",
+                "Minimum: what comes in",
+                "The warehouse _tries to keep_ this many. While it holds fewer, the comparator on this block calls for "
+                        + "the item, so a _farm_ or a hand-built line runs exactly as long as it is needed.",
+                "Minimum: the warehouse restocks",
+                "If a _warehouse production_ of the same aisle has a _pattern_ for the item, the warehouse _orders it "
+                        + "by itself_ while it is below the minimum — never spending what a _reserve_ protects. If a "
+                        + "machine _swallows_ a batch and nothing comes back, that rule _stops ordering_ and waits for "
+                        + "you: open it and click the rule's _mark_ to let it try again.",
+                "Maximum: what may be stored",
+                "The warehouse stores _no more_ than this. Above it the _stacker crane_ stops accepting the item and "
+                        + "a _warehouse input_ holding it _backs up on purpose_ — that is the rule working, not a jam.",
+                "Reserve: what may go out",
+                "The last items are kept from the warehouse's own _automation_: a _redstone request_ at a _warehouse "
+                        + "output_ stops at them. _You_ are not stopped — a request at a _terminal_ is served down to "
+                        + "the last item.",
+                "When looked at with Goggles",
+                "Shows its _address_, how many _rules_ it holds and how many of them are _below their minimum_, _at "
+                        + "their maximum_, _down to their reserve_ or _paused_ after a lost batch.");
 
         tooltip(lang, "block.wareworks.warehouse_controller",
                 "Manages one warehouse _aisle_: it gives the aisle its _letter_, finds its _storage locations_ and "

@@ -1,11 +1,13 @@
 package dev.wareworks.content.station;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.UUID;
 
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
@@ -26,6 +28,13 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.production.ProductionOrder;
+import dev.wareworks.core.stock.StockAccess;
+import dev.wareworks.core.stock.StockLevels;
+import dev.wareworks.core.stock.StockRule;
+import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.stock.StockRules;
+import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.core.BlockPos;
@@ -201,52 +210,89 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // how many of each could be made right now (M11, ADR-024). The second number is the server's own, because a
         // client knows neither the patterns nor what their ingredients are already promised to.
         Map<ItemKey, Long> producible = controller.producibleAmounts();
+        // The aisle's stock rules (M15, issue #3) and the levels they are judged against. The levels are read at most
+        // once per item type and only for an item a rule really governs; the open requests are already collected
+        // above, so no key costs a second pass over the queue.
+        StockRules<ItemKey> rules = controller.stockRules();
+        // The levels a rule is judged against, read at most once per item type and only for an item a rule really
+        // governs: the open requests are already collected above, so no key costs a second pass over the queue.
+        Map<ItemKey, StockLevels> levelCache = new HashMap<>();
+        Function<ItemKey, StockLevels> levels = key -> levelCache.computeIfAbsent(key,
+                item -> controller.stockLevelsOf(item, promised.getOrDefault(item, 0L)));
         List<TerminalStockEntry> entries = new ArrayList<>(stock.distinctKeys());
         for (ItemKey key : stock.keys()) {
             long total = stock.count(key);
             if (total > 0)
-                entries.add(new TerminalStockEntry(key, total,
+                entries.add(entry(controller, rules, levels, key, total,
                         reservations.availableStock(key, total, promised.getOrDefault(key, 0L)),
                         producible.containsKey(key), producible.getOrDefault(key, 0L)));
         }
-        // Items the aisle can make but does not hold. They are offered at zero stock on purpose (M11, ADR-024):
-        // ordering one starts a production order, which is the whole point of a production station.
-        List<TerminalStockEntry> offers = new ArrayList<>(producible.size());
+        // Rows that exist although the aisle holds none of the item, and that would each become unreachable without
+        // one: what a production station can make (M11, ADR-024) — ordering it starts a production order — and what a
+        // stock rule governs (M15) — a warehouse that is calling for an item it has run out of has to say so where a
+        // player looks, and a row that has vanished can never be requested again.
+        List<TerminalStockEntry> pinned = new ArrayList<>(producible.size() + rules.governedKeys().size());
         for (Map.Entry<ItemKey, Long> entry : producible.entrySet()) {
             if (stock.count(entry.getKey()) <= 0)
-                offers.add(new TerminalStockEntry(entry.getKey(), 0L, 0L, true, entry.getValue()));
+                pinned.add(entry(controller, rules, levels, entry.getKey(), 0L, 0L, true, entry.getValue()));
         }
-        return window(entries, offers);
+        for (ItemKey key : rules.governedKeys()) {
+            if (stock.count(key) <= 0 && !producible.containsKey(key))
+                pinned.add(entry(controller, rules, levels, key, 0L, 0L, false, 0L));
+        }
+        return window(entries, pinned);
+    }
+
+    /**
+     * One snapshot entry with what a stock rule says about its item added to it (M15, issue #3).
+     * <p>
+     * Nothing is read per key that is not O(1): an aisle without stock keepers — and every unruled item of one with
+     * them — costs exactly what it cost before M15.
+     */
+    private static TerminalStockEntry entry(WarehouseControllerBlockEntity controller, StockRules<ItemKey> rules,
+            Function<ItemKey, StockLevels> levels, ItemKey key, long total, long available, boolean producible,
+            long producibleAmount) {
+        Optional<StockRuleStatus> rule = rules.governingStatusOf(key, levels);
+        if (rule.isEmpty())
+            return new TerminalStockEntry(key, total, available, producible, producibleAmount);
+        // Refined by what automatic restocking is doing about the item, so a row can say "being made now" and
+        // "paused" as well as what the three numbers say (M15 part 2).
+        return new TerminalStockEntry(key, total, available, producible, producibleAmount,
+                rule.map(status -> controller.refineStockRuleStatus(key, status)),
+                rules.heldBack(key, available),
+                rules.ruleFor(key).map(StockRule::maximum).orElse(StockRule.UNSET));
     }
 
     /**
      * The reported window: the stocked entries in {@link TerminalStockEntry#ORDER}, cut to
-     * {@code maxTerminalStockEntries}, with the producible-only offers <b>reserved from that cut</b>.
+     * {@code maxTerminalStockEntries}, with the rows that have no stock of their own — producible offers and ruled
+     * items — <b>reserved from that cut</b>.
      * <p>
-     * An offer has no stock, so {@code ORDER} — which leads with the stored amount, for the reasons given there —
-     * sorts it behind every stocked entry, and a plain cut would drop the offers first. On an aisle with more item
-     * types than the cap the terminal would then silently offer nothing it can make: no tinted cell, no "Can be
-     * produced here", nothing to ctrl-click, and no message saying why (M11 review fix). The offers are bounded on
-     * their own by the aisle's patterns and never take more than half the window, so many patterns cannot push the
-     * stock off the screen either.
+     * Such a row has no stock, so {@code ORDER} — which leads with the stored amount, for the reasons given there —
+     * sorts it behind every stocked entry, and a plain cut would drop exactly those rows first. On an aisle with more
+     * item types than the cap the terminal would then silently offer nothing it can make: no tinted cell, no "Can be
+     * produced here", nothing to ctrl-click, and no message saying why (M11 review fix) — and a reserve on an item the
+     * warehouse has just run out of would delete the row that explains it (M15). Both groups are bounded on their own
+     * (by the aisle's patterns and by {@code maxStockRules}) and together never take more than half the window, so
+     * neither can push the stock off the screen.
      */
-    private static List<TerminalStockEntry> window(List<TerminalStockEntry> stocked, List<TerminalStockEntry> offers) {
+    private static List<TerminalStockEntry> window(List<TerminalStockEntry> stocked, List<TerminalStockEntry> pinned) {
         int max = Math.max(1, WareworksConfig.maxTerminalStockEntries());
         stocked.sort(TerminalStockEntry.ORDER);
-        offers.sort(TerminalStockEntry.ORDER);
-        int offerRoom = Math.min(offers.size(), Math.max(1, max / 2));
-        int stockedRoom = Math.max(0, max - offerRoom);
-        List<TerminalStockEntry> reported = new ArrayList<>(Math.min(max, stocked.size() + offers.size()));
+        pinned.sort(TerminalStockEntry.ORDER);
+        int pinnedRoom = Math.min(pinned.size(), Math.max(1, max / 2));
+        int stockedRoom = Math.max(0, max - pinnedRoom);
+        List<TerminalStockEntry> reported = new ArrayList<>(Math.min(max, stocked.size() + pinned.size()));
         reported.addAll(stocked.subList(0, Math.min(stocked.size(), stockedRoom)));
-        reported.addAll(offers.subList(0, offerRoom));
+        reported.addAll(pinned.subList(0, pinnedRoom));
         reported.sort(TerminalStockEntry.ORDER);
         return List.copyOf(reported);
     }
 
     /**
-     * Server: whether {@code key} is still worth a row on a screen — the aisle holds it, or a production station can
-     * make it (M11, ADR-024) — whether or not it is inside the last {@link #stockSnapshot()}. The menu asks this
-     * before it tells a screen that an item type is gone.
+     * Server: whether {@code key} is still worth a row on a screen — the aisle holds it, a production station can make
+     * it (M11, ADR-024), or a stock rule governs it (M15) — whether or not it is inside the last
+     * {@link #stockSnapshot()}. The menu asks this before it tells a screen that an item type is gone.
      */
     public boolean holdsInStock(ItemKey key) {
         return holdsInStock(key, producibleKeys());
@@ -261,11 +307,20 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         return controller().map(WarehouseControllerBlockEntity::producibleKeys).orElse(Set.of());
     }
 
-    /** {@link #holdsInStock(ItemKey)} with the aisle's producible keys already resolved ({@link #producibleKeys()}). */
+    /**
+     * {@link #holdsInStock(ItemKey)} with the aisle's producible keys already resolved ({@link #producibleKeys()}).
+     * <p>
+     * A key a stock rule governs answers {@code true} at zero stock, for the same reason a producible one does: its
+     * row is pinned into the snapshot, so reporting it as gone would delete a row the server keeps sending and leave
+     * a reserved or capped item unreachable at the screen (M15).
+     */
     public boolean holdsInStock(ItemKey key, Set<ItemKey> producible) {
         if (key == null)
             return false;
-        return producible.contains(key) || controller().map(controller -> controller.countOf(key) > 0).orElse(false);
+        if (producible.contains(key))
+            return true;
+        return controller().map(controller -> controller.countOf(key) > 0 || controller.stockRules().governsKey(key))
+                .orElse(false);
     }
 
     /**
@@ -404,33 +459,77 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * for {@code maxTerminalRequestAmount}; delivered items free room again) — the same set a redstone request at a
      * warehouse output can get, which bounds its own merged request by its filter amount.
      *
+     * <p>
+     * <b>This overload accepts every boundary the request crosses</b>, exactly as a ctrl-click does
+     * ({@link RequestAcknowledgement#ANY}), so it can never end in a question and keeps the meaning it had before M15
+     * part 2. It is for callers with nobody to ask — the dev harness and the GameTests of the request itself. The
+     * screen's path is {@link #requestFromTerminal(Player, ItemKey, int, RequestAcknowledgement)}.
+     *
      * @return the accepted request with the amount <b>this call</b> granted ({@code RequestResult#granted()}) and what
      *         the request waits for now ({@code pending()}), or the reason it was refused
      */
     public RequestResult requestFromTerminal(Player player, ItemKey key, int amount) {
+        return requestFromTerminal(player, key, amount, RequestAcknowledgement.ANY).result()
+                .orElseThrow(() -> new IllegalStateException("an acknowledged request is never asked about"));
+    }
+
+    /**
+     * Server: {@link #requestFromTerminal(Player, ItemKey, int)} with what the player has already agreed to pay for it
+     * ({@code docs/warehouse-system.md} §3.6.6, M15 part 2, issue #3).
+     * <p>
+     * <b>The server decides whether a question is needed</b>, and it decides it here rather than on the screen: a
+     * client knows neither the aisle's production patterns nor what their ingredients are promised to, so it could
+     * never work out that a click for four planks spends a log a rule protects. The cost is measured
+     * ({@code WarehouseControllerBlockEntity#confirmationFor}) and compared with {@code acknowledged}; a cost the
+     * player has not accepted leaves this method with <b>nothing requested at all</b> and the question as the answer.
+     * <p>
+     * <b>A confirmed request is measured again.</b> The acknowledgement carries numbers, not a flag
+     * ({@link RequestAcknowledgement}), so a warehouse that moved between the question and the answer — a crane that
+     * promised the items, a reserve somebody raised, a pattern somebody rewrote — is asked about a second time instead
+     * of being handed an old "yes". Nothing is trusted from the client but the consent itself, and consent is not
+     * permission: a reserve never holds anything back from a player anyway, which is why a ctrl-click may send
+     * {@link RequestAcknowledgement#ANY} and skip the question the way the design asks.
+     * <p>
+     * The question is asked <b>after</b> the cheap validations (reach, amount, aisle, item) and before anything is
+     * promised, so an out-of-reach or unstocked click still gets its plain refusal rather than a dialog.
+     *
+     * @param acknowledged what the player accepted, {@link RequestAcknowledgement#NONE} for a plain click
+     * @return the resolved request, or the question the terminal asks first ({@link TerminalRequestOutcome})
+     */
+    public TerminalRequestOutcome requestFromTerminal(Player player, ItemKey key, int amount,
+            RequestAcknowledgement acknowledged) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(acknowledged, "acknowledged");
         if (level == null || level.isClientSide || isRemoved())
-            return RequestResult.rejected(RequestRejection.NO_CONTROLLER);
+            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
         // Player-scoped refusals are answered, not remembered: they say nothing about this terminal (see above).
         if (!canPlayerUse(player))
-            return RequestResult.rejected(RequestRejection.OUT_OF_REACH);
+            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.OUT_OF_REACH));
         if (amount < 1)
-            return RequestResult.rejected(RequestRejection.INVALID_AMOUNT);
+            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.INVALID_AMOUNT));
         Optional<WarehouseControllerBlockEntity> found = controller();
         if (found.isEmpty())
-            return rememberRejection(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
+            return TerminalRequestOutcome.of(rememberRejection(RequestResult.rejected(RequestRejection.NO_CONTROLLER)));
         WarehouseControllerBlockEntity controller = found.get();
         // Resolve against the server's own state: a key the aisle neither holds nor can produce is refused before it
         // reaches the queue, whatever the client claimed. ItemKey compares item and components, so a matching key is
         // the indexed one. A producible key is allowed through here and the controller decides how much of it can
         // really be promised (M11, ADR-024).
         if (controller.countOf(key) <= 0 && !controller.producibleKeys().contains(key))
-            return rememberRejection(RequestResult.rejected(RequestRejection.NOT_IN_STOCK));
+            return TerminalRequestOutcome.of(rememberRejection(RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
+        // One call for the question and the request: the controller measures what this click would cross from the very
+        // snapshot it would then start the order against, so what the player is told and what happens cannot differ and
+        // a click walks the aisle's patterns once (M15 review fix). It is also the re-check of an answer that was given
+        // a moment ago against a warehouse that has moved since.
         // The cap goes to the controller instead of clamping here, because a repeated request for the same item is
         // merged into the open one and the cap must bound the merged total, not this click (§7.2, ADR-020).
-        return rememberRejection(controller.request(worldPosition, key, amount,
-                Math.max(1, WareworksConfig.maxTerminalRequestAmount())));
+        // A terminal request is a player's own: a stock rule's reserve does not hold it back, and the row tells them
+        // that they are going below it (M15, issue #3).
+        TerminalRequestOutcome outcome = controller.request(worldPosition, key, amount,
+                Math.max(1, WareworksConfig.maxTerminalRequestAmount()), StockAccess.PLAYER, acknowledged);
+        outcome.result().ifPresent(this::rememberRejection);
+        return outcome;
     }
 
     // --- station -------------------------------------------------------------------------------------------------

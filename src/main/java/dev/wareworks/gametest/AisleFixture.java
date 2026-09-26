@@ -29,6 +29,8 @@ import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.TerminalDisplaySide;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
+import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
@@ -171,6 +173,15 @@ final class AisleFixture {
                 .setValue(WarehouseProductionBlock.FACING, relative.sideDirection(rack.side()).getOpposite()));
     }
 
+    /**
+     * An aligned warehouse stock keeper at {@code rack}: its panel looks into the aisle, like an input or an output
+     * ({@code docs/warehouse-system.md} §3.6). It holds the aisle's stock rules and no items at all.
+     */
+    void stockKeeper(RackPosition rack) {
+        helper.setBlock(rackPos(rack), WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
+                .setValue(WarehouseStockKeeperBlock.FACING, relative.sideDirection(rack.side()).getOpposite()));
+    }
+
     /** Breaks the block at a test-relative position like a player would (block entity removal logic runs, no block drop). */
     void breakBlock(BlockPos pos) {
         helper.getLevel().destroyBlock(helper.absolutePos(pos), false);
@@ -261,6 +272,14 @@ final class AisleFixture {
                 absoluteRackPos(rack));
         if (be == null)
             helper.fail("missing warehouse production block entity", rackPos(rack));
+        return be;
+    }
+
+    WarehouseStockKeeperBlockEntity stockKeeperAt(RackPosition rack) {
+        WarehouseStockKeeperBlockEntity be = WareworksBlockEntityTypes.WAREHOUSE_STOCK_KEEPER
+                .getNullable(helper.getLevel(), absoluteRackPos(rack));
+        if (be == null)
+            helper.fail("missing warehouse stock keeper block entity", rackPos(rack));
         return be;
     }
 

@@ -18,19 +18,26 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 
 /**
- * Common block of the warehouse stations, input and output ({@code docs/warehouse-system.md} §1, §3.2).
+ * Common block of the warehouse members that are <b>placed into a rack facing the aisle</b>: the input and output
+ * stations, the terminal, the production station and the stock keeper ({@code docs/warehouse-system.md} §1, §3.2,
+ * §3.6).
  * <p>
  * {@link #FACING} points from the station towards the aisle ({@code FACING == side.getOpposite()} for the rack side it
  * stands on); the model shows the crane opening on that side. Placement faces the player
  * ({@link #placementFacing}): standing in the aisle and placing into the rack gives the aligned facing. The wrench (top
  * or bottom face) rotates clockwise.
  * <p>
- * The block entity has no ticker: stations only react to insertions, extractions, redstone, goggle observation and
- * lifecycle events. Its buffer drops when the block is broken ({@code IBE.onRemove} → {@code destroy()}).
+ * The block entity has no ticker: these members only react to insertions, extractions, redstone, goggle observation
+ * and lifecycle events. A buffered one drops its buffer when the block is broken ({@code IBE.onRemove} →
+ * {@code destroy()}).
+ * <p>
+ * The block entity type is bound to {@code BlockEntity} rather than to {@link WarehouseStationBlockEntity}, because
+ * the warehouse stock keeper shares every rule above — placement, wrench rotation, no ticker, drops on removal — but
+ * holds no items at all and therefore has no buffer (M15).
  *
  * @param <T> the block entity type
  */
-public abstract class WarehouseStationBlock<T extends WarehouseStationBlockEntity> extends HorizontalDirectionalBlock
+public abstract class WarehouseStationBlock<T extends BlockEntity> extends HorizontalDirectionalBlock
         implements IBE<T>, IWrenchable {
     protected WarehouseStationBlock(Properties properties) {
         super(properties);

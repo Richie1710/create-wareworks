@@ -34,6 +34,8 @@ import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.content.crane.CraneJobSummary;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.StockKeeperRules;
+import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
@@ -91,7 +93,7 @@ public final class DisplayLinkGameTests {
     private static final BlockPos[] SOURCE_BLOCKS = {
             new BlockPos(0, BASE_Y, 0), new BlockPos(2, BASE_Y, 0), new BlockPos(4, BASE_Y, 0),
             new BlockPos(6, BASE_Y, 0), new BlockPos(0, BASE_Y, 2), new BlockPos(2, BASE_Y, 2),
-            new BlockPos(4, BASE_Y, 2), new BlockPos(6, BASE_Y, 2)};
+            new BlockPos(4, BASE_Y, 2), new BlockPos(6, BASE_Y, 2), new BlockPos(0, BASE_Y, 4)};
 
     // --- aisle layout (aisle_16x10x7) ---
     private static final int AISLE_Z = 3;
@@ -103,6 +105,7 @@ public final class DisplayLinkGameTests {
     private static final RackPosition TERMINAL = new RackPosition(0, 0, Side.RIGHT);
     private static final RackPosition OUTPUT = new RackPosition(1, 0, Side.RIGHT);
     private static final RackPosition INPUT = new RackPosition(5, 0, Side.RIGHT);
+    private static final RackPosition KEEPER = new RackPosition(3, 0, Side.RIGHT);
     /** A terminal far behind the dock, at no rack position of the aisle. */
     private static final BlockPos STRAY_TERMINAL = new BlockPos(12, BASE_Y, AISLE_Z);
     /** An output far behind the dock, at no rack position of the aisle. */
@@ -125,6 +128,9 @@ public final class DisplayLinkGameTests {
     private static final int STORED_IRON = 40;
     private static final int STORED_DIAMONDS = 12;
     private static final int STORED_EMERALDS = 7;
+    /** A minimum the aisle cannot meet (it holds no emeralds here) and a maximum the iron already exceeds. */
+    private static final int RULE_MINIMUM = 64;
+    private static final int RULE_MAXIMUM = 1;
     /** Both keys of the tie-break test hold the same amount, so only the item id may decide their order. */
     private static final int TIED_AMOUNT = 9;
     private static final int TIE_PULLS = 5;
@@ -145,7 +151,7 @@ public final class DisplayLinkGameTests {
     /**
      * The four sources are in Create's registry under their {@code wareworks} ids, their names use exactly the lang keys
      * the generated English carries, and every bound block offers them in the declared order while rail, input and
-     * production station offer none.
+     * production station and stock keeper offer none.
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void displaysourcesregistered(GameTestHelper helper) {
@@ -162,13 +168,14 @@ public final class DisplayLinkGameTests {
                 WareworksBlocks.WAREHOUSE_RAIL.getDefaultState(), WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState(),
                 WareworksBlocks.WAREHOUSE_INTERFACE.getDefaultState(), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState(),
                 WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState(), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState(),
-                WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState());
+                WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState(),
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState());
         List<List<DisplaySource>> expected = List.of(List.of(WareworksDisplaySources.CRANE_STATUS.get()), List.of(),
                 List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get()),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()), List.of(),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()),
                 List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get()),
-                List.of());
+                List.of(), List.of());
         for (int i = 0; i < blocks.size(); i++) {
             BlockPos pos = SOURCE_BLOCKS[i];
             helper.setBlock(pos, blocks.get(i));
@@ -212,6 +219,53 @@ public final class DisplayLinkGameTests {
                     helper.assertValueEqual(argText(args[0]), "A", "aisle letter on the nixie row");
                     assertKey(helper, (Component) args[1], WareworksLang.DISPLAY_AISLE_STATUS_READY,
                             "status on the nixie row");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * An aisle with stock keepers gets a fifth line naming what its rules are doing (M15, issue #3): how many govern,
+     * how many call for their item and how many refuse it at their maximum. It is left out entirely while the aisle has
+     * no rule, because a display has few rows and a line reading "Rules: 0" would push a number a player asked for off
+     * a four-tube board.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void aislesummarywithstockrules(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STOCKED, IRON.toStack(STORED_IRON), DIAMOND.toStack(STORED_DIAMONDS));
+        aisle.storage(EMPTY_STORAGE);
+        aisle.storage(SECOND_EMPTY_STORAGE);
+        aisle.stockKeeper(KEEPER);
+        lectern(helper, LECTERN);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 0))
+                .thenExecute(() -> {
+                    link(helper, aisle.controllerPos(), Direction.UP, LECTERN, WareworksDisplaySources.AISLE_SUMMARY);
+                    assertFullSummary(helper, lecternPages(helper, LECTERN), 1, 3, 2, STORED_IRON + STORED_DIAMONDS);
+
+                    WarehouseStockKeeperBlockEntity keeper = aisle.stockKeeperAt(KEEPER);
+                    keeper.editRule(0, StockKeeperRules.FIELD_ITEM, EMERALD, 0L);
+                    keeper.editRule(0, StockKeeperRules.FIELD_MINIMUM, null, RULE_MINIMUM);
+                    keeper.editRule(1, StockKeeperRules.FIELD_ITEM, IRON, 0L);
+                    keeper.editRule(1, StockKeeperRules.FIELD_MAXIMUM, null, RULE_MAXIMUM);
+                })
+                // The counts a display reads are the controller's own, refreshed by its rule tick.
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().governingStockRuleCount(), 2,
+                        "both rules govern"))
+                .thenExecute(() -> {
+                    linkAt(helper, aisle.controllerPos().relative(Direction.UP)).updateGatheredData();
+                    List<Component> lines = lecternPages(helper, LECTERN);
+                    helper.assertValueEqual(lines.size(), 5, "the rules line is added to the four counts");
+                    assertKey(helper, lines.get(4), WareworksLang.DISPLAY_AISLE_LINE_RULES, "rules line");
+                    Object[] args = argsOf(helper, lines.get(4), "rules line");
+                    helper.assertValueEqual(args.length, 3, "the line carries all three counts");
+                    helper.assertValueEqual(argText(args[0]), number(2), "governing rules");
+                    helper.assertValueEqual(argText(args[1]), number(1), "rules calling for their item");
+                    // The count that explains a warehouse input standing still: the iron is far past its maximum, so a
+                    // board watching this aisle has to be able to show it and not only the goggles.
+                    helper.assertValueEqual(argText(args[2]), number(1), "rules refusing their item");
+                    helper.assertValueEqual(aisle.controller().stockRulesAtMaximum(), 1, "the controller's own count");
                 })
                 .thenSucceed();
     }

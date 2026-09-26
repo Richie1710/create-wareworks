@@ -28,6 +28,20 @@ public interface ReservationView<K, L> {
     /** Capacity reserved at {@code location} for {@code key}. */
     long reservedCapacity(L location, K key);
 
+    /**
+     * Capacity reserved for {@code key} over <b>all</b> locations: the items of that key a transport job is carrying
+     * into the warehouse right now (M15, issue #3). It is the mirror of {@link #reservedStock(Object)} on the storing
+     * side, and the "inbound" term a stock rule's maximum is measured against — without it two trips planned one
+     * after the other would both see the same headroom and together store past the maximum.
+     * <p>
+     * The name differs from the per-location {@link #reservedCapacity(Object)} only because generic erasure makes
+     * {@code reservedCapacity(K)} and {@code reservedCapacity(L)} the same method.
+     * <p>
+     * A store leftover rerouted back into an input buffer still counts here: it is capacity promised for the key, and
+     * counting it makes a maximum err on the side of storing less rather than more.
+     */
+    long reservedCapacityFor(K key);
+
     /** Stock of {@code key} reserved inside {@code location}. */
     long reservedStock(L location, K key);
 

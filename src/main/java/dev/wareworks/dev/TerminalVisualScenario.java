@@ -28,16 +28,21 @@ import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
+import dev.wareworks.content.station.StockKeeperRules;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
+import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.StockLine;
 import dev.wareworks.core.terminal.TerminalAmounts;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
+import dev.wareworks.util.WareworksLang;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -82,6 +87,8 @@ public final class TerminalVisualScenario implements VisualScenario {
     private static final RackPosition TERMINAL = RackPosition.of(1, 0, Side.RIGHT);
     /** The production station beside it: what makes the terminal offer an item the aisle does not hold (M11). */
     private static final RackPosition PRODUCTION = RackPosition.of(2, 0, Side.RIGHT);
+    /** The stock keeper above the terminal: what puts rule badges into the terminal's grid (M15, issue #3). */
+    private static final RackPosition KEEPER = RackPosition.of(1, 1, Side.RIGHT);
     private static final int STORAGE_FIRST_POSITION = 3;
     private static final int STORAGE_LEVELS = 2;
     private static final int CLEAR_MARGIN = 3;
@@ -113,6 +120,23 @@ public final class TerminalVisualScenario implements VisualScenario {
     private static final int PLANKS_PER_RUN = 4;
     /** Narrows the grid to the producible item, so the marking is unmistakable in the shot. */
     private static final String PRODUCT_SEARCH = "plank";
+
+    /**
+     * The four rules the keeper holds, one per badge colour the terminal can draw: an item above its maximum, one
+     * whose last items are all reserved, one the warehouse is short of and holds <b>none</b> of (its row exists only
+     * because of the rule), and one that is simply within its limits.
+     */
+    private static final ItemKey AT_MAXIMUM_ITEM = ItemKey.of(Items.DIAMOND);
+    private static final ItemKey AT_RESERVE_ITEM = ItemKey.of(Items.EMERALD);
+    private static final ItemKey BELOW_MINIMUM_ITEM = ItemKey.of(Items.GOLD_BLOCK);
+    private static final ItemKey SATISFIED_ITEM = ItemKey.of(Items.COAL);
+    /** The control: an item no rule governs, whose row must say nothing about rules at all. */
+    private static final ItemKey UNRULED_ITEM = ItemKey.of(Items.IRON_INGOT);
+    private static final int RULE_MAXIMUM = 8;
+    private static final int RULE_RESERVE = 12;
+    private static final int RULE_MINIMUM = 64;
+    private static final int SATISFIED_MINIMUM = 1;
+    private static final int GOVERNING_RULES = 4;
 
     private static final String SEARCH_TEXT = "iron";
     /** The reported M7 case: the same item clicked ten more times while the first request is still open. */
@@ -211,7 +235,18 @@ public final class TerminalVisualScenario implements VisualScenario {
                     .waitTicks(SETTLE_TICKS)
                     .shot("ordercancelled")
                     .client("terminal: clear the search after the production shots",
-                            context -> screen(context).setSearch(""));
+                            context -> screen(context).setSearch(""))
+                    // Stock rules (M15, issue #3): the badge in a cell's corner and the reserve as a part of what
+                    // this player may still claim. The states are asserted on the server and then on the screen,
+                    // because a screenshot cannot tell a right badge from a wrong one.
+                    .server("terminal: write four stock rules on the keeper", TerminalVisualScenario::writeRules)
+                    .serverUntil("terminal: wait until the aisle enforces them",
+                            TerminalVisualScenario::rulesEnforced, SCREEN_TIMEOUT_TICKS)
+                    .until("terminal: wait until the screen shows the badges",
+                            TerminalVisualScenario::ruleBadgesShown, SCREEN_TIMEOUT_TICKS)
+                    .waitTicks(SETTLE_TICKS)
+                    .client("terminal: check every badge the shot claims", TerminalVisualScenario::checkRuleBadges)
+                    .shot("rules");
         }
         script.client("terminal: close the screen", TerminalVisualScenario::closeScreen)
                 .until("terminal: wait until the screen is closed", context -> context.minecraft().screen == null,
@@ -224,9 +259,10 @@ public final class TerminalVisualScenario implements VisualScenario {
         if (!(open instanceof WarehouseTerminalScreen terminal))
             return "screen=" + (open == null ? "none" : open.getClass().getSimpleName());
         return String.format(Locale.ROOT,
-                "screen=terminal entries=%d shown=%d requestsHere=%d requestedHere=%d openRequests=%d orders=%d "
-                        + "orderState=%s feedback='%s' status='%s' statusFits=%s",
-                terminal.matchingEntries().size(), terminal.visibleEntries().size(), terminal.status().requestsHere(),
+                "screen=terminal entries=%d shown=%d ruled=%d requestsHere=%d requestedHere=%d openRequests=%d "
+                        + "orders=%d orderState=%s feedback='%s' status='%s' statusFits=%s",
+                terminal.matchingEntries().size(), terminal.visibleEntries().size(),
+                terminal.matchingEntries().stream().filter(StockLine::ruled).count(), terminal.status().requestsHere(),
                 terminal.status().requestedHere(), terminal.status().openRequests(),
                 terminal.productionOrders().size(), newestOrderState(terminal), feedbackText(terminal),
                 terminal.shownStatusLine().getString(), terminal.statusTextsFit());
@@ -265,6 +301,8 @@ public final class TerminalVisualScenario implements VisualScenario {
                 .setValue(WarehouseTerminalBlock.FACING, layout.sideDirection(TERMINAL.side()).getOpposite()));
         level.setBlockAndUpdate(layout.rackPos(PRODUCTION), WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
                 .setValue(WarehouseProductionBlock.FACING, layout.sideDirection(PRODUCTION.side()).getOpposite()));
+        level.setBlockAndUpdate(layout.rackPos(KEEPER), WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
+                .setValue(WarehouseStockKeeperBlock.FACING, layout.sideDirection(KEEPER.side()).getOpposite()));
         WarehouseProductionBlockEntity station = production(level, dock);
         if (!station.setPatternEntry(0, 0, INGREDIENT, LOG_PER_RUN)
                 || !station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, PRODUCT, PLANKS_PER_RUN))
@@ -479,6 +517,103 @@ public final class TerminalVisualScenario implements VisualScenario {
             return;
         }
         throw new VisualTestException("the producible item left the visible grid before it could be ordered");
+    }
+
+    // --- stock rules (M15, issue #3) -------------------------------------------------------------------------------
+
+    /** Writes one rule per badge colour onto the keeper of the aisle, through the same entry point an edit uses. */
+    private static void writeRules(MinecraftServer server, VisualContext context) {
+        WarehouseStockKeeperBlockEntity keeper = keeper(server.overworld(), context.origin());
+        rule(keeper, 0, AT_MAXIMUM_ITEM, StockKeeperRules.FIELD_MAXIMUM, RULE_MAXIMUM);
+        rule(keeper, 1, AT_RESERVE_ITEM, StockKeeperRules.FIELD_RESERVE, RULE_RESERVE);
+        rule(keeper, 2, BELOW_MINIMUM_ITEM, StockKeeperRules.FIELD_MINIMUM, RULE_MINIMUM);
+        rule(keeper, 3, SATISFIED_ITEM, StockKeeperRules.FIELD_MINIMUM, SATISFIED_MINIMUM);
+        LOGGER.info(PREFIX + "terminal: the keeper holds {} rules", keeper.rules().ruleCount());
+    }
+
+    private static void rule(WarehouseStockKeeperBlockEntity keeper, int row, ItemKey key, int field, long value) {
+        if (!keeper.editRule(row, StockKeeperRules.FIELD_ITEM, key, 0L).changed()
+                || !keeper.editRule(row, field, null, value).changed())
+            throw new VisualTestException("the rule in row " + row + " could not be written");
+    }
+
+    /** Whether the controller's own copy governs every rule, i.e. whether the warehouse really enforces them. */
+    private static boolean rulesEnforced(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER
+                .getNullable(server.overworld(), context.origin().relative(AISLE.getOpposite()));
+        return controller != null && controller.stockRules().governingCount() == GOVERNING_RULES;
+    }
+
+    /** Whether the screen has the four ruled rows, including the one of an item the aisle holds none of. */
+    private static boolean ruleBadgesShown(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        for (ItemKey key : List.of(AT_MAXIMUM_ITEM, AT_RESERVE_ITEM, BELOW_MINIMUM_ITEM, SATISFIED_ITEM)) {
+            if (terminal.entry(key).filter(StockLine::ruled).isEmpty())
+                return false;
+        }
+        return true;
+    }
+
+    /**
+     * Fails the run unless every badge of the shot is the one it claims to be, and unless the reserve is reported as
+     * a <b>part of</b> what this player may still claim — the user's decision for M15, and the one thing a screenshot
+     * of coloured squares could never prove.
+     */
+    private static void checkRuleBadges(VisualContext context) {
+        assertBadge(context, AT_MAXIMUM_ITEM, StockRuleStatus.AT_MAXIMUM);
+        assertBadge(context, AT_RESERVE_ITEM, StockRuleStatus.AT_RESERVE);
+        assertBadge(context, BELOW_MINIMUM_ITEM, StockRuleStatus.BELOW_MINIMUM);
+        assertBadge(context, SATISFIED_ITEM, StockRuleStatus.SATISFIED);
+        StockLine<ItemKey> reserved = line(context, AT_RESERVE_ITEM);
+        if (reserved.ruleReserved() <= 0L || reserved.ruleReserved() > reserved.available())
+            throw new VisualTestException("the reserve is not a part of what the player may claim: " + reserved);
+        if (reserved.availableToAutomation() != 0L)
+            throw new VisualTestException("automation should get nothing more of " + reserved.name());
+        StockLine<ItemKey> shortOfMinimum = line(context, BELOW_MINIMUM_ITEM);
+        if (shortOfMinimum.total() > 0L)
+            throw new VisualTestException("the pinned row should have no stock at all: " + shortOfMinimum);
+        // The row's own words. A tooltip is drawn only while a mouse hovers, so the run reads the lines instead of
+        // photographing them: the hint that a click goes below the reserve is the whole point of the user's decision
+        // that a player may take it.
+        List<String> hint = screen(context).itemTooltip(reserved).stream().map(Component::getString).toList();
+        if (hint.stream().noneMatch(text -> text.contains(reserveHintText())))
+            throw new VisualTestException("the row does not say that a request goes below the reserve: " + hint);
+        if (hint.stream().noneMatch(text -> text.contains(ruleStatusText(StockRuleStatus.AT_RESERVE))))
+            throw new VisualTestException("the row does not name what the rule is doing: " + hint);
+        List<String> unruled = screen(context).itemTooltip(line(context, UNRULED_ITEM)).stream()
+                .map(Component::getString).toList();
+        if (unruled.stream().anyMatch(text -> text.contains(reserveHintText())))
+            throw new VisualTestException("an item no rule governs must say nothing about a reserve: " + unruled);
+        LOGGER.info(PREFIX + "terminal: badges at maximum/reserve/minimum/satisfied are drawn, {} of {} available "
+                + "are held back from automation, and the row says: {}", reserved.ruleReserved(),
+                reserved.available(), hint);
+    }
+
+    private static void assertBadge(VisualContext context, ItemKey key, StockRuleStatus expected) {
+        StockLine<ItemKey> line = line(context, key);
+        if (line.rule().filter(expected::equals).isEmpty())
+            throw new VisualTestException("the badge of " + line.name() + " is " + line.rule() + ", not " + expected);
+    }
+
+    private static String reserveHintText() {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_BELOW_RESERVE).getString();
+    }
+
+    private static String ruleStatusText(StockRuleStatus status) {
+        return WareworksLang.translateDirect(WareworksLang.keeperStatusKey(status)).getString();
+    }
+
+    private static StockLine<ItemKey> line(VisualContext context, ItemKey key) {
+        return screen(context).entry(key)
+                .orElseThrow(() -> new VisualTestException("the terminal does not show " + key));
+    }
+
+    private static WarehouseStockKeeperBlockEntity keeper(ServerLevel level, BlockPos dock) {
+        WarehouseStockKeeperBlockEntity keeper = WareworksBlockEntityTypes.WAREHOUSE_STOCK_KEEPER.getNullable(level,
+                layout(dock).rackPos(KEEPER));
+        if (keeper == null)
+            throw new VisualTestException("the warehouse stock keeper of the aisle is missing");
+        return keeper;
     }
 
     /** Gives up on the newest order through the screen's own cancel control. */

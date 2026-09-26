@@ -15,6 +15,7 @@ import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.data.WareworksBlockStateGen;
@@ -26,7 +27,8 @@ import net.minecraft.world.level.material.MapColor;
  * <p>
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
- * controller, interface, input, output, terminal, production station (GameTest {@code creativetaborderandicon}). Recipes are hand-written JSON in
+ * controller, interface, input, output, terminal, production station, stock keeper
+ * (GameTest {@code creativetaborderandicon}). Recipes are hand-written JSON in
  * {@code data/wareworks/recipe/} (GameTest {@code recipesloaded}). This class must only be initialised through
  * {@link #register()}, which {@code Wareworks} calls after {@code registerEventListeners}; otherwise Registrate silently
  * drops client-side listeners.
@@ -183,6 +185,32 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
+                    .item()
+                    .transform(ModelGen.customItemModel("_", "block"))
+                    .register();
+
+    /**
+     * Warehouse stock keeper ({@code docs/warehouse-system.md} §3.6, M15, issue #3). The aisle member that holds the
+     * warehouse's stock rules — one item plus a minimum, a maximum and a reserve, per row. Its own blockstate
+     * ({@link WareworksBlockStateGen#stockKeeperBlockProvider()}) over the hand-made
+     * {@code models/block/warehouse_stock_keeper/block.json} and its lit twin (authored with the aisle side facing
+     * north); the item model uses the unlit block model.
+     * <p>
+     * It holds no items, so a <b>schematic</b> may carry its rules along: the block is deliberately <i>not</i> in
+     * {@code create:safe_nbt}, which makes Create take the {@code PartialSafeNBT} path instead and gives the keeper
+     * control over what a printed copy starts with — the rules, never the comparator value it had in another warehouse
+     * ({@code WarehouseStockKeeperBlockEntity#writeSafe}). A wrench pickup and a broken block drop through the loot
+     * table and keep no rules, the same as a production station's patterns. Does not conduct redstone, like the other
+     * members that sit in a rack row. Protected from contraptions; drops itself.
+     */
+    public static final BlockEntry<WarehouseStockKeeperBlock> WAREHOUSE_STOCK_KEEPER =
+            REGISTRATE.block("warehouse_stock_keeper", WarehouseStockKeeperBlock::new)
+                    .initialProperties(SharedProperties::softMetal)
+                    .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK)
+                            .isRedstoneConductor((state, level, pos) -> false))
+                    .transform(TagGen.pickaxeOnly())
+                    .transform(WareworksTags.relocationProtected())
+                    .blockstate(WareworksBlockStateGen.stockKeeperBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();

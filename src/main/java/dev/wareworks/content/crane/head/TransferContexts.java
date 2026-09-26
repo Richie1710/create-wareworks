@@ -108,6 +108,9 @@ public final class TransferContexts {
             // delivers into, so one context serves all three; only the kind it reports differs.
             case OUTPUT, PRODUCTION -> blockEntity instanceof WarehouseDeliveryStationBlockEntity delivery
                     ? Resolution.available(ofDelivery(level, delivery, kind)) : Resolution.MISSING;
+            // A warehouse stock keeper holds no items at all, so no job can ever name it as a source or a target
+            // (M15): a crane that somehow asked for one is told the member is not there, which is exactly true.
+            case KEEPER -> Resolution.MISSING;
         };
     }
 

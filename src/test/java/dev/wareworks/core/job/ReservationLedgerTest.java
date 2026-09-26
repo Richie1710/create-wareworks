@@ -48,6 +48,7 @@ class ReservationLedgerTest {
         assertEquals(0, ledger.size());
         assertEquals(0, ledger.reservedCapacity(A));
         assertEquals(0, ledger.reservedCapacity(A, DIAMOND));
+        assertEquals(0, ledger.reservedCapacityFor(DIAMOND));
         assertEquals(0, ledger.reservedStock(A, DIAMOND));
         assertEquals(0, ledger.reservedStock(DIAMOND));
         assertEquals(0, ledger.reservedStockNotBackingRequests(DIAMOND));
@@ -67,6 +68,11 @@ class ReservationLedgerTest {
         assertEquals(10, ledger.reservedCapacity(A, DIAMOND));
         assertEquals(5, ledger.reservedCapacity(A, IRON));
         assertEquals(7, ledger.reservedCapacity(B));
+        // Per key over all locations: what is on its way into the warehouse, the number a stock rule's maximum is
+        // measured against (M15, issue #3).
+        assertEquals(17, ledger.reservedCapacityFor(DIAMOND));
+        assertEquals(5, ledger.reservedCapacityFor(IRON));
+        assertEquals(0, ledger.reservedCapacityFor("gold"));
         assertEquals(22, ledger.totalReservedCapacity());
         assertEquals(0, ledger.totalReservedStock());
         assertEquals(List.of(JOB1, JOB2, JOB3), List.copyOf(ledger.jobIds()));
@@ -207,9 +213,11 @@ class ReservationLedgerTest {
         TransportJob<String, String> job = TransportJob.store(JOB2, IN, A, IRON, 64);
         ledger.track(job);
         assertEquals(List.of(reservation(JOB2, Reservation.Kind.CAPACITY, A, IRON, 64, null)), ledger.reservationsOf(JOB2));
+        assertEquals(64, ledger.reservedCapacityFor(IRON), "on its way into the warehouse, wherever it is going");
         job = job.withPicked(40);
         ledger.track(job);
         assertEquals(40, ledger.reservedCapacity(A));
+        assertEquals(40, ledger.reservedCapacityFor(IRON));
         job = job.plusDelivered(30);
         ledger.track(job);
         assertEquals(10, ledger.reservedCapacity(A));
@@ -217,11 +225,13 @@ class ReservationLedgerTest {
         ledger.track(job);
         assertEquals(0, ledger.reservedCapacity(A));
         assertEquals(10, ledger.reservedCapacity(B));
+        assertEquals(10, ledger.reservedCapacityFor(IRON), "a reroute moves it, it does not double it");
         job = job.withTarget(IN, LocationKind.INPUT);
         ledger.track(job);
         assertEquals(10, ledger.reservedCapacity(IN));
         ledger.track(job.plusDelivered(10));
         assertTrue(ledger.isEmpty());
+        assertEquals(0, ledger.reservedCapacityFor(IRON));
     }
 
     @Test
@@ -272,6 +282,8 @@ class ReservationLedgerTest {
         ReservationView<String, String> view = ledger.readOnlyView();
         assertFalse(view instanceof ReservationLedger);
         ledger.reserveStock(JOB1, A, DIAMOND, 3, REQ1);
+        ledger.reserveCapacity(JOB2, B, IRON, 4);
+        assertEquals(4, view.reservedCapacityFor(IRON));
         assertEquals(3, view.reservedStock(A, DIAMOND));
         assertEquals(3, view.committedToRequest(REQ1));
         assertEquals(ledger.reservations(), view.reservations());
@@ -321,6 +333,7 @@ class ReservationLedgerTest {
                     capacity += r.amount();
                     expected.merge("cap|" + r.location(), (long) r.amount(), Long::sum);
                     expected.merge("cap|" + r.location() + "|" + r.key(), (long) r.amount(), Long::sum);
+                    expected.merge("capKey|" + r.key(), (long) r.amount(), Long::sum);
                 }
                 case STOCK -> {
                     stock += r.amount();
@@ -354,6 +367,7 @@ class ReservationLedgerTest {
             }
         }
         for (String key : keys) {
+            assertEquals(expected.getOrDefault("capKey|" + key, 0L), ledger.reservedCapacityFor(key));
             assertEquals(expected.getOrDefault("stock|" + key, 0L), ledger.reservedStock(key));
             assertEquals(expected.getOrDefault("free|" + key, 0L), ledger.reservedStockNotBackingRequests(key));
             assertEquals(expected.getOrDefault("transit|" + key, 0L), ledger.inTransit(key));

@@ -1,0 +1,64 @@
+{
+  "variants": {
+    "facing=east,lit=false,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block",
+      "y": 90
+    },
+    "facing=east,lit=false,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused",
+      "y": 90
+    },
+    "facing=east,lit=true,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_lit",
+      "y": 90
+    },
+    "facing=east,lit=true,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused",
+      "y": 90
+    },
+    "facing=north,lit=false,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block"
+    },
+    "facing=north,lit=false,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused"
+    },
+    "facing=north,lit=true,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_lit"
+    },
+    "facing=north,lit=true,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused"
+    },
+    "facing=south,lit=false,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block",
+      "y": 180
+    },
+    "facing=south,lit=false,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused",
+      "y": 180
+    },
+    "facing=south,lit=true,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_lit",
+      "y": 180
+    },
+    "facing=south,lit=true,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused",
+      "y": 180
+    },
+    "facing=west,lit=false,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block",
+      "y": 270
+    },
+    "facing=west,lit=false,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused",
+      "y": 270
+    },
+    "facing=west,lit=true,paused=false": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_lit",
+      "y": 270
+    },
+    "facing=west,lit=true,paused=true": {
+      "model": "wareworks:block/warehouse_stock_keeper/block_paused",
+      "y": 270
+    }
+  }
+}

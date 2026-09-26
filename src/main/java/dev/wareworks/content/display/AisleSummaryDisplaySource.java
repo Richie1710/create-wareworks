@@ -53,6 +53,23 @@ public class AisleSummaryDisplaySource extends DisplaySource {
                 WareworksLang.number(stock.distinctKeys())));
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEMS,
                 WareworksLang.number(stock.totalItems())));
+        // Only for an aisle that really has stock rules (M15, issue #3): a display has few rows, and a line reading
+        // "Rules: 0 · below min 0 · at max 0" would push a number a player asked for off a four-tube board. All three
+        // counts are the controller's own cached ones, so a pull stays a handful of field reads (ADR-026). The
+        // at-maximum count is the one that explains a warehouse input backing up, so a board that watches the aisle
+        // must be able to show it rather than only the goggles (M15 review fix).
+        if (controller.governingStockRuleCount() > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_RULES,
+                    WareworksLang.number(controller.governingStockRuleCount()),
+                    WareworksLang.number(controller.stockRulesBelowMinimum()),
+                    WareworksLang.number(controller.stockRulesAtMaximum())));
+        // The safety stop gets a line of its own rather than a fourth number on the one above (M15 part 2, issue #3):
+        // it is the only rule state that asks a player to go and look at a machine, and a board that shows it at all
+        // has to show it where it cannot be read as one more statistic. Left out entirely while nothing is paused,
+        // which is every warehouse that is working.
+        if (controller.pausedStockRuleCount() > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_RULES_PAUSED,
+                    WareworksLang.number(controller.pausedStockRuleCount())));
         return WarehouseDisplays.limit(lines, stats);
     }
 

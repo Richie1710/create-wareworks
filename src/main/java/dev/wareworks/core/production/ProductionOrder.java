@@ -27,7 +27,11 @@ import org.jetbrains.annotations.Nullable;
  * station's buffer no longer holds the ingredients, i.e. the machine really took them;</li>
  * <li>{@link #withResultStock} accumulates the <b>increases</b> of the result's stock (never the level itself, which
  * also falls when the crane serves a request) and completes the order once {@link #resultAmount()} of them were
- * seen;</li>
+ * seen. An <b>automatic</b> order is deliberately not counted this way ({@link #countsStockLevels()}): see
+ * {@link #withStored};</li>
+ * <li>{@link #withStored} counts result items the warehouse really <b>stored out of one of its own warehouse
+ * inputs</b> — the route the product of a pattern takes back into the racks. This is the only channel an automatic
+ * order is completed by, because its completion decides whether a rule's safety stop fires;</li>
  * <li>{@link #timedOutAt} ends an order that made no progress for the configured timeout, {@link #cancelled} ends one a
  * player gave up on. Both release what is still promised and neither takes anything back: ingredients a machine has
  * already swallowed are gone ({@link ProductionOrderState#handedIngredientsOver()}).</li>
@@ -51,12 +55,19 @@ import org.jetbrains.annotations.Nullable;
  *                       Keeping the promise apart from {@link #resultAmount()} is what stops a failed order from
  *                       taking items off its request that production was never going to deliver for it
  *                       ({@link #unfulfilledPromise()}, {@code docs/warehouse-system.md} §3.5.3)
+ * @param restock        whether the <b>warehouse itself</b> started this order to refill a stock rule's minimum
+ *                       (M15 part 2, issue #3) rather than a player or a redstone request asking for the result. It
+ *                       is an explicit flag and not "has no backing request", because an ordinary order loses its
+ *                       request when that request is served or cancelled ({@link #withoutBackingRequest()}) and would
+ *                       otherwise turn into an automatic one — which would let a player's own cancellation trip the
+ *                       safety stop of a rule that never ordered anything
  * @param <K>            item key type
  * @param <L>            location type
  */
 public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmount, List<SupplyLine<K>> lines,
                                     ProductionOrderState state, long deadlineTick, long produced,
-                                    long resultStockSeen, Optional<UUID> backingRequest, long promisedToRequest) {
+                                    long resultStockSeen, Optional<UUID> backingRequest, long promisedToRequest,
+                                    boolean restock) {
     public ProductionOrder {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(station, "station");
@@ -74,6 +85,10 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         // the whole run yields.
         promisedToRequest = backingRequest.isEmpty() ? 0L
                 : Math.max(0L, Math.min(promisedToRequest, resultAmount));
+        // An automatic order is one nobody asked for: the two can never both be true, so save data cannot describe an
+        // order that would both refund a request and trip a rule's safety stop.
+        if (restock && backingRequest.isPresent())
+            restock = false;
     }
 
     /**
@@ -103,6 +118,28 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     public static <K, L> ProductionOrder<K, L> start(UUID id, L station, ProductionPattern<K> pattern, int runs,
             Supplier<UUID> lineIds, long now, long timeoutTicks, long resultStockNow, @Nullable UUID backingRequest,
             long promisedToRequest) {
+        return start(id, station, pattern, runs, lineIds, now, timeoutTicks, resultStockNow, backingRequest,
+                promisedToRequest, false);
+    }
+
+    /**
+     * An <b>automatic restock order</b> (M15 part 2, issue #3): the warehouse itself refilling a stock rule's minimum,
+     * so there is no request behind it and nothing to give back if it fails. Everything else about it — the supply
+     * lines, the crane jobs, the timeout — is an ordinary production order.
+     * <p>
+     * The one difference is <b>how its result is counted</b>: an automatic order is completed only by items the
+     * warehouse really stored out of one of its inputs ({@link #withStored}) and never by a rise of the result's stock
+     * level, because its completion is what decides whether the safety stop fires ({@link #countsStockLevels()}). It
+     * therefore keeps no stock baseline at all.
+     */
+    public static <K, L> ProductionOrder<K, L> restock(UUID id, L station, ProductionPattern<K> pattern, int runs,
+            Supplier<UUID> lineIds, long now, long timeoutTicks) {
+        return start(id, station, pattern, runs, lineIds, now, timeoutTicks, 0L, null, 0L, true);
+    }
+
+    private static <K, L> ProductionOrder<K, L> start(UUID id, L station, ProductionPattern<K> pattern, int runs,
+            Supplier<UUID> lineIds, long now, long timeoutTicks, long resultStockNow, @Nullable UUID backingRequest,
+            long promisedToRequest, boolean restock) {
         Objects.requireNonNull(pattern, "pattern");
         Objects.requireNonNull(lineIds, "lineIds");
         if (runs < 1)
@@ -113,12 +150,66 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
                     ingredient.totalFor(runs)));
         return new ProductionOrder<>(id, station, pattern.result().key(), pattern.resultFor(runs), lines,
                 ProductionOrderState.WAITING_FOR_INGREDIENTS, deadline(now, timeoutTicks), 0L,
-                Math.max(0L, resultStockNow), Optional.ofNullable(backingRequest), promisedToRequest);
+                Math.max(0L, resultStockNow), Optional.ofNullable(backingRequest), promisedToRequest, restock);
     }
 
     /** Whether the order still promises ingredients and can still finish. */
     public boolean isOpen() {
         return state.isOpen();
+    }
+
+    /**
+     * Whether the warehouse started this order by itself to refill a stock rule ({@link #restock()}). It is the one
+     * kind of order that can trip a rule's safety stop, and the one nobody is waiting for.
+     */
+    public boolean isRestock() {
+        return restock;
+    }
+
+    /**
+     * Whether a rise of the result's <b>stock level</b> may complete this order ({@link #withResultStock}).
+     * <p>
+     * It may for an order a player or a redstone request asked for: somebody is waiting, and an item that turns up
+     * from anywhere satisfies them just as well (§3.5.3). It may <b>not</b> for an automatic order (M15 part 2), and
+     * that is the whole of the safety stop: completion is what decides whether a rule keeps ordering, and a level
+     * rise says nothing about <i>where</i> the items came from. An unrelated farm, a barrel tipped into a rack, or a
+     * player taking the product out and putting it back would otherwise complete an order whose ingredients a machine
+     * had swallowed — and the rule would go on feeding that machine for ever. An automatic order is therefore counted
+     * only by {@link #withStored}.
+     */
+    public boolean countsStockLevels() {
+        return !restock;
+    }
+
+    /**
+     * Whether an arrival may be counted towards this order at all ({@link #withStored}): it must be open, and an
+     * automatic order must have been given something first.
+     * <p>
+     * The gate is the mirror image of {@link #endedWithLostIngredients()}. A machine cannot have made anything before
+     * the crane dropped an ingredient at it, so an automatic order with nothing delivered can only be completed by
+     * somebody else's items — and it is exactly the order that has delivered nothing which must be allowed to time out
+     * without pausing anything.
+     */
+    public boolean countsArrivals() {
+        return isOpen() && (!restock || deliveredIngredients() > 0);
+    }
+
+    /**
+     * Whether this order ended <b>badly</b>: it is finished, it did not complete, and the crane had already dropped
+     * ingredients at the production station. Those items are gone ({@code docs/warehouse-system.md} §3.5.4), and for
+     * an automatic order this is exactly the safety stop's condition (M15 part 2).
+     * <p>
+     * An order that gave up while the crane was still fetching answers {@code false}: nothing left the warehouse, so
+     * there is nothing to protect a player from.
+     * <p>
+     * For an automatic order, {@link ProductionOrderState#COMPLETE} really is evidence that the machine gave something
+     * back, because such an order is only ever completed by items the warehouse stored out of one of its inputs
+     * ({@link #countsStockLevels()}). The one thing that remains indistinguishable is a <i>second</i> source of the
+     * same product feeding the same warehouse through an input: the warehouse did receive the items, and no
+     * bookkeeping can say which machine made them ({@code docs/warehouse-system.md} §3.6.3, ADR-026).
+     */
+    public boolean endedWithLostIngredients() {
+        return state.isFinished() && state != ProductionOrderState.COMPLETE && deliveredIngredients() > 0;
     }
 
     /** The ingredient line with {@code lineId}, if this order has it. */
@@ -202,7 +293,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     /** This order with another deadline (a world reload gives every restored order its full timeout again). */
     public ProductionOrder<K, L> withDeadline(long newDeadline) {
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, newDeadline, produced,
-                resultStockSeen, backingRequest, promisedToRequest);
+                resultStockSeen, backingRequest, promisedToRequest, restock);
     }
 
     /** Whether every ingredient line has been served completely. */
@@ -240,13 +331,13 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
             return this;
         if (!isOpen())
             return new ProductionOrder<>(id, station, result, resultAmount, updated, state, deadlineTick, produced,
-                    resultStockSeen, backingRequest, promisedToRequest);
+                    resultStockSeen, backingRequest, promisedToRequest, restock);
         boolean complete = true;
         for (SupplyLine<K> line : updated)
             complete &= line.isComplete();
         return new ProductionOrder<>(id, station, result, resultAmount, updated,
                 complete ? ProductionOrderState.DELIVERED : state, deadline(now, timeoutTicks), produced,
-                resultStockSeen, backingRequest, promisedToRequest);
+                resultStockSeen, backingRequest, promisedToRequest, restock);
     }
 
     /**
@@ -258,7 +349,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (state != ProductionOrderState.DELIVERED)
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, ProductionOrderState.WAITING_FOR_RESULT,
-                deadline(now, timeoutTicks), produced, resultStockSeen, backingRequest, promisedToRequest);
+                deadline(now, timeoutTicks), produced, resultStockSeen, backingRequest, promisedToRequest, restock);
     }
 
     /**
@@ -266,12 +357,37 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      * <p>
      * Only <b>increases</b> count: the level also falls when the crane serves a request out of the same stock, and a
      * falling level says nothing about production. The order completes once it has seen {@link #resultAmount()} items
-     * arrive — from any source, which is deliberate: a player who puts the product in by hand has satisfied the order
-     * just as well, and the alternative (only counting what a particular input delivered) would make the order depend
-     * on which station the machine happens to feed.
+     * arrive — from any source, which is deliberate for an order somebody is waiting for: a player who puts the product
+     * in by hand has satisfied the request just as well.
+     * <p>
+     * An <b>automatic</b> order is not counted here at all ({@link #countsStockLevels()}); {@link #withStored} is its
+     * only channel.
      */
     public ProductionOrder<K, L> withResultStock(long stockNow, long now, long timeoutTicks) {
         return withResultStock(stockNow, observableGain(stockNow), now, timeoutTicks);
+    }
+
+    /**
+     * This order after {@code amount} result items really arrived in the warehouse: the crane stored them out of one of
+     * the aisle's own warehouse inputs, which is the route the product of a pattern takes back into the racks
+     * ({@code docs/warehouse-system.md} §3.5).
+     * <p>
+     * Unlike {@link #withResultStock} this counts an <b>event</b> and not a level, so it needs no baseline and cannot be
+     * fooled by the level falling and rising again. It is what an automatic order is completed by, and for such an
+     * order nothing is counted before the crane has dropped an ingredient at the machine ({@link #countsArrivals()}).
+     * An arrival of 0, a closed order and an order that already has everything it waits for all change nothing.
+     */
+    public ProductionOrder<K, L> withStored(long amount, long now, long timeoutTicks) {
+        if (amount <= 0L || !countsArrivals())
+            return this;
+        long counted = Math.min(amount, outstandingResult());
+        if (counted <= 0L)
+            return this;
+        long total = saturatedAdd(produced, counted);
+        boolean complete = total >= resultAmount;
+        return new ProductionOrder<>(id, station, result, resultAmount, lines,
+                complete ? ProductionOrderState.COMPLETE : state, complete ? now : deadline(now, timeoutTicks), total,
+                resultStockSeen, backingRequest, promisedToRequest, restock);
     }
 
     /**
@@ -280,10 +396,11 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      * <p>
      * It is separate from {@link #withResultStock(long, long, long, long)} because one arrival must be credited
      * <b>once</b>: with two open orders for the same result, each would otherwise count the same items in full and
-     * both would complete although only one batch was made ({@link ProductionOrders#observeResult}).
+     * both would complete although only one batch was made ({@link ProductionOrders#observeResult}). An automatic order
+     * answers 0 whatever the level is ({@link #countsStockLevels()}).
      */
     public long observableGain(long stockNow) {
-        return isOpen() ? Math.max(0L, Math.max(0L, stockNow) - resultStockSeen) : 0L;
+        return isOpen() && countsStockLevels() ? Math.max(0L, Math.max(0L, stockNow) - resultStockSeen) : 0L;
     }
 
     /**
@@ -292,7 +409,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      * new baseline either way, so the same arrival is not seen again on the next observation.
      */
     public ProductionOrder<K, L> withResultStock(long stockNow, long gained, long now, long timeoutTicks) {
-        if (!isOpen())
+        if (!isOpen() || !countsStockLevels())
             return this;
         long current = Math.max(0L, stockNow);
         long counted = Math.max(0L, Math.min(gained, outstandingResult()));
@@ -306,7 +423,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         long nextDeadline = complete ? now : counted > 0L ? deadline(now, timeoutTicks) : deadlineTick;
         return new ProductionOrder<>(id, station, result, resultAmount, lines,
                 complete ? ProductionOrderState.COMPLETE : state, nextDeadline, total, current, backingRequest,
-                promisedToRequest);
+                promisedToRequest, restock);
     }
 
     /**
@@ -333,7 +450,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (backingRequest.isEmpty())
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
-                resultStockSeen, Optional.empty(), 0L);
+                resultStockSeen, Optional.empty(), 0L, restock);
     }
 
     /**
@@ -342,7 +459,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      */
     private ProductionOrder<K, L> endedAt(ProductionOrderState next, long now) {
         return new ProductionOrder<>(id, station, result, resultAmount, lines, next, now, produced, resultStockSeen,
-                backingRequest, promisedToRequest);
+                backingRequest, promisedToRequest, restock);
     }
 
     /** The deadline {@code timeoutTicks} after {@code now}, saturating instead of overflowing. */

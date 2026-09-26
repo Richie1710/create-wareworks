@@ -1,6 +1,7 @@
 package dev.wareworks.content.controller;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -8,7 +9,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.function.ToLongFunction;
 
@@ -24,7 +27,9 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
+import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.AbortReason;
@@ -34,6 +39,7 @@ import dev.wareworks.core.inventory.SnapshotQueue;
 import dev.wareworks.core.inventory.StockIndex;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.FilterMatch;
+import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.PlannerInput;
 import dev.wareworks.core.job.RequestQueue;
@@ -47,6 +53,22 @@ import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionOrders;
 import dev.wareworks.core.production.ProductionPattern;
 import dev.wareworks.core.production.SupplyLine;
+import dev.wareworks.core.stock.RestockDecision;
+import dev.wareworks.core.stock.RestockInput;
+import dev.wareworks.core.stock.RestockLimits;
+import dev.wareworks.core.stock.RestockOutcome;
+import dev.wareworks.core.stock.RestockPlan;
+import dev.wareworks.core.stock.RestockPlanner;
+import dev.wareworks.core.stock.StockAccess;
+import dev.wareworks.core.stock.StockAvailability;
+import dev.wareworks.core.stock.StockLevels;
+import dev.wareworks.core.stock.StockRule;
+import dev.wareworks.core.stock.StockRuleEvaluation;
+import dev.wareworks.core.stock.StockRulePause;
+import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.stock.StockRules;
+import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.warehouse.AisleMembership;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
@@ -142,6 +164,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private final RequestQueue<ItemKey, BlockPos> requests = new RequestQueue<>(configuredMaxOpenRequests());
     /** Store filters of the storage locations, cached for planning; read from the interfaces, not saved. */
     private final AisleFilters filters = new AisleFilters();
+    /** The aisle's stock rules, copied from its warehouse stock keepers (M15, issue #3). <b>Saved</b>, see below. */
+    private final AisleStockRules stockRules = new AisleStockRules();
+    /**
+     * The rules the <b>safety stop</b> is holding, by item (M15 part 2, issue #3). At most one rule governs an item,
+     * so the item is the rule's identity here, and a pause survives a rule being edited into another keeper row.
+     * <p>
+     * <b>Saved</b>, for the same reason the rule copy is: it has to be known before the first evaluation after a world
+     * load, or a restart would quietly resume ordering into a machine that already swallowed a batch
+     * ({@link StockRulePause}).
+     */
+    private final Map<ItemKey, StockRulePause> stockPauses = new LinkedHashMap<>();
     /** Production orders of this aisle ({@code docs/warehouse-system.md} §3.5, ADR-024). Saved. */
     private final ProductionOrders<ItemKey, RackPosition> productionOrders =
             new ProductionOrders<>(configuredMaxProductionOrders());
@@ -161,14 +194,74 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private long nextRelinkTick;
     private long nextSnapshotTick;
     private long nextProductionTick;
+    private long nextStockRuleTick;
+    /**
+     * Every keeper of the aisle is re-read on the next tick. Set on load, after a layout change and on every re-link
+     * check, so a keeper edited while this controller was unloaded is picked up at the latest one
+     * {@code geometryRefreshTicks} later. Single edits do not go through it: they are applied at once
+     * ({@link #onStockRulesChanged}).
+     */
+    private boolean stockRulesRefreshPending = true;
     /** Restored orders have no deadline yet: the first tick that knows the game time gives them a fresh one. */
     private boolean productionDeadlinesPending;
     /** Rate limit for the "could not read storage location" line: a second, different inventory stays reportable. */
     private final LogThrottle snapshotFailures = new LogThrottle();
+    /**
+     * Result items credited to production orders through the <b>arrival</b> channel since the last observation of the
+     * stock level, by item ({@link #onResultStored}, M15 part 2).
+     * <p>
+     * The same items are in the stock index too, so the level-based channel has to leave them out or an order would be
+     * credited twice for one physical batch ({@link ProductionOrders#observeResult(Object, long, long, long, long)}).
+     * Derived, cleared by every observation pass and never saved: it only ever holds one tick's worth of arrivals.
+     */
+    private final Map<ItemKey, Long> storedCredits = new HashMap<>();
 
     // --- goggles ---
     private ControllerGoggleSummary summary = ControllerGoggleSummary.NONE;
     private final SyncThrottle summarySync = new SyncThrottle(GoggleObservers.SUMMARY_SYNC_MIN_INTERVAL_TICKS);
+    /**
+     * What the aisle's stock rules are doing, for the controller's goggle lines (M15, issue #3): how many rules govern
+     * an item, how many of them call for it and how many of them stop it from being stored.
+     * <p>
+     * Derived and <b>not</b> saved, refreshed by the rule tick ({@link #tickStockKeepers}) rather than while a summary
+     * is built: a goggle summary is rebuilt on every observation, and reading three counters per rule per tick for as
+     * long as a player looks at the block is work nobody asked for. Enforcement never reads these numbers.
+     */
+    private int governingRules;
+    private int rulesBelowMinimum;
+    private int rulesAtMaximum;
+    /**
+     * The aisle's rules with their status and levels, computed at most once per tick ({@link #stockRuleEvaluations()}).
+     * Display state for the lamps, the comparators, both goggle surfaces and an open keeper screen; never read by
+     * anything that moves an item.
+     */
+    private List<StockRuleEvaluation<ItemKey>> ruleEvaluations = List.of();
+    private long ruleEvaluationTick = Long.MIN_VALUE;
+    /** The rule set {@link #ruleEvaluations} was computed from, compared by identity so an edit invalidates it. */
+    @Nullable
+    private StockRules<ItemKey> ruleEvaluationOf;
+    /**
+     * What automatic restocking last decided about each item, by item (M15 part 2, issue #3) — the overlay every
+     * surface reads on top of the three numbers ({@link RestockOutcome#refine}).
+     * <p>
+     * Derived and <b>not</b> saved: it is recomputed by the restock pass every {@code stockRuleIntervalTicks}, and an
+     * outcome that is out of date for one second says nothing a player acts on. Only outcomes that really say
+     * something are kept, so a warehouse whose rules are all satisfied holds an empty map and refines nothing. The
+     * map instance is replaced only when the outcomes really changed, which is what {@link #ruleEvaluations} compares
+     * against.
+     */
+    private Map<ItemKey, RestockOutcome> restockOutcomes = Map.of();
+    /**
+     * The ingredient a waiting rule needs a player to supply, by item (M15 part 2, issue #3): the other half of
+     * {@code RestockDecision}, kept because it is the one thing a player can act on and the planner is the only place
+     * that knows it ({@link RestockOutcome#WAITING_FOR_INGREDIENTS}).
+     * <p>
+     * Derived and not saved, like {@link #restockOutcomes}, and only filled for the rules that really wait — which is
+     * why it is a second map rather than a field on every outcome.
+     */
+    private Map<ItemKey, ItemKey> restockMissing = Map.of();
+    /** The outcomes {@link #ruleEvaluations} was computed with, by identity (see {@link #restockOutcomes}). */
+    private Map<ItemKey, RestockOutcome> ruleEvaluationRestock = Map.of();
 
     public WarehouseControllerBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -791,15 +884,20 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * Starts a production order for {@code amount} items of {@code key}, using the pattern of {@code patterns} that
      * can make the most of it right now.
      *
+     * @param available what the ingredients of a pattern are worth to <b>this</b> caller — the plain
+     *                  {@link #availabilityLookup()} for the warehouse's own accounting, and the same lookup behind a
+     *                  rule's reserve for a taker that may not spend it ({@link StockAvailability#of}, M15). It bounds
+     *                  both the pattern choice and the number of runs, so an order can never be started against
+     *                  ingredients its starter is not allowed to have.
      * @return how many result items the order <b>promises the backing request</b>, i.e. at most {@code amount} (0 when
      * no order could be started). The order itself may yield more, because a pattern makes whole runs; that surplus
      * simply lands in stock and was promised to nobody ({@code ProductionOrder#promisedToRequest}).
      */
-    private int startProductionOrder(ItemKey key, int amount, UUID backingRequest, List<AislePattern> patterns) {
+    private int startProductionOrder(ItemKey key, int amount, UUID backingRequest, List<AislePattern> patterns,
+            ToLongFunction<ItemKey> available) {
         if (level == null || layout == null || amount < 1)
             return 0;
         productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
-        ToLongFunction<ItemKey> available = availabilityLookup();
         Optional<AislePattern> found = bestProductionPattern(key, patterns, available);
         if (found.isEmpty())
             return 0;
@@ -885,16 +983,48 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             results.add(order.result());
         boolean changed = false;
         for (ItemKey result : results) {
+            // Items the warehouse really stored out of one of its inputs since the last observation are already
+            // counted (onCraneDelivered) and are in this level too: crediting them a second time would complete an
+            // order nothing was made for (M15 part 2).
+            long arrived = storedCredits.getOrDefault(result, 0L);
             // Only an order that really changed marks the controller dirty: observing an unchanged stock level must
             // not save the chunk on every tick for as long as an order is open.
             for (ProductionOrder<ItemKey, RackPosition> observed
-                    : productionOrders.observeResult(result, stock.count(result), now, timeout)) {
+                    : productionOrders.observeResult(result, stock.count(result), now, timeout, arrived)) {
                 changed = true;
                 if (observed.state() == ProductionOrderState.COMPLETE)
                     onProductionOrderFinished(observed);
             }
         }
+        // The credits are per observation window: whatever was not consumed here belonged to a level rise that has
+        // already been seen, or to an order that has since closed.
+        storedCredits.clear();
         return changed;
+    }
+
+    /**
+     * Server: result items of a production order really arrived in the warehouse — the crane stored them out of one of
+     * this aisle's warehouse inputs, which is the route the product of a pattern takes back into the racks
+     * ({@code docs/warehouse-system.md} §3.5).
+     * <p>
+     * This is the <b>only</b> channel an automatic restock order is completed by, and that is the whole of the safety
+     * stop (M15 part 2, ADR-026): a rise of the stock index says nothing about where the items came from, so a barrel
+     * tipped into a rack, an unrelated farm or a player taking the product out and putting it back would otherwise
+     * complete an order whose ingredients a machine had swallowed — and the rule would go on feeding that machine.
+     */
+    private void onResultStored(ItemKey key, int delivered) {
+        long timeout = productionTimeoutTicks();
+        ProductionOrders.Observation<ItemKey, RackPosition> observed =
+                productionOrders.observeStored(key, delivered, level.getGameTime(), timeout);
+        if (observed.isEmpty())
+            return;
+        if (observed.credited() > 0L)
+            storedCredits.merge(key, observed.credited(), Long::sum);
+        for (ProductionOrder<ItemKey, RackPosition> order : observed.changed()) {
+            if (order.state() == ProductionOrderState.COMPLETE)
+                onProductionOrderFinished(order);
+        }
+        setChanged();
     }
 
     /**
@@ -926,6 +1056,15 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private void onProductionOrderFinished(ProductionOrder<ItemKey, RackPosition> order) {
         cancelSupplyJobsOf(order);
+        // The safety stop (M15 part 2): an order the warehouse started by itself ended with ingredients already in a
+        // machine and nothing coming back. Those items are unrecoverable, so the rule stops ordering and waits for the
+        // player rather than feeding the same machine again. An order that gave up while the crane was still fetching
+        // cost nothing and never pauses anything (ProductionOrder#endedWithLostIngredients).
+        if (order.isRestock() && order.endedWithLostIngredients())
+            pauseStockRule(order.result(),
+                    order.state() == ProductionOrderState.CANCELLED ? StockRulePause.Cause.CANCELLED
+                            : StockRulePause.Cause.TIMED_OUT,
+                    order.deliveredIngredients());
         // Only what production promised this request, never the whole run: a pattern makes whole runs, so the surplus
         // of an order was promised to nobody, and taking it off the request would strip that request of items the
         // aisle really holds — or delete it outright when the shortfall reaches its remaining amount (§3.5.3).
@@ -981,6 +1120,76 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     // --- retrieval requests --------------------------------------------------------------------------------------
 
     /**
+     * Server: what a player's request for {@code amount} items of {@code key} would cost across the boundaries a stock
+     * keeper set — the question a warehouse terminal asks before it makes the request ({@code docs/warehouse-system.md}
+     * §3.6.6, M15 part 2).
+     * <p>
+     * It measures; {@link RequestConfirmation#of} decides. Everything it measures is measured the way
+     * {@link #request(BlockPos, ItemKey, int, int, StockAccess)} measures it — the same availability, the same pattern
+     * choice, the same run count — so the question names exactly what the request would then do. A player is never
+     * <b>refused</b> any of it ({@link StockAccess#PLAYER}); being told the number is the whole point.
+     * <p>
+     * <b>Cost.</b> An aisle without a governing rule answers after one integer read: no rule can be crossed, so
+     * nothing is measured at all. A ruled item that is simply in stock costs one {@link #stockLevelsOf} — whose
+     * {@link StockLevels#available()} is the very number the request would be clamped with — and nothing else: neither
+     * the aisle's patterns nor the ingredients' availability are resolved, because a request that stays inside the
+     * racks can spend no ingredient (M15 review fix). Only a request that would have to <b>produce</b> something walks
+     * the patterns, and then once per click — never per tick.
+     * <p>
+     * A terminal does not call this and then make the request: it makes the request with what the player accepted, and
+     * the request measures the question from its own snapshot
+     * ({@link #request(BlockPos, ItemKey, int, int, StockAccess, RequestAcknowledgement)}), so the two can never
+     * disagree and the snapshot is built once. This entry point is for asking without requesting.
+     */
+    public RequestConfirmation<ItemKey> confirmationFor(ItemKey key, int amount) {
+        Objects.requireNonNull(key, "key");
+        long wantedByClick = Math.max(0, amount);
+        StockRules<ItemKey> rules = stockRules();
+        if (level == null || level.isClientSide || isRemoved() || layout == null || wantedByClick < 1
+                || rules.governingCount() == 0)
+            return RequestConfirmation.none(key, wantedByClick);
+        StockLevels levels = stockLevelsOf(key);
+        if (wantedByClick <= levels.available())
+            return confirmationFrom(key, wantedByClick, levels, List.of(), NOTHING_AVAILABLE);
+        // What the ingredients of a production order are worth to this request: a player's availability, i.e. with no
+        // reserve taken off — which is precisely why the reserved part of it has to be named rather than subtracted.
+        return confirmationFrom(key, wantedByClick, levels, aislePatterns(),
+                StockAvailability.of(rules, StockAccess.PLAYER, availabilityLookup()));
+    }
+
+    /**
+     * {@link #confirmationFor} measured against a snapshot the caller has already taken: the aisle's patterns and what
+     * an ingredient is worth to this request.
+     * <p>
+     * {@code patterns} and {@code ingredientAvailability} are only consulted when the request reaches past the racks, so
+     * an in-stock request may be given an empty list and {@link #NOTHING_AVAILABLE}.
+     */
+    private RequestConfirmation<ItemKey> confirmationFrom(ItemKey key, long wantedByClick, StockLevels levels,
+            List<AislePattern> patterns, ToLongFunction<ItemKey> ingredientAvailability) {
+        StockRules<ItemKey> rules = stockRules();
+        if (wantedByClick < 1 || rules.governingCount() == 0)
+            return RequestConfirmation.none(key, Math.max(0L, wantedByClick));
+        long inStock = levels.available();
+        Optional<ProductionPattern<ItemKey>> pattern = Optional.empty();
+        long runs = 0L;
+        long wanted = Math.min(wantedByClick, inStock);
+        // Only a request that reaches past the racks can start an order, and only then is a pattern chosen.
+        if (wantedByClick > inStock) {
+            wanted = Math.min(wantedByClick, inStock + producibleAmount(key, patterns, ingredientAvailability));
+            long produced = Math.max(0L, wanted - inStock);
+            Optional<AislePattern> best = produced > 0L
+                    ? bestProductionPattern(key, patterns, ingredientAvailability) : Optional.empty();
+            if (best.isPresent()) {
+                ProductionPattern<ItemKey> chosen = best.get().pattern();
+                pattern = Optional.of(chosen);
+                runs = Math.min(chosen.runsFor(produced),
+                        ProduciblePlanner.runsPossible(chosen, ingredientAvailability));
+            }
+        }
+        return RequestConfirmation.of(rules, key, wanted, levels, pattern, runs, ingredientAvailability);
+    }
+
+    /**
      * Server: a retrieval request with no amount cap of its own, i.e. bounded only by {@link #availableStock}; see
      * {@link #request(BlockPos, ItemKey, int, int)}.
      * <p>
@@ -991,6 +1200,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public RequestResult request(BlockPos outputPos, ItemKey key, int amount) {
         return request(outputPos, key, amount, RequestQueue.NO_AMOUNT_LIMIT);
+    }
+
+    /**
+     * Server: a retrieval request made on a player's behalf, i.e. one a stock rule's reserve does not hold back; see
+     * {@link #request(BlockPos, ItemKey, int, int, StockAccess)}.
+     * <p>
+     * The warehouse's own automation passes {@link StockAccess#AUTOMATION} instead. This overload keeps the meaning
+     * every caller had before M15 — nothing was ever held back from anyone — so no existing behaviour changes.
+     */
+    public RequestResult request(BlockPos outputPos, ItemKey key, int amount, int maxRemainingPerRequest) {
+        return request(outputPos, key, amount, maxRemainingPerRequest, StockAccess.PLAYER);
     }
 
     /**
@@ -1012,47 +1232,101 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * queue position until it has been served once and then moves behind the waiting requests, so repeatedly topping one
      * up cannot starve the other stations (§7.2 "fairness").
      *
+     * <p>
+     * <b>Stock rules</b> (M15, issue #3) enter here and nowhere else on the request side: the availability the queue
+     * clamps with is {@link StockAvailability}, so a rule's reserve holds items back from
+     * {@link StockAccess#AUTOMATION} — a redstone-triggered output request — while a {@link StockAccess#PLAYER} at a
+     * terminal is still served down to the last item and told in the row that it goes below the reserve. Because the
+     * wrapped availability already subtracts what the open requests promise, the reserve bounds a <b>merged</b>
+     * request exactly as it bounds a new one (ADR-020). The <b>ingredients</b> of a production order this request
+     * starts are measured against the same reserve, so automation cannot reach reserved items through a pattern.
+     *
      * @param maxRemainingPerRequest largest amount one request of this station may wait for, at least 1
      *                               ({@link RequestQueue#NO_AMOUNT_LIMIT} for no cap of its own)
+     * @param access                 who is asking: the warehouse's own automation stops at a rule's reserve, a player
+     *                               may take it
      * @throws IllegalArgumentException if {@code amount < 1} or {@code maxRemainingPerRequest < 1}
      */
-    public RequestResult request(BlockPos outputPos, ItemKey key, int amount, int maxRemainingPerRequest) {
+    public RequestResult request(BlockPos outputPos, ItemKey key, int amount, int maxRemainingPerRequest,
+            StockAccess access) {
+        // ANY never raises a question, so there is always a result to unwrap: an output's redstone request and a
+        // GameTest ask nobody, and a rule's reserve refuses them at the queue rather than in a dialog.
+        return request(outputPos, key, amount, maxRemainingPerRequest, access, RequestAcknowledgement.ANY).result()
+                .orElseThrow();
+    }
+
+    /**
+     * Server: {@link #request(BlockPos, ItemKey, int, int, StockAccess)} that may <b>ask first</b> (M15 part 2,
+     * issue #3): when the click crosses a boundary a stock keeper set and {@code acknowledged} does not already cover
+     * it, nothing at all is requested and the question is returned instead ({@link TerminalRequestOutcome}).
+     * <p>
+     * The question is measured from the <b>same snapshot</b> the order would be started against — one walk of the
+     * aisle's patterns, one availability lookup, one set of levels — so what the player is told and what then happens
+     * cannot differ, and a click costs that snapshot once rather than twice ({@code docs/warehouse-system.md} §3.6.6).
+     *
+     * @param acknowledged what the player has already accepted; {@link RequestAcknowledgement#ANY} asks nothing and
+     *                     {@link RequestAcknowledgement#NONE} is a plain click
+     */
+    public TerminalRequestOutcome request(BlockPos outputPos, ItemKey key, int amount, int maxRemainingPerRequest,
+            StockAccess access, RequestAcknowledgement acknowledged) {
         Objects.requireNonNull(outputPos, "outputPos");
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(access, "access");
+        Objects.requireNonNull(acknowledged, "acknowledged");
         if (amount < 1)
             throw new IllegalArgumentException("amount must be at least 1: " + amount);
         if (level == null || level.isClientSide || isRemoved() || layout == null || !isOutputStation(layout, outputPos))
-            return RequestResult.rejected(RequestRejection.NO_CONTROLLER);
+            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
         requests.setMaxOpenRequests(configuredMaxOpenRequests());
         requests.setMaxOpenRequestsPerDestination(Math.max(RequestQueue.MIN_OPEN_REQUESTS,
                 WareworksConfig.maxOpenRequestsPerOutput()));
         // What the aisle really holds, and what its production patterns could still make of what it holds. A request
         // may ask for both: the stock part is served at once, the produced part as it arrives through a warehouse
         // input, by ordinary RETRIEVE jobs serving this very request (§3.5, ADR-024).
-        long inStock = availableStock(key);
+        StockLevels levels = stockLevelsOf(key);
+        long inStock = levels.available();
+        // What this taker may have of that stock: everything for a player, everything above a rule's reserve for the
+        // warehouse's own automation (M15). Without a rule for the key the two are the same number.
+        long claimable = stockRules().availableTo(access, key, inStock);
         // One pass over the aisle's patterns for every production question this request asks — how much could be
         // made, which pattern would make it, and what its ingredients are still worth. Asking each of them separately
         // resolved every production station's block entity again per click (§3.5.2).
         List<AislePattern> patterns = aislePatterns();
-        long producible = producibleAmount(key, patterns, availabilityLookup());
+        // The ingredients are governed by the same reserve as the stock (M15 review fix): a rule's reserve holds items
+        // back from the warehouse's own automation, and spending them as the ingredients of an order this very request
+        // starts would be exactly that — automation taking the reserved items, one step removed. Measured once and
+        // used for both questions, so what is promised and what is then ordered agree.
+        ToLongFunction<ItemKey> ingredients = StockAvailability.of(stockRules(), access, availabilityLookup());
+        // What this click would cross, from that very snapshot. Nothing is promised until it is covered.
+        if (!acknowledged.any()) {
+            RequestConfirmation<ItemKey> question = confirmationFrom(key, amount, levels, patterns, ingredients);
+            if (!acknowledged.covers(question))
+                return TerminalRequestOutcome.asking(question);
+        }
+        long producible = producibleAmount(key, patterns, ingredients);
         RequestQueue.AddResult<ItemKey, BlockPos> added = requests.add(key, amount, outputPos.immutable(),
-                candidate -> candidate.equals(key) ? inStock + producible : availableStock(candidate),
+                StockAvailability.forRequest(stockRules(), access,
+                        candidate -> candidate.equals(key) ? inStock : availableStock(candidate), key, producible),
                 maxRemainingPerRequest);
         if (added.request().isEmpty()) {
-            return RequestResult.rejected(switch (added.rejection().orElseThrow()) {
+            return TerminalRequestOutcome.of(RequestResult.rejected(switch (added.rejection().orElseThrow()) {
                 case QUEUE_FULL -> RequestRejection.QUEUE_FULL;
                 case DESTINATION_FULL -> RequestRejection.OUTPUT_FULL;
-                case NOTHING_AVAILABLE -> nothingAvailableReason(key, patterns);
+                case NOTHING_AVAILABLE -> nothingAvailableReason(key, patterns, access);
                 case REQUEST_FULL -> RequestRejection.REQUEST_FULL;
-            });
+            }));
         }
         RetrievalRequest<ItemKey, BlockPos> accepted = added.request().get();
         int granted = added.accepted();
-        int fromProduction = (int) Math.max(0L, granted - inStock);
+        // Everything beyond what this taker may claim from the racks has to be made, not fetched. Measured against
+        // the claimable amount rather than the whole stock, so items a reserve holds back are not silently counted as
+        // served (M15).
+        int fromProduction = (int) Math.max(0L, granted - claimable);
         // A pattern makes whole runs, so an order may yield more than was asked for; that surplus simply lands in
         // stock. What this request waits for — and what it gets back if the order fails — is never more than what it
         // asked for, which the order records as its promise (§3.5.3).
-        int producing = fromProduction > 0 ? startProductionOrder(key, fromProduction, accepted.id(), patterns) : 0;
+        int producing = fromProduction > 0
+                ? startProductionOrder(key, fromProduction, accepted.id(), patterns, ingredients) : 0;
         if (producing < fromProduction) {
             // No order could be started after all, or a smaller one: give the request back what will never be made,
             // instead of leaving it waiting for items nobody produces.
@@ -1060,18 +1334,35 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             granted -= fromProduction - producing;
         }
         if (granted < 1)
-            return RequestResult.rejected(nothingAvailableReason(key, patterns));
+            return TerminalRequestOutcome.of(RequestResult.rejected(nothingAvailableReason(key, patterns, access)));
         setChanged();
-        return RequestResult.accepted(requests.get(accepted.id()).orElse(accepted), granted, added.merged(), producing);
+        return TerminalRequestOutcome.of(RequestResult.accepted(requests.get(accepted.id()).orElse(accepted), granted,
+                added.merged(), producing));
     }
 
     /**
-     * Why nothing of {@code key} could be promised. A full production order queue is told apart from a plain "not in
-     * stock" ({@link RequestRejection#PRODUCTION_BUSY}), because the cure is a different one: the ingredients may all
-     * be there, and what the player has to do is wait for an order to finish or give one up rather than go looking
-     * for an item the warehouse is not missing.
+     * Why nothing of {@code key} could be promised. A stock rule's reserve ({@link RequestRejection#RESERVED}) and a
+     * full production order queue ({@link RequestRejection#PRODUCTION_BUSY}) are told apart from a plain "not in
+     * stock", because the cure is a different one in both cases: the items may all be there, and what the player has
+     * to do is lower a reserve or wait for an order rather than go looking for an item the warehouse is not missing.
+     * <p>
+     * The reserve answers for both ways it can refuse automation: the requested item is in the racks and held back, or
+     * the item could be <b>made</b> and it is the ingredients that are held back.
      */
-    private RequestRejection nothingAvailableReason(ItemKey key, List<AislePattern> patterns) {
+    /** An availability that answers 0 for every key: for a request that cannot spend an ingredient at all. */
+    private static final ToLongFunction<ItemKey> NOTHING_AVAILABLE = key -> 0L;
+
+    private RequestRejection nothingAvailableReason(ItemKey key, List<AislePattern> patterns, StockAccess access) {
+        // A reserve is checked first and only for the warehouse's own automation: the items are there, they are just
+        // not for it (M15). A player is never held back, so they can never see this reason.
+        if (access == StockAccess.AUTOMATION) {
+            if (availableStock(key) > 0 && availableTo(access, key) == 0)
+                return RequestRejection.RESERVED;
+            // The same answer when it is the ingredients that are reserved: without a reserve this aisle could make
+            // the item, so "not in stock" would send a player looking for something the warehouse is not missing.
+            if (producibleAmount(key, patterns, availabilityLookup()) > 0)
+                return RequestRejection.RESERVED;
+        }
         if (!productionOrders.isFull())
             return RequestRejection.NOT_IN_STOCK;
         for (AislePattern candidate : patterns) {
@@ -1132,6 +1423,711 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // already spoken for, so neither may be handed out twice (§3.5, ADR-024).
         return dispatch.reservations().availableStock(key, stock.count(key),
                 requests.remainingOf(key) + productionOrders.outstandingIngredient(key));
+    }
+
+    /**
+     * The stock rules that govern this aisle (M15, issue #3): the controller's own copy of what the warehouse stock
+     * keepers of the aisle hold, in a stable order. Everything that gates item movement asks this copy and never a
+     * keeper's block entity, so nothing can be stored past a maximum, and nothing reserved handed out, while a
+     * keeper's chunk happens to be unloaded (the M8 cold-cache lesson).
+     * <p>
+     * The copy is saved with this controller and refreshed whenever a keeper joins, changes or leaves
+     * ({@link AisleStockRules}), so an aisle without keepers answers neutrally ({@code Long.MAX_VALUE} of headroom, no
+     * reserve) and behaves exactly as it did before M15.
+     */
+    public StockRules<ItemKey> stockRules() {
+        return stockRules.rules();
+    }
+
+    /**
+     * What this warehouse knows about one item right now, as a stock rule is judged against it (M15): what the racks
+     * hold, what a transport job is carrying in, what an open production order is still expected to bring back, and
+     * what a new request may still claim.
+     * <p>
+     * Four counter reads, one of them a pass over the request queue ({@link #availableStock}). Asked per rule of a
+     * keeper that is being looked at or whose screen is open, never per candidate of a planning run.
+     */
+    public StockLevels stockLevelsOf(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        return new StockLevels(stock.count(key), dispatch.reservations().reservedCapacityFor(key),
+                productionOrders.outstandingResult(key), availableStock(key));
+    }
+
+    /**
+     * {@link #stockLevelsOf(ItemKey)} for a caller that has already collected what the open requests owe
+     * ({@link #remainingRequestedByKey()}), i.e. one that asks about many keys in the same pass — a terminal's stock
+     * snapshot, or this controller's own rule tick.
+     * <p>
+     * That turns the one expensive term into a map lookup: every other counter is O(1) or bounded by the open
+     * production orders, so asking for a whole aisle's rules costs one pass over the queue instead of one per key.
+     *
+     * @param openRequestRemaining what the open requests for {@code key} still wait for, 0 when none do
+     */
+    public StockLevels stockLevelsOf(ItemKey key, long openRequestRemaining) {
+        Objects.requireNonNull(key, "key");
+        long promised = Math.max(0L, openRequestRemaining) + productionOrders.outstandingIngredient(key);
+        return new StockLevels(stock.count(key), dispatch.reservations().reservedCapacityFor(key),
+                productionOrders.outstandingResult(key),
+                dispatch.reservations().availableStock(key, stock.count(key), promised));
+    }
+
+    /**
+     * What the aisle's rule set says about the rule the warehouse stock keeper at {@code keeperPos} holds at
+     * {@code ruleIndex} of its own configured rules (empty rows skipped) — the one answer a keeper's screen, its lamp
+     * and its goggles all read.
+     * <p>
+     * It is answered <b>here</b> and not in the keeper, because only this copy knows the whole aisle: whether an
+     * earlier rule already governs the same item ({@link StockRuleStatus#SHADOWED}) and whether the rule is beyond
+     * {@code maxStockRules} ({@link StockRuleStatus#INERT}). A keeper this controller does not hold rules for answers
+     * {@link StockRuleStatus#NO_WAREHOUSE}.
+     */
+    public StockRuleStatus stockRuleStatus(BlockPos keeperPos, int ruleIndex) {
+        Objects.requireNonNull(keeperPos, "keeperPos");
+        if (ruleIndex < 0)
+            return StockRuleStatus.NO_WAREHOUSE;
+        List<StockRuleStatus> statuses = stockRuleStatuses(keeperPos);
+        return ruleIndex < statuses.size() ? statuses.get(ruleIndex) : StockRuleStatus.NO_WAREHOUSE;
+    }
+
+    /**
+     * What the aisle's rule set says about <b>all</b> the rules of the keeper at {@code keeperPos}, in that keeper's own
+     * row order (empty rows skipped) — one answer for its lamp, its comparator, its goggles and its screen.
+     * <p>
+     * This is the batched form, and the one every caller should use: it resolves the keeper's rack and its offset once
+     * instead of per rule, and it reads the aisle's evaluation, which is computed <b>once per tick</b> and costs one
+     * pass over the request queue for the whole aisle ({@link #stockRuleEvaluations()}). Asking per rule walked that
+     * queue again for every single rule (M15 review fix).
+     * <p>
+     * A keeper this controller holds no rules for answers an empty list, which its caller reports as
+     * {@link StockRuleStatus#NO_WAREHOUSE}: only this copy knows the whole aisle, i.e. whether an earlier rule already
+     * governs the same item ({@link StockRuleStatus#SHADOWED}) and whether a rule is beyond {@code maxStockRules}
+     * ({@link StockRuleStatus#INERT}).
+     */
+    public List<StockRuleStatus> stockRuleStatuses(BlockPos keeperPos) {
+        Objects.requireNonNull(keeperPos, "keeperPos");
+        if (level == null || level.isClientSide || layout == null)
+            return List.of();
+        Optional<RackPosition> rack = layout.worldToLocal(keeperPos);
+        if (rack.isEmpty())
+            return List.of();
+        OptionalInt offset = stockRules.offsetOf(rack.get());
+        if (offset.isEmpty())
+            return List.of();
+        int start = offset.getAsInt();
+        int count = stockRules.ruleCountAt(rack.get());
+        List<StockRuleEvaluation<ItemKey>> evaluations = stockRuleEvaluations();
+        List<StockRuleStatus> statuses = new ArrayList<>(count);
+        for (int index = start; index < start + count; index++)
+            // Beyond the flattened set only when StockRules truncated it at its hard bound, which is the same "applies
+            // nothing until the cap is raised" the rule cap produces. The displayed status, not the counted one: this
+            // is what a player is shown, so a paused rule says "paused" here (M15 part 2).
+            statuses.add(index < evaluations.size() ? evaluations.get(index).displayStatus() : StockRuleStatus.INERT);
+        return List.copyOf(statuses);
+    }
+
+    /**
+     * Server: whether the rule the warehouse stock keeper at {@code keeperPos} holds at {@code ruleIndex} of its own
+     * configured rules is the one that <b>governs</b> {@code key} in this aisle (M15 part 2, issue #3).
+     * <p>
+     * This is the question a keeper asks before it lets an edit lift a rule's safety stop: a pause is held per item, and
+     * only the row that really applies the numbers for that item may re-arm an automatic order into the machine that
+     * swallowed a batch (M15 review fix).
+     * <p>
+     * It is answered from the rule set alone — no levels, no evaluation, nothing cached — because it is asked in the
+     * middle of an edit, and building the per-tick evaluation there would freeze levels that the same tick still
+     * changes.
+     */
+    public boolean stockRuleGoverns(BlockPos keeperPos, int ruleIndex, ItemKey key) {
+        Objects.requireNonNull(keeperPos, "keeperPos");
+        Objects.requireNonNull(key, "key");
+        if (level == null || level.isClientSide || layout == null || ruleIndex < 0)
+            return false;
+        Optional<RackPosition> rack = layout.worldToLocal(keeperPos);
+        if (rack.isEmpty())
+            return false;
+        OptionalInt offset = stockRules.offsetOf(rack.get());
+        if (offset.isEmpty() || ruleIndex >= stockRules.ruleCountAt(rack.get()))
+            return false;
+        OptionalInt governing = stockRules.rules().governingIndexOf(key);
+        return governing.isPresent() && governing.getAsInt() == offset.getAsInt() + ruleIndex;
+    }
+
+    /**
+     * Every rule of this aisle with its status and the levels it was judged against — <b>one</b> evaluation per tick,
+     * reused by the rule tick, every keeper's lamp and comparator, its goggles and its open screen.
+     * <p>
+     * The one expensive term is what the open requests owe, which {@link #remainingRequestedByKey()} collects in a
+     * single pass over the queue; everything else is O(1) per governing rule, and a shadowed, inert or unfinished rule
+     * is never measured at all ({@code StockRules#evaluate}). Judging the same rule set several times in one tick — once
+     * for the counts and once per keeper — walked that queue once per rule instead (M15 review fix).
+     * <p>
+     * The cache is scoped to the current game tick and is display state only: what gates item movement asks
+     * {@link #storeHeadroom} and {@link #availableTo} directly, which always read the live counters.
+     */
+    private List<StockRuleEvaluation<ItemKey>> stockRuleEvaluations() {
+        if (level == null || level.isClientSide)
+            return List.of();
+        long now = level.getGameTime();
+        StockRules<ItemKey> rules = stockRules.rules();
+        // The rule set and the restock outcomes are compared by identity, not by value: every refresh that really
+        // changed something builds a new one, so an edit — or an order started in this very tick — is never answered
+        // out of the cache.
+        if (ruleEvaluationTick == now && ruleEvaluationOf == rules && ruleEvaluationRestock == restockOutcomes)
+            return ruleEvaluations;
+        Map<ItemKey, Long> promised = requests.remainingByKey();
+        List<StockRuleEvaluation<ItemKey>> evaluated =
+                rules.evaluate(key -> stockLevelsOf(key, promised.getOrDefault(key, 0L)));
+        if (!restockOutcomes.isEmpty()) {
+            List<StockRuleEvaluation<ItemKey>> overlaid = new ArrayList<>(evaluated.size());
+            // Only onto a rule that really governs its item: the outcomes are keyed by item, and PAUSED outranks every
+            // other status, so a shadowed or inert duplicate row for a paused item would hide its own "an earlier rule
+            // already governs this" warning and offer a resume click for the other row's pause (M15 review fix).
+            for (StockRuleEvaluation<ItemKey> evaluation : evaluated)
+                overlaid.add(evaluation.withRestock(evaluation.governs()
+                        ? restockOutcomes.getOrDefault(evaluation.key(), RestockOutcome.NOT_GOVERNING)
+                        : RestockOutcome.NOT_GOVERNING));
+            evaluated = List.copyOf(overlaid);
+        }
+        ruleEvaluations = evaluated;
+        ruleEvaluationTick = now;
+        ruleEvaluationOf = rules;
+        ruleEvaluationRestock = restockOutcomes;
+        return ruleEvaluations;
+    }
+
+    /**
+     * The evaluations of the rules the keeper at {@code keeperPos} holds, in that keeper's own row order (empty rows
+     * skipped) — one answer for its lamp, its comparator, its goggles and its screen.
+     * <p>
+     * This is the batched form and the one every caller should use: it resolves the keeper's rack and its offset once
+     * instead of per rule, and it reads the aisle's evaluation, which is computed <b>once per tick</b> for the whole
+     * aisle ({@link #stockRuleEvaluations()}). An evaluation carries the rule, its unrefined status (what the rule
+     * <i>counts as</i>), the levels it was judged against and what restocking is doing about it, so a caller needs no
+     * second lookup for any of them.
+     * <p>
+     * A keeper this controller holds no rules for answers an empty list, which its caller reports as
+     * {@link StockRuleStatus#NO_WAREHOUSE}: only this copy knows the whole aisle.
+     */
+    public List<StockRuleEvaluation<ItemKey>> stockRuleViewsAt(BlockPos keeperPos) {
+        Objects.requireNonNull(keeperPos, "keeperPos");
+        if (level == null || level.isClientSide || layout == null)
+            return List.of();
+        Optional<RackPosition> rack = layout.worldToLocal(keeperPos);
+        if (rack.isEmpty())
+            return List.of();
+        OptionalInt offset = stockRules.offsetOf(rack.get());
+        if (offset.isEmpty())
+            return List.of();
+        int start = offset.getAsInt();
+        int count = stockRules.ruleCountAt(rack.get());
+        List<StockRuleEvaluation<ItemKey>> evaluations = stockRuleEvaluations();
+        List<StockRuleEvaluation<ItemKey>> views = new ArrayList<>(count);
+        for (int index = start; index < start + count && index < evaluations.size(); index++)
+            views.add(evaluations.get(index));
+        return List.copyOf(views);
+    }
+
+    /**
+     * Server: the warehouse stock keeper at {@code rack} was loaded, edited or removed
+     * ({@link WarehouseRegistry#stockRulesChanged}). Its rules are re-read <b>at once</b> rather than on the next
+     * tick, so the plan and the request that follow in the same tick already obey the new rule.
+     */
+    void onStockRulesChanged(RackPosition rack) {
+        boolean changed = readStockRulesAt(rack);
+        // A rule a player deleted takes its pause with it, which is one of the two ways to resume (M15 part 2).
+        changed |= pruneStockPauses();
+        if (changed)
+            setChanged();
+    }
+
+    /**
+     * Re-reads every keeper of the aisle and drops the copies of racks that no longer hold an aligned keeper. Runs on
+     * the first tick after a load and on every re-link check ({@code geometryRefreshTicks}), always as a backstop for a
+     * keeper that was edited while this controller was unloaded.
+     * <p>
+     * The racks it visits are the ones this copy already holds rules for <b>plus</b> the aisle's keeper records, and
+     * every one of them is judged by {@link #readStockRulesAt}, i.e. by what really stands there. A rack is therefore
+     * only ever dropped on the evidence of a loaded block, never because a membership record happens to be missing:
+     * after an aisle was replaced the records are gone for a moment, and reading that as "no rule" would store past a
+     * maximum and hand out a reserve, which nothing can undo (M15 review fix).
+     */
+    private void refreshAllStockRules() {
+        if (layout == null)
+            return;
+        boolean changed = stockRules.setCap(WareworksConfig.maxStockRules());
+        Set<RackPosition> racks = new TreeSet<>(RackPosition.ORDER);
+        racks.addAll(stockRules.keepers());
+        // Only when the aisle really has keepers: records(KEEPER) walks the whole member map, and a warehouse without
+        // keepers must pay nothing for the question.
+        if (membership.keeperCount() > 0) {
+            for (LocationRecord record : membership.records(LocationKind.KEEPER))
+                racks.add(record.position());
+        }
+        for (RackPosition rack : racks)
+            changed |= readStockRulesAt(rack);
+        changed |= pruneStockPauses();
+        if (changed)
+            setChanged();
+    }
+
+    /**
+     * Reads the rules of one keeper into the copy.
+     * <p>
+     * A position whose chunk is <b>not loaded</b> keeps the rules it was last read with — that is the whole point of
+     * saving the copy with the controller: a maximum must keep capping and a reserve must keep holding back while the
+     * keeper sleeps. A position that <b>is</b> loaded and holds no keeper facing this aisle any more loses its rules,
+     * because then the keeper really is gone as far as this warehouse is concerned. The alignment test is the same one
+     * {@link #isOutputStation} uses, so a keeper a player turned away from the aisle stops governing at once instead of
+     * being put back by the next edit or chunk load (M15 review fix).
+     *
+     * @return whether the aisle's rule set changed
+     */
+    private boolean readStockRulesAt(RackPosition rack) {
+        if (level == null || level.isClientSide || layout == null)
+            return false;
+        BlockPos pos = layout.rackPos(rack);
+        if (!level.isLoaded(pos))
+            return false;
+        if (level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper && !keeper.isRemoved()
+                && keeper.isAlignedWith(layout, rack.side()))
+            return stockRules.set(rack, keeper.rules().rules());
+        return dropStockRulesAt(rack);
+    }
+
+    /**
+     * Forgets the rules of the keeper at {@code rack} and, while that block is loaded, lets it stop calling for items:
+     * a keeper this warehouse no longer reads must not keep a comparator running for a rule nothing enforces
+     * ({@link WarehouseStockKeeperBlockEntity#clearRuleState}, M15 review fix).
+     *
+     * @return whether the aisle's rule set changed
+     */
+    private boolean dropStockRulesAt(RackPosition rack) {
+        boolean changed = stockRules.remove(rack);
+        clearKeeperRuleState(layout, rack);
+        return changed;
+    }
+
+    /**
+     * Lets the keeper at {@code rack} of {@code current} drop its lamp and its comparator value, if that block is loaded
+     * and really is a keeper. The layout is passed in because the caller may be the very code that is <b>taking it
+     * away</b>: a rack position means a world position only through the layout it belongs to.
+     * <p>
+     * Never called from {@code invalidate()} or from a load: a chunk unload leaves a keeper exactly as it was
+     * (ADR-013), and only a real loss of the warehouse quietens it.
+     */
+    private void clearKeeperRuleState(@Nullable AisleLayout current, RackPosition rack) {
+        if (level == null || level.isClientSide || current == null)
+            return;
+        BlockPos pos = current.rackPos(rack);
+        if (level.isLoaded(pos)
+                && level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper && !keeper.isRemoved())
+            keeper.clearRuleState();
+    }
+
+    /**
+     * Every keeper this controller holds rules for in {@code current} stops signalling, because that aisle is gone or
+     * because this controller is — the counterpart of the rule tick, which is what switched those states on.
+     */
+    private void clearAllKeeperRuleStates(@Nullable AisleLayout current) {
+        for (RackPosition rack : List.copyOf(stockRules.keepers()))
+            clearKeeperRuleState(current, rack);
+    }
+
+    /**
+     * Server: judges the rules of every loaded keeper of this aisle and lets it take its lamp state and its
+     * comparator value from the result ({@code WarehouseStockKeeperBlockEntity#refreshRuleState}).
+     * <p>
+     * Runs every {@code stockRuleIntervalTicks} and costs <b>one</b> evaluation of the aisle's rule set
+     * ({@link #stockRuleEvaluations()}) plus one block entity lookup per keeper — bounded by the number of rules and
+     * keepers, never by the size of the aisle: the keepers are taken from the rule copy's own index, so the aisle's
+     * member map is not walked at all. It writes a block state only when a lamp really changed and pushes a neighbour
+     * update only when the comparator value really changed, so a crane delivering a stack of 64 produces one update
+     * rather than 64. Enforcement does not depend on it: the maximum and the reserve are applied where a job is planned
+     * and where a request is made.
+     */
+    private void tickStockKeepers(long now) {
+        if (now < nextStockRuleTick)
+            return;
+        nextStockRuleTick = now + Math.max(1, WareworksConfig.stockRuleIntervalTicks());
+        if (layout == null)
+            return;
+        refreshStockRuleCounts();
+        tickRestocking(now);
+        for (RackPosition rack : List.copyOf(stockRules.keepers())) {
+            BlockPos pos = layout.rackPos(rack);
+            if (!level.isLoaded(pos))
+                continue;
+            if (level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper && !keeper.isRemoved())
+                keeper.refreshRuleState(this);
+        }
+    }
+
+    /**
+     * Re-counts what the aisle's rules are doing for the goggle lines (M15, issue #3).
+     * <p>
+     * It judges the controller's <b>own copy</b>, not the keepers, so the numbers describe what the warehouse is
+     * really enforcing — including the rules of a keeper whose chunk is not loaded, which still cap and still reserve.
+     * An aisle without rules leaves the loop immediately and reads no counter at all; a rule that governs nothing
+     * (shadowed, inert or without a number) never reaches {@code stockLevelsOf} either, which is
+     * {@code StockRules#evaluate}'s own guarantee.
+     */
+    private void refreshStockRuleCounts() {
+        if (stockRules.isEmpty()) {
+            governingRules = 0;
+            rulesBelowMinimum = 0;
+            rulesAtMaximum = 0;
+            return;
+        }
+        int governing = 0;
+        int below = 0;
+        int atMaximum = 0;
+        for (StockRuleEvaluation<ItemKey> evaluation : stockRuleEvaluations()) {
+            if (!evaluation.status().governs())
+                continue;
+            governing++;
+            if (evaluation.status() == StockRuleStatus.BELOW_MINIMUM)
+                below++;
+            else if (evaluation.status() == StockRuleStatus.AT_MAXIMUM)
+                atMaximum++;
+        }
+        governingRules = governing;
+        rulesBelowMinimum = below;
+        rulesAtMaximum = atMaximum;
+    }
+
+    /**
+     * How many stock rules of this aisle really govern an item — the number the controller's goggles and the aisle
+     * summary display show (M15, issue #3).
+     * <p>
+     * Derived state, refreshed by the rule tick every {@code stockRuleIntervalTicks} and never saved, so it can be a
+     * tick or two behind what a keeper's screen shows and reads 0 for the first rule tick after a load. Nothing that
+     * moves an item ever reads it: enforcement asks {@link #stockRules()} itself.
+     */
+    public int governingStockRuleCount() {
+        return governingRules;
+    }
+
+    /** Governing rules of this aisle whose item the warehouse is short of ({@link #governingStockRuleCount()}). */
+    public int stockRulesBelowMinimum() {
+        return rulesBelowMinimum;
+    }
+
+    /** Governing rules of this aisle that stop their item from being stored ({@link #governingStockRuleCount()}). */
+    public int stockRulesAtMaximum() {
+        return rulesAtMaximum;
+    }
+
+    // --- automatic restocking (M15 part 2, issue #3) ---------------------------------------------------------------
+
+    /**
+     * Server: the warehouse's own restocking pass. Runs inside the rule tick, i.e. every
+     * {@code stockRuleIntervalTicks} and never per tick, and starts <b>at most one</b> production order
+     * ({@link RestockPlan}).
+     * <p>
+     * <b>A satisfied warehouse pays almost nothing for it.</b> The evaluation of the rules has already been made for
+     * the counts and the lamps; if no governing rule is short of its minimum and no rule is paused, this method
+     * returns before it resolves a single production station or builds an availability snapshot. Only a warehouse that
+     * really is missing something walks its patterns — one block entity lookup per production station, the same method
+     * a terminal request uses.
+     * <p>
+     * <b>The ingredients are measured against the reserve.</b> The availability handed to the planner is
+     * {@link StockAvailability#of} for {@link StockAccess#AUTOMATION}, which is the same path a redstone request
+     * already takes: an automatic order can never spend items a rule protects, whether it asks for them directly or
+     * reaches them through a pattern.
+     */
+    private void tickRestocking(long now) {
+        if (stockRules.isEmpty()) {
+            clearRestockOutcomes();
+            return;
+        }
+        List<StockRuleEvaluation<ItemKey>> evaluations = stockRuleEvaluations();
+        boolean anyShort = false;
+        for (StockRuleEvaluation<ItemKey> evaluation : evaluations) {
+            if (evaluation.status() == StockRuleStatus.BELOW_MINIMUM && !stockPauses.containsKey(evaluation.key())) {
+                anyShort = true;
+                break;
+            }
+        }
+        // Nothing to order, nothing already being made and nothing paused: every outcome would refine to the plain
+        // status anyway, so the whole pass — patterns, availability snapshot, planner — is skipped and the overlay is
+        // dropped. An order that is already running keeps the pass alive although no rule reads as short: its own
+        // result counts towards the minimum ({@code StockLevels#pipeline()}), and "being made now" is exactly what
+        // that rule has to say while it does.
+        if (!anyShort && stockPauses.isEmpty() && productionOrders.openRestockCount() == 0) {
+            clearRestockOutcomes();
+            return;
+        }
+        RestockLimits limits = WareworksConfig.restockLimits();
+        // Resolved once for the whole pass, and only when an order could actually come of it.
+        List<AislePattern> patterns = anyShort && limits.enabled() ? aislePatterns() : List.of();
+        Map<ItemKey, List<ProductionPattern<ItemKey>>> byResult = patternsByResult(patterns);
+        ToLongFunction<ItemKey> available = patterns.isEmpty() ? key -> 0L
+                : StockAvailability.of(stockRules(), StockAccess.AUTOMATION, availabilityLookup());
+        List<RestockInput<ItemKey>> inputs = new ArrayList<>(evaluations.size());
+        for (StockRuleEvaluation<ItemKey> evaluation : evaluations) {
+            ItemKey key = evaluation.key();
+            inputs.add(new RestockInput<>(evaluation.rule(), evaluation.levels(), evaluation.governs(),
+                    stockPauses.containsKey(key), productionOrders.openRestockCountFor(key),
+                    byResult.getOrDefault(key, List.of())));
+        }
+        productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
+        RestockPlan<ItemKey> plan = RestockPlanner.plan(inputs, limits, productionOrders.openRestockCount(),
+                productionOrders.isFull(), available);
+        plan.order().ifPresent(decision -> startRestockOrder(decision, patterns, available));
+        applyRestockOutcomes(plan);
+    }
+
+    /** The patterns of {@code patterns} grouped by the item they make, in aisle order. */
+    private Map<ItemKey, List<ProductionPattern<ItemKey>>> patternsByResult(List<AislePattern> patterns) {
+        if (patterns.isEmpty())
+            return Map.of();
+        Map<ItemKey, List<ProductionPattern<ItemKey>>> byResult = new LinkedHashMap<>();
+        for (AislePattern candidate : patterns)
+            byResult.computeIfAbsent(candidate.pattern().result().key(), key -> new ArrayList<>())
+                    .add(candidate.pattern());
+        return byResult;
+    }
+
+    /**
+     * Starts the order a decision asks for: an ordinary production order with <b>no request behind it</b>
+     * ({@code ProductionOrder#restock}). Nothing new is invented — the crane fetches the ingredients with the same
+     * {@code SUPPLY} jobs, the machine works, and the result comes back through a warehouse input and is stored by an
+     * ordinary {@code STORE} job.
+     *
+     * @return whether an order was really started
+     */
+    private boolean startRestockOrder(RestockDecision<ItemKey> decision, List<AislePattern> patterns,
+            ToLongFunction<ItemKey> available) {
+        if (level == null || layout == null || decision.pattern().isEmpty())
+            return false;
+        ProductionPattern<ItemKey> chosen = decision.pattern().get();
+        RackPosition station = null;
+        for (AislePattern candidate : patterns) {
+            // Identity: the decision was made from exactly these pattern objects, in this pass.
+            if (candidate.pattern() == chosen) {
+                station = candidate.station();
+                break;
+            }
+        }
+        if (station == null)
+            return false;
+        // The planner's own run count, not a second derivation of it: it already bounded the runs by the rule's
+        // headroom, by what one order may spend in ingredient items and by what the ingredients allow, and rounding the
+        // amount up again here would order more than the rule may have (M15 review fix).
+        int runs = Math.min(decision.runs(), ProduciblePlanner.runsPossible(chosen, available));
+        if (runs < 1)
+            return false;
+        ProductionOrder<ItemKey, RackPosition> order = ProductionOrder.restock(UUID.randomUUID(), station, chosen,
+                runs, UUID::randomUUID, level.getGameTime(), productionTimeoutTicks());
+        if (!productionOrders.add(order))
+            return false;
+        setChanged();
+        return true;
+    }
+
+    /**
+     * Keeps what the pass decided, for every surface that reports it. Outcomes that say nothing
+     * ({@link RestockOutcome#NOT_GOVERNING}, {@link RestockOutcome#SATISFIED}) are left out, so a warehouse whose
+     * rules are all met holds an empty map, and the map instance is only replaced when something really changed —
+     * which is what keeps the per-tick evaluation cache valid.
+     */
+    private void applyRestockOutcomes(RestockPlan<ItemKey> plan) {
+        Map<ItemKey, RestockOutcome> next = new LinkedHashMap<>();
+        Map<ItemKey, ItemKey> missing = new LinkedHashMap<>();
+        for (RestockDecision<ItemKey> decision : plan.decisions()) {
+            if (decision.outcome() != RestockOutcome.NOT_GOVERNING && decision.outcome() != RestockOutcome.SATISFIED)
+                next.put(decision.key(), decision.outcome());
+            decision.missingIngredient().ifPresent(item -> missing.put(decision.key(), item));
+        }
+        if (!next.equals(restockOutcomes))
+            restockOutcomes = Map.copyOf(next);
+        if (!missing.equals(restockMissing))
+            restockMissing = Map.copyOf(missing);
+    }
+
+    private void clearRestockOutcomes() {
+        if (!restockOutcomes.isEmpty())
+            restockOutcomes = Map.of();
+        if (!restockMissing.isEmpty())
+            restockMissing = Map.of();
+    }
+
+    /**
+     * The ingredient the rule for {@code key} is waiting for a player to supply, or empty when it is not waiting for
+     * one ({@link RestockOutcome#WAITING_FOR_INGREDIENTS}, M15 part 2). This is what the keeper's screen names.
+     */
+    public Optional<ItemKey> restockMissingIngredient(ItemKey key) {
+        return Optional.ofNullable(restockMissing.get(Objects.requireNonNull(key, "key")));
+    }
+
+    /** What automatic restocking last decided about {@code key}; {@link RestockOutcome#NOT_GOVERNING} when nothing. */
+    public RestockOutcome restockOutcomeOf(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        return restockOutcomes.getOrDefault(key, RestockOutcome.NOT_GOVERNING);
+    }
+
+    /**
+     * {@code status} refined by what automatic restocking is doing about {@code key} — the one value every surface
+     * shows ({@link RestockOutcome#refine}).
+     * <p>
+     * It takes the status rather than computing it, because the caller has just measured the levels itself and a
+     * second, cached answer could be a tick out of date: a terminal row has to turn in the same tick the request that
+     * emptied the reserve was accepted, not on the next one.
+     */
+    public StockRuleStatus refineStockRuleStatus(ItemKey key, StockRuleStatus status) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(status, "status");
+        return restockOutcomeOf(key).refine(status);
+    }
+
+    /**
+     * Server: the <b>safety stop</b>. An automatic order ended with ingredients already handed to a machine and no
+     * result, so the rule for that item stops ordering and waits for the player ({@link StockRulePause}).
+     * <p>
+     * Only the ordering stops: the maximum still caps, the reserve still holds back, and the keeper's comparator still
+     * calls for the item, so a player's own farm goes on running. A second loss for the same item — possible only with
+     * {@code maxRestockOrdersPerRule} above 1 — adds its unrecovered items to the first pause rather than replacing
+     * it, because what a player has to be told is the whole cost.
+     */
+    private void pauseStockRule(ItemKey key, StockRulePause.Cause cause, long unrecovered) {
+        StockRulePause before = stockPauses.get(key);
+        StockRulePause next = before == null ? new StockRulePause(cause, unrecovered)
+                : new StockRulePause(before.cause(), before.unrecovered() + Math.max(0L, unrecovered));
+        if (next.equals(before))
+            return;
+        stockPauses.put(key, next);
+        // "Stop ordering" has to mean the orders that are already out, too: with maxRestockOrdersPerRule above 1 a
+        // second batch may be on its way to the very machine that swallowed the first. Cancelling reroutes what the
+        // crane is still carrying back into storage (cancelSupplyJobsOf), so only what a machine already took is lost
+        // (M15 review fix).
+        cancelOpenRestockOrders(key);
+        // The overlay is rebuilt by the next pass; invalidating it here makes the paused state visible in this tick,
+        // which is the tick a player watching the keeper sees the order fail in.
+        restockOutcomes = withOutcome(key, RestockOutcome.PAUSED);
+        setChanged();
+        Wareworks.LOGGER.info("Stock rule for {} paused at {}: an automatic order {} with {} ingredient items not "
+                + "recovered", key, worldPosition, cause.name().toLowerCase(java.util.Locale.ROOT), next.unrecovered());
+    }
+
+    /**
+     * Server: lets the rule for {@code key} order again after a player has looked at their machine. This is the one
+     * way back, and it is deliberately a <b>player's</b> action: the warehouse cannot tell a fixed machine from a
+     * broken one, and retrying by itself would feed the same machine a second batch.
+     *
+     * @return whether a pause was really lifted
+     */
+    public boolean resumeStockRule(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        if (level == null || level.isClientSide || stockPauses.remove(key) == null)
+            return false;
+        restockOutcomes = withoutOutcome(key);
+        setChanged();
+        return true;
+    }
+
+    /**
+     * Cancels every open <b>automatic</b> order for {@code key}. Ordinary orders are untouched: somebody is waiting for
+     * those, and a rule's safety stop is not about them.
+     * <p>
+     * Each cancellation goes through {@link #onProductionOrderFinished}, so a sibling that had already delivered
+     * ingredients adds its own loss to the pause — what a player has to be told is the whole cost. The recursion that
+     * follows from it ends after the last open order of the item.
+     */
+    private void cancelOpenRestockOrders(ItemKey key) {
+        if (level == null)
+            return;
+        long now = level.getGameTime();
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.open()) {
+            if (order.isRestock() && order.result().equals(key))
+                productionOrders.cancel(order.id(), now).ifPresent(this::onProductionOrderFinished);
+        }
+    }
+
+    /** The pause holding the rule for {@code key}, or empty when it is not paused. */
+    public Optional<StockRulePause> stockRulePause(ItemKey key) {
+        return Optional.ofNullable(stockPauses.get(Objects.requireNonNull(key, "key")));
+    }
+
+    /** How many rules of this aisle the safety stop is holding — the count both goggle surfaces show. */
+    public int pausedStockRuleCount() {
+        return stockPauses.size();
+    }
+
+    /**
+     * Forgets the pauses of items no rule governs any more. A rule a player deleted takes its pause with it, which is
+     * also one of the two ways to resume: writing the rule again starts from a clean state.
+     *
+     * @return whether anything was forgotten
+     */
+    private boolean pruneStockPauses() {
+        if (stockPauses.isEmpty())
+            return false;
+        StockRules<ItemKey> rules = stockRules.rules();
+        List<ItemKey> gone = new ArrayList<>();
+        for (ItemKey key : stockPauses.keySet()) {
+            if (!rules.governsKey(key))
+                gone.add(key);
+        }
+        for (ItemKey key : gone) {
+            stockPauses.remove(key);
+            restockOutcomes = withoutOutcome(key);
+        }
+        return !gone.isEmpty();
+    }
+
+    /** {@link #restockOutcomes} with one more entry, as a new map (the cache compares by identity). */
+    private Map<ItemKey, RestockOutcome> withOutcome(ItemKey key, RestockOutcome outcome) {
+        if (restockOutcomes.get(key) == outcome)
+            return restockOutcomes;
+        Map<ItemKey, RestockOutcome> next = new LinkedHashMap<>(restockOutcomes);
+        next.put(key, outcome);
+        return Map.copyOf(next);
+    }
+
+    /** {@link #restockOutcomes} without one entry, as a new map. */
+    private Map<ItemKey, RestockOutcome> withoutOutcome(ItemKey key) {
+        if (!restockOutcomes.containsKey(key))
+            return restockOutcomes;
+        Map<ItemKey, RestockOutcome> next = new LinkedHashMap<>(restockOutcomes);
+        next.remove(key);
+        return Map.copyOf(next);
+    }
+
+    /**
+     * How many items of {@code key} the given taker may still be promised: {@link #availableStock} for a
+     * {@link StockAccess#PLAYER}, and what is left above a governing rule's reserve for
+     * {@link StockAccess#AUTOMATION} (M15, issue #3). Without a rule for the key both are {@link #availableStock}.
+     * <p>
+     * {@link #availableStock} itself stays the warehouse's internal number — what the aisle really has to give. The
+     * reserve is subtracted here, at the entry point of a request, and at the one place that entry point spends stock
+     * on the taker's behalf: the ingredients of a production order the request starts ({@link StockAvailability#of} in
+     * {@link #request}), so automation cannot reach a reserve through a pattern either.
+     */
+    public long availableTo(StockAccess access, ItemKey key) {
+        Objects.requireNonNull(access, "access");
+        Objects.requireNonNull(key, "key");
+        return stockRules().availableTo(access, key, availableStock(key));
+    }
+
+    /**
+     * How many more items of {@code key} this warehouse may still <b>store</b> ({@code PlannerInput#storeHeadroom},
+     * M15, issue #3): the maximum of a governing rule, minus what is in the racks and what a transport job is
+     * carrying in, plus what an open production order is still expected to bring back.
+     * <p>
+     * {@link Long#MAX_VALUE} when no rule governs the key, and then it costs a single map lookup: the three counters
+     * are only read for an item a rule really caps, so a warehouse without rules pays nothing for the question.
+     * <p>
+     * The {@code + outstandingResult} allowance is the rule "the warehouse always takes back what it sent out for": a
+     * pattern makes whole runs, so an order for 32 regularly comes back as 36, and without it the surplus would be
+     * refused at the input and strand the order.
+     */
+    public long storeHeadroom(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        Optional<StockRule<ItemKey>> rule = stockRules().ruleFor(key);
+        if (rule.isEmpty())
+            return Long.MAX_VALUE;
+        return rule.get().headroom(stock.count(key), dispatch.reservations().reservedCapacityFor(key),
+                productionOrders.outstandingResult(key));
     }
 
     /**
@@ -1263,6 +2259,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         dispatch.track(job);
         if (job.targetKind() == LocationKind.STORAGE)
             refreshLocation(target);
+        // Items that came in through a warehouse input and were really stored: the one arrival a production order may
+        // count as its machine's product (M15 part 2). Reported after the snapshot, so the stock index and the order
+        // agree within the same tick.
+        if (job.type() == JobType.STORE && job.targetKind() == LocationKind.STORAGE && delivered > 0)
+            onResultStored(job.key(), delivered);
         return requestId.map(this::hasOpenJobOwner).orElse(true);
     }
 
@@ -1319,6 +2320,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         if (membership.isDirty())
             processMembership(layout);
+        if (stockRulesRefreshPending) {
+            stockRulesRefreshPending = false;
+            refreshAllStockRules();
+        }
         drainPendingSnapshots();
         if (!productionOrders.isEmpty()) {
             if (observeProductionResults(now))
@@ -1327,11 +2332,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 nextProductionTick = now + Math.max(1, WareworksConfig.dispatchIntervalTicks());
                 tickProductionOrders(now);
             }
+        } else if (!storedCredits.isEmpty()) {
+            // Nothing is waiting for a result any more, so an arrival credit that was never consumed is stale: keeping
+            // it would suppress the first level gain of the next order for that item (M15 part 2).
+            storedCredits.clear();
         }
         if (now >= nextSnapshotTick) {
             nextSnapshotTick = now + WareworksConfig.snapshotIntervalTicks();
             nextRoundRobinLocation().ifPresent(this::refreshLocation);
         }
+        tickStockKeepers(now);
         if (layout != null)
             dispatch.tick(level, layout, now);
     }
@@ -1372,6 +2382,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private void relink(long now) {
         relinkRequested = false;
         nextRelinkTick = now + Math.max(MIN_RELINK_INTERVAL_TICKS, WareworksConfig.geometryRefreshTicks());
+        // The stock rules ride the geometry cadence: a keeper edited while this controller was unloaded is picked up
+        // here at the latest, and a changed maxStockRules takes effect (AisleStockRules#setCap).
+        stockRulesRefreshPending = true;
         Direction facing = facing();
         BlockPos dockPos = worldPosition.relative(facing);
         if (!level.isLoaded(dockPos))
@@ -1411,6 +2424,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         layout = next;
         if (next == null) {
             WarehouseRegistry.unregister(level, worldPosition);
+            // The keepers lose their warehouse, so they stop calling for items. Their world positions come from the
+            // layout that is being taken away. A real loss of the aisle on a loaded controller, never an unload.
+            clearAllKeeperRuleStates(previous);
             clearAisleState(); // no aisle, no locations, no output stations to deliver to
         } else {
             WarehouseRegistry.register(level, worldPosition, next);
@@ -1429,12 +2445,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /**
      * Forgets everything that belongs to the aisle. The reservations go with it: a crane that is no longer this
      * controller's keeps its items and job and continues without controller (it holds items it cannot deliver).
+     * <p>
+     * <b>The stock rules are deliberately kept</b> (M15 review fix). Everything else here is derived from inventories
+     * that are read again within a few ticks, but a rule gates item movement in both irreversible directions: a
+     * forgotten maximum stores items that are never moved back out, and a forgotten reserve is handed to automation and
+     * cannot be recalled. Both ways back into the copy need the keeper's chunk to be loaded, so throwing it away here
+     * would read "a keeper I cannot see" as "no rule" — exactly what saving the copy with the controller exists to
+     * prevent. Instead {@link #refreshAllStockRules} re-probes every rack the copy holds on the next tick and drops the
+     * ones that really are no keeper any more, on the evidence of a loaded block.
      */
     private void clearAisleState() {
         membership.clear();
         stock.clear();
         pendingSnapshots.clear();
         filters.clear();
+        stockRulesRefreshPending = true;
         sharedInventories.clear();
         requests.clear();
         productionOrders.clear();
@@ -1466,10 +2491,20 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 cancelRequestsFor(current.rackPos(removed.position())); // nothing can be delivered there any more
             else if (removed.kind() == LocationKind.PRODUCTION)
                 cancelProductionOrdersAt(removed.position()); // its orders can never finish
+            else if (removed.kind() == LocationKind.KEEPER)
+                // The keeper left the aisle (broken, replaced or turned away from it): its rules go with it, and if the
+                // block is still there it stops calling for items — nothing enforces them any more.
+                dropStockRulesAt(removed.position());
             changed = true;
         }
         for (LocationRecord added : changes.added()) {
             changed = true;
+            if (added.kind() == LocationKind.KEEPER) {
+                // Read at once, not on a later tick: a keeper a player just placed governs from now on, and a plan in
+                // this very tick must not store past the maximum it carries.
+                readStockRulesAt(added.position());
+                continue;
+            }
             if (added.kind() != LocationKind.STORAGE)
                 continue;
             // A new storage location is indexed empty at once and read within the next ticks (this tick first, at most
@@ -1538,12 +2573,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             relinkRequested = true; // rotated: another dock position
     }
 
-    /** Real removal: the dock loses its controller link and the aisle leaves the registry. */
+    /**
+     * Real removal: the dock loses its controller link, the keepers stop signalling for a warehouse that no longer
+     * exists, and the aisle leaves the registry. A chunk unload does none of this ({@link #invalidate()}, ADR-013).
+     */
     @Override
     public void remove() {
         super.remove();
         if (level instanceof ServerLevel) {
             unlinkDock();
+            clearAllKeeperRuleStates(layout);
             WarehouseRegistry.unregister(level, worldPosition);
         }
     }
@@ -1581,8 +2620,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return new ControllerGoggleSummary(status, length, height, membership.storageCount(), filteredLocationCount(),
                 membership.inputCount(), membership.outputCount(), membership.productionCount(),
                 membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
-                productionOrders.openCount(), linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo),
-                dispatch.lastReason());
+                productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
+                linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), dispatch.lastReason());
     }
 
     @Override
@@ -1622,6 +2661,22 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (shown.productionOrders() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_ORDERS, shown.productionOrders())
                     .forGoggles(tooltip, 1);
+        // What the aisle's stock keepers are doing to it (M15, issue #3). The two warnings are indented under the
+        // count and are left out while they are 0, so an aisle whose rules are all satisfied shows one quiet line.
+        if (shown.stockRules() > 0) {
+            WareworksLang.countLine(WareworksLang.GOGGLES_STOCK_RULES, shown.stockRules()).forGoggles(tooltip, 1);
+            if (shown.rulesBelowMinimum() > 0)
+                WareworksLang.countLine(WareworksLang.GOGGLES_RULES_BELOW_MINIMUM, shown.rulesBelowMinimum())
+                        .style(ChatFormatting.GOLD).forGoggles(tooltip, 2);
+            if (shown.rulesAtMaximum() > 0)
+                WareworksLang.countLine(WareworksLang.GOGGLES_RULES_AT_MAXIMUM, shown.rulesAtMaximum())
+                        .style(ChatFormatting.GOLD).forGoggles(tooltip, 2);
+            // The safety stop is red, not gold: it is the one line that means a machine ate a batch and the warehouse
+            // stopped ordering until a player looks at it (M15 part 2, issue #3).
+            if (shown.rulesPaused() > 0)
+                WareworksLang.countLine(WareworksLang.GOGGLES_RULES_PAUSED, shown.rulesPaused())
+                        .style(ChatFormatting.RED).forGoggles(tooltip, 2);
+        }
         shown.crane().ifPresent(crane -> {
             WareworksLang.translate(WareworksLang.GOGGLES_STACKER_CRANE).style(ChatFormatting.GRAY).forGoggles(tooltip, 1);
             crane.addGoggleLines(tooltip, 2, false);
@@ -1646,6 +2701,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         ControllerPersistence.writeLocations(tag, membership, stock.readOnlyView(), registries);
         ControllerPersistence.writeRequests(tag, requests.requests(), worldPosition, registries);
         ControllerPersistence.writeProductionOrders(tag, productionOrders.all(), registries);
+        // The aisle's stock rules are saved with the controller on purpose: a keeper's chunk can be unloaded while
+        // this controller plans, and a rule that is read as "no rule" would store past a maximum or hand out a
+        // reserve, which nothing ever undoes (AisleStockRules).
+        ControllerPersistence.writeStockRules(tag, stockRules.saved(), registries);
+        // The safety stop is saved with the rules and for the same reason: a restart must not quietly resume ordering
+        // into a machine that already swallowed a batch (M15 part 2, issue #3).
+        ControllerPersistence.writeStockPauses(tag, stockPauses, registries);
     }
 
     @Override
@@ -1683,8 +2745,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             // the first tick gives every restored order its full timeout again (§3.5).
             productionOrders.restore(ControllerPersistence.readProductionOrders(tag, registries));
             productionDeadlinesPending = true;
+            // Restored before the first tick, so the very first plan after a load already knows every maximum and
+            // every reserve, even while the keepers themselves are still in unloaded chunks.
+            stockRules.restore(ControllerPersistence.readStockRules(tag, registries));
+            stockRules.setCap(WareworksConfig.maxStockRules());
+            stockPauses.clear();
+            stockPauses.putAll(ControllerPersistence.readStockPauses(tag, registries));
+            restockOutcomes = Map.of();
         }
         relinkRequested = true;
+        stockRulesRefreshPending = true;
         if (level instanceof ServerLevel && !isRemoved()) {
             // Data changed on a live block entity (e.g. /data merge): keep the registry in step.
             if (layout != null)
