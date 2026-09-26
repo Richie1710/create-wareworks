@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-alpha] - 2026-09-26
+
 ### Added
 
 - Stock rules: the new **Warehouse Stock Keeper** holds one item plus a minimum, a maximum and a reserve per row, and
@@ -73,7 +75,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.2.1-alpha...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.3.0-alpha...HEAD
+[0.3.0-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.2.1-alpha...v0.3.0-alpha
 [0.2.1-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.2.0-alpha...v0.2.1-alpha
 [0.2.0-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.1.0-alpha...v0.2.0-alpha
 [0.1.0-alpha]: https://github.com/Richie1710/create-wareworks/releases/tag/v0.1.0-alpha
