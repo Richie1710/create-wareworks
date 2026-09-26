@@ -57,6 +57,7 @@ public final class WareworksLangGen {
                 "Empty filter: this location accepts nothing");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_FILTER_SHADOWED),
                 "Without effect: another interface counts this inventory");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_PRIORITY), "Priority: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_CONTROLLER), "Warehouse Controller:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_AISLE_LETTER), "Aisle %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_READY), "Ready");
@@ -66,6 +67,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_NO_RAILS), "No warehouse rails in front of the crane");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_LOCATIONS), "Storage locations: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FILTERED_LOCATIONS), "Filtered locations: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRIORITISED_LOCATIONS), "Prioritised locations: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATIONS), "Inputs: %1$s, outputs: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_COUNT), "Misaligned blocks: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ITEM_TYPES), "Item types: %1$s");
@@ -73,6 +75,9 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.CONTROLLER_AISLE_LETTER), "Aisle");
         lang.accept(WareworksLang.key(WareworksLang.CONTROLLER_AISLE_LETTER_ROW), "Letter");
         lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_FILTER), "Stored Items");
+        lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_PRIORITY), "Storage Priority");
+        lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_PRIORITY_ROW), "Priority");
+        lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_PRIORITY_TIP), "Hold to set the priority");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_OPEN_REQUESTS), "Open requests: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_INPUT), "Warehouse Input:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_OUTPUT), "Warehouse Output:");
@@ -380,9 +385,14 @@ public final class WareworksLangGen {
                         + "_attribute_ and _package filters_ all work, and an _empty_ slot accepts _everything_. A "
                         + "filter only restricts _storing_: whatever is already inside can always be _retrieved_, and "
                         + "changing a filter never moves items that are already stored.",
+                "When setting the priority",
+                "_Hold_ the click on the _filter slot_ to set a _priority_ from _0_ to _9_: among the locations that "
+                        + "are _equally suitable_, the crane fills the _highest_ one first, so a rack by the _door_ can "
+                        + "fill before the far end of the aisle. It only decides where _new_ items go — it never moves "
+                        + "what is already stored, and _retrieval_ always takes the _nearest_ source.",
                 "When looked at with Goggles",
-                "Shows its _address_, its _filter_, the _attached inventory_, its _used slots_, the most stored _items_ "
-                        + "and the items _reserved_ for a running crane job.");
+                "Shows its _address_, its _filter_, its _priority_, the _attached inventory_, its _used slots_, the "
+                        + "most stored _items_ and the items _reserved_ for a running crane job.");
 
         tooltip(lang, "block.wareworks.warehouse_input",
                 "A _station_ of a warehouse _aisle_ where items _enter_ the warehouse. It _buffers_ arriving items until "

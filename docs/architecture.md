@@ -76,7 +76,9 @@ dev.wareworks
 │   ├── item                   ItemKey (item + components, count-less), ItemHandlerSnapshots, ItemTypeSummaries
 │   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views)
 │   ├── storage                WarehouseInterfaceBlock / BlockEntity, AttachedInventorySummary (storage location);
-│   │                          StorageFilterBehaviour (the store filter slot, empty filters not synced),
+│   │                          StorageFilterBehaviour (the store filter slot, empty filters not synced; since M16 the
+│   │                          same box also carries the storage priority as a hold-to-edit board row, written only
+│   │                          while it is not 0, ADR-028),
 │   │                          StorageFilterValueBox (its slot on the aisle face) (M8, ADR-021)
 │   ├── controller             AisleLayout (world mapping of an aisle), WarehouseControllerBlock / BlockEntity,
 │   │                          AisleLetterBehaviour, WarehouseRegistry, WarehouseMember / StorageMember,
@@ -84,7 +86,9 @@ dev.wareworks
 │   │                          RequestRejection, RequestResult (M2); CraneDispatch (M3: planning, ledger, reroutes);
 │   │                          LocationReservationSummary (bounded goggle data of a location's reservations, M4);
 │   │                          WarehouseRegistry.StorageObservation (assignment + reservations in one scan, M4 review);
-│   │                          AisleFilters (store filters of the aisle's storage locations, cached for planning, M8);
+│   │                          AisleFilters (store filters **and** storage priorities of the aisle's storage locations,
+│   │                          cached for planning, both read in one lookup per location, M8 + M16, ADR-028; the name
+│   │                          was kept on purpose);
 │   │                          AisleStockRules (the controller's own, saved copy of its keepers' stock rules, M15,
 │   │                          ADR-027; the pauses of the safety stop live in the controller beside it)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock, RailScan (M2); CraneExecution,
@@ -137,7 +141,10 @@ dev.wareworks
 │   │                          WarehouseStockKeeperScreen (the rule rows), ClientStockKeepers,
 │   │                          StockKeeperScreenUpdates (M15, ADR-027)
 │   ├── render                 StackerCraneRenderer (animated crane, SafeBlockEntityRenderer without Flywheel visual),
-│   │                          WareworksPartialModels (crane partials), CraneModelLayout (model dimensions, pose math) (M4)
+│   │                          WareworksPartialModels (crane partials), CraneModelLayout (model dimensions, pose math) (M4);
+│   │                          WarehouseInterfaceRenderer (Create's filter renderer with the view distance the mod's
+│   │                          most mass-placed block needs, M8 review; since M16 it also draws the storage priority
+│   │                          digit on the plate, skipped at 0, ADR-028)
 │   └── ponder                 WareworksPonderPlugin (the one PonderPlugin), WareworksPonderScenes (which scene belongs
 │       │                      to which item), WareworksPonderTags (own tag wareworks:warehouse + Create tags),
 │       │                      WareworksPonderLang (ponder lang inside the Registrate LANG generator) (M5)
@@ -156,6 +163,10 @@ dev.wareworks
 │                              WarehouseTerminalGameTests: terminal block, membership and screen API, M6;
 │                              StorageFilterGameTests: one test per Create filter item plus the sorting, full,
 │                              re-dedication, persistence and goggle cases, M8;
+│                              StoragePriorityGameTests: the storage priority in the world — the crane driving past a
+│                              nearer rack, the fallback when the preferred one is full, filters and grouping still
+│                              winning, a change mid job, persistence, the cold cache, goggles, aliases and the
+│                              clipboard, M16;
 │                              ProductionGameTests: patterns, supply jobs, the full loop with the test playing the
 │                              player's machine, refusal, cancel, timeout and persistence, M11;
 │                              MechanicalArmGameTests: arm interaction point types, their fixed modes and real
@@ -188,7 +199,10 @@ dev.wareworks
 │                              ordering for itself through a real Mechanical Arm and Mechanical Crafter, the terminal's
 │                              three questions and the safety stop, M15 part 2), the last two through ScreenInput (mouse
 │                              and key input into an open screen) and GoggleShots (shared goggle-tooltip shots and the
-│                              player reach they need),
+│                              player reach they need);
+│                              FiltersVisualScenario (a rack row dedicated by filters, M8) and
+│                              PrioritiesVisualScenario (the priority digit on the block and the delivery order it
+│                              causes, fed by a real Create belt, M16),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -332,6 +346,23 @@ but not the filter item; and it is drawn only within `FilteringBehaviour#getRend
 config `filterItemRenderDistance` (default **10** blocks), which bounds where those cameras may stand. The run ends
 with a real redstone retrieval into an output at the far end of the aisle, which proves that a store filter never
 blocks fetching *and* parks the crane clear of the line of sight to the rack row.
+*Extension (M16, storage priorities):* a scenario `priorities` (`./gradlew runVisualTest
+-Pwareworks.visualTest=priorities`, `dev.PrioritiesVisualScenario`) does the same for ADR-028, and needs two things the
+older screenshot scenarios did not. It runs with `VisualWorldProfile.playable`, because Create draws a goggle tooltip
+only for a non-spectator within reach, and it sets the reach back to **0** for the world shots, because a crosshair
+inside a value box's 4 px sphere makes Create draw that box's highlight and its checkered face texture even with the GUI
+hidden, right over the very digit those shots are about. (Before the M16 review fix it drew a second, smaller copy of the
+number there as well, for *any* targeted block — see ADR-028. That half is gone, so the goggle shots, which need the real
+reach, now show the digit exactly as a player sees it.) What it asserts on the server before any shot is a **sequence**, not a total: five deliveries into the prioritised
+rack past two nearer empty ones, a live simulated insert refusing a sixth, and only then the overflow into the
+*farthest* rack of the row because that one is prioritised 1 — plus a dedicated location prioritised 7 that receives
+none of the item its filter rejects, a number raised from 0 to 9 between two shots of the same camera, and a retrieval
+served out of the cheaper source although the other one is prioritised higher. Both goggle lines are read back from the
+client block entity and compared, because a screenshot cannot tell a right number from a wrong one. Two harness lessons
+came out of it and are fixed in it: a creative player that touches the ground switches flying off by itself, so a
+playable-profile scenario must re-assert flight before every camera group; and `BeltInventory#addItem` queues an
+inserted stack for the belt's own next tick, so "everything has arrived" must compare the delivered sum and not only
+look at an apparently empty belt.
 
 ### ADR-015 — Feel and polish: recipes, sounds, creative tab (M4)
 *Recipes:* hand-written JSON in `src/main/resources/data/wareworks/recipe/<item>.json` (1.21.1 format: singular folder, result `id`), one recipe per item with the item's id. The project has no recipe provider, and seven recipes do not justify one; a Registrate `.recipe(...)` for the same path would clash with the JSON (the same resource path in `src/main/resources` and `src/generated/resources` breaks `processResources`). The stacker crane is a Create `mechanical_crafting` recipe (3 x 4, mirrored accepted), everything else vanilla crafting; four of the seven recipes were rebalanced in M9 (below). GameTest `recipesloaded` fails when a recipe does not load, so a typo in an item id or tag cannot slip through.
@@ -653,6 +684,11 @@ documented limitation. A filter a player sets is authoritative state, so a filte
 (with components) into chunk packets — the same exposure every Create filter block and the warehouse output already
 have, and only for interfaces that were actually filtered. `PlannerInput` gained `storeFilter`, and
 `ControllerGoggleSummary` gained `filteredLocations` (a count, so the tag stays bounded).
+
+*Extended by ADR-028 (M16, issue #11):* the same slot carries a second setting, the location's **storage priority**, as
+a hold-to-edit board row — and the ranking this ADR made the first sort key gained a fourth one below it. Nothing decided
+here is reversed: a priority orders only the locations the filter, consolidation and item-type grouping left equal, and
+retrieval still never asks either of the two.
 
 ### ADR-022 — The warehouse terminal has two directions: an aisle-derived intake port and a player-chosen screen (M10)
 *Context:* Play-testing rejected the M6 terminal. It was a rack-position member with **one** `FACING`, aligned exactly
@@ -1140,6 +1176,122 @@ config keys, four of which (`maxRestockOrders`, `maxRestockOrdersPerRule`, `maxR
 `maxRestockIngredientItems`) bound how much the warehouse may ever have in a machine at once, with `0` in either order
 count as the off switch for automatic ordering while every rule keeps capping and reserving. A warehouse from before M15 has no keeper, so every new path is guarded by "does a rule govern
 this key", which answers no, and the behaviour is bit-for-bit what it was.
+
+### ADR-028 — A storage location's priority is a board row on its filter slot, and the fourth ranking key (M16, issue #11)
+*Context:* GitHub issue #11, from play-testing: "a large vault with a cobblestone filter should take the cobblestone
+before the general chests do; a rack by the door should fill before the far end of the aisle." Since M8 a player can say
+*what* may live in a location (ADR-021); there was no way to say *which* of the suitable locations should fill first. The
+planner's own answer is travel time, which is the right default and the wrong one as soon as a player has built a layout
+with intent.
+
+*Decision:*
+* **The priority is a property of the storage location**, i.e. of the warehouse interface, exactly like its store filter
+  (ADR-021). Everything that argument bought stays bought: the number is created, moved, wrenched, broken and saved
+  together with the location it describes, and no controller-side mapping can drift from the machine.
+* **It applies only when storing.** `PlannerInput#storePriority` is typed `ToIntFunction<? super L>` — a function of the
+  **location** and of nothing else — and it is read in exactly one method, `JobPlanner#selectStorage`. The two paths that
+  do not store, `planOutOfStorage` (RETRIEVE and SUPPLY) and `selectStation`, pass the constant `NEUTRAL_PRIORITY`
+  **literally**. So "a high priority must never send the crane past a nearer location that holds the same item" holds
+  **structurally**: there is no code path on which a retrieval could consult a priority, and no future edit can break it
+  by forgetting a check. A `BiFunction<L, K, Integer>` like `storeFilter`'s was rejected for the same reason — it would
+  have made "the priority cannot depend on the item" a convention instead of a type.
+* **It is the fourth sort key, not the first.** The ranking reads: **hard rules** (the store filter, `FilterMatch`) →
+  **automatic tidiness** (exact-item consolidation, then item-type grouping) → **explicit player preference** (the
+  priority) → **cost** (travel time) → **stability** (index order). A priority therefore orders only what the rules
+  above it left equal. It must not outrank the filter, or "dedicated" would stop meaning dedicated (ADR-021 made the
+  same argument for `DEDICATED` over consolidation); and it must not outrank grouping, or one prioritised location would
+  collect every item type in the warehouse — the exact mixing M3 added grouping to prevent, and which the M8 review
+  already had to undo once for deny lists. Travel time is *below* it because a preference that loses to distance is not
+  a preference.
+* **Default 0, higher wins, and "no priority set" is provably the old behaviour.** `PlannerInput.NO_PRIORITY` (0 for
+  every location) is the builder's default, so an input built without a priority is *literally* the input the planner
+  received before M16; the new key answers 0 for every pair and `thenComparing` consults the next key exactly then. The
+  whole pre-M16 JUnit and GameTest suite is therefore the regression proof, and
+  `JobPlannerTest#priorityZeroEverywhereReproducesTheOldOrder` pins it directly: twelve seeded layouts planned with and
+  without an all-zero priority function produce the identical job, reasons, cursor and live-call sequence.
+* **Where the number lives: a board row on the existing filter slot, not a second value box.** This is the question the
+  milestone was opened on, and the answer is forced by three measurements rather than chosen. The aisle face is a 3 px
+  brass frame around a plate that is only **6 px** tall (x 3..13, y 3..9), with the crane's arm port directly above it
+  (y 9..13, `stacker-crane.md` §7.1). A Create value box is hit-tested within half its scale, so two boxes need their
+  centres **8 px** apart — more than the plate is tall. Any second position either reaches into the arm's path, leaves
+  the block, or overlaps the first box's sphere, in which case the behaviour that comes earlier in
+  `SmartBlockEntity#getAllBehaviours` silently swallows the other. Every other face is already taken, and putting a
+  setting on one of them is exactly the ADR-022 mistake M10 had to undo: `FACING` touches the attached inventory, the
+  lateral faces carry the row-building placement rule, and top and bottom are the wrench faces and are covered by the
+  neighbours in a rack wall. So the priority becomes a **hold-to-edit board row** on the box that is already there,
+  which is also Create's most common idiom (funnel, saw, deployer, belt tunnel): a **short click** still sets or clears
+  the filter, **holding** the click opens `ValueSettingsScreen` with one row, "Priority", 0..9. A player on a rack wall
+  reaches it exactly where they already reach the filter, at any height, with no new face and no new block.
+* **`acceptsValueSettings()` becomes a constant `true`** — deliberately **not** Create's own `isCountVisible()`, whose
+  `getMaxStackSize() > 1` term would make the board unreachable as soon as a player used a non-stackable item as a plain
+  filter. The one behaviour change this brings is that a filter click no longer takes `ValueSettingsInputHandler`'s
+  immediate server-side `onShortInteract` branch but goes through Create's client warmup and fires on **release**. That
+  is a change in feel, recorded rather than hidden. The M8 fake-player protection is untouched, because
+  `ValueSettingsInputHandler` asks `mayInteract` *before* its fake-player branch.
+* **Range 0..9, no negative numbers.** `ValueSettingsScreen#getClosestCoordinate` scans board columns from 0, so a
+  negative value cannot be picked on a board at all, and an offset encoding would make the saved number differ from the
+  shown one. A single digit also keeps the digit on the block one glyph wide. Consequence,
+  accepted: **"fill last" is not directly expressible** — a player raises the others instead. The range is 0-based so it
+  can be widened later without a save migration, and the value is clamped **on read** (like the crane's mast height), so
+  a lowered maximum never rewrites a player's number.
+* **The number is readable in the world, without goggles.** `client.render.WarehouseInterfaceRenderer` draws the digit
+  on the plate itself, skipped entirely at 0 and cut off at the same `filterItemRenderDistance` Create cuts the filter
+  item off at. Anything Create draws for a value box exists only for the block under `mc.hitResult`, so without the
+  digit the number would be invisible from two steps away — and the visual harness, whose camera profile has zero
+  interaction range, could not photograph it at all. The digit stays inside the plate and never enters the arm port; it
+  moves to the plate's upper right while a filter item occupies the middle of the box. Goggles add "Priority: N" on the
+  interface and "Prioritised locations: N" on the controller, both only while they apply.
+* **It is drawn there and nowhere else** (M16 review fix). The first version also returned the number from
+  `getCountLabelForValueBox()`, for parity with a funnel's amount, on the assumption that Create shows that label only
+  for a *hit* of the box's 4 px sphere. It does not: `FilteringRenderer#tick` builds the `ItemValueBox` with the label and
+  hands it to the `Outliner` **before** its `if (!hit) continue;`, and `ValueBox#render` guards only the outline *icon*
+  with `if (!isPassive)` before calling `renderContents` unconditionally — so `passive(!hit)` suppresses the icon, not the
+  label. For an empty filter slot, which is the default and the common case for a prioritised location, Create's
+  `isEmpty` branch then lands its glyph *inside* the renderer's own digit, at 55 % of its size and with a dark outline
+  that shows through the open counters of the big glyph: the number was garbled at exactly the moment a player aims at
+  the block to read it. `getCountLabelForValueBox()` is therefore always empty — it cannot simply be dropped, because
+  Create's own implementation would put the *filter amount* there — while `isCountVisible()` stays `true`, which is what
+  adds the "Hold to set the priority" hover line. The lesson is general and belongs with ADR-013: a Create hook that
+  *looks* like it is scoped to the hovered box may be scoped to the targeted **block**, and the difference is only
+  visible in `FilteringRenderer`'s statement order.
+* **Persistence, sync and the clipboard cost as little as the filter does.** `StorePriority` is written **only while it
+  is not 0**, so a pre-M16 world reads back 0 with no migration, an unprioritised interface still syncs nothing at all,
+  and a prioritised but **unfiltered** one adds one int (~66 accounting bytes) while still skipping Create's ~215-byte
+  filter block (§3.1.1). `writeSafe` carries it into schematics and it costs no `getRequiredItems()`. The clipboard keeps
+  Create's `"Filtering"` key so funnel → interface keeps working, but strips Create's generic `Value`/`Row` pair and
+  writes `StorePriority` instead: that pair means *extracted amount* to every other filter block, and carrying the
+  priority in it would swap a funnel's amount and a location's priority in both directions. Into a clipboard the number is
+  written **unconditionally** (M16 review fix): the byte budget is about update tags, while an omitted key in a clipboard
+  makes "no priority" unsayable. Create writes its own `Filter` entry unconditionally and pastes an empty stack back as
+  "no filter", so a copy of a neutral interface really does clear the target's filter — with the key omitted, that same
+  paste would silently keep the target's number, and the ranking input the player believed they had overwritten would
+  still decide where the crane stores. A funnel writes no `StorePriority` at all, so a missing key stays an unambiguous
+  "not copied from an interface".
+* **The controller cache carries both settings.** `AisleFilters` caches filter *and* priority per rack, and the M8
+  one-shot resolve of an unread rack reads both in the **same** block entity lookup, so the first plan after a world
+  load already uses the right preference. Still one lookup per location *ever*, no new per-tick work and no world
+  search. The asymmetry to the filter is deliberate: an unread *filter* defaulting to "no filter" was permanently wrong
+  (items entered a chest the player had forbidden, and nothing is ever re-shuffled), so an unresolvable filter counts as
+  `REJECTED`; a priority has no forbidding answer, so an unresolvable one counts as 0 and costs only the old
+  travel-time order for a few hundred ticks. The dangerous default would be "assume high", which is never taken.
+
+*Reason:* Every alternative to the board row was either unreachable or a lie about the block. A second value box does
+not fit on the plate, measured rather than guessed. A wrench scroll would have put an invisible, unlabelled number on a
+face that already rotates the block. A controller-side list of preferred locations would need its own UI and its own
+rules for a location that moved or broke — the argument ADR-021 already settled. And every alternative to the fourth
+ranking key was a rule a player cannot reason about: above the filter it breaks dedication, above grouping it re-creates
+the mixed chest, below travel time it does nothing.
+
+*Consequences:* A player can say which of the equally suitable locations fills first, and a vault dedicated to
+cobblestone can also be the *first* place cobblestone goes. Retrieval is unchanged and provably so. Nothing is ever
+re-shuffled: raising a priority moves no item that is already stored, exactly as changing a filter does not (ADR-021). A
+running job keeps its target; only the next trip goes to the new preferred rack. `PlannerInput` gained `storePriority`
+and `ControllerGoggleSummary` gained `prioritisedLocations` (a count, so the tag stays bounded, and left out of the tag
+while it is 0). `ControllerGoggleSummary.counts(...)` therefore has one more int parameter, which is the hazard its own
+javadoc already warns about. The ranking now has a **documented shape** — hard rules, tidiness, preference, cost,
+stability — into which issue #12 (the warehouse output as a port) can slot a preference of its own without touching the
+other keys. Two names were **not** changed although they now carry both settings: `AisleFilters` and
+`WarehouseRegistry.filterChanged`; their javadoc says so, and renaming them is a separate, mechanical change.
 
 ## Persistence & sync
 

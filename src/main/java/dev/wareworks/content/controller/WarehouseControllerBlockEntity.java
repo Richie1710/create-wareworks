@@ -13,6 +13,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.ToLongFunction;
 
 import org.jetbrains.annotations.Nullable;
@@ -164,6 +165,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private final RequestQueue<ItemKey, BlockPos> requests = new RequestQueue<>(configuredMaxOpenRequests());
     /** Store filters of the storage locations, cached for planning; read from the interfaces, not saved. */
     private final AisleFilters filters = new AisleFilters();
+    /**
+     * The one-shot resolve {@link #storeFilterMatch} and {@link #storePriorityAt} share, held once instead of captured
+     * per call: filter and priority of a never-read location come from the same lookup ({@link #readStoreSettingsAt}),
+     * and {@link AisleFilters} never calls it once the cache is warm.
+     */
+    private final Function<RackPosition, Optional<AisleFilters.StoreSettings>> storeSettingsResolver =
+            this::readStoreSettingsAt;
     /** The aisle's stock rules, copied from its warehouse stock keepers (M15, issue #3). <b>Saved</b>, see below. */
     private final AisleStockRules stockRules = new AisleStockRules();
     /**
@@ -370,19 +378,33 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * filter's own test for a filtered location.
      * <p>
      * A location whose filter this controller has not read yet (restored from a save, or freshly joined and still
-     * queued for its snapshot) is resolved once through {@link #readStoreFilterAt} instead of being treated as
+     * queued for its snapshot) is resolved once through {@link #readStoreSettingsAt} instead of being treated as
      * unfiltered — see {@link AisleFilters} for why that matters after every world load.
      */
     FilterMatch storeFilterMatch(RackPosition rack, ItemKey key) {
-        return level == null ? FilterMatch.UNFILTERED : filters.match(level, rack, key, this::readStoreFilterAt);
+        return level == null ? FilterMatch.UNFILTERED : filters.match(level, rack, key, storeSettingsResolver);
     }
 
     /**
-     * Reads the store filter of {@code rack} straight from its interface, for the one lookup {@link AisleFilters} does
-     * per location that was never read into the cache. Empty while the position is not loaded or holds no storage
-     * member.
+     * The storage priority of the storage location at {@code rack} ({@code docs/warehouse-system.md} §3.1, ADR-028,
+     * M16): the planner's {@code storePriority}, higher fills first. One map lookup.
+     * <p>
+     * Like {@link #storeFilterMatch} it resolves a location this controller has not read yet through
+     * {@link #readStoreSettingsAt} — the <b>same</b> one-shot resolve, down to the same {@link #storeSettingsResolver}
+     * instance, which reads filter and priority together, so the first plan after a world load already stores into the
+     * preferred rack instead of the nearest one.
      */
-    private Optional<ItemStack> readStoreFilterAt(RackPosition rack) {
+    int storePriorityAt(RackPosition rack) {
+        return level == null ? AisleFilters.NO_PRIORITY : filters.priorityOf(rack, storeSettingsResolver);
+    }
+
+    /**
+     * Reads the store filter and the storage priority of {@code rack} straight from its interface, for the one lookup
+     * {@link AisleFilters} does per location that was never read into the cache. Both in one lookup on purpose: the
+     * planner may ask for either first, and a priority the controller has not read must never be guessed. Empty while
+     * the position is not loaded or holds no storage member.
+     */
+    private Optional<AisleFilters.StoreSettings> readStoreSettingsAt(RackPosition rack) {
         if (level == null || level.isClientSide || layout == null)
             return Optional.empty();
         BlockPos pos = layout.rackPos(rack);
@@ -391,7 +413,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (!(blockEntity instanceof StorageMember member) || blockEntity.isRemoved())
             return Optional.empty();
-        return Optional.of(member.storeFilter());
+        return Optional.of(new AisleFilters.StoreSettings(member.storeFilter(), member.storePriority()));
     }
 
     /**
@@ -405,21 +427,40 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return filters.filteredCount(rack -> !sharedInventories.isAlias(rack));
     }
 
+    /**
+     * Storage locations of this aisle that carry a storage <b>priority</b> that applies (goggle summary, M16, ADR-028).
+     * Shared-inventory aliases are excluded for the same reason as for the filters: a priority on the other half of a
+     * double chest can do nothing.
+     */
+    public int prioritisedLocationCount() {
+        return filters.prioritisedCount(rack -> !sharedInventories.isAlias(rack));
+    }
+
     /** Whether the storage location at {@code rack} carries a store filter the planner actually consults. */
     public boolean isStorageFiltered(RackPosition rack) {
         Objects.requireNonNull(rack, "rack");
         return !sharedInventories.isAlias(rack) && filters.isFiltered(rack);
     }
 
+    /** Whether the storage location at {@code rack} carries a storage priority the planner actually consults (M16). */
+    public boolean isStoragePrioritised(RackPosition rack) {
+        Objects.requireNonNull(rack, "rack");
+        return !sharedInventories.isAlias(rack) && filters.isPrioritised(rack);
+    }
+
     /**
-     * Whether the storage location at {@code rack} carries a store filter that has <b>no effect</b>, because another
-     * location counts the inventory it reads (double chest, item vault) and the planner only asks that one
-     * ({@code docs/warehouse-system.md} §3.1.1). Its interface shows this as a goggle hint, so a player can see which
-     * of two interfaces on one inventory is the effective one.
+     * Whether the storage location at {@code rack} carries a store filter or a storage priority that has <b>no
+     * effect</b>, because another location counts the inventory it reads (double chest, item vault) and the planner only
+     * asks that one ({@code docs/warehouse-system.md} §3.1.1). Its interface shows this as a goggle hint, so a player can
+     * see which of two interfaces on one inventory is the effective one.
+     * <p>
+     * A <b>priority</b> on an alias is included (M16): it is as dead as a filter there, and which of two interfaces on
+     * one inventory is canonical depends on the order {@code SharedInventories.assign} saw them, so the hint is the only
+     * way to tell.
      */
     public boolean isStorageFilterShadowed(RackPosition rack) {
         Objects.requireNonNull(rack, "rack");
-        return sharedInventories.isAlias(rack) && filters.isFiltered(rack);
+        return sharedInventories.isAlias(rack) && (filters.isFiltered(rack) || filters.isPrioritised(rack));
     }
 
     /** Members at rack positions with the wrong facing. */
@@ -552,9 +593,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * From the registry: a player changed the store filter of the storage location at {@code rack}. Re-reads that one
-     * filter at once (one block entity lookup), so the next planning run already honours it; the inventory itself is not
-     * re-read, because its contents did not change ({@code docs/warehouse-system.md} §3.1, ADR-021).
+     * From the registry: a player changed the store filter or the storage priority of the storage location at
+     * {@code rack}. Re-reads <b>both</b> at once (one block entity lookup), so the next planning run already honours the
+     * change; the inventory itself is not re-read, because its contents did not change
+     * ({@code docs/warehouse-system.md} §3.1, ADR-021, ADR-028).
      */
     void onStorageFilterChanged(RackPosition rack) {
         if (level == null || level.isClientSide || layout == null)
@@ -568,7 +610,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (blockEntity instanceof StorageMember member && !blockEntity.isRemoved())
-            filters.set(rack, member.storeFilter());
+            filters.set(rack, member.storeFilter(), member.storePriority());
     }
 
     /**
@@ -593,10 +635,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             membership.markDirty(rack); // gone without a notification: probe it again
             return false;
         }
-        // The store filter is refreshed here as well: this is every path on which the controller already resolves the
-        // member (join, content hint, round robin, after a transfer, load verification), and it has to be known even
-        // when the attached inventory is not loaded (ADR-021).
-        filters.set(rack, member.storeFilter());
+        // The store settings are refreshed here as well: this is every path on which the controller already resolves the
+        // member (join, content hint, round robin, after a transfer, load verification), and they have to be known even
+        // when the attached inventory is not loaded (ADR-021, ADR-028).
+        filters.set(rack, member.storeFilter(), member.storePriority());
         BlockPos attached = member.attachedPos();
         if (!level.isLoaded(attached))
             return false;
@@ -2618,7 +2660,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         int length = layout == null ? 0 : layout.geometry().length();
         int height = layout == null ? 0 : layout.geometry().height();
         return new ControllerGoggleSummary(status, length, height, membership.storageCount(), filteredLocationCount(),
-                membership.inputCount(), membership.outputCount(), membership.productionCount(),
+                prioritisedLocationCount(), membership.inputCount(), membership.outputCount(), membership.productionCount(),
                 membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
                 productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
                 linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), dispatch.lastReason());
@@ -2647,6 +2689,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 .forGoggles(tooltip, 1);
         if (shown.filteredLocations() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_FILTERED_LOCATIONS, shown.filteredLocations())
+                    .forGoggles(tooltip, 2);
+        // A count, so the summary stays bounded whatever the warehouse holds, and only while something is prioritised.
+        if (shown.prioritisedLocations() > 0)
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRIORITISED_LOCATIONS, shown.prioritisedLocations())
                     .forGoggles(tooltip, 2);
         WareworksLang.stationCounts(shown.inputs(), shown.outputs()).forGoggles(tooltip, 1);
         if (shown.productionStations() > 0)

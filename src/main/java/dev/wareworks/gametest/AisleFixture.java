@@ -299,6 +299,16 @@ final class AisleFixture {
         helper.assertTrue(interfaceAt(rack).setStoreFilter(filter), "the interface accepts the filter " + filter);
     }
 
+    /**
+     * Sets the storage priority of the storage location at {@code rack}, as holding the click on its filter slot would
+     * ({@code docs/warehouse-system.md} §3.1, M16). 0 is "no preference".
+     */
+    void setStorePriority(RackPosition rack, int priority) {
+        WarehouseInterfaceBlockEntity be = interfaceAt(rack);
+        be.setStorePriority(priority);
+        helper.assertValueEqual(be.storePriority(), priority, "the interface took the priority");
+    }
+
     FilteringBehaviour filterOf(RackPosition output) {
         FilteringBehaviour filter = BlockEntityBehaviour.get(outputAt(output), FilteringBehaviour.TYPE);
         if (filter == null)

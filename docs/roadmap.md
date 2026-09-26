@@ -20,6 +20,7 @@
 | **M13** | Ponder scenes for terminal, production station and storage filters | Four new scenes: placing a terminal, requesting at a terminal, feeding machines from a warehouse, and dedicating storage locations with filters; terminal and production station appear in the Ponder index | Done |
 | **M14** | Display Link sources for stock displays | Four sources a Create Display Link can read: aisle summary and stock list on the controller and the terminal, the stock of a filter slot's item on the output and the interface, and the crane's status on the dock | Done |
 | **M15** | Stock rules | Warehouse stock keeper with a minimum, a maximum and a reserve per item; the warehouse restocks its own minimums through a production station and stops ordering when a machine loses a batch; the terminal asks before one of your own clicks crosses a reserve or a maximum; two Ponder scenes teach the three numbers and the restocking | Done |
+| **M16** | Storage location priorities | A priority 0-9 on each storage location, set by holding the click on its filter slot and drawn on the block: among the equally suitable locations the crane fills the highest first. Storing only — retrieval always takes the nearest source, and nothing already stored is ever moved | Done |
 
 ## Planned
 

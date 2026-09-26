@@ -9,6 +9,7 @@ import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 import com.simibubi.create.content.logistics.filter.FilterItem;
 import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
+import com.simibubi.create.foundation.blockEntity.behaviour.ValueBoxTransform;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
 import dev.wareworks.Wareworks;
@@ -80,6 +81,14 @@ import net.neoforged.neoforge.items.IItemHandler;
  * left out of client packets entirely ({@link StorageFilterBehaviour}), so an unfiltered rack wall costs no update-tag
  * bytes.
  * <p>
+ * <b>Storage priority (M16, ADR-028).</b> The same value box carries a second setting on a hold-to-edit board: a
+ * priority 0..9 that decides which of the <b>equally suitable</b> storage locations the crane fills first. It is a
+ * property of the location, like the filter, and applies only when <b>storing</b>: retrieval always takes the shortest
+ * path, and raising a priority never moves what is already stored. The plate of the aisle face is too small for a second
+ * value box, which is why both settings share one ({@link StorageFilterBehaviour}). A change is reported through the
+ * same registry notification as a filter change, and the number travels in the update tag only while it is not 0, so an
+ * unprioritised rack wall still costs nothing.
+ * <p>
  * <b>Stock hints.</b> A neighbour-change hint or a block update from the attached position also tells the controllers
  * whose aisle contains this interface ({@link WarehouseRegistry#contentChanged}), which re-read the location within a
  * few ticks instead of waiting for their round robin ({@code docs/warehouse-system.md} §5, ADR-013).
@@ -104,10 +113,10 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
     private static final long NEVER = Long.MIN_VALUE;
 
     /**
-     * Store filter slot. Assigned in {@link #addBehaviours}, which {@code SmartBlockEntity} calls from its constructor,
-     * so this field must not have an initializer (it would reset the behaviour to {@code null}).
+     * Store filter and storage priority slot. Assigned in {@link #addBehaviours}, which {@code SmartBlockEntity} calls
+     * from its constructor, so this field must not have an initializer (it would reset the behaviour to {@code null}).
      */
-    protected FilteringBehaviour storeFilterBehaviour;
+    protected StorageFilterBehaviour storeFilterBehaviour;
 
     @Nullable
     private BlockCapabilityCache<IItemHandler, @Nullable Direction> attachedCache;
@@ -131,16 +140,18 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
 
     @Override
     public void addBehaviours(List<BlockEntityBehaviour> behaviours) {
-        // Aisle face only: every other face already carries an interaction (see StorageFilterValueBox). No showCount():
-        // a storage filter has no amount, so a click sets or clears it and no hold-to-edit board opens.
+        // Aisle face only: every other face already carries an interaction (see StorageFilterValueBox). One behaviour,
+        // not two: the plate is 6 px tall and two value boxes need 8 px between their centres, so the storage priority
+        // is a board row on this very box (M16, ADR-028, see StorageFilterBehaviour).
         storeFilterBehaviour = new StorageFilterBehaviour(this, new StorageFilterValueBox());
         storeFilterBehaviour.setLabel(WareworksLang.translateDirect(WareworksLang.INTERFACE_STORE_FILTER));
         // No withPredicate: list, attribute and package filters are exactly what this slot is for.
-        storeFilterBehaviour.withCallback(stack -> onStoreFilterChanged());
+        storeFilterBehaviour.withCallback(stack -> onStoreSettingsChanged());
+        storeFilterBehaviour.withPriorityCallback(priority -> onStoreSettingsChanged());
         behaviours.add(storeFilterBehaviour);
     }
 
-    // --- store filter --------------------------------------------------------------------------------------------
+    // --- store filter and storage priority -----------------------------------------------------------------------
 
     /**
      * A copy of the filter stack that decides what may be stored here; empty means "accepts everything". A copy,
@@ -157,10 +168,37 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * Whether this location's store filter has <b>no effect</b>, because another storage location counts the inventory
-     * it reads (double chest, item vault) and the planner only ever asks that one ({@code docs/warehouse-system.md}
-     * §3.1.1). Resolved on the server at every goggle observation and synced with the rest of the goggle data, so the
-     * tooltip can say which of two interfaces on one inventory is the effective one.
+     * The storage priority of this location ({@code docs/warehouse-system.md} §3.1, ADR-028): 0..9, higher fills first.
+     * It decides only <b>where new items go</b>, among the locations the store filter, consolidation and item-type
+     * grouping left equal; it never affects retrieval and never re-shuffles what is already stored.
+     */
+    @Override
+    public int storePriority() {
+        return storeFilterBehaviour.priority();
+    }
+
+    /** Whether a player gave this location a storage priority at all (M16). */
+    public boolean hasStorePriority() {
+        return storeFilterBehaviour.priority() != StorageFilterBehaviour.MIN_PRIORITY;
+    }
+
+    /**
+     * The value box the store filter and the storage priority share, for
+     * {@code client.render.WarehouseInterfaceRenderer} (which draws the priority digit on the block itself, because
+     * anything Create draws for a value box is part of the outliner box and only appears for the block under the
+     * crosshair).
+     */
+    public ValueBoxTransform storeSettingsSlot() {
+        return storeFilterBehaviour.getSlotPositioning();
+    }
+
+    /**
+     * Whether this location's store filter <b>and</b> its storage priority have <b>no effect</b>, because another
+     * storage location counts the inventory it reads (double chest, item vault) and the planner only ever asks that one
+     * ({@code docs/warehouse-system.md} §3.1.1). Resolved on the server at every goggle observation and synced with the
+     * rest of the goggle data, so the tooltip can say which of two interfaces on one inventory is the effective one —
+     * which of them is canonical depends on the order {@code SharedInventories.assign} saw them, so this hint is the
+     * player's only way to tell.
      */
     public boolean isStoreFilterShadowed() {
         return filterShadowed;
@@ -176,8 +214,21 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
         return storeFilterBehaviour.setFilter(filter);
     }
 
-    /** The filter changed: the controllers of this rack position re-read it, so the next planning run honours it. */
-    private void onStoreFilterChanged() {
+    /**
+     * Server: sets the storage priority as the hold-to-edit board would (clamped to 0..9). Used by tests and scripted
+     * scenes; players hold the click on the filter slot.
+     *
+     * @return whether it changed
+     */
+    public boolean setStorePriority(int priority) {
+        return storeFilterBehaviour.setPriority(priority);
+    }
+
+    /**
+     * The filter or the priority changed: the controllers of this rack position re-read both, so the next planning run
+     * honours the change.
+     */
+    private void onStoreSettingsChanged() {
         if (level instanceof ServerLevel && !isRemoved())
             WarehouseRegistry.filterChanged(level, worldPosition);
     }
@@ -377,10 +428,16 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
         } else {
             WareworksLang.storageFilter(filter.getHoverName()).forGoggles(tooltip, 1);
             addFilterDetails(tooltip, filter);
-            if (filterShadowed)
-                WareworksLang.translate(WareworksLang.GOGGLES_STORAGE_FILTER_SHADOWED).style(ChatFormatting.GOLD)
-                        .forGoggles(tooltip, 2);
         }
+        // Only while it is set, like the reservation lines: an unprioritised location says nothing about priorities.
+        int priority = storeFilterBehaviour.priority();
+        if (priority != StorageFilterBehaviour.MIN_PRIORITY)
+            WareworksLang.countLine(WareworksLang.GOGGLES_STORAGE_PRIORITY, priority).forGoggles(tooltip, 1);
+        // A priority on a shared-inventory alias is as ineffective as a filter there, so the hint covers both: without
+        // it a priority set on the wrong half of a double chest would be invisibly dead (§3.1.1).
+        if (filterShadowed && (!filter.isEmpty() || priority != StorageFilterBehaviour.MIN_PRIORITY))
+            WareworksLang.translate(WareworksLang.GOGGLES_STORAGE_FILTER_SHADOWED).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
         reservations.addGoggleLines(tooltip, 1);
         AttachedInventorySummary shown = summary;
         if (!shown.hasInventory()) {

@@ -41,7 +41,8 @@ can watch it happen.
 * **Warehouse Controller**: sits behind the dock, gives the aisle its letter, finds storage locations and stations, keeps
   a stock index and plans store and retrieve jobs. It never moves items itself.
 * **Warehouse Interface**: turns any inventory with an item capability (chests, barrels, Create vaults, modded storage)
-  into an addressable storage location such as `A-03-07R`. Its filter slot decides what may be stored there.
+  into an addressable storage location such as `A-03-07R`. Its filter slot decides what may be stored there, and a
+  priority on the same slot decides which of the suitable locations fills first.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse.
 * **Warehouse Output**: the brass hand-over point that requests the item in its filter slot on a redstone pulse;
@@ -134,7 +135,7 @@ never onto the port. Right-click with an empty hand to open it.
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
 path for your factory.
 
-## Storage filters
+## Storage filters and priorities
 
 Right-click the filter slot on the lower half of a Warehouse Interface's aisle face with an item, and that storage
 location only accepts that item. List, Attribute and Package Filters work exactly as elsewhere in Create.
@@ -148,6 +149,16 @@ location only accepts that item. List, Attribute and Package Filters work exactl
   controller's goggles say that no filter accepts them.
 
 ![A rack row of four storage locations, three of them showing their filter item](docs/screenshots/storage-filters.png)
+
+**Priorities.** *Hold* the click on the same slot to set a priority from **0** to **9**. Among the locations that are
+equally suitable, the crane fills the highest one first, so the vault by the door can fill before the far end of the
+aisle. The number is drawn on the block while it is not 0, and a Create clipboard copies filter and priority together
+down a whole rack wall.
+
+* **Storing only.** Retrieval always takes the nearest source, and raising a priority never moves what is already
+  stored. A running job keeps its target.
+* **It never overrules a filter**, and it never mixes item types: a dedicated location still wins, and a location that
+  already holds the incoming item still wins. The priority decides between the locations that are otherwise equal.
 
 ## Production
 

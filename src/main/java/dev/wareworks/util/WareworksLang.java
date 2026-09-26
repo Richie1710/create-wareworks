@@ -57,8 +57,18 @@ public final class WareworksLang {
     public static final String GOGGLES_STORAGE_FILTER_SHADOWED = "gui.goggles.storage_filter_shadowed";
     /** {@code "Filtered locations: %1$s"}: storage locations of an aisle that carry a store filter. */
     public static final String GOGGLES_FILTERED_LOCATIONS = "gui.goggles.filtered_locations";
+    /** {@code "Priority: %1$s"}: the storage priority of a storage location (M16, ADR-028). */
+    public static final String GOGGLES_STORAGE_PRIORITY = "gui.goggles.storage_priority";
+    /** {@code "Prioritised locations: %1$s"}: storage locations of an aisle that carry a storage priority (M16). */
+    public static final String GOGGLES_PRIORITISED_LOCATIONS = "gui.goggles.prioritised_locations";
     /** {@code "Stored Items"}: label of the warehouse interface's store filter slot. */
     public static final String INTERFACE_STORE_FILTER = "interface.store_filter";
+    /** {@code "Storage Priority"}: title of the interface's hold-to-edit board (M16). */
+    public static final String INTERFACE_STORE_PRIORITY = "interface.store_priority";
+    /** {@code "Priority"}: the single row label of that board. */
+    public static final String INTERFACE_STORE_PRIORITY_ROW = "interface.store_priority_row";
+    /** Hover tip under the filter slot: hold the click to set the storage priority (M16). */
+    public static final String INTERFACE_STORE_PRIORITY_TIP = "interface.store_priority_tip";
     /** {@code "Warehouse Controller:"}: goggle header of a warehouse controller. */
     public static final String GOGGLES_WAREHOUSE_CONTROLLER = "gui.goggles.warehouse_controller";
     /** {@code "Aisle %1$s"}: the controller's aisle letter. */

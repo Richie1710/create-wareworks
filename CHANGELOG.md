@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Storage locations have a **priority**: hold the click on a warehouse interface's filter slot to set a number from 0 to
+  9, and among the locations that are equally suitable the crane fills the highest one first — so a large vault filtered
+  to cobblestone takes the cobblestone before the general chests do, and a rack by the door fills before the far end of
+  the aisle
+- A priority decides only where **new** items go. It never overrules a filter and never mixes item types: a dedicated
+  location and a location that already holds the item still win. Retrieval always takes the nearest source, raising a
+  priority never moves what is already stored, and a running crane job keeps its target
+- The number is drawn on the block itself while it is not 0, and read by goggles on the interface ("Priority: 5") and on
+  the controller ("Prioritised locations: 3"). A Create clipboard copies a location's filter and priority together — and
+  copying a location that has neither clears both on the location you paste it onto, so a whole rack wall can be set up,
+  and reset, in a few clicks
+
 ## [0.3.0-alpha] - 2026-09-26
 
 ### Added

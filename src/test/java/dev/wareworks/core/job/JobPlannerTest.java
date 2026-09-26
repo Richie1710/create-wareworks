@@ -2,6 +2,7 @@ package dev.wareworks.core.job;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +12,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -52,6 +54,8 @@ class JobPlannerTest {
     private final Map<RackPosition, Set<String>> storeFilters = new HashMap<>();
     /** Locations whose list is a <b>deny</b> list: they accept everything they do not list, but select nothing. */
     private final Set<RackPosition> denyLists = new HashSet<>();
+    /** Storage priorities per location ({@link PlannerInput#storePriority()}, M16); absent means 0. */
+    private final Map<RackPosition, Integer> priorities = new HashMap<>();
 
     /** Simulated live inventories that record every call. */
     private static final class Live {
@@ -125,6 +129,15 @@ class JobPlannerTest {
     private void denyFilter(RackPosition location, String... denied) {
         storeFilters.put(location, Set.of(denied));
         denyLists.add(location);
+    }
+
+    /** Gives {@code location} a storage priority (M16); higher fills first when storing. */
+    private void priority(RackPosition location, int priority) {
+        priorities.put(location, priority);
+    }
+
+    private int priorityOf(RackPosition location) {
+        return priorities.getOrDefault(location, 0);
     }
 
     private FilterMatch filterMatch(RackPosition location, String key) {
@@ -993,6 +1006,324 @@ class JobPlannerTest {
 
         assertEquals(Optional.empty(), planner.planReroute(in, IRON, 4, JobType.STORE, null),
                 "a store reroute still honours the filter: new items never enter a location that rejects them");
+    }
+
+    // --- storage priorities (M16, issue #11, ADR-028) --------------------------------------------------------------
+
+    /** A warehouse in which nothing was prioritised answers 0, so every other test in this class plans as before M16. */
+    @Test
+    void storePriorityIsNeutralByDefault() {
+        assertEquals(0, input().build().storePriority().applyAsInt(IN_A));
+        assertSame(PlannerInput.NO_PRIORITY, input().build().storePriority());
+        assertThrows(NullPointerException.class, () -> input().storePriority(null).build());
+    }
+
+    /**
+     * The headline case: two locations the rules above the priority leave equal (both unfiltered, both empty), so today
+     * only travel time decides. A priority overrides it, which is what "the rack by the door fills before the far end of
+     * the aisle" means: travel time is measured crane -> input -> location and has nothing to do with where a player
+     * stands.
+     */
+    @Test
+    void storePrefersAHigherPriorityLocationOverANearerOne() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition farPreferred = rack(9, 0, Side.LEFT);
+        stock.update(near, slots(27));
+        stock.update(farPreferred, slots(27));
+        live.insertable.put(near, STACK);
+        live.insertable.put(farPreferred, STACK);
+        priority(farPreferred, 3);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(near, farPreferred)).storePriority(this::priorityOf)
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+
+        assertEquals(farPreferred, storeTarget(base, IRON), "the preferred location wins over the nearer one");
+        assertEquals(List.of(farPreferred), live.insertCalls, "and it is the first candidate simulated");
+
+        // Without the priority the same scene stores into the nearer location: travel time is the next key.
+        priorities.clear();
+        live.insertCalls.clear();
+        assertEquals(near, storeTarget(base, IRON));
+    }
+
+    /**
+     * A filter is a <b>hard</b> rule ("may this item live here at all"), a priority a <b>soft</b> preference ("which of
+     * the permitted locations first"), so hard comes first: a prioritised unfiltered vault must never outrank a
+     * dedicated shelf, or dedicated locations would never fill while a general vault has room, the failure ADR-021
+     * forbids.
+     */
+    @Test
+    void priorityDoesNotOutrankTheStoreFilter() {
+        RackPosition nearPrioritised = rack(1, 0, Side.LEFT);
+        RackPosition farDedicated = rack(9, 0, Side.LEFT);
+        stock.update(nearPrioritised, slots(27));
+        stock.update(farDedicated, slots(27));
+        live.insertable.put(nearPrioritised, STACK);
+        live.insertable.put(farDedicated, STACK);
+        priority(nearPrioritised, 9);
+        filter(farDedicated, IRON);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(nearPrioritised, farDedicated)).storePriority(this::priorityOf)
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+
+        assertEquals(farDedicated, storeTarget(base, IRON), "priority 9 does not beat a dedication");
+        assertEquals(List.of(farDedicated), live.insertCalls);
+
+        // And a rejecting filter still drops the location however high its priority is.
+        priority(farDedicated, 9);
+        live.insertCalls.clear();
+        assertEquals(nearPrioritised, storeTarget(base, DIAMOND), "the dedicated location rejects diamonds");
+        assertFalse(live.insertCalls.contains(farDedicated), "a rejected location is never simulated");
+    }
+
+    /**
+     * The load-bearing decision, with a precedent in this repository: the M8 review found that a deny-list chest ranked
+     * above consolidation and grouping "filled with a mix of everything" and demoted it. A priority is per
+     * <b>location</b>, not per item, so a prioritised unfiltered location attracts <i>every</i> item type; above those
+     * keys it would reproduce that bug by design. Below them it cannot.
+     */
+    @Test
+    void priorityDoesNotOutrankConsolidationOrItemTypeGrouping() {
+        RackPosition preferredHoldingAnotherType = rack(1, 0, Side.LEFT);
+        RackPosition emptyPlain = rack(4, 0, Side.LEFT);
+        RackPosition holdingTheKey = rack(8, 0, Side.LEFT);
+        stock.update(preferredHoldingAnotherType, slots(26, DIAMOND, 10));
+        stock.update(emptyPlain, slots(27));
+        stock.update(holdingTheKey, slots(26, IRON, 10));
+        for (RackPosition location : List.of(preferredHoldingAnotherType, emptyPlain, holdingTheKey))
+            live.insertable.put(location, STACK);
+        priority(preferredHoldingAnotherType, 5);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storePriority(this::priorityOf)
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+
+        assertEquals(emptyPlain,
+                storeTarget(base.storageLocations(List.of(preferredHoldingAnotherType, emptyPlain)), IRON),
+                "item-type grouping decides before the priority, so a preferred location is not mixed");
+
+        live.insertCalls.clear();
+        priorities.clear();
+        priority(emptyPlain, 5);
+        assertEquals(holdingTheKey, storeTarget(base.storageLocations(List.of(emptyPlain, holdingTheKey)), IRON),
+                "consolidation decides before the priority");
+    }
+
+    /** Within one filter class the priority is what orders several dedicated locations among themselves. */
+    @Test
+    void priorityRanksSeveralDedicatedLocations() {
+        RackPosition nearDedicated = rack(1, 0, Side.LEFT);
+        RackPosition farDedicated = rack(9, 0, Side.LEFT);
+        stock.update(nearDedicated, slots(27));
+        stock.update(farDedicated, slots(27));
+        live.insertable.put(nearDedicated, STACK);
+        live.insertable.put(farDedicated, STACK);
+        filter(nearDedicated, IRON);
+        filter(farDedicated, IRON);
+        priority(nearDedicated, 1);
+        priority(farDedicated, 4);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(nearDedicated, farDedicated)).storePriority(this::priorityOf)
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+        assertEquals(farDedicated, storeTarget(base, IRON), "both dedicated to iron: the higher priority fills first");
+    }
+
+    /** Equal priorities leave the old order intact: travel time, then list order for an exact tie. */
+    @Test
+    void equalPrioritiesFallBackToTravelTime() {
+        RackPosition near = rack(2, 0, Side.LEFT);
+        RackPosition far = rack(7, 0, Side.LEFT);
+        RackPosition nearOtherSide = rack(2, 0, Side.RIGHT);
+        for (RackPosition location : List.of(near, far, nearOtherSide)) {
+            stock.update(location, slots(27));
+            live.insertable.put(location, STACK);
+            priority(location, 3);
+        }
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A)).storePriority(this::priorityOf)
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+
+        assertEquals(near, storeTarget(base.storageLocations(List.of(far, near)), IRON),
+                "equal priority: the nearer location wins");
+        live.insertCalls.clear();
+        assertEquals(near, storeTarget(base.storageLocations(List.of(near, nearOtherSide)), IRON),
+                "equal priority and equal travel time: list order decides");
+        live.insertCalls.clear();
+        priority(far, 4);
+        assertEquals(far, storeTarget(base.storageLocations(List.of(near, far)), IRON),
+                "and one step higher wins again");
+    }
+
+    /**
+     * The identity proof asked for by the milestone: with every priority 0 the planner produces the <b>same</b> job as
+     * one that was never told about priorities at all. Structurally this holds because the new key compares
+     * {@code Integer.compare(0, 0) == 0} for every pair, so the comparator evaluates the same chain as before, and
+     * because the builder default is literally {@link PlannerInput#NO_PRIORITY}; this walks several seeded layouts
+     * (filters, pre-existing contents, distances and item types mixed) to show it.
+     */
+    @Test
+    void priorityZeroEverywhereReproducesTheOldOrder() {
+        List<String> keys = List.of(IRON, DIAMOND, WORN_SWORD, NEW_SWORD, SHULKER);
+        for (long seed = 1; seed <= 12; seed++) {
+            Random random = new Random(seed);
+            stock.clear();
+            storeFilters.clear();
+            denyLists.clear();
+            priorities.clear();
+            live.insertable.clear();
+            List<RackPosition> storage = new ArrayList<>();
+            for (int i = 0; i < 8; i++) {
+                RackPosition location = rack(1 + random.nextInt(12), random.nextInt(3),
+                        random.nextBoolean() ? Side.LEFT : Side.RIGHT);
+                if (storage.contains(location))
+                    continue;
+                storage.add(location);
+                String held = keys.get(random.nextInt(keys.size()));
+                stock.update(location, random.nextBoolean() ? slots(27) : slots(26, held, 1 + random.nextInt(20)));
+                live.insertable.put(location, random.nextInt(4) == 0 ? 0 : STACK);
+                if (random.nextInt(3) == 0)
+                    filter(location, keys.get(random.nextInt(keys.size())));
+                else if (random.nextInt(5) == 0)
+                    denyFilter(location, keys.get(random.nextInt(keys.size())));
+            }
+            String buffered = keys.get(random.nextInt(keys.size()));
+            PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A, IN_B))
+                    .inputCursor(random.nextInt(2)).storageLocations(storage)
+                    .itemType(key -> key.split(ITEM_TYPE_SEPARATOR, 2)[0])
+                    .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                    .inputBuffers(location -> slots(0, buffered, 7));
+
+            live.insertCalls.clear();
+            PlanResult<String, RackPosition> before = planner.plan(base.build());
+            List<RackPosition> callsBefore = List.copyOf(live.insertCalls);
+            live.insertCalls.clear();
+            PlanResult<String, RackPosition> zeroed = planner.plan(base.storePriority(location -> 0).build());
+
+            String scene = "seed " + seed + ", storage " + storage;
+            assertEquals(describe(before), describe(zeroed), scene);
+            assertEquals(before.reasons(), zeroed.reasons(), scene);
+            assertEquals(before.nextInputCursor(), zeroed.nextInputCursor(), scene);
+            assertEquals(callsBefore, live.insertCalls, "the same candidates in the same order: " + scene);
+        }
+    }
+
+    /** A planned job without its (random) id, for comparing two planning runs of the same scene. */
+    private static String describe(PlanResult<String, RackPosition> result) {
+        return result.job()
+                .map(planned -> planned.job().type() + " " + planned.job().source() + " to " + planned.job().target()
+                        + " " + planned.job().key() + " x" + planned.job().plannedAmount() + " in "
+                        + planned.estimatedTicks() + " ticks")
+                .orElse("no job");
+    }
+
+    /**
+     * Retrieval keeps the shortest path, always: the planner passes the neutral priority literally on that path, so a
+     * high priority can never send the crane past a nearer location holding the same item. The same for a SUPPLY.
+     */
+    @Test
+    void retrievalIgnoresStorePriorities() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition farPrioritised = rack(9, 0, Side.LEFT);
+        stock.update(near, slots(0, DIAMOND, 10));
+        stock.update(farPrioritised, slots(0, DIAMOND, 10));
+        live.extractable.put(near, 10);
+        live.extractable.put(farPrioritised, 10);
+        live.insertable.put(OUT_A, STACK);
+        live.insertable.put(IN_C, STACK); // the production station of the supply below
+        priority(farPrioritised, 9);
+        PlannerInput.Builder<String, RackPosition> base = input().storePriority(this::priorityOf)
+                .storageLocations(List.of(near, farPrioritised));
+
+        PlanResult<String, RackPosition> retrieve = planner.plan(base
+                .requests(List.of(request(id(1), DIAMOND, 5, OUT_A))).build());
+        assertEquals(near, retrieve.job().orElseThrow().job().source(),
+                "a retrieve takes the nearest source, priority or not");
+        assertEquals(List.of(near), live.extractCalls, "the far, prioritised source is never asked");
+
+        live.extractCalls.clear();
+        PlanResult<String, RackPosition> supply = planner.plan(base.requests(List.of())
+                .supplies(List.of(new PlannerInput.SupplyNeed<>(id(2), DIAMOND, 5, IN_C))).build());
+        assertEquals(near, supply.job().orElseThrow().job().source(), "a supply takes the nearest source too");
+        assertEquals(List.of(near), live.extractCalls);
+    }
+
+    /** A store reroute is still storing, so it honours the priority like the store plan does. */
+    @Test
+    void storeRerouteHonoursPriorities() {
+        RackPosition failed = rack(2, 0, Side.LEFT);
+        RackPosition near = rack(3, 0, Side.LEFT);
+        RackPosition farPreferred = rack(9, 0, Side.LEFT);
+        for (RackPosition location : List.of(failed, near, farPreferred)) {
+            stock.update(location, slots(27));
+            live.insertable.put(location, STACK);
+        }
+        priority(farPreferred, 2);
+        PlannerInput<String, RackPosition> in = input().crane(2, 0).storePriority(this::priorityOf)
+                .storageLocations(List.of(failed, near, farPreferred)).inputs(List.of(IN_A)).build();
+        assertEquals(farPreferred, planner.planReroute(in, IRON, 10, JobType.STORE, failed).orElseThrow().location());
+        assertEquals(List.of(farPreferred), live.insertCalls, "the preferred location is tried first");
+    }
+
+    /**
+     * On a retrieve reroute the filter class is still the first key, so a priority can never lift a rejecting location
+     * above an accepting one: the items would then go back into a location the player forbade for new items.
+     */
+    @Test
+    void retrieveRerouteKeepsRejectingLocationsLastDespitePriority() {
+        RackPosition nearRejectingPrioritised = rack(1, 0, Side.LEFT);
+        RackPosition farGeneral = rack(8, 0, Side.LEFT);
+        stock.update(nearRejectingPrioritised, slots(27));
+        stock.update(farGeneral, slots(27));
+        live.insertable.put(nearRejectingPrioritised, STACK);
+        live.insertable.put(farGeneral, STACK);
+        filter(nearRejectingPrioritised, DIAMOND);
+        priority(nearRejectingPrioritised, 9);
+        PlannerInput<String, RackPosition> in = input().crane(1, 0).storePriority(this::priorityOf)
+                .storageLocations(List.of(nearRejectingPrioritised, farGeneral)).outputs(List.of(OUT_A)).build();
+        assertEquals(farGeneral, planner.planReroute(in, IRON, 5, JobType.RETRIEVE, OUT_A).orElseThrow().location(),
+                "rejecting stays last although it is nearer and prioritised 9");
+        assertEquals(List.of(farGeneral), live.insertCalls);
+    }
+
+    /** A priority only reorders the candidates: it costs no extra live call and no extra budget. */
+    @Test
+    void priorityCostsNoLiveCallOrBudget() {
+        List<RackPosition> chests = new ArrayList<>();
+        for (int x = 1; x <= 6; x++) {
+            RackPosition chest = rack(x, 0, Side.LEFT);
+            stock.update(chest, slots(27));
+            chests.add(chest);
+        }
+        RackPosition accepting = chests.get(5);
+        live.insertable.put(accepting, STACK);
+        priority(chests.get(4), 7); // prioritised, but its live inventory refuses
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A)).storageLocations(chests)
+                .inputBuffers(location -> slots(0, IRON, 5));
+
+        live.insertCalls.clear();
+        planner.plan(base.build());
+        int callsWithout = live.insertCalls.size();
+        live.insertCalls.clear();
+        PlanResult<String, RackPosition> withPriorities = planner.plan(base.storePriority(this::priorityOf).build());
+        assertEquals(accepting, withPriorities.job().orElseThrow().job().target());
+        assertEquals(callsWithout, live.insertCalls.size(), "the same number of live calls, only in another order");
+        assertFalse(withPriorities.reasons().contains(NoJobReason.BUDGET_EXHAUSTED));
+    }
+
+    /**
+     * A stock rule's maximum is consulted per key <b>before</b> any candidate work, so no priority can resurrect a
+     * capped item, and the reason stays the specific {@code AT_MAXIMUM} rather than {@code WAREHOUSE_FULL}.
+     */
+    @Test
+    void storeHeadroomStillDecidesBeforeAnyPriority() {
+        RackPosition preferred = rack(1, 0, Side.LEFT);
+        stock.update(preferred, slots(27));
+        live.insertable.put(preferred, STACK);
+        priority(preferred, 9);
+        PlanResult<String, RackPosition> result = planner.plan(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(preferred)).storePriority(this::priorityOf)
+                .inputBuffers(location -> slots(0, IRON, 5)).storeHeadroom(key -> 0).build());
+        assertFalse(result.hasJob());
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), result.reasons());
+        assertEquals(List.of(), live.insertCalls, "nothing was even simulated");
     }
 
     /** On a retrieve reroute a rejecting location is the last resort, not a peer of the ones that accept the item. */

@@ -45,4 +45,17 @@ public interface StorageMember extends WarehouseMember {
     default ItemStack storeFilter() {
         return ItemStack.EMPTY;
     }
+
+    /**
+     * The storage priority a player gave this location ({@code docs/warehouse-system.md} §3.1, ADR-028, M16): 0..9,
+     * higher fills first. It orders only the locations the store filter, consolidation and item-type grouping left
+     * equal, it is read only when items are <b>stored</b>, and it is a property of the location and of no item — which
+     * is what keeps it out of the retrieval path entirely.
+     * <p>
+     * The default is 0, "no preference", so a storage member without a priority slot needs no change and a warehouse
+     * nobody prioritised plans exactly as it did before M16.
+     */
+    default int storePriority() {
+        return 0;
+    }
 }

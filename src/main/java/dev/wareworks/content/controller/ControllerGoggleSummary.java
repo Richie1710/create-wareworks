@@ -23,6 +23,8 @@ import net.minecraft.nbt.Tag;
  * @param storageLocations  aligned warehouse interfaces
  * @param filteredLocations storage locations that carry a store filter (M8, ADR-021); a count only, so the tag stays
  *                          bounded, and the filters themselves are read from the interfaces
+ * @param prioritisedLocations storage locations that carry a storage priority (M16, ADR-028); a count only, for the same
+ *                          reason — a priority is per location, so only the interfaces can name them
  * @param inputs            aligned warehouse inputs
  * @param outputs           aligned warehouse outputs
  * @param productionStations aligned warehouse production stations (M11, ADR-024)
@@ -44,19 +46,21 @@ import net.minecraft.nbt.Tag;
  * @param lastPlanReason    why the last planning run created no job (empty if it created one or never ran)
  */
 public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, int mastHeight, int storageLocations,
-                                      int filteredLocations, int inputs, int outputs, int productionStations,
+                                      int filteredLocations, int prioritisedLocations, int inputs, int outputs,
+                                      int productionStations,
                                       int misaligned, int itemTypes, long totalItems, int openRequests,
                                       int productionOrders, int stockRules, int rulesBelowMinimum, int rulesAtMaximum,
                                       int rulesPaused, Optional<CraneGoggleInfo> crane,
                                       Optional<NoJobReason> lastPlanReason) {
     public static final ControllerGoggleSummary NONE =
-            counts(ControllerStatus.NO_DOCK, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0, 0, 0, 0, 0, 0);
+            counts(ControllerStatus.NO_DOCK, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0, 0, 0, 0, 0, 0);
 
     private static final String STATUS = "Status";
     private static final String LENGTH = "Length";
     private static final String HEIGHT = "Height";
     private static final String STORAGE = "Storage";
     private static final String FILTERED = "Filtered";
+    private static final String PRIORITISED = "Prioritised";
     private static final String INPUTS = "Inputs";
     private static final String OUTPUTS = "Outputs";
     private static final String PRODUCTION_STATIONS = "Production";
@@ -79,6 +83,7 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         mastHeight = Math.max(0, mastHeight);
         storageLocations = Math.max(0, storageLocations);
         filteredLocations = Math.max(0, filteredLocations);
+        prioritisedLocations = Math.max(0, prioritisedLocations);
         inputs = Math.max(0, inputs);
         outputs = Math.max(0, outputs);
         productionStations = Math.max(0, productionStations);
@@ -106,20 +111,22 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
      * exactly one way to build a summary of counts, and it names every one of them.
      */
     public static ControllerGoggleSummary counts(ControllerStatus status, int aisleLength, int mastHeight,
-                                                 int storageLocations, int filteredLocations, int inputs, int outputs,
-                                                 int productionStations, int misaligned, int itemTypes, long totalItems,
-                                                 int openRequests, int productionOrders, int stockRules,
-                                                 int rulesBelowMinimum, int rulesAtMaximum, int rulesPaused) {
-        return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations, inputs,
-                outputs, productionStations, misaligned, itemTypes, totalItems, openRequests, productionOrders,
-                stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused, Optional.empty(), Optional.empty());
+                                                 int storageLocations, int filteredLocations, int prioritisedLocations,
+                                                 int inputs, int outputs, int productionStations, int misaligned,
+                                                 int itemTypes, long totalItems, int openRequests, int productionOrders,
+                                                 int stockRules, int rulesBelowMinimum, int rulesAtMaximum,
+                                                 int rulesPaused) {
+        return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
+                prioritisedLocations, inputs, outputs, productionStations, misaligned, itemTypes, totalItems,
+                openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused,
+                Optional.empty(), Optional.empty());
     }
 
     /** This summary without crane data and planning result (the counts only, filtered locations included). */
     public ControllerGoggleSummary withoutCrane() {
-        return counts(status, aisleLength, mastHeight, storageLocations, filteredLocations, inputs, outputs,
-                productionStations, misaligned, itemTypes, totalItems, openRequests, productionOrders, stockRules,
-                rulesBelowMinimum, rulesAtMaximum, rulesPaused);
+        return counts(status, aisleLength, mastHeight, storageLocations, filteredLocations, prioritisedLocations,
+                inputs, outputs, productionStations, misaligned, itemTypes, totalItems, openRequests, productionOrders,
+                stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused);
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -129,6 +136,10 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         tag.putInt(HEIGHT, mastHeight);
         tag.putInt(STORAGE, storageLocations);
         tag.putInt(FILTERED, filteredLocations);
+        // Left out while nothing is prioritised, which is every aisle before M16, and a missing key reads back as 0 —
+        // the same rule the production and stock-rule numbers follow.
+        if (prioritisedLocations > 0)
+            tag.putInt(PRIORITISED, prioritisedLocations);
         tag.putInt(INPUTS, inputs);
         tag.putInt(OUTPUTS, outputs);
         tag.putInt(MISALIGNED, misaligned);
@@ -165,8 +176,9 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         Optional<CraneGoggleInfo> crane = tag.contains(CRANE, Tag.TAG_COMPOUND)
                 ? Optional.of(CraneGoggleInfo.read(tag.getCompound(CRANE))) : Optional.empty();
         return new ControllerGoggleSummary(ControllerStatus.byName(tag.getString(STATUS)).orElse(ControllerStatus.NO_DOCK),
-                tag.getInt(LENGTH), tag.getInt(HEIGHT), tag.getInt(STORAGE), tag.getInt(FILTERED), tag.getInt(INPUTS),
-                tag.getInt(OUTPUTS), tag.getInt(PRODUCTION_STATIONS), tag.getInt(MISALIGNED), tag.getInt(ITEM_TYPES),
+                tag.getInt(LENGTH), tag.getInt(HEIGHT), tag.getInt(STORAGE), tag.getInt(FILTERED),
+                tag.getInt(PRIORITISED), tag.getInt(INPUTS), tag.getInt(OUTPUTS), tag.getInt(PRODUCTION_STATIONS),
+                tag.getInt(MISALIGNED), tag.getInt(ITEM_TYPES),
                 tag.getLong(TOTAL_ITEMS), tag.getInt(OPEN_REQUESTS), tag.getInt(PRODUCTION_ORDERS),
                 tag.getInt(STOCK_RULES), tag.getInt(RULES_BELOW_MINIMUM), tag.getInt(RULES_AT_MAXIMUM),
                 tag.getInt(RULES_PAUSED), crane, reasonByName(tag.getString(LAST_PLAN)));

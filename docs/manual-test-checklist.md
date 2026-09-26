@@ -68,8 +68,9 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 19. Change the controller's aisle letter: every address in the aisle follows within a second of looking.
 19a. **Filter slot (M8).** Look at an interface **from the aisle**: a filter slot sits on the lower half of the framed
     plate, below the dark arm slot. Right-click it with an item — the item is drawn there, and goggles read
-    "Filter: <item>" instead of "Accepts everything". Right-click with an **empty hand** clears it again. There is no
-    amount board (a storage filter has no amount).
+    "Filter: <item>" instead of "Accepts everything". Right-click with an **empty hand** clears it again. Holding the
+    click opens a board for the location's **storage priority**, not for an amount (a storage filter has no amount);
+    that board is check 111.
 19b. The slot must not swallow the other interactions: the **wrench** on the top face still rotates the block, clicking
     the **side** of an interface with another interface still copies its facing (row building), and clicking the parts
     of the aisle face away from the slot still places a block normally.
@@ -104,6 +105,10 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
     Two chests with *different* List Filters must be tellable apart by their goggles (each names its own contents).
 19l. Point a **deployer** at the aisle face of a filtered interface and let it right-click with something in hand: the
     filter must **not** change and the filter item that is in the slot must not disappear.
+
+The same slot carries a second setting since M16 — the location's **storage priority**, set by *holding* the click. It has
+its own checks in **section S**, because it needs a rack wall and a longer look at the crane; do them together with these
+if you are already standing at the wall.
 
 ## D. Stations
 
@@ -811,6 +816,86 @@ numbers of one rule, so keep the keeper's screen open on a second monitor if you
     an edit lifted a safety stop ("The warehouse orders this item again"), the panel's reworded maximum sentence and its
     Alt hint, and the amount hint under the scroll input, which now names four things and is the widest single line of
     the terminal window.
+
+    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
+    nothing about how they look.
+
+
+## S. Storage location priorities (M16)
+
+Build one aisle with a **warehouse input** fed by a belt or a funnel, a **warehouse output**, and a rack **wall** of at
+least four storage locations — some of them above your head, which is the case this feature was designed against. The
+automated side of M16 (`StoragePriorityGameTests`, `JobPlannerTest`, the `priorities` visual scenario) already proves
+*what the crane does*; everything below is about whether a person can reach the number, read it, and see why the crane
+went where it went.
+
+111. **Can you set it, on the wall, at any height?** Stand in the aisle and look at the filter slot on the lower half of
+    an interface's aisle face. A **short** right-click still sets or clears the filter, exactly as before. **Hold** the
+    click for about a quarter second: Create's value settings board opens with one row, "Priority", and a scale from 0
+    to 9. Set 5, release, and check that the number stuck. Do this for a location **above head height** and one at your
+    feet — the judgement is whether you can aim at a 6 px plate on a rack wall without crouching around, and whether the
+    board opens reliably rather than sometimes only setting the filter.
+
+    Watch for the one change in feel this brought: since the slot accepts value settings, a filter click fires on
+    **release** instead of the instant you press. Note it if it feels laggy or if a quick click ever fails to set a
+    filter.
+
+    The other interactions must still work over it: the **wrench** on the top face rotates the block, clicking the
+    **side** of an interface with another interface still copies its facing (row building), and the parts of the aisle
+    face away from the slot still place blocks normally.
+
+112. **Can you read it without goggles?** A location at priority 0 draws **nothing at all**. Any other number is drawn
+    as a digit on the andesite plate. Walk the aisle and judge: is it legible at 2, 5 and about 8 blocks, at a grazing
+    angle down the wall, and **at night** or in an unlit warehouse? Does it stay inside the plate and clear of the dark
+    arm slot above it? On a location that also has a **filter item**, the digit moves to the plate's upper right —
+    check that the two do not overlap and that the digit is still the thing you notice first. (Known and expected: the
+    *filter item* on a full-cube block is lit by the block's own interior and comes out nearly black, while the digit is
+    drawn at full brightness. So on a filtered, prioritised location the number reads and the filter item barely does.)
+
+    Aim at the block and check that the digit stays **one clean glyph**: the number must not grow a second, smaller copy
+    of itself and must not turn into a smear (that was an M16 defect — Create's corner label on the value box was drawn
+    on top of it for every targeted block, and it is switched off now). Then step close enough to hit the slot itself:
+    Create's box highlight and the checkered face appear and cover the digit, which is expected, and the hover tip's
+    third line must read "Hold to set the priority". Goggles on the interface read "Priority: 5"; goggles on the
+    **controller** read "Prioritised locations: N" under the storage count, and **nothing** while no location is
+    prioritised.
+
+113. **Is the effect obvious?** Leave two nearer locations empty and unprioritised, give a **far** one priority 5, and
+    feed a stack into the input. The crane must drive **past** the near ones to the far one — watch a whole trip and
+    judge whether it reads as intent rather than as a bug. Then fill that location and keep feeding: the items must go
+    somewhere else without any stall, and the controller goggles must **not** say the warehouse is full.
+
+    Then the two rules that matter more than the feature: give a location a **filter** for something else and a priority
+    of 9 — it must still refuse the incoming item, and a *dedicated* location must still win over a merely prioritised
+    one. And **request** the stored item at the output or the terminal: the delivery must come from the **nearest**
+    source that holds it, even when a farther one is prioritised higher. A priority that changed retrieval would be a
+    defect, not a preference.
+
+    Finally, raise a priority while the crane is **already on a trip**: the running job must finish where it was going,
+    the next trip goes to the new preferred rack, and **nothing already stored may move**.
+
+114. **Copying, saving, and an old world.** Set a filter and a priority on one interface, then use Create's
+    **clipboard**: copying it onto the other interfaces of the rack wall must carry **both** settings — this is the
+    reason the number sits on the filter slot at all, so judge whether dedicating and prioritising a whole wall is
+    actually quick. Copy a **funnel's** filter onto an interface as well: the funnel's *amount* must never turn into a
+    priority, and copying an interface onto a funnel must not change the funnel's amount. Then the **reset** direction:
+    copy an interface that has *neither* a filter nor a priority and paste it onto a prioritised, filtered one — both must
+    end up cleared, and the number must not survive the paste that visibly removed the filter.
+
+    Save and reload: the numbers are still set. Open a world created **before** this version: every location reads
+    priority 0 and the warehouse behaves exactly as it did. Break a prioritised interface and place it again — it comes
+    back at 0, like any freshly placed block (the number is a setting, not an item property).
+
+    Two interfaces on **one double chest**: only one of them counts the chest, so only its priority applies. The other
+    one's goggles must say "Without effect: another interface counts this inventory" in gold **even when it carries only
+    a priority and no filter**, and the controller's "Prioritised locations" must not count it.
+
+115. **German (`de_de`).** Switch the language and walk the same surfaces: the board's title ("Lagerpriorität") and its
+    row ("Priorität"), the hover tip ("Halten, um die Priorität zu setzen"), the interface's goggle line
+    ("Priorität: 5"), the controller's "Priorisierte Lagerplätze: N", and the interface's Shift tooltip, which now has
+    a **fourth** section, "Beim Einstellen der Priorität". Nothing may show a raw key, run out of its box or be cut off
+    — German is the longer language and the screenshot runs only ever render English, so this is the only place
+    clipping shows up. The longest line to watch is the new tooltip paragraph.
 
     **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
     nothing about how they look.

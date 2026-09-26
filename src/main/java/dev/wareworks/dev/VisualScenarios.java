@@ -13,6 +13,7 @@ final class VisualScenarios {
             Map.entry(CranePosesVisualScenario.NAME, CranePosesVisualScenario::new),
             Map.entry(BlocksVisualScenario.NAME, BlocksVisualScenario::new),
             Map.entry(FiltersVisualScenario.NAME, FiltersVisualScenario::new),
+            Map.entry(PrioritiesVisualScenario.NAME, PrioritiesVisualScenario::new),
             Map.entry(RobustnessVisualScenario.NAME, RobustnessVisualScenario::new),
             Map.entry(PonderVisualScenario.NAME, PonderVisualScenario::new),
             Map.entry(TerminalVisualScenario.NAME, TerminalVisualScenario::new),

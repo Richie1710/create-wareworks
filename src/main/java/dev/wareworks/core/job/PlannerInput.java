@@ -56,6 +56,14 @@ import dev.wareworks.core.inventory.StockView;
  *                             reroutes into storage), never for retrieval; on a {@code RETRIEVE} reroute a rejected
  *                             location is ranked last rather than dropped, so leftovers can go back where they came
  *                             from
+ * @param storePriority        the storage priority a player gave a location (M16, issue #11, ADR-028): higher fills
+ *                             first. It is a property of the <b>location</b> and of nothing else — the type
+ *                             {@code ToIntFunction<? super L>} is that guarantee, and it is why a priority can never
+ *                             depend on the item and never reach the retrieval path. Consulted only in
+ *                             {@link JobPlanner#selectStorage}, as the sort key <b>below</b> the store filter,
+ *                             consolidation and item-type grouping and <b>above</b> travel time, so a preference never
+ *                             overrules a filter and never mixes item types; the default is {@link #NO_PRIORITY},
+ *                             i.e. 0 for every location, which makes the ranking the function it was before M16
  * @param storeHeadroom        how many more items of a key the warehouse may still <b>store</b> (M15, issue #3): a
  *                             stock rule's maximum, minus what is stored and on its way in, plus what an open
  *                             production order is still expected to bring back. Consulted once per key in the store
@@ -77,13 +85,21 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         JobPlanner.InsertEstimate<K, L> insertEstimate, JobPlanner.LiveExtract<K, L> liveExtract,
         JobPlanner.LiveInsert<K, L> liveInsert, BiPredicate<? super L, ? super K> insertRefused,
         BiPredicate<? super L, ? super K> extractRefused,
-        BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToLongFunction<? super K> storeHeadroom,
-        int liveSimulationBudget) {
+        BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
+        ToLongFunction<? super K> storeHeadroom, int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
      * the builder's default, so an aisle without rules plans exactly as it did before M15.
      */
     public static final ToLongFunction<Object> UNLIMITED_HEADROOM = key -> Long.MAX_VALUE;
+    /**
+     * The storage priority of a warehouse in which no location was prioritised: 0 everywhere (M16, issue #11). It is
+     * the builder's default, and because the ranking key compares {@code 0} with {@code 0} for every pair of
+     * candidates, an input built without {@link Builder#storePriority} is <b>literally</b> the input the planner
+     * received before M16 — which is what makes the existing test suite the regression proof of "no priority set
+     * behaves exactly as before".
+     */
+    public static final ToIntFunction<Object> NO_PRIORITY = location -> 0;
 
     public PlannerInput {
         if (!Double.isFinite(craneX) || !Double.isFinite(craneY))
@@ -108,6 +124,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         Objects.requireNonNull(insertRefused, "insertRefused");
         Objects.requireNonNull(extractRefused, "extractRefused");
         Objects.requireNonNull(storeFilter, "storeFilter");
+        Objects.requireNonNull(storePriority, "storePriority");
         Objects.requireNonNull(storeHeadroom, "storeHeadroom");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
@@ -163,9 +180,9 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
     /**
      * A builder with safe defaults: crane at (0, 0), stopped, no transfer time, no requests or locations, everything
      * available, every key its own item type, unknown capacity estimates, live callbacks that accept and give nothing, no
-     * known refusals, no store filters ({@link FilterMatch#UNFILTERED} everywhere), unlimited store headroom
-     * ({@link #UNLIMITED_HEADROOM}, i.e. no stock rule) and {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}. The
-     * carry limit has no default.
+     * known refusals, no store filters ({@link FilterMatch#UNFILTERED} everywhere), no storage priorities
+     * ({@link #NO_PRIORITY}, i.e. 0 everywhere), unlimited store headroom ({@link #UNLIMITED_HEADROOM}, i.e. no stock
+     * rule) and {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}. The carry limit has no default.
      */
     public static <K, L> Builder<K, L> builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
         return new Builder<>(stock, reservations);
@@ -195,6 +212,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         private BiPredicate<? super L, ? super K> insertRefused = (location, key) -> false;
         private BiPredicate<? super L, ? super K> extractRefused = (location, key) -> false;
         private BiFunction<? super L, ? super K, FilterMatch> storeFilter = (location, key) -> FilterMatch.UNFILTERED;
+        private ToIntFunction<? super L> storePriority = NO_PRIORITY;
         private ToLongFunction<? super K> storeHeadroom = UNLIMITED_HEADROOM;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
@@ -300,6 +318,16 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         }
 
         /**
+         * The storage priority of a location ({@link PlannerInput#storePriority()}). Left out, it is
+         * {@link PlannerInput#NO_PRIORITY} — the answer of a warehouse in which nothing was prioritised, and the input
+         * the planner received before M16.
+         */
+        public Builder<K, L> storePriority(ToIntFunction<? super L> storePriority) {
+            this.storePriority = storePriority;
+            return this;
+        }
+
+        /**
          * How many more items of a key the warehouse may still store ({@link PlannerInput#storeHeadroom()}). Left
          * out, it is {@link PlannerInput#UNLIMITED_HEADROOM} — the answer of an aisle that has no stock rules.
          */
@@ -316,7 +344,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         public PlannerInput<K, L> build() {
             return new PlannerInput<>(craneX, craneY, speeds, transferTicks, carryLimit, itemType, stock, reservations,
                     requests, supplies, storageLocations, inputs, outputs, inputBuffers, inputCursor, available,
-                    insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter,
+                    insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter, storePriority,
                     storeHeadroom, liveSimulationBudget);
         }
     }

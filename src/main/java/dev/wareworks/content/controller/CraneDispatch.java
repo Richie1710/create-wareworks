@@ -224,6 +224,9 @@ final class CraneDispatch {
                 // Store filters decide before the estimate and before any live call, so a location that may not take the
                 // item costs neither a live simulation nor a remembered refusal (ADR-021).
                 .storeFilter(controller::storeFilterMatch)
+                // The player's storage priority, from the same cache: it orders only the locations the filter,
+                // consolidation and item-type grouping left equal, and it is read nowhere but when storing (ADR-028).
+                .storePriority(controller::storePriorityAt)
                 // A stock rule's maximum decides even earlier, per item type instead of per location: one lookup that
                 // costs nothing while no rule governs the key (M15, issue #3).
                 .storeHeadroom(controller::storeHeadroom)

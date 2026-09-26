@@ -46,8 +46,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       accepts the item and whose estimate exceeds their reserved capacity, ranked by (a0) a filter that
  *       <b>selects</b> the item ({@link FilterMatch#DEDICATED}; a deny list that merely does not exclude it is
  *       {@link FilterMatch#ALLOWED} and ranks like an unfiltered location), then (a) already holding the item, then
- *       (a2) holding nothing or only items of the same type ({@link PlannerInput#itemType()}), then (b) travel time
- *       crane → input → location. Amount =
+ *       (a2) holding nothing or only items of the same type ({@link PlannerInput#itemType()}), then (a3) the storage
+ *       priority a player gave the location ({@link PlannerInput#storePriority()}, higher first, M16), then (b) travel
+ *       time crane → input → location. Amount =
  *       {@code min(buffered, storeHeadroom, carryLimit, liveInsertable − reservedCapacity)}. When an input's items fit
  *       nowhere, the reason distinguishes "no room" ({@link NoJobReason#WAREHOUSE_FULL}) from "no filter accepts them"
  *       ({@link NoJobReason#NO_MATCHING_FILTER}) and from "a rule holds enough already"
@@ -78,6 +79,14 @@ import dev.wareworks.core.warehouse.LocationKind;
  * <b>last</b> instead of dropped, and the location the items were just picked from can therefore always take its own
  * stock back. Every other storing path (the store plan and the store reroute) drops them, so a dedicated location never
  * receives new items its filter rejects.
+ * <p>
+ * <b>Storage priorities and where they may not reach</b> (M16, issue #11, ADR-028): a player's priority is a property of
+ * a storage <i>location</i> ({@link PlannerInput#storePriority()}), it orders only the locations the rules above it left
+ * equal, and it is read in exactly one method, {@link #selectStorage}. Retrieval ({@link #planOutOfStorage}) and the
+ * station fallback ({@link #selectStation}) pass {@link #NEUTRAL_PRIORITY} literally, so "a high priority must never
+ * send the crane past a nearer location that holds the same item" holds structurally and cannot be broken by forgetting
+ * a check. On a reroute with {@code allowRejected} the priority is still the fourth key and the filter class the first,
+ * so a priority can never lift a rejecting location above an accepting one.
  *
  * @param <K> item key type
  * @param <L> location type
@@ -89,6 +98,13 @@ public final class JobPlanner<K, L> {
     public static final long UNKNOWN_CAPACITY = Long.MAX_VALUE;
     /** Filter rank of a candidate no store filter applies to (stations, retrieve sources): neither better nor worse. */
     private static final int NEUTRAL_FILTER_RANK = FilterMatch.UNFILTERED.storeRank();
+    /**
+     * Storage priority of a candidate no priority applies to (M16, issue #11): every path that does <b>not</b> store
+     * passes this literally, so retrieval and station ranking are free of priorities <b>by construction</b> rather than
+     * by a check. It is also the value of an unprioritised storage location, so a warehouse nobody prioritised ranks
+     * exactly as it did before M16.
+     */
+    private static final int NEUTRAL_PRIORITY = 0;
 
     /** Simulated extraction from a live inventory: how many of {@code key} could be taken now, up to the maximum. */
     @FunctionalInterface
@@ -125,10 +141,22 @@ public final class JobPlanner<K, L> {
         }
     }
 
+    /**
+     * The candidate ranking, lower first: <b>hard rules</b> (the store filter) → <b>automatic tidiness</b>
+     * (consolidation, item-type grouping) → <b>explicit player preference</b> (the storage priority, M16) → <b>cost</b>
+     * (travel time) → <b>stability</b> (index order, which makes this a strict total order on distinct candidates).
+     * <p>
+     * The priority is compared with {@link Integer#compare} of the swapped operands rather than by negating a value, so
+     * a range widened later cannot trip over {@code -Integer.MIN_VALUE}. Adding this key changed nothing for a
+     * warehouse without priorities: the key answers 0 for every pair, and {@code thenComparing} consults the next key
+     * exactly then, so the comparator is the same function it was before M16 (see
+     * {@link PlannerInput#NO_PRIORITY}).
+     */
     private static final Comparator<Candidate<?>> RANKING = Comparator
             .comparingInt((Candidate<?> candidate) -> candidate.filterRank())
             .thenComparing((Candidate<?> candidate) -> !candidate.consolidates())
             .thenComparing((Candidate<?> candidate) -> !candidate.compatible())
+            .thenComparing((a, b) -> Integer.compare(b.priority(), a.priority()))
             .thenComparingLong(Candidate::travelTicks)
             .thenComparingInt(Candidate::order);
 
@@ -333,7 +361,9 @@ public final class JobPlanner<K, L> {
             long travel = TravelTimeModel.add(
                     TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), pos.x(), pos.y()),
                     TravelTimeModel.travelTicks(input.speeds(), pos.x(), pos.y(), outputPos.x(), outputPos.y()));
-            candidates.add(new Candidate<>(location, NEUTRAL_FILTER_RANK, false, false, travel, rank));
+            // Retrieval never reads a storage priority (M16): the neutral value is passed literally, so the shortest
+            // path wins and a prioritised location can never send the crane past a nearer source of the same item.
+            candidates.add(new Candidate<>(location, NEUTRAL_FILTER_RANK, false, false, NEUTRAL_PRIORITY, travel, rank));
         }
         candidates.sort(RANKING);
         for (Candidate<L> candidate : candidates) {
@@ -358,9 +388,10 @@ public final class JobPlanner<K, L> {
 
     /**
      * Storage locations that accept {@code key}, ranked by their store filter ({@link FilterMatch#storeRank()}), then
-     * consolidation, then {@code baseTravel} + travel from {@code (fromX, fromY)}. Every path that <b>stores</b> items
-     * goes through here (the store plan and both reroutes into storage), so the store filter is honoured exactly once,
-     * in one place.
+     * consolidation, then item-type compatibility, then the location's storage priority (M16), then {@code baseTravel} +
+     * travel from {@code (fromX, fromY)}. Every path that <b>stores</b> items goes through here (the store plan and both
+     * reroutes into storage), so the store filter and the priority are each honoured exactly once, in one place — and
+     * nowhere else, which is what keeps priorities out of retrieval.
      *
      * @param allowRejected rank locations whose filter rejects {@code key} last instead of dropping them. Only the
      *                      {@code RETRIEVE} reroute passes {@code true}: it puts items back that already left the
@@ -399,10 +430,14 @@ public final class JobPlanner<K, L> {
             boolean consolidates = input.stock().countAt(key, location) > 0;
             // Nothing of another item type (per index): item types are not mixed while such locations are free.
             boolean compatible = consolidates || holdsOnlyTypeOf(input, location, key);
+            // The one place a storage priority is read (M16), and only once the location may take the item at all: it
+            // decides among the locations the rules above left equal, and never against them.
+            int priority = input.storePriority().applyAsInt(location);
             RackPosition pos = position(location);
             long travel = TravelTimeModel.add(baseTravel,
                     TravelTimeModel.travelTicks(input.speeds(), fromX, fromY, pos.x(), pos.y()));
-            candidates.add(new Candidate<>(location, filter.storeRank(), consolidates, compatible, travel, rank));
+            candidates.add(new Candidate<>(location, filter.storeRank(), consolidates, compatible, priority, travel,
+                    rank));
             if (survey != null)
                 survey.ranked = true;
         }
@@ -430,7 +465,8 @@ public final class JobPlanner<K, L> {
                 continue;
             RackPosition pos = position(location);
             long travel = TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), pos.x(), pos.y());
-            candidates.add(new Candidate<>(location, NEUTRAL_FILTER_RANK, false, false, travel, rank));
+            // A station is no storage location: it has no store filter and no storage priority (M16).
+            candidates.add(new Candidate<>(location, NEUTRAL_FILTER_RANK, false, false, NEUTRAL_PRIORITY, travel, rank));
         }
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, limit, budget);
@@ -489,8 +525,10 @@ public final class JobPlanner<K, L> {
      *                     {@link #NEUTRAL_FILTER_RANK} where no filter applies (stations, retrieve sources)
      * @param consolidates already holds the item key (storage only)
      * @param compatible   holds nothing or only items of the key's type per index (storage only)
+     * @param priority     the storage priority a player gave the location, higher first (storage only, M16);
+     *                     {@link #NEUTRAL_PRIORITY} where none applies (stations, retrieve sources)
      */
-    private record Candidate<L>(L location, int filterRank, boolean consolidates, boolean compatible,
+    private record Candidate<L>(L location, int filterRank, boolean consolidates, boolean compatible, int priority,
             long travelTicks, int order) {
     }
 

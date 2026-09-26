@@ -32,8 +32,8 @@ import net.minecraft.world.level.block.entity.BlockEntity;
  * fully faded in, and lets the scenario assert the tooltip's own lines on the client block entity that draws them: a
  * screenshot cannot tell a right number from a wrong one.
  * <p>
- * Shared by the stock rule scenarios ({@link StockRulesVisualScenario}, {@link RestockVisualScenario}); dev tooling
- * only (ADR-014).
+ * Shared by the stock rule scenarios ({@link StockRulesVisualScenario}, {@link RestockVisualScenario}) and by
+ * {@link PrioritiesVisualScenario}; dev tooling only (ADR-014).
  */
 final class GoggleShots {
     /** Frames Create's goggle overlay needs to fade in completely ({@code GoggleOverlayRenderer}: {@code fade = t/24}). */
