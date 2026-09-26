@@ -48,7 +48,9 @@ dev.wareworks
 │   ├── job                    RequestQueue, RetrievalRequest (M2 stations); TransportJob, JobType, Reservation,
 │   │                          ReservationLedger / ReservationView, CraneSpeeds, CraneKinematics, TravelTimeModel,
 │   │                          JobPlanner, PlannerInput, PlanResult, PlannedJob, RerouteTarget, NoJobReason, RefusalMemory (M3);
-│   │                          FilterMatch (what a location's store filter says about a key, M8, ADR-021)
+│   │                          FilterMatch (what a location's store filter says about a key, M8, ADR-021);
+│   │                          since M17 (ADR-029) PlannerInput also carries ports / portRank and a STORE job may target
+│   │                          an OUTPUT (TransportJob.storeToPort, NoJobReason.PORT_FULL)
 │   ├── crane                  CranePhase, CranePose, CraneState, CraneTimings, CraneEvent, CraneEffect,
 │   │                          CraneInterruption, AbortReason, CraneStateMachine, CraneMotion (M3); CraneSoundCues
 │   │                          (when the crane makes which sound, M4); CraneResync (when a client snaps to a
@@ -64,6 +66,10 @@ dev.wareworks
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
 │   │                          ProductionOrders (a controller's orders), ProduciblePlanner (what an aisle could make)
+│   ├── port                   the policy of one warehouse port (M17, issue #12, ADR-029): PortDirection (request /
+│   │                          accept, derived from the sign of the rank), PortRedstone (on a pulse / while powered /
+│   │                          unless powered; its ordinal is the board row, its name the save name) and PortSettings
+│   │                          (the signed rank plus the redstone behaviour, and gateOpen)
 │   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
 │                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
 │                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
@@ -90,7 +96,9 @@ dev.wareworks
 │   │                          cached for planning, both read in one lookup per location, M8 + M16, ADR-028; the name
 │   │                          was kept on purpose);
 │   │                          AisleStockRules (the controller's own, saved copy of its keepers' stock rules, M15,
-│   │                          ADR-027; the pauses of the safety stop live in the controller beside it)
+│   │                          ADR-027; the pauses of the safety stop live in the controller beside it);
+│   │                          AislePorts (the port policies and filter items of the aisle's warehouse ports, cached for
+│   │                          planning and for the continuous pass, not saved, unread until read, M17, ADR-029)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock, RailScan (M2); CraneExecution,
 │   │   │                      CranePersistence, CraneGoggleInfo, CraneJobSummary, CranePauseReason, CranePauseDecision
 │   │                      (M3; the pause priority became a pure, unit-tested function in M5); CraneSounds
@@ -100,6 +108,10 @@ dev.wareworks
 │   │                          TransferContexts (storage interface, input, output) (M3)
 │   ├── station                WarehouseStationBlock / BlockEntity (base), WarehouseInputBlock / BE,
 │                              WarehouseOutputBlock / BE, RequestFilterBehaviour, StationBuffer, StationGoggleSummary (M2);
+│                              PortRankBehaviour (the warehouse port's direction and rank on a wrench-only value
+│                              box) and PortRankValueBox (its position: the filter slot's own faces, because only
+│                              one of the two boxes is ever eligible per hand state) (M17, ADR-029; the port's
+│                              redstone behaviour rides on the filter slot's board rows in RequestFilterBehaviour);
 │                              WarehouseDeliveryStationBlockEntity (shared base of the stations a crane delivers into),
 │                              WarehouseTerminalBlock / BE, TerminalStockEntry, TerminalStatus (M6, ADR-018);
 │                              WarehouseTerminalMenu, TerminalMenuLayout (window geometry both sides need),
@@ -144,15 +156,19 @@ dev.wareworks
 │   │                          WareworksPartialModels (crane partials), CraneModelLayout (model dimensions, pose math) (M4);
 │   │                          WarehouseInterfaceRenderer (Create's filter renderer with the view distance the mod's
 │   │                          most mass-placed block needs, M8 review; since M16 it also draws the storage priority
-│   │                          digit on the plate, skipped at 0, ADR-028)
+│   │                          digit on the plate, skipped at 0, ADR-028);
+│   │                          WarehouseOutputRenderer (the port's filter item plus, for an accepting port, its signed
+│   │                          rank on the plate on the back, M17, ADR-029)
 │   └── ponder                 WareworksPonderPlugin (the one PonderPlugin), WareworksPonderScenes (which scene belongs
 │       │                      to which item), WareworksPonderTags (own tag wareworks:warehouse + Create tags),
 │       │                      WareworksPonderLang (ponder lang inside the Registrate LANG generator) (M5)
 │       └── scenes             PonderAisle (shared stage layout), CraneScript (crane animation through the client pose
 │                              API), CraneScenes (stacker_crane/overview), WarehouseScenes (interface, storing,
 │                              retrieving, M5; filters, M13), TerminalScenes (terminal, requesting),
-│                              ProductionScenes (production) (M13) and StockRuleScenes (stock_rules: the three
-│                              numbers; restocking: the minimum ordering by itself and the safety stop) (M15)
+│                              ProductionScenes (production) (M13), StockRuleScenes (stock_rules: the three
+│                              numbers; restocking: the minimum ordering by itself and the safety stop) (M15) and
+│                              PortScenes (port_requesting: feeding a machine without a clock; port_accepting: an
+│                              overflow, also registered for the stock keeper) (M17)
 ├── data                       WareworksDatagen (GatherDataEvent hooks), WareworksLangGen (English lang),
 │                              WareworksBlockStateGen (the blockstate generators Create's BlockStateGen does not cover:
 │                              the terminal's multipart state, M10, ADR-022; the stock keeper's three lamp models over
@@ -175,7 +191,10 @@ dev.wareworks
 │                              lecterns, nixie tubes, a display board and a sign, M14;
 │                              StockKeeperGameTests, StockRuleEnforcementGameTests, StockRestockGameTests and
 │                              TerminalConfirmationGameTests: the stock rules, what they do to a moving warehouse,
-│                              automatic restocking with its safety stop, and the terminal's confirmation, M15)
+│                              automatic restocking with its safety stop, and the terminal's confirmation, M15;
+│                              WarehousePortGameTests: the warehouse port's two directions and three redstone
+│                              behaviours, its two value boxes and the clipboard, the ranking against storage, a full
+│                              port, an old world's output, persistence and the cold cache, M17)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -202,7 +221,10 @@ dev.wareworks
 │                              player reach they need);
 │                              FiltersVisualScenario (a rack row dedicated by filters, M8) and
 │                              PrioritiesVisualScenario (the priority digit on the block and the delivery order it
-│                              causes, fed by a real Create belt, M16),
+│                              causes, fed by a real Create belt, M16) and
+│                              PortsVisualScenario (the five rows of issue #12's own table in one aisle: an unwired
+│                              overflow, a filtered one, a diversion, a pulse and a machine fed through a Mechanical
+│                              Press, each phase asserted on the server before the shot that claims it, M17),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -1290,8 +1312,161 @@ and `ControllerGoggleSummary` gained `prioritisedLocations` (a count, so the tag
 while it is 0). `ControllerGoggleSummary.counts(...)` therefore has one more int parameter, which is the hazard its own
 javadoc already warns about. The ranking now has a **documented shape** — hard rules, tidiness, preference, cost,
 stability — into which issue #12 (the warehouse output as a port) can slot a preference of its own without touching the
-other keys. Two names were **not** changed although they now carry both settings: `AisleFilters` and
+other keys. **M17 did exactly that** (ADR-029): an accepting warehouse port became one further key, the *target class*,
+above the filter, and a port's own strength reuses this key rather than adding one — so the milestone that ADR-028 was
+written to make possible cost the comparator a single key in total. Two names were **not** changed although they now carry both settings: `AisleFilters` and
 `WarehouseRegistry.filterChanged`; their javadoc says so, and renaming them is a separate, mechanical change.
+
+### ADR-029 — The warehouse output became the warehouse **port**: one signed rank carries direction and order, on the block that was already there (M17, issue #12)
+*Context:* GitHub issue #12, from the user, with a table of the combinations they wanted. Until M17 a warehouse output
+could do exactly one thing: hand out what its filter named, once per redstone rising edge. Two things were therefore
+impossible. A warehouse could not **give up** items it was not allowed to keep — M15's maximum (ADR-027) simply let the
+warehouse input back up, which is correct but leaves the player with a jammed belt and no outlet — and a machine could
+only be **fed** by building a redstone clock, which produces one trip per pulse and an unbounded pile of promises. The
+milestone's job was to make the output the warehouse's general port: a **direction**, a **rank** and a **redstone
+condition**, with the filter it already had.
+
+*Decision:*
+* **The output block was extended; no second block was added.** This was the **user's** decision and is recorded here
+  because the reasoning is not obvious. A separate "warehouse export" block would have doubled the surface for one
+  difference in behaviour: the same buffer, the same extract-only capability, the same M12 arm point, the same
+  membership, the same drops, the same goggle header, the same display source, the same recipe slot in the creative tab —
+  and a player would have had to decide *before placing* which of two nearly identical blocks a rack position should
+  hold, then break and replace it to change their mind. It would also have needed a new `LocationKind`, which reaches
+  `RackProbe`, membership, persistence, the arm points and `TransferContexts`. Extending the block instead means an
+  existing world keeps working by construction, one recipe and one Ponder subject cover both directions, and switching a
+  port around is a wrench click rather than a rebuild. The cost, accepted: the block's **name** no longer describes
+  everything it does. It is still "Warehouse Output" and still `wareworks:warehouse_output`, because renaming a
+  registered block is a user-visible change nobody asked for; the docs, the tooltip and the goggles call it a *port*.
+* **One signed number is the direction.** `core.port.PortSettings(rank, redstone)`: `rank == 0` requests, `rank < 0` is
+  an **overflow** (every storage location wins over it), `rank > 0` a **diversion** (it wins over every storage
+  location). `PortDirection` is *derived* from the sign, not stored, so "what the port does" and "where it ranks among
+  the others" can never disagree — the failure mode of a separate direction flag plus a priority. The magnitude is offset
+  by one (`±(v + 1)`), which makes every accepting rank non-zero: `0` then means "requests" **and** "is not a store
+  target" **and** "the class storage itself sits at" with no extra flag, and the board's default magnitude 0 is already a
+  usable overflow (`−1`) rather than a neutral that would tie with storage. The magnitude keeps M16's range `0..9` and
+  its milestones, so "priority" means one thing across the mod and one digit stays one glyph wide.
+* **Two value boxes on the same faces, exactly one eligible per hand state.** M16 had to prove that a second box does not
+  fit on a warehouse interface's 6 px plate (ADR-028). The output's faces are less crowded — its plate is y 5.5..13 px —
+  but the answer here is better than measuring: the port box is `onlyVisibleWithWrench()` and the filter slot's
+  `mayInteract` **refuses Create's wrench**, so Create's input handler and both renderers skip exactly one of them at any
+  moment. Nothing has to be measured, the filter slot does not move a pixel, and the rule is one sentence a player can
+  hold: *hold the Wrench to configure the port, anything else to set the filter.* It is Create's own **item** and not the
+  `c:tools/wrench` tag, because Create splits the two predicates itself — `ScrollValueRenderer` draws a `needsWrench` box
+  only for `AllItems.WRENCH` while `ValueSettingsInputHandler` accepts the tag — so matching the tag here would leave a
+  player holding another mod's wrench with **no** box drawn at all. Both boxes refuse a `FakePlayer`,
+  because Create's input handler skips its 4 px hit test for one and exporting items is irreversible.
+* **The redstone behaviour goes on the board's free row axis.** M2 dropped Create's "Exactly" row from this slot (the
+  controller always clamps to the available stock), so the rows had been unused ever since. Create's own idiom for a
+  board whose rows are a *unit* and whose column is a *value* is the brass diode, and that is what this is: row =
+  when the port acts, column = the requested amount. `upTo` stays `true` for ever, so the amount path, M7's merge cap
+  and `maxRequestAmount()` are untouched, and in the accepting direction the column is simply not read (every cell shows
+  an em dash) instead of being removed — `ValueSettingsScreen` divides by `board.maxValue()` for its click sound.
+* **The ranking gained exactly one key**, which is the shape ADR-028 promised: **target class** → store filter →
+  consolidation → item-type grouping → priority *or* a port's strength → travel time → index order. The class is the
+  first key because "a diversion takes items before they are stored" and "storage always wins over an overflow" are
+  statements about *which kind of place* the items go to and must hold against every other rule — a diversion beats even
+  a `DEDICATED` location, an overflow loses to every location that may take the item. Three values, with storage in the
+  middle: `0` diversion, `1` storage, `2` overflow. Every path that does not store passes the storage class
+  **literally**, so the key answers 0 for every pair there and the comparator is the function it was before M17.
+* **The content layer applies the whole policy; the planner only ranks.** `PlannerInput#ports` is the list of ports that
+  will take items *now* — direction, redstone gate, pulse token and availability already applied — and `#portRank` their
+  signed rank. So "off means off" is a property of the list, `JobPlanner` contains no redstone, and the two defaults
+  (`List.of()` and `NO_PORT_RANK`) make an input built without ports *literally* the pre-M17 input. A rank of `0` drops
+  a candidate inside the planner as well, because that is also what a controller answers for a port it could not read:
+  **"not read yet" must never mean "assume it accepts"**, since an export cannot be undone. That asymmetry is the same
+  one ADR-028 recorded for filters and priorities, with the dangerous default on the other side.
+* **A stock rule's maximum is what makes an overflow necessary, so it may not gate the ports.** A candidate carries its
+  own limit: `portLimit` is what one trip can carry, `storageLimit` is that bounded by the headroom. A key at its maximum
+  contributes **no storage candidate at all** — no estimate, no live call, no remembered refusal, exactly as before M17 —
+  and still reaches the ports. This is the interaction the feature exists for, and it is why #12 needed #3 first.
+* **A port candidate consults neither the capacity estimate nor the refusal memory.** A station buffer has no index
+  snapshot, so an estimate could only answer "unknown"; and a port has no snapshot round robin that would ever forget a
+  remembered refusal, so a refusal entry would ignore the port long after a funnel emptied it. The reservation is still
+  subtracted like for every candidate. The cost is therefore one live call per *offered* port per key per run, and
+  `JobPlanner.MAX_PORT_CANDIDATES` (12) of them at most: "the handful of ports an aisle has" is not something a player is
+  bound by — an aisle has up to `maxAisleLength × maxMastHeight × 2` rack positions against a live budget of 64 — so the
+  bound is **enforced** instead of assumed. Above the cap `collectPorts` ranks the port candidates with the same
+  comparator and offers only the best, which drops the weakest ports rather than an arbitrary window, and dropping a port
+  is the safe direction anyway: the items go to storage or back up instead of leaving. At or below the cap nothing is
+  ranked and nothing changes. A port whose filter rejects the key is dropped before the live call, so a rack wall of
+  filtered ports costs nothing at all, exactly as a partitioned warehouse does not (ADR-021).
+* **No new location kind and no new job type.** A store into a port is a `STORE` job with a `LocationKind.OUTPUT`
+  target (`TransportJob.storeToPort`), so nothing downstream had to learn a new concept: nobody asked for the items, they
+  are never counted as stored, and the crane uses the delivery context it already uses for a retrieve. `JobType`'s
+  allowed targets became a **set** (`STORE = {STORAGE, INPUT, OUTPUT}`) instead of two named kinds.
+* **Such a job reserves capacity, not transit.** `TRANSIT` means "items that have left the indexed stock and are owed to
+  whoever asked for them", so the ledger's delivery-target branch excludes a `STORE` however delivery-like its target
+  is. What a store job holds at a port is **room**, which is also what stops two jobs planning into the same port slots.
+* **Ports are the last reroute stage, and only for store leftovers.** Storage, then input buffers, then an accepting
+  port — last, whatever its rank, because putting items back into an input is reversible and exporting them is not, and
+  it converges anyway (the next store plan offers them to the port again). Retrieve and supply leftovers **never** reach
+  a port, in both layers: the planner skips them and `CraneDispatch#rerouteOutputs` keeps them out of the output
+  list altogether, so a port that is currently gated *shut* is not a retrieve-reroute target either. A store reroute that
+  does land in a port spends its **pulse token**, decided from the kind of the target that was *chosen*: the job still
+  names the target that failed, because the crane's state machine re-targets it only when the answer comes back. A player can therefore reason
+  that whatever comes out of a port is surplus, and the mod never quietly feeds a shredder with items somebody
+  requested.
+* **The crane never waits at a full store target.** `CraneExecution`'s "wait at a full delivery target" pre-check is
+  scoped to jobs that are not a `STORE`: waiting is right when somebody is waiting for the items and wrong for a store
+  into an overflow, where the crane would park in front of a full port and block the aisle. Scoped by the **type**
+  rather than by "has a request id", so every `RETRIEVE` and `SUPPLY` is byte for byte as it was.
+* **`NoJobReason.PORT_FULL` is declared before `AT_MAXIMUM` and does arm the back-off.** A maximum is not a fault; an
+  overflow that cannot get rid of its items is the thing to go and fix, so it is the more specific and the more
+  actionable answer. And unlike a maximum it is reached only after a full candidate walk with an estimate and a live
+  simulation per candidate — exactly the work `fullBackoffTicks` exists to protect (the M15 argument, turned around
+  because the cost is the other way round).
+* **The direction is readable in the world, from both sides, without goggles.** From **inside the aisle** — where no
+  value box and no drawn digit may go, because the crane's arm port owns that face — an accepting port turns
+  **andesite** around the aisle opening and on the back spout: ADR-017's material language (andesite = the dumb intake,
+  brass = the smart filtered output), and "whatever the warehouse cannot keep" is the dumb direction. A second hand-made
+  model `block_accept.json` differs from `block.json` in exactly that one texture, selected by the derived blockstate
+  property `accepting`, which the block entity re-asserts from the rank on every change and once on load (so a
+  `/setblock` with the wrong value is corrected rather than believed) and writes with `UPDATE_CLIENTS` alone — a
+  direction is something a player reads, not something a neighbour reacts to (the stock keeper's lamp argument). From
+  **outside**, where the wiring is, `WarehouseOutputRenderer` paints the signed rank on the back plate, for accepting
+  ports only: the ADR-028 lesson that anything Create draws for a value box exists only for the block under the
+  crosshair.
+* **Every surface says the same thing.** The port's goggles name the direction, the rank, what it accepts, its redstone
+  behaviour and how many items it has handed over; the controller counts "Accepting ports: N"; the aisle display gains
+  "Ports: N accepting"; and the crane says **"Handing over"** instead of "Storing" while it carries items into a port,
+  which needed `CraneJobSummary` to carry its `targetKind` in the client packet, because the job type alone cannot tell
+  a store from an export. Two Ponder scenes teach the two directions, and the accepting one is registered for the
+  **stock keeper** as well, because a maximum that makes an input back up on purpose is exactly what it answers.
+* **Four save keys, every one of them conditional.** `PortRank` (only while it is not 0, under the behaviour's own key
+  instead of Create's generic `ScrollValue`), `RedstoneMode` (only while it is not `PULSE`), `PortArmed` (only while an
+  accepting pulse port holds an unused edge) and `PortExported` (only while it is above 0). An unconfigured port
+  therefore writes **none** of them, a pre-M17 output's tag stays byte for byte its own, a missing key reads as the
+  default, and no migration exists. The clipboard keeps Create's `Value` (so a port still sets a funnel's amount), forces
+  `Row` to the "up to" row — it means "exactly" to every funnel and the redstone behaviour here — and writes the mode
+  and the rank **unconditionally** under keys of their own, because in a clipboard an omitted key makes a default
+  unsayable and a paste of a plain port could then never undo a configured one (the M16 clipboard lesson).
+
+*Reason:* Every alternative was either a second concept or a lie about the block. A separate export block doubled the
+surface and forced a decision before placement, for one difference in behaviour (the user's own argument, above). A
+direction flag *plus* a priority could disagree with itself, and the planner would have had to read two functions where
+one is enough. A controller-side list of "where surplus goes" would need its own UI and its own rules for a port that
+moved or broke — the argument ADR-021 settled once and ADR-028 settled again. A new `LocationKind` would have reached
+five subsystems for a station that behaves exactly like an output in all of them. And every alternative to the target
+class as the *first* ranking key was a rule a player cannot reason about: below the filter, "storage always wins over an
+overflow" would break the moment somebody dedicated a port; below grouping or the priority, a diversion would stop being
+a diversion as soon as a rack happened to hold the item already.
+
+*Consequences:* A warehouse can now **route** instead of only storing: everything arrives at one input and the system
+decides whether it goes into a rack, straight on to a machine, or back out as surplus — with the crane doing the
+carrying, so a player can always see why a chest is full. A stock rule's maximum became useful rather than merely
+correct: the surplus leaves instead of jamming the belt. A machine can be fed with no clock and with at most one open
+request in flight. Nothing is destroyed and nothing teleports: a full port backs up like a full warehouse, and what
+stands in a port is station buffer — never re-stored, never counted as stock, and never fetched back, which is
+structural because retrieval only ever iterates the stock index. `PlannerInput` gained two components and
+`ControllerGoggleSummary` one more int parameter, the hazard its own javadoc warns about. The ranking key is one `int`
+with storage at the **middle** value, so a further class — a collecting source (issue #13) — slots in without touching
+any other key, and `AislePorts` already caches a policy plus a filter per member and gates it per tick. Two risks are
+recorded rather than guarded: a **diversion** can swallow what a rule's minimum needs (which is precisely what
+"everything incoming is diverted out" asks for, and ADR-027's safety stop bounds the restocking side of it), and a
+player who pipes a port's chest back into an input makes an item at its maximum churn for ever (undetectable — the mod
+cannot see belts — bounded, because retrievals and supplies are planned before stores, and readable on the port's
+"Handed over: N").
 
 ## Persistence & sync
 

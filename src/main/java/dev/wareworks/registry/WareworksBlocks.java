@@ -129,10 +129,13 @@ public final class WareworksBlocks {
                     .register();
 
     /**
-     * Warehouse output station ({@code docs/warehouse-system.md} §3.2). Horizontal blockstate (all {@code powered}
-     * variants use the same model) over the hand-made {@code models/block/warehouse_output/block.json} (authored with
-     * the aisle opening facing north). Does not conduct redstone, so neighbouring outputs in a rack row are triggered
-     * separately. Protected from contraptions; drops itself.
+     * Warehouse output station, the warehouse <b>port</b> since M17 ({@code docs/warehouse-system.md} §3.2, issue #12).
+     * Horizontal blockstate over the hand-made {@code models/block/warehouse_output/block.json} (authored with the aisle
+     * opening facing north) plus its {@code block_accept} twin for the accepting direction; all {@code powered} variants
+     * keep the same model, because a stored edge is nothing a player can see
+     * ({@link WareworksBlockStateGen#warehousePortBlockProvider()}). The item model stays the requesting one, which is
+     * the direction a placed port starts in. Does not conduct redstone, so neighbouring ports in a rack row are
+     * triggered separately. Protected from contraptions; drops itself.
      */
     public static final BlockEntry<WarehouseOutputBlock> WAREHOUSE_OUTPUT =
             REGISTRATE.block("warehouse_output", WarehouseOutputBlock::new)
@@ -142,7 +145,7 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .transform(DisplaySource.displaySource(WareworksDisplaySources.FILTERED_STOCK))
-                    .blockstate(BlockStateGen.horizontalBlockProvider(true))
+                    .blockstate(WareworksBlockStateGen.warehousePortBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();

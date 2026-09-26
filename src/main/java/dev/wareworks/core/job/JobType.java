@@ -2,6 +2,7 @@ package dev.wareworks.core.job;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 import dev.wareworks.core.warehouse.LocationKind;
 
@@ -12,12 +13,19 @@ import dev.wareworks.core.warehouse.LocationKind;
  * location, a retrieve job picks at a storage location and drops at an output station. Leftovers in the handling head
  * can be rerouted (§8), so a job's target may later be another kind: store leftovers go back to an input buffer,
  * retrieve leftovers into a storage location.
+ * <p>
+ * <b>A store job may also drop at an {@link LocationKind#OUTPUT}</b> (M17, issue #12): an accepting warehouse port is a
+ * target the store plan may choose and the last resort for store leftovers. The allowed target kinds are therefore a
+ * <b>set</b> rather than the two named kinds — {@link #plannedTargetKind()} and {@link #fallbackTargetKind()} keep their
+ * meaning for their existing readers, but they no longer enumerate everything a type may drop at.
  */
 public enum JobType {
-    /** Input station → storage location. */
-    STORE(LocationKind.INPUT, LocationKind.STORAGE, LocationKind.INPUT),
+    /** Input station → storage location, an accepting warehouse port, or back into an input buffer. */
+    STORE(LocationKind.INPUT, LocationKind.STORAGE, LocationKind.INPUT,
+            Set.of(LocationKind.STORAGE, LocationKind.INPUT, LocationKind.OUTPUT)),
     /** Storage location → output station. */
-    RETRIEVE(LocationKind.STORAGE, LocationKind.OUTPUT, LocationKind.STORAGE),
+    RETRIEVE(LocationKind.STORAGE, LocationKind.OUTPUT, LocationKind.STORAGE,
+            Set.of(LocationKind.OUTPUT, LocationKind.STORAGE)),
     /**
      * Storage location → production station ({@code docs/warehouse-system.md} §3.5, ADR-024): one ingredient of a
      * production order on its way to the machine that will consume it.
@@ -26,16 +34,20 @@ public enum JobType {
      * reserves them there — and differs only in where they go and in who is waiting for them. Leftovers go back into
      * storage, never to an output: nobody requested them at a station.
      */
-    SUPPLY(LocationKind.STORAGE, LocationKind.PRODUCTION, LocationKind.STORAGE);
+    SUPPLY(LocationKind.STORAGE, LocationKind.PRODUCTION, LocationKind.STORAGE,
+            Set.of(LocationKind.PRODUCTION, LocationKind.STORAGE));
 
     private final LocationKind sourceKind;
     private final LocationKind plannedTargetKind;
     private final LocationKind fallbackTargetKind;
+    private final Set<LocationKind> allowedTargets;
 
-    JobType(LocationKind sourceKind, LocationKind plannedTargetKind, LocationKind fallbackTargetKind) {
+    JobType(LocationKind sourceKind, LocationKind plannedTargetKind, LocationKind fallbackTargetKind,
+            Set<LocationKind> allowedTargets) {
         this.sourceKind = sourceKind;
         this.plannedTargetKind = plannedTargetKind;
         this.fallbackTargetKind = fallbackTargetKind;
+        this.allowedTargets = allowedTargets;
     }
 
     /** The kind of location the items are picked from. */
@@ -71,10 +83,13 @@ public enum JobType {
         return this != STORE;
     }
 
-    /** Whether a job of this type may drop at a location of {@code kind} (planned target or reroute fallback). */
+    /**
+     * Whether a job of this type may drop at a location of {@code kind}: its planned target, its reroute fallback, and
+     * for a {@link #STORE} also an {@link LocationKind#OUTPUT}, i.e. an accepting warehouse port (M17, issue #12).
+     */
     public boolean allowsTarget(LocationKind kind) {
         Objects.requireNonNull(kind, "kind");
-        return kind == plannedTargetKind || kind == fallbackTargetKind;
+        return allowedTargets.contains(kind);
     }
 
     /** The type with the given save name, or empty for {@code null} or unknown names. */

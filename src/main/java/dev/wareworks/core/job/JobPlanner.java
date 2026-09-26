@@ -49,9 +49,15 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       (a2) holding nothing or only items of the same type ({@link PlannerInput#itemType()}), then (a3) the storage
  *       priority a player gave the location ({@link PlannerInput#storePriority()}, higher first, M16), then (b) travel
  *       time crane → input → location. Amount =
- *       {@code min(buffered, storeHeadroom, carryLimit, liveInsertable − reservedCapacity)}. When an input's items fit
- *       nowhere, the reason distinguishes "no room" ({@link NoJobReason#WAREHOUSE_FULL}) from "no filter accepts them"
- *       ({@link NoJobReason#NO_MATCHING_FILTER}) and from "a rule holds enough already"
+ *       {@code min(buffered, storeHeadroom, carryLimit, liveInsertable − reservedCapacity)}. The aisle's <b>accepting
+ *       warehouse ports</b> ({@link PlannerInput#ports()}, M17) are candidates of the same ranking, above (a0) by their
+ *       target class: a <b>diversion</b> (positive {@link PlannerInput#portRank()}) outranks every location, an
+ *       <b>overflow</b> (negative) loses to every location that may take the item, and their amount is bounded by the
+ *       buffer and the carry limit but <b>not</b> by {@code storeHeadroom} — a stock rule's maximum is exactly what makes
+ *       an overflow necessary. When an input's items fit nowhere, the reason distinguishes "no room"
+ *       ({@link NoJobReason#WAREHOUSE_FULL}) from "no filter accepts them"
+ *       ({@link NoJobReason#NO_MATCHING_FILTER}), from "an accepting port was the only place left and it is full"
+ *       ({@link NoJobReason#PORT_FULL}) and from "a rule holds enough already"
  *       ({@link NoJobReason#AT_MAXIMUM}).</li>
  * </ol>
  * Candidates are tried in rank order and fall through when the live result leaves nothing (§5).
@@ -70,9 +76,12 @@ import dev.wareworks.core.warehouse.LocationKind;
  * <b>{@link #planReroute}</b> follows the §8 table and never consults {@link PlannerInput#storeHeadroom()} (M15): the
  * items are already in the handling head, so they must always find a target or the crane holds for ever. Store
  * leftovers go to another storage location (same ranking as STORE, from the crane's position), else to an input
- * buffer; retrieve leftovers go back to a storage location, else to another output station (refinement: an output
- * that did not request the items only as the last resort); otherwise the result is empty (the crane holds). The station fallback has a live simulation budget of its own, so storage
- * candidates that used up the budget never hide a station that accepts the items.
+ * buffer, else to an accepting warehouse port (M17: <b>last</b>, whatever its rank, because putting items back into an
+ * input is reversible and exporting them is not); retrieve leftovers go back to a storage location, else to another
+ * output station (refinement: an output that did not request the items only as the last resort) and <b>never</b> to an
+ * accepting port; otherwise the result is empty (the crane holds). The station fallback and the port fallback have a
+ * live simulation budget of their own, so storage candidates that used up the budget never hide a station or a port that
+ * accepts the items.
  * <p>
  * <b>Store filters and the retrieve reroute</b> (M8 review fix, §8): a {@code RETRIEVE} reroute puts items back that
  * already came <i>out</i> of the warehouse, so a rejecting filter is advisory there — such locations are ranked
@@ -82,11 +91,19 @@ import dev.wareworks.core.warehouse.LocationKind;
  * <p>
  * <b>Storage priorities and where they may not reach</b> (M16, issue #11, ADR-028): a player's priority is a property of
  * a storage <i>location</i> ({@link PlannerInput#storePriority()}), it orders only the locations the rules above it left
- * equal, and it is read in exactly one method, {@link #selectStorage}. Retrieval ({@link #planOutOfStorage}) and the
- * station fallback ({@link #selectStation}) pass {@link #NEUTRAL_PRIORITY} literally, so "a high priority must never
- * send the crane past a nearer location that holds the same item" holds structurally and cannot be broken by forgetting
- * a check. On a reroute with {@code allowRejected} the priority is still the fourth key and the filter class the first,
- * so a priority can never lift a rejecting location above an accepting one.
+ * equal, and it is read in exactly one method, {@link #collectStorage}. Retrieval ({@link #planOutOfStorage}), the
+ * station fallback ({@link #selectStation}) and the accepting ports ({@link #collectPorts}) pass
+ * {@link #NEUTRAL_PRIORITY} or their own strength, so "a high priority must never send the crane past a nearer location
+ * that holds the same item" holds structurally and cannot be broken by forgetting a check. On a reroute with
+ * {@code allowRejected} the priority is still below the filter class, so a priority can never lift a rejecting location
+ * above an accepting one.
+ * <p>
+ * <b>Accepting warehouse ports</b> (M17, issue #12, ADR-029): a port is a <b>target</b> and nothing else. It is never a
+ * source, so retrieval cannot see it — {@link #planOutOfStorage} iterates {@code stock().locationsOf(key)} and a station
+ * buffer is never in the stock index, which is what makes "items in a port are never fetched back, never counted as
+ * stock and never re-stored" structural rather than a rule. Its rank is read in exactly two methods,
+ * {@link #collectPorts} and nothing else, and the sign became the ranking's first key while the magnitude reuses M16's
+ * priority key, so M17 added one comparator key in total.
  *
  * @param <K> item key type
  * @param <L> location type
@@ -94,6 +111,24 @@ import dev.wareworks.core.warehouse.LocationKind;
 public final class JobPlanner<K, L> {
     /** Default for {@link PlannerInput#liveSimulationBudget()}. */
     public static final int DEFAULT_LIVE_SIMULATION_BUDGET = 64;
+    /**
+     * How many accepting warehouse ports one run may offer per item key ({@link #collectPorts}, M17, issue #12).
+     * <p>
+     * A port consults neither the capacity estimate nor the refusal memory, so — unlike a storage location — it costs one
+     * live simulation per key per run for as long as it is gated open. That cost was argued from "the handful of ports an
+     * aisle has", which nothing enforced: an aisle has up to {@code maxAisleLength × maxMastHeight × 2} rack positions,
+     * so a rack wall of accepting ports could spend the whole {@link PlannerInput#liveSimulationBudget()} on ports every
+     * run and never reach a storage location at all — while a heavily restricted <i>warehouse</i> cannot, which is
+     * exactly the asymmetry ADR-021 exists to remove. This enforces the claim instead: the port candidates are ranked
+     * first and only the best ones are offered, so the cost of the port stage is bounded whatever a player builds.
+     * <p>
+     * Well above any real build and far below the budget, so an aisle with this many accepting ports or fewer — every
+     * aisle anybody builds, and every test — ranks and offers all of them, literally unchanged. Beyond it the ranking
+     * still decides <b>which</b> ports are dropped, so a dedicated or higher-ranked port is never cut in favour of a
+     * weaker one, and dropping a port is the safe direction in any case: it sends items to storage or backs the input up
+     * instead of exporting them, and exporting is the irreversible half.
+     */
+    public static final int MAX_PORT_CANDIDATES = 12;
     /** Capacity estimate meaning "unknown, ask the live inventory". */
     public static final long UNKNOWN_CAPACITY = Long.MAX_VALUE;
     /** Filter rank of a candidate no store filter applies to (stations, retrieve sources): neither better nor worse. */
@@ -105,6 +140,21 @@ public final class JobPlanner<K, L> {
      * exactly as it did before M16.
      */
     private static final int NEUTRAL_PRIORITY = 0;
+    /**
+     * Rank class of an accepting warehouse port that takes items <b>before</b> they are stored (M17, issue #12): a
+     * positive port rank, the diversion.
+     */
+    private static final int CLASS_DIVERSION = 0;
+    /**
+     * Rank class of a storage location, and the class every path that does not store passes literally (retrieval
+     * sources, station fallbacks). It sits between the two port classes, which is the whole of "storage always wins over
+     * an overflow, a diversion always wins over storage": it is the only place those two sentences are written down.
+     */
+    private static final int CLASS_STORAGE = 1;
+    /** Rank class of an accepting warehouse port that only receives what no storage location took: the overflow. */
+    private static final int CLASS_OVERFLOW = 2;
+    /** The rank of a port that is none: {@link PlannerInput#portRank()} answering this drops the candidate. */
+    private static final int NOT_A_PORT = 0;
 
     /** Simulated extraction from a live inventory: how many of {@code key} could be taken now, up to the maximum. */
     @FunctionalInterface
@@ -142,18 +192,26 @@ public final class JobPlanner<K, L> {
     }
 
     /**
-     * The candidate ranking, lower first: <b>hard rules</b> (the store filter) → <b>automatic tidiness</b>
-     * (consolidation, item-type grouping) → <b>explicit player preference</b> (the storage priority, M16) → <b>cost</b>
-     * (travel time) → <b>stability</b> (index order, which makes this a strict total order on distinct candidates).
+     * The candidate ranking, lower first: <b>where the items go at all</b> (the target class, M17) → <b>hard rules</b>
+     * (the store filter) → <b>automatic tidiness</b> (consolidation, item-type grouping) → <b>explicit player
+     * preference</b> (the storage priority, M16, and an accepting port's strength) → <b>cost</b> (travel time) →
+     * <b>stability</b> (index order, which makes this a strict total order on distinct candidates).
+     * <p>
+     * The <b>target class</b> is the first key because "a diversion takes items before they are stored" and "storage
+     * always wins over an overflow" are statements about <i>which kind of place</i> the items go to, and they must hold
+     * against every other rule — a diversion beats even a {@link FilterMatch#DEDICATED} location, an overflow loses to
+     * every location that may take the item. The sign of a port's rank became this class and its magnitude reuses the
+     * M16 priority key, so M17 adds <b>one</b> key rather than one per property (ADR-028's promised shape).
      * <p>
      * The priority is compared with {@link Integer#compare} of the swapped operands rather than by negating a value, so
-     * a range widened later cannot trip over {@code -Integer.MIN_VALUE}. Adding this key changed nothing for a
-     * warehouse without priorities: the key answers 0 for every pair, and {@code thenComparing} consults the next key
-     * exactly then, so the comparator is the same function it was before M16 (see
-     * {@link PlannerInput#NO_PRIORITY}).
+     * a range widened later cannot trip over {@code -Integer.MIN_VALUE}. Adding either key changed nothing for a
+     * warehouse without priorities or accepting ports: the key answers 0 for every pair, and {@code thenComparing}
+     * consults the next key exactly then, so the comparator is the same function it was before M16 and before M17 (see
+     * {@link PlannerInput#NO_PRIORITY}, {@link PlannerInput#NO_PORT_RANK}).
      */
     private static final Comparator<Candidate<?>> RANKING = Comparator
-            .comparingInt((Candidate<?> candidate) -> candidate.filterRank())
+            .comparingInt((Candidate<?> candidate) -> candidate.rankClass())
+            .thenComparingInt(Candidate::filterRank)
             .thenComparing((Candidate<?> candidate) -> !candidate.consolidates())
             .thenComparing((Candidate<?> candidate) -> !candidate.compatible())
             .thenComparing((a, b) -> Integer.compare(b.priority(), a.priority()))
@@ -231,26 +289,32 @@ public final class JobPlanner<K, L> {
             // for the player, and only the first is relieved by a retrieval (ADR-021, §7.4).
             StoreSurvey survey = new StoreSurvey();
             for (K key : buffer.keys()) {
+                // What one trip can carry of this key, whatever it ends up being carried to. This bounds an accepting
+                // port's amount (M17): a port is not storage, so no stock rule's maximum applies to it.
+                int portLimit = limit(buffer.count(key), input.carryLimit().applyAsInt(key));
+                if (portLimit < 1)
+                    continue;
                 // A stock rule's maximum decides before anything else costs something: one lookup, no candidate walk,
                 // no estimate, no live call and no remembered refusal (M15, issue #3). Partial storing is normal and
                 // exact — stock 1990, maximum 2048 and a buffer of 64 store 58 and leave 6 in the input on purpose.
+                // It gates the STORAGE candidates only: an item at its maximum contributes none at all and still
+                // reaches the accepting ports, which is the whole reason an overflow exists (M17).
                 long headroom = input.storeHeadroom().applyAsLong(key);
                 if (headroom <= 0) {
-                    // Skips this KEY, not the input: the buffer's other item types and then the next input are still
-                    // tried, so one capped item never blocks a station.
+                    // The key is not skipped any more, but it contributes no storage candidate: the buffer's other item
+                    // types and then the next input are tried as before, so one capped item never blocks a station.
                     survey.atMaximum = true;
-                    continue;
                 }
-                int limit = limit(Math.min(buffer.count(key), headroom), input.carryLimit().applyAsInt(key));
-                if (limit < 1)
-                    continue;
-                Optional<Selection<L>> selection = selectStorage(input, key, limit, null, stationPos.x(),
-                        stationPos.y(), toStation, budget, false, survey);
+                int storageLimit = headroom <= 0 ? 0
+                        : limit(Math.min(buffer.count(key), headroom), input.carryLimit().applyAsInt(key));
+                Optional<Selection<L>> selection = selectStoreTarget(input, key, portLimit, storageLimit, null,
+                        stationPos.x(), stationPos.y(), toStation, budget, survey);
                 if (selection.isPresent()) {
-                    L storage = selection.get().location();
-                    TransportJob<K, L> job = TransportJob.store(newId(), station, storage, key,
-                            selection.get().amount());
-                    return new PlanResult<>(Optional.of(new PlannedJob<>(job, tripTicks(input, station, storage))),
+                    L target = selection.get().location();
+                    TransportJob<K, L> job = selection.get().kind() == LocationKind.STORAGE
+                            ? TransportJob.store(newId(), station, target, key, selection.get().amount())
+                            : TransportJob.storeToPort(newId(), station, target, key, selection.get().amount());
+                    return new PlanResult<>(Optional.of(new PlannedJob<>(job, tripTicks(input, station, target))),
                             reasons, next);
                 }
                 if (budget.exhausted) {
@@ -270,8 +334,10 @@ public final class JobPlanner<K, L> {
      * whose target {@code failedTarget} failed (§8). The crane position of {@code input} is the travel origin.
      *
      * @param failedTarget the target to exclude, or {@code null} (a hold retry: every location may be chosen)
-     * @return the best target that accepts at least one item in the live simulation, or empty (hold the items); at
-     * most twice {@link PlannerInput#liveSimulationBudget()} live calls (storage, then stations)
+     * @return the best target that accepts at least one item in the live simulation, or empty (hold the items); at most
+     * three times {@link PlannerInput#liveSimulationBudget()} live calls for a {@code STORE} reroute (storage, then the
+     * input stations, then the accepting ports), twice for a {@code RETRIEVE} one (storage, then the output stations) and
+     * once for a {@code SUPPLY} one (storage alone)
      * @throws IllegalArgumentException if {@code amount < 1}
      */
     public Optional<RerouteTarget<L>> planReroute(PlannerInput<K, L> input, K key, int amount, JobType type,
@@ -286,11 +352,17 @@ public final class JobPlanner<K, L> {
         double y = input.craneY();
         return switch (type) {
             // Storing leftovers is still storing, so a rejecting filter drops the location here as in the store plan.
+            // An accepting port is the LAST resort, after the input buffers and whatever its rank says (M17): putting
+            // items back into an input is reversible and exporting them is not, and it converges to the same outcome
+            // anyway, because the next store plan offers them to the port. The port list is the gated one, so "off means
+            // off" holds on a reroute too, and a port's filter is hard here — which cannot park the crane, because
+            // advisory-filter storage is still a target and HOLDING is still the floor.
             case STORE -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, false, null)
-                    .map(selection -> selection.target(LocationKind.STORAGE))
-                    .or(() -> selectStation(input, input.inputs(), key, amount, failedTarget,
-                            new Budget(input.liveSimulationBudget()))
-                            .map(selection -> selection.target(LocationKind.INPUT)));
+                    .map(Selection::target)
+                    .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
+                            new Budget(input.liveSimulationBudget())).map(Selection::target))
+                    .or(() -> selectPorts(input, key, amount, failedTarget, x, y,
+                            new Budget(input.liveSimulationBudget())).map(Selection::target));
             // Back into storage first: another output never asked for these items (its own requests are served by
             // their own jobs), so delivering there would over-deliver. Only when no storage location accepts them.
             // Store filters are advisory here (M8 review fix): these items already left the warehouse, so a location
@@ -298,15 +370,17 @@ public final class JobPlanner<K, L> {
             // re-dedicated while its stock was inside could not take that stock back, and a fully partitioned aisle
             // could park the crane in HOLDING for ever (§8).
             case RETRIEVE -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, true, null)
-                    .map(selection -> selection.target(LocationKind.STORAGE))
-                    .or(() -> selectStation(input, input.outputs(), key, amount, failedTarget,
-                            new Budget(input.liveSimulationBudget()))
-                            .map(selection -> selection.target(LocationKind.OUTPUT)));
+                    .map(Selection::target)
+                    .or(() -> selectStation(input, withoutPorts(input, input.outputs()), LocationKind.OUTPUT, key,
+                            amount, failedTarget, new Budget(input.liveSimulationBudget())).map(Selection::target));
             // Supply leftovers go back into storage and nowhere else: nobody requested them at a station, and putting
             // them into an output would hand a player ingredients they never asked for (ADR-024). Rejecting filters
             // are advisory here for the same reason as on a retrieve reroute — these items already left the warehouse.
+            // Retrieve and supply leftovers are never offered to an accepting port (M17): only items the warehouse chose
+            // not to store may leave through one, so a player can reason that what comes out of a port is surplus and
+            // the mod never quietly feeds a shredder with items somebody requested.
             case SUPPLY -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, true, null)
-                    .map(selection -> selection.target(LocationKind.STORAGE));
+                    .map(Selection::target);
         };
     }
 
@@ -361,9 +435,11 @@ public final class JobPlanner<K, L> {
             long travel = TravelTimeModel.add(
                     TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), pos.x(), pos.y()),
                     TravelTimeModel.travelTicks(input.speeds(), pos.x(), pos.y(), outputPos.x(), outputPos.y()));
-            // Retrieval never reads a storage priority (M16): the neutral value is passed literally, so the shortest
-            // path wins and a prioritised location can never send the crane past a nearer source of the same item.
-            candidates.add(new Candidate<>(location, NEUTRAL_FILTER_RANK, false, false, NEUTRAL_PRIORITY, travel, rank));
+            // Retrieval never reads a storage priority (M16) and never a port rank (M17): the neutral values are passed
+            // literally, so the shortest path wins and neither a prioritised location nor a port can send the crane past
+            // a nearer source of the same item.
+            candidates.add(new Candidate<>(location, LocationKind.STORAGE, CLASS_STORAGE, NEUTRAL_FILTER_RANK, false,
+                    false, NEUTRAL_PRIORITY, travel, rank, limit));
         }
         candidates.sort(RANKING);
         for (Candidate<L> candidate : candidates) {
@@ -387,11 +463,36 @@ public final class JobPlanner<K, L> {
     // --- target selection ----------------------------------------------------------------------------------------
 
     /**
+     * The store plan's <b>one</b> ranking (M17, issue #12): the aisle's accepting warehouse ports and its storage
+     * locations in a single candidate list, ranked by {@link #RANKING} and tried in that order with the existing live
+     * fall-through. A diversion port therefore outranks every location, an overflow port loses to every location that may
+     * take the item, and ports among themselves rank by filter, then strength, then travel time, then index order.
+     * <p>
+     * The two limits are separate on purpose, and this is the crux of the M15 interaction: {@code portLimit} is what one
+     * trip can carry, {@code storageLimit} is that bounded by the stock rule's headroom. A key at its maximum passes
+     * {@code storageLimit == 0}, which contributes <b>no storage candidate at all</b> — no estimate, no live call and no
+     * remembered refusal, exactly as before M17 — and still reaches the ports, which is the whole reason an overflow
+     * exists.
+     *
+     * @param portLimit    the amount a port candidate may take (0 for none)
+     * @param storageLimit the amount a storage candidate may take (0 for none, e.g. a key at its maximum)
+     */
+    private Optional<Selection<L>> selectStoreTarget(PlannerInput<K, L> input, K key, int portLimit, int storageLimit,
+            @Nullable L excluded, double fromX, double fromY, long baseTravel, Budget budget,
+            @Nullable StoreSurvey survey) {
+        List<Candidate<L>> candidates = new ArrayList<>();
+        collectPorts(input, candidates, key, portLimit, excluded, fromX, fromY, baseTravel, survey);
+        collectStorage(input, candidates, key, storageLimit, excluded, fromX, fromY, baseTravel, false, survey);
+        candidates.sort(RANKING);
+        return tryInsert(input, candidates, key, budget);
+    }
+
+    /**
      * Storage locations that accept {@code key}, ranked by their store filter ({@link FilterMatch#storeRank()}), then
      * consolidation, then item-type compatibility, then the location's storage priority (M16), then {@code baseTravel} +
-     * travel from {@code (fromX, fromY)}. Every path that <b>stores</b> items goes through here (the store plan and both
-     * reroutes into storage), so the store filter and the priority are each honoured exactly once, in one place — and
-     * nowhere else, which is what keeps priorities out of retrieval.
+     * travel from {@code (fromX, fromY)}. Every path that <b>stores into a location</b> goes through here (the store plan
+     * through {@link #selectStoreTarget} and both reroutes into storage), so the store filter and the priority are each
+     * honoured exactly once, in one place — and nowhere else, which is what keeps priorities out of retrieval.
      *
      * @param allowRejected rank locations whose filter rejects {@code key} last instead of dropping them. Only the
      *                      {@code RETRIEVE} reroute passes {@code true}: it puts items back that already left the
@@ -403,6 +504,50 @@ public final class JobPlanner<K, L> {
             double fromX, double fromY, long baseTravel, Budget budget, boolean allowRejected,
             @Nullable StoreSurvey survey) {
         List<Candidate<L>> candidates = new ArrayList<>();
+        collectStorage(input, candidates, key, limit, excluded, fromX, fromY, baseTravel, allowRejected, survey);
+        candidates.sort(RANKING);
+        return tryInsert(input, candidates, key, budget);
+    }
+
+    /**
+     * The output stations of {@code outputs} that are <b>not</b> accepting warehouse ports (M17, issue #12). The last
+     * resort of a retrieve reroute is "another output station that did not ask for these items", and an accepting port
+     * must never be that station: only items the warehouse chose not to store may leave through a port, so a player can
+     * reason that what comes out of one is surplus. Returns {@code outputs} itself while there are no ports, so an aisle
+     * without them reroutes exactly as it did before M17.
+     * <p>
+     * <b>Defensive</b> for the production content layer, which already keeps accepting ports out of
+     * {@link PlannerInput#outputs()} ({@code CraneDispatch#rerouteOutputs}, so that a port which is currently gated shut
+     * is not a retrieve-reroute target either — a rule this method cannot express, because it only sees the ports that
+     * are gated open). It stays because it is the one place the rule is written inside the planner, and because an input
+     * built with a port in both lists must not export a retrieve's leftovers.
+     */
+    private static <K, L> List<L> withoutPorts(PlannerInput<K, L> input, List<L> outputs) {
+        if (input.ports().isEmpty())
+            return outputs;
+        List<L> result = new ArrayList<>(outputs.size());
+        for (L output : outputs) {
+            if (!input.ports().contains(output))
+                result.add(output);
+        }
+        return result;
+    }
+
+    /** Accepting warehouse ports alone, for the last resort of a store reroute (§8, M17). */
+    private Optional<Selection<L>> selectPorts(PlannerInput<K, L> input, K key, int limit, @Nullable L excluded,
+            double fromX, double fromY, Budget budget) {
+        List<Candidate<L>> candidates = new ArrayList<>();
+        collectPorts(input, candidates, key, limit, excluded, fromX, fromY, 0L, null);
+        candidates.sort(RANKING);
+        return tryInsert(input, candidates, key, budget);
+    }
+
+    /** Adds the storage candidates for {@code key} to {@code candidates}; see {@link #selectStorage}. */
+    private void collectStorage(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
+            @Nullable L excluded, double fromX, double fromY, long baseTravel, boolean allowRejected,
+            @Nullable StoreSurvey survey) {
+        if (limit < 1)
+            return;
         int order = 0;
         for (L location : input.storageLocations()) {
             int rank = order++;
@@ -436,13 +581,80 @@ public final class JobPlanner<K, L> {
             RackPosition pos = position(location);
             long travel = TravelTimeModel.add(baseTravel,
                     TravelTimeModel.travelTicks(input.speeds(), fromX, fromY, pos.x(), pos.y()));
-            candidates.add(new Candidate<>(location, filter.storeRank(), consolidates, compatible, priority, travel,
-                    rank));
+            candidates.add(new Candidate<>(location, LocationKind.STORAGE, CLASS_STORAGE, filter.storeRank(),
+                    consolidates, compatible, priority, travel, rank, limit));
             if (survey != null)
-                survey.ranked = true;
+                survey.storageRanked = true;
         }
-        candidates.sort(RANKING);
-        return tryInsert(input, candidates, key, limit, budget);
+    }
+
+    /**
+     * Adds the accepting warehouse ports for {@code key} to {@code candidates} (M17, issue #12). Their class comes from
+     * the <b>sign</b> of {@link PlannerInput#portRank()} and their ranking strength from its magnitude, so one signed
+     * number carries both.
+     * <p>
+     * What a port candidate deliberately does <b>not</b> consult:
+     * <ul>
+     * <li>the <b>capacity estimate</b> — a station buffer has no index snapshot, so the estimate could only answer
+     * "unknown"; the reservation is subtracted by {@link #tryInsert} as for every candidate;</li>
+     * <li>the <b>refusal memory</b>, which stays storage-only: a port has no snapshot round robin that would forget an
+     * entry, so a remembered refusal would ignore it long after a funnel emptied it. The cost is therefore one live call
+     * per offered port per key per run, and {@value #MAX_PORT_CANDIDATES} of them at most: with more gated-open ports
+     * than that the candidates are ranked here and only the best are offered, so no rack wall of ports can spend the
+     * budget a storage location needs ({@link #MAX_PORT_CANDIDATES});</li>
+     * <li>{@link PlannerInput#storeHeadroom()} — a port is not storage, and a maximum is exactly what makes an overflow
+     * necessary;</li>
+     * <li>{@link PlannerInput#storePriority()} — that is a property of a storage <i>location</i> (ADR-028); a port's
+     * strength travels in its own rank.</li>
+     * </ul>
+     * A port's <b>filter is hard</b> everywhere, including the reroute path: an unfiltered port takes anything, a
+     * filtered one only its item, and a rejected one is dropped before any live call, so a rack wall of filtered ports
+     * can no more eat the live-simulation budget than a partitioned warehouse can (ADR-021).
+     */
+    private void collectPorts(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
+            @Nullable L excluded, double fromX, double fromY, long baseTravel, @Nullable StoreSurvey survey) {
+        if (limit < 1 || input.ports().isEmpty())
+            return;
+        // Collected apart from the caller's list so the cap can be applied by rank; merged unsorted when it does not bite,
+        // which makes an aisle with at most MAX_PORT_CANDIDATES accepting ports the same function it was.
+        List<Candidate<L>> ports = new ArrayList<>();
+        int order = 0;
+        for (L port : input.ports()) {
+            int rank = order++;
+            int portRank = input.portRank().applyAsInt(port);
+            // A list and a rank function that disagree must never export anything: rank 0 is "this is no accepting
+            // port", which is also what a content layer that could not read a port's policy answers.
+            if (portRank == NOT_A_PORT || port.equals(excluded) || !input.available().test(port))
+                continue;
+            FilterMatch filter = Objects.requireNonNull(input.storeFilter().apply(port, key), "storeFilter result");
+            if (!filter.allowsStoring())
+                continue;
+            RackPosition pos = position(port);
+            long travel = TravelTimeModel.add(baseTravel,
+                    TravelTimeModel.travelTicks(input.speeds(), fromX, fromY, pos.x(), pos.y()));
+            ports.add(new Candidate<>(port, LocationKind.OUTPUT,
+                    portRank > NOT_A_PORT ? CLASS_DIVERSION : CLASS_OVERFLOW, filter.storeRank(), false, false,
+                    portStrength(portRank), travel, rank, limit));
+            if (survey != null)
+                survey.portRanked = true;
+        }
+        if (ports.size() <= MAX_PORT_CANDIDATES) {
+            candidates.addAll(ports);
+            return;
+        }
+        // More gated-open ports than one run may live-test: the same comparator the caller uses decides which survive, so
+        // the cap drops the weakest ports and never the port the ranking wanted.
+        ports.sort(RANKING);
+        candidates.addAll(ports.subList(0, MAX_PORT_CANDIDATES));
+    }
+
+    /**
+     * The ranking strength of a port rank: its magnitude minus one, so the weakest overflow ({@code -1}) and the weakest
+     * diversion ({@code +1}) both rank 0 among their own class. Computed in {@code long} so a rank of
+     * {@link Integer#MIN_VALUE} from a broken caller cannot overflow.
+     */
+    private static int portStrength(int portRank) {
+        return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, Math.abs((long) portRank) - 1L));
     }
 
     private static void note(@Nullable StoreSurvey survey, boolean filterRejected) {
@@ -454,9 +666,9 @@ public final class JobPlanner<K, L> {
             survey.otherSkip = true;
     }
 
-    /** Stations ranked by travel time from the crane. */
-    private Optional<Selection<L>> selectStation(PlannerInput<K, L> input, List<L> stations, K key, int limit,
-            @Nullable L excluded, Budget budget) {
+    /** Stations of one {@code kind} ranked by travel time from the crane. */
+    private Optional<Selection<L>> selectStation(PlannerInput<K, L> input, List<L> stations, LocationKind kind, K key,
+            int limit, @Nullable L excluded, Budget budget) {
         List<Candidate<L>> candidates = new ArrayList<>();
         int order = 0;
         for (L location : stations) {
@@ -465,24 +677,28 @@ public final class JobPlanner<K, L> {
                 continue;
             RackPosition pos = position(location);
             long travel = TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), pos.x(), pos.y());
-            // A station is no storage location: it has no store filter and no storage priority (M16).
-            candidates.add(new Candidate<>(location, NEUTRAL_FILTER_RANK, false, false, NEUTRAL_PRIORITY, travel, rank));
+            // A station is no storage location: it has no store filter, no storage priority (M16) and no class of its
+            // own (M17) — a station fallback is reached only when nothing else took the items.
+            candidates.add(new Candidate<>(location, kind, CLASS_STORAGE, NEUTRAL_FILTER_RANK, false, false,
+                    NEUTRAL_PRIORITY, travel, rank, limit));
         }
         candidates.sort(RANKING);
-        return tryInsert(input, candidates, key, limit, budget);
+        return tryInsert(input, candidates, key, budget);
     }
 
-    private Optional<Selection<L>> tryInsert(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
+    private Optional<Selection<L>> tryInsert(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key,
             Budget budget) {
         for (Candidate<L> candidate : candidates) {
             if (!budget.tryUse())
                 return Optional.empty();
+            int limit = candidate.limit();
             long reserved = input.reservations().reservedCapacity(candidate.location());
             int ask = CapacityMath.toIntClamped(limit + reserved);
             long live = input.liveInsert().simulateInsert(candidate.location(), key, ask);
             long amount = Math.min(limit, live - reserved);
             if (amount > 0)
-                return Optional.of(new Selection<>(candidate.location(), (int) amount, candidate.travelTicks()));
+                return Optional.of(new Selection<>(candidate.location(), candidate.kind(), (int) amount,
+                        candidate.travelTicks()));
         }
         return Optional.empty();
     }
@@ -521,31 +737,45 @@ public final class JobPlanner<K, L> {
     /**
      * A ranked candidate location.
      *
-     * @param filterRank   {@link FilterMatch#storeRank()} of its store filter, the first sort key (storage only);
+     * @param kind         what it is, which the store plan needs to tell a storage location from an accepting warehouse
+     *                     port and a reroute needs for its {@link RerouteTarget} (M17)
+     * @param rankClass    where the items go at all, the first sort key (M17): {@link #CLASS_DIVERSION},
+     *                     {@link #CLASS_STORAGE} or {@link #CLASS_OVERFLOW}. Every path that does not store passes
+     *                     {@link #CLASS_STORAGE} literally, so the key answers 0 for every pair there
+     * @param filterRank   {@link FilterMatch#storeRank()} of its store filter (storage locations and ports);
      *                     {@link #NEUTRAL_FILTER_RANK} where no filter applies (stations, retrieve sources)
      * @param consolidates already holds the item key (storage only)
      * @param compatible   holds nothing or only items of the key's type per index (storage only)
-     * @param priority     the storage priority a player gave the location, higher first (storage only, M16);
-     *                     {@link #NEUTRAL_PRIORITY} where none applies (stations, retrieve sources)
+     * @param priority     the storage priority a player gave the location, higher first (M16), or an accepting port's
+     *                     strength (M17); {@link #NEUTRAL_PRIORITY} where neither applies (stations, retrieve sources)
+     * @param limit        the most items this candidate may take, which differs between a port and a storage location
+     *                     whenever a stock rule's maximum bounds the latter (M15 × M17)
      */
-    private record Candidate<L>(L location, int filterRank, boolean consolidates, boolean compatible, int priority,
-            long travelTicks, int order) {
+    private record Candidate<L>(L location, LocationKind kind, int rankClass, int filterRank, boolean consolidates,
+            boolean compatible, int priority, long travelTicks, int order, int limit) {
     }
 
     /**
      * Why one input station's items fit nowhere, so {@link #plan} can tell {@link NoJobReason#WAREHOUSE_FULL} ("no
      * room", relieved by a retrieval) from {@link NoJobReason#NO_MATCHING_FILTER} ("no filter accepts them", which
-     * needs an unfiltered location instead) and from {@link NoJobReason#AT_MAXIMUM} ("a stock rule says the warehouse
-     * holds enough of this", which is not a fault at all). Collected over all item types of that input.
+     * needs an unfiltered location instead), from {@link NoJobReason#AT_MAXIMUM} ("a stock rule says the warehouse
+     * holds enough of this", which is not a fault at all) and from {@link NoJobReason#PORT_FULL} ("an accepting port was
+     * the only place left for them and it is full", M17). Collected over all item types of that input.
      */
     private static final class StoreSurvey {
-        /** At least one location entered the ranking: its filter allowed the key and its estimate had room. */
-        private boolean ranked;
+        /** At least one storage location entered the ranking: its filter allowed the key and its estimate had room. */
+        private boolean storageRanked;
+        /**
+         * At least one accepting warehouse port entered the ranking (M17): its filter allowed the key. Told apart from
+         * {@link #storageRanked} because a run in which only ports were ranked and nothing was planned means the port is
+         * full, not that the warehouse is.
+         */
+        private boolean portRanked;
         /** At least one location was skipped because its store filter rejects the key. */
         private boolean filterRejected;
         /**
          * At least one item type was skipped because a stock rule left no headroom for it (M15). Set at the skip site
-         * in {@link #plan}, not through {@link #note}: such a key never reaches {@link #selectStorage}, so an input
+         * in {@link #plan}, not through {@link #note}: such a key contributes no storage candidate at all, so an input
          * holding only a capped item would otherwise report {@link NoJobReason#WAREHOUSE_FULL} while eleven empty
          * chests stand behind it.
          */
@@ -554,20 +784,24 @@ public final class JobPlanner<K, L> {
         private boolean otherSkip;
 
         /**
-         * Only a run in which <b>every</b> skip was a maximum or a filter mismatch reports one of those, and a
-         * maximum wins over a filter mismatch: it is the more specific answer, and the one the player can act on.
+         * Only a run in which <b>every</b> skip was a full port, a maximum or a filter mismatch reports one of those,
+         * and the more specific answer wins: a storage location that was ranked or skipped for room is a genuinely full
+         * warehouse, then a full accepting port (the thing to go and fix), then a maximum (not a fault at all), then a
+         * filter mismatch.
          */
         NoJobReason reason() {
-            if (ranked || otherSkip)
+            if (storageRanked || otherSkip)
                 return NoJobReason.WAREHOUSE_FULL;
+            if (portRanked)
+                return NoJobReason.PORT_FULL;
             if (atMaximum)
                 return NoJobReason.AT_MAXIMUM;
             return filterRejected ? NoJobReason.NO_MATCHING_FILTER : NoJobReason.WAREHOUSE_FULL;
         }
     }
 
-    private record Selection<L>(L location, int amount, long travelTicks) {
-        RerouteTarget<L> target(LocationKind kind) {
+    private record Selection<L>(L location, LocationKind kind, int amount, long travelTicks) {
+        RerouteTarget<L> target() {
             return new RerouteTarget<>(location, kind, amount, travelTicks);
         }
     }

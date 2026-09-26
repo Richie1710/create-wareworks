@@ -45,6 +45,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.SlotView;
 import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
@@ -587,8 +588,9 @@ public final class WarehouseStationGameTests {
 
     /**
      * Clipboard paste onto the request filter: a list, attribute or package filter is refused before Create takes a
-     * filter item from a survival player's inventory; a concrete item pastes as usual, an "Exactly" row as "up to"; the
-     * amount board offers only the "up to" row.
+     * filter item from a survival player's inventory; a concrete item pastes as usual, and an "Exactly" row pastes as
+     * "up to" — since M17 that row means the port's <b>redstone behaviour</b>, so a funnel's row must not become one
+     * either ({@code WarehousePortGameTests#portClipboard} covers that side in full).
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void outputClipboardFilter(GameTestHelper helper) {
@@ -621,12 +623,16 @@ public final class WarehouseStationGameTests {
         helper.assertTrue(DIAMOND.matches(output.requestedItem()), "filter item pasted");
         helper.assertValueEqual(output.requestAmount(), FILTER_AMOUNT, "amount pasted");
         helper.assertTrue(filter.upTo, "an Exactly row pastes as up to");
+        helper.assertValueEqual(output.redstoneMode(), PortRedstone.PULSE,
+                "and a funnel's Exactly row never becomes a redstone behaviour (M17)");
         for (ItemStack filterItem : filterItems)
             helper.assertValueEqual(player.getInventory().countItem(filterItem.getItem()), 1, "nothing was taken");
 
-        helper.assertValueEqual(filter.createBoard(player, null).rows().size(), 1, "the board has only the up-to row");
-        filter.setValueSettings(player, new ValueSettings(1, BOARD_AMOUNT), false);
-        helper.assertTrue(filter.upTo, "the board stores up to");
+        helper.assertValueEqual(filter.createBoard(player, null).rows().size(), PortRedstone.values().length,
+                "the board's rows are the port's redstone behaviours, one per mode (M17)");
+        filter.setValueSettings(player, new ValueSettings(PortRedstone.WHILE_POWERED.ordinal(), BOARD_AMOUNT), false);
+        helper.assertTrue(filter.upTo, "the board still stores up to");
+        helper.assertValueEqual(output.redstoneMode(), PortRedstone.WHILE_POWERED, "and the row is the behaviour");
         helper.assertValueEqual(output.requestAmount(), BOARD_AMOUNT, "board amount");
         helper.assertValueEqual(filter.getCountLabelForValueBox().getString(), String.valueOf(BOARD_AMOUNT),
                 "the value box shows the number");

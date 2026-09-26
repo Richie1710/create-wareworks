@@ -5,6 +5,7 @@ import com.tterrag.registrate.util.entry.ItemProviderEntry;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.client.ponder.scenes.CraneScenes;
+import dev.wareworks.client.ponder.scenes.PortScenes;
 import dev.wareworks.client.ponder.scenes.ProductionScenes;
 import dev.wareworks.client.ponder.scenes.StockRuleScenes;
 import dev.wareworks.client.ponder.scenes.TerminalScenes;
@@ -37,10 +38,11 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_input</td><td>warehouse/storing</td></tr>
- *   <tr><td>warehouse_output</td><td>warehouse/retrieving</td></tr>
+ *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production</td></tr>
- *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking</td></tr>
+ *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
+ *       warehouse/port_accepting</td></tr>
  * </table>
  */
 public final class WareworksPonderScenes {
@@ -89,6 +91,19 @@ public final class WareworksPonderScenes {
 
         scenes.forComponents(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
                 .addStoryBoard("warehouse/restocking", StockRuleScenes::restocking,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // The two port scenes come last on purpose (M17, issue #12): scene order per component is registration order,
+        // so registering them here leaves warehouse/retrieving the first thing a warehouse output shows and
+        // warehouse/stock_rules the first thing a stock keeper shows, with the port as the answer that follows.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT)
+                .addStoryBoard("warehouse/port_requesting", PortScenes::requesting,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // Also a scene of the stock keeper: a maximum that makes a warehouse input back up (warehouse/stock_rules) is
+        // exactly what an accepting port answers, and a player who read the one needs to find the other.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT, WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
+                .addStoryBoard("warehouse/port_accepting", PortScenes::accepting,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

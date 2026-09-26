@@ -10,20 +10,26 @@ import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.station.PortRankBehaviour;
+import dev.wareworks.content.station.PortRankValueBox;
 import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.registry.WareworksBlocks;
 import net.createmod.ponder.api.scene.SceneBuildingUtil;
 import net.createmod.ponder.api.scene.Selection;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * The shared stage of the Wareworks Ponder scenes: one aisle laid out exactly by the rules of
@@ -172,10 +178,60 @@ public record PonderAisle(int aisleZ, int dockX, int lastRailX, int plateSize) {
                 .setValue(WarehouseStockKeeperBlock.FACING, outward(side).getOpposite()), false);
     }
 
-    /** An output station; its opening faces the aisle. */
+    /** An output station, i.e. a warehouse port that requests; its opening faces the aisle. */
     public void placeOutput(CreateSceneBuilder scene, SceneBuildingUtil util, int position, int level, Side side) {
-        scene.world().setBlock(rack(util, position, level, side), WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
-                .setValue(WarehouseOutputBlock.FACING, outward(side).getOpposite()), false);
+        placePort(scene, util, position, level, side, PortSettings.REQUEST_RANK);
+    }
+
+    /**
+     * A warehouse port with a signed {@code rank} (M17, issue #12): {@code 0} requests, a negative rank is an overflow
+     * and a positive one a diversion ({@link PortSettings}).
+     * <p>
+     * Both halves of the port's direction are written, because in a {@code PonderLevel} nothing brings them into step:
+     * the {@link WarehouseOutputBlock#ACCEPTING} block state chooses the model with the andesite ring and spout, and the
+     * block entity's rank is what {@code WarehouseOutputRenderer} paints on the back plate. The block entity would
+     * re-assert the state itself in a real world, but only on a server ({@code WarehouseOutputBlockEntity#onLoad}).
+     */
+    public void placePort(CreateSceneBuilder scene, SceneBuildingUtil util, int position, int level, Side side,
+            int rank) {
+        BlockPos pos = rack(util, position, level, side);
+        scene.world().setBlock(pos, portState(side, rank), false);
+        // A requesting port is what an unconfigured block entity already is, so it needs no instruction of its own.
+        if (rank != PortSettings.REQUEST_RANK)
+            writePortRank(scene, util, pos, rank);
+    }
+
+    /**
+     * Turns a port that is already standing into one with {@code rank}, for the beat where a player's wrench does it.
+     * The block state goes first: {@code SchematicLevel#setBlock} keeps a block entity whose type still fits the new
+     * state, so the rank written afterwards survives, while the other order would lose it.
+     */
+    public void setPortRank(CreateSceneBuilder scene, SceneBuildingUtil util, BlockPos port, Side side, int rank) {
+        scene.world().setBlock(port, portState(side, rank), false);
+        writePortRank(scene, util, port, rank);
+    }
+
+    /** The state of a port on {@code side} with {@code rank}: its opening faces the aisle. */
+    private BlockState portState(Side side, int rank) {
+        return WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
+                .setValue(WarehouseOutputBlock.FACING, outward(side).getOpposite())
+                .setValue(WarehouseOutputBlock.ACCEPTING, rank != PortSettings.REQUEST_RANK);
+    }
+
+    /** Writes the rank {@link PortRankBehaviour} reads back, the number the renderer draws on the back plate. */
+    private static void writePortRank(CreateSceneBuilder scene, SceneBuildingUtil util, BlockPos port, int rank) {
+        scene.world().modifyBlockEntityNBT(util.select().position(port), WarehouseOutputBlockEntity.class,
+                nbt -> nbt.putInt(PortRankBehaviour.RANK_TAG, rank));
+    }
+
+    /**
+     * The centre of the port's <b>wrench-only</b> settings box as a scene vector: on the face's centre line, but
+     * {@link PortRankValueBox#CENTER_Y_PIXELS} px above the block's bottom edge rather than at the face's centre, so an
+     * arrow points at the box a player really clicks ({@code PortRankValueBox}). Only for a horizontal face.
+     */
+    public static Vec3 portBox(SceneBuildingUtil util, BlockPos port, Direction face) {
+        double aboveCenter = (PortRankValueBox.CENTER_Y_PIXELS - 8.0) / 16.0;
+        return util.vector().blockSurface(port, face).add(0, aboveCenter, 0);
     }
 
     /**

@@ -66,6 +66,14 @@ class CraneModelLayoutTest {
     /** The terminal's core column, which the four shells surround. */
     private static final float TERMINAL_CORE_MIN_PX = 3.0F;
     private static final float TERMINAL_CORE_MAX_PX = 13.0F;
+    /** Texture key the two warehouse port models differ in: brass for a requesting port, andesite for an accepting one. */
+    private static final String PORT_ACCENT = "accent";
+    /**
+     * The surfaces that carry the port's direction cue: the ring around the aisle opening, seen standing <b>in</b> the
+     * aisle, and the spout on the back, seen from outside where the funnel is.
+     */
+    private static final Set<String> PORT_ACCENT_FACES = Set.of("aisle_frame_top/north", "aisle_frame_bottom/north",
+            "aisle_frame_west/north", "aisle_frame_east/north", "port_spout/south", "port_spout/east", "port_spout/west");
     /** The arm port of the intake shell: the same 8 x 4 px opening the warehouse interface has, over the full depth. */
     private static final float[] TERMINAL_PORT_FROM = {4.0F, 9.0F, 0.0F};
     private static final float[] TERMINAL_PORT_TO = {12.0F, 13.0F, TERMINAL_SHELL_DEPTH_PX};
@@ -622,6 +630,55 @@ class CraneModelLayoutTest {
 
     private static List<Box> boxes(String name) throws IOException {
         return boxes(MODELS.resolve(name + ".json"), name);
+    }
+
+    /**
+     * The warehouse port has <b>two</b> models, one per direction (M17, issue #12): {@code block} for a requesting port
+     * and {@code block_accept} for an accepting one. They must be the very same block — the arm still enters through the
+     * same opening, the same faces are covered, nothing moves — and differ in one thing only: the {@code accent} texture
+     * of the ring around the aisle opening and of the spout on the back, which turns from brass to andesite
+     * (ADR-017's material language: andesite is the dumb intake, brass the smart filtered output).
+     * <p>
+     * A whole-model comparison with the accent entry removed covers geometry, UVs, faces and cullfaces in one go, so a
+     * later edit to one of the files can never leave the other behind. The accent's <b>use</b> is pinned separately, so
+     * the cue cannot silently move off the two surfaces a player reads it from.
+     */
+    @Test
+    void portAcceptVariantIsTheSameBlockWithAnAndesiteAccent() throws IOException {
+        Path folder = BLOCK_MODELS.resolve("warehouse_output");
+        Map<String, Object> request = read(folder.resolve("block.json"));
+        Map<String, Object> accept = read(folder.resolve("block_accept.json"));
+        assertEquals("create:block/brass_casing", object(request.get("textures")).get(PORT_ACCENT),
+                "a requesting port is brass all over");
+        assertEquals("create:block/andesite_casing", object(accept.get("textures")).get(PORT_ACCENT),
+                "an accepting port shows andesite");
+        assertEquals(withoutAccentTexture(request), withoutAccentTexture(accept),
+                "the two directions are the same block: only the accent texture may differ");
+        assertEquals(PORT_ACCENT_FACES, accentedFaces(request), "which surfaces carry the direction cue");
+        assertEquals(PORT_ACCENT_FACES, accentedFaces(accept), "the accepting model accents the same surfaces");
+    }
+
+    /** {@code model} without the one texture entry the two port directions differ in. */
+    private static Map<String, Object> withoutAccentTexture(Map<String, Object> model) {
+        Map<String, Object> copy = new LinkedHashMap<>(model);
+        Map<String, Object> textures = new LinkedHashMap<>(object(copy.get("textures")));
+        textures.remove(PORT_ACCENT);
+        copy.put("textures", textures);
+        return copy;
+    }
+
+    /** Every {@code element/face} of {@code model} whose texture is {@code #accent}. */
+    private static Set<String> accentedFaces(Map<String, Object> model) {
+        Set<String> accented = new java.util.TreeSet<>();
+        for (Object element : array(model.get("elements"))) {
+            Map<String, Object> fields = object(element);
+            Map<String, Object> faces = object(fields.get("faces"));
+            for (Map.Entry<String, Object> face : faces.entrySet()) {
+                if (("#" + PORT_ACCENT).equals(object(face.getValue()).get("texture")))
+                    accented.add(fields.get("name") + "/" + face.getKey());
+            }
+        }
+        return accented;
     }
 
     /** The elements of another block's model, {@code models/block/<block>/block.json}. */

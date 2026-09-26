@@ -18,6 +18,21 @@ public enum NoJobReason {
      */
     NO_MATCHING_FILTER,
     /**
+     * An accepting warehouse port was the only target left for an input station's items and it accepts nothing right
+     * now (M17, issue #12): the port's buffer is full, so the input backs up exactly as it does when a warehouse is
+     * full — nothing is destroyed and nothing is dropped.
+     * <p>
+     * Reported <b>instead of</b> {@link #AT_MAXIMUM} when both applied, with M15's own argument turned around: a
+     * maximum is not a fault, but an overflow that cannot get rid of its items is the thing to go and fix, so it is the
+     * more specific and the more actionable answer. It loses to {@link #WAREHOUSE_FULL}, because a storage location
+     * that was ranked and gave nothing is a genuinely full warehouse again.
+     * <p>
+     * Unlike {@link #AT_MAXIMUM} it <b>does</b> arm the dispatcher's {@code fullBackoffTicks} back-off: reaching it
+     * costs a full candidate walk, an estimate and a live simulation per candidate, which is exactly the work
+     * {@link #WAREHOUSE_FULL} and {@link #NO_MATCHING_FILTER} back off to protect.
+     */
+    PORT_FULL,
+    /**
      * An input station holds items a stock rule will not let the warehouse store any more: its maximum is reached
      * (M15, issue #3). Told apart from {@link #WAREHOUSE_FULL} and {@link #NO_MATCHING_FILTER} because it is not a
      * fault at all — the input backs up <b>on purpose</b>, and neither a bigger warehouse nor another filter changes

@@ -24,6 +24,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.inventory.StockIndex;
+import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.warehouse.LocationKind;
 
 class JobPlannerTest {
@@ -45,6 +46,9 @@ class JobPlannerTest {
     private static final RackPosition IN_C = RackPosition.of(0, 2, Side.RIGHT);
     private static final RackPosition OUT_A = RackPosition.of(0, 0, Side.LEFT);
     private static final RackPosition OUT_B = RackPosition.of(0, 1, Side.LEFT);
+    /** Accepting warehouse ports (M17): output stations of the aisle that take items instead of requesting them. */
+    private static final RackPosition PORT_A = RackPosition.of(4, 0, Side.RIGHT);
+    private static final RackPosition PORT_B = RackPosition.of(10, 0, Side.RIGHT);
 
     private final StockIndex<String, RackPosition> stock = new StockIndex<>();
     private final ReservationLedger<String, RackPosition> ledger = new ReservationLedger<>();
@@ -56,6 +60,8 @@ class JobPlannerTest {
     private final Set<RackPosition> denyLists = new HashSet<>();
     /** Storage priorities per location ({@link PlannerInput#storePriority()}, M16); absent means 0. */
     private final Map<RackPosition, Integer> priorities = new HashMap<>();
+    /** Signed port ranks ({@link PlannerInput#portRank()}, M17); absent means 0, i.e. "no accepting port". */
+    private final Map<RackPosition, Integer> portRanks = new HashMap<>();
 
     /** Simulated live inventories that record every call. */
     private static final class Live {
@@ -1342,5 +1348,480 @@ class JobPlannerTest {
         assertEquals(farGeneral, planner.planReroute(in, IRON, 5, JobType.RETRIEVE, OUT_A).orElseThrow().location(),
                 "the unfiltered location wins although it is five blocks further away");
         assertEquals(List.of(farGeneral), live.insertCalls, "the rejecting one is not even simulated first");
+    }
+    // --- accepting warehouse ports (M17, issue #12, ADR-029) -------------------------------------------------------
+
+    /**
+     * A warehouse whose ports all request has no accepting port at all, which is the builder's default, so every other
+     * test in this class plans as before M17.
+     */
+    @Test
+    void acceptingPortsAreAbsentByDefault() {
+        assertEquals(List.of(), input().build().ports());
+        assertSame(PlannerInput.NO_PORT_RANK, input().build().portRank());
+        assertEquals(0, input().build().portRank().applyAsInt(PORT_A));
+        assertThrows(NullPointerException.class, () -> input().portRank(null).build());
+        assertThrows(NullPointerException.class, () -> input().ports(null).build());
+    }
+
+    /**
+     * The identity proof asked for by the milestone, in the shape M16 used: with no accepting port the planner produces
+     * the <b>same</b> job, the same reasons, the same cursor and the same live-call sequence as one that was never told
+     * about ports at all. Structurally it holds because every non-port candidate carries the same rank class, so the new
+     * first key compares equal for every pair and {@code thenComparing} evaluates the chain that was there before; this
+     * walks several seeded layouts (filters, priorities, pre-existing contents, distances and item types mixed) to show
+     * it.
+     */
+    @Test
+    void noAcceptingPortReproducesTheOldOrder() {
+        List<String> keys = List.of(IRON, DIAMOND, WORN_SWORD, NEW_SWORD, SHULKER);
+        for (long seed = 1; seed <= 12; seed++) {
+            Random random = new Random(seed);
+            stock.clear();
+            storeFilters.clear();
+            denyLists.clear();
+            priorities.clear();
+            portRanks.clear();
+            live.insertable.clear();
+            List<RackPosition> storage = new ArrayList<>();
+            for (int i = 0; i < 8; i++) {
+                RackPosition location = rack(1 + random.nextInt(12), random.nextInt(3),
+                        random.nextBoolean() ? Side.LEFT : Side.RIGHT);
+                if (storage.contains(location))
+                    continue;
+                storage.add(location);
+                String held = keys.get(random.nextInt(keys.size()));
+                stock.update(location, random.nextBoolean() ? slots(27) : slots(26, held, 1 + random.nextInt(20)));
+                live.insertable.put(location, random.nextInt(4) == 0 ? 0 : STACK);
+                if (random.nextInt(3) == 0)
+                    filter(location, keys.get(random.nextInt(keys.size())));
+                else if (random.nextInt(5) == 0)
+                    denyFilter(location, keys.get(random.nextInt(keys.size())));
+                if (random.nextInt(3) == 0)
+                    priority(location, random.nextInt(10));
+            }
+            String buffered = keys.get(random.nextInt(keys.size()));
+            PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A, IN_B))
+                    .inputCursor(random.nextInt(2)).storageLocations(storage).storePriority(this::priorityOf)
+                    .itemType(key -> key.split(ITEM_TYPE_SEPARATOR, 2)[0])
+                    .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                    .inputBuffers(location -> slots(0, buffered, 7));
+
+            live.insertCalls.clear();
+            PlanResult<String, RackPosition> before = planner.plan(base.build());
+            List<RackPosition> callsBefore = List.copyOf(live.insertCalls);
+            live.insertCalls.clear();
+            PlanResult<String, RackPosition> withEmptyPorts = planner.plan(base.ports(List.of())
+                    .portRank(this::portRankOf).build());
+
+            String scene = "seed " + seed + ", storage " + storage;
+            assertEquals(describe(before), describe(withEmptyPorts), scene);
+            assertEquals(before.reasons(), withEmptyPorts.reasons(), scene);
+            assertEquals(before.nextInputCursor(), withEmptyPorts.nextInputCursor(), scene);
+            assertEquals(callsBefore, live.insertCalls, "the same candidates in the same order: " + scene);
+        }
+    }
+
+    /**
+     * The user's row "everything incoming is diverted out": a diversion port outranks <b>every</b> storage location,
+     * including a near one that is dedicated to the very item — "before they are stored" has to beat even the strongest
+     * storing rule, or a diversion would divert nothing in a tidy warehouse.
+     */
+    @Test
+    void aDiversionPortBeatsEvenADedicatedLocation() {
+        RackPosition nearDedicated = rack(1, 0, Side.LEFT);
+        stock.update(nearDedicated, slots(27));
+        live.insertable.put(nearDedicated, STACK);
+        filter(nearDedicated, IRON);
+        priority(nearDedicated, PlannerInput.NO_PRIORITY.applyAsInt(nearDedicated) + 9);
+        live.insertable.put(PORT_B, STACK);
+        port(PORT_B, 1); // the weakest diversion there is
+
+        TransportJob<String, RackPosition> job = storeJob(withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(nearDedicated)).storePriority(this::priorityOf)
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK)), PORT_B),
+                IRON, 8);
+        assertEquals(PORT_B, job.target());
+        assertEquals(LocationKind.OUTPUT, job.targetKind());
+        assertEquals(JobType.STORE, job.type(), "it is still a store job: nobody asked for these items");
+        assertEquals(Optional.empty(), job.requestId());
+        assertEquals(8, job.plannedAmount());
+        assertEquals(List.of(PORT_B), live.insertCalls, "and the port is the first candidate simulated");
+    }
+
+    /**
+     * The other half of the user's table: <b>a storage location always wins over an overflow</b>, however strong the
+     * overflow is and however far away the location — the whole point of a negative rank is "only what the warehouse
+     * could not keep". The port is reached only once nothing can store the items.
+     */
+    @Test
+    void storageAlwaysWinsOverAnOverflowPort() {
+        RackPosition farGeneral = rack(12, 2, Side.LEFT);
+        stock.update(farGeneral, slots(27));
+        live.insertable.put(farGeneral, STACK);
+        live.insertable.put(PORT_A, STACK);
+        port(PORT_A, PortSettings.MIN_RANK); // the strongest overflow there is, and it stands next to the input
+
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(farGeneral))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK)), PORT_A);
+        assertEquals(farGeneral, storeJob(base, IRON, 8).target(), "the far chest beats the overflow at the door");
+        assertEquals(List.of(farGeneral), live.insertCalls, "and the port is not even simulated");
+
+        // Only when nothing can store them does the overflow get anything.
+        live.insertable.put(farGeneral, 0);
+        live.insertCalls.clear();
+        assertEquals(PORT_A, storeJob(base, IRON, 8).target());
+        assertEquals(List.of(farGeneral, PORT_A), live.insertCalls, "storage first, always");
+    }
+
+    /**
+     * The interaction M15 and M17 were designed around, and the reason an overflow exists at all: an item at its stock
+     * rule's <b>maximum</b> contributes no storage candidate — no ranking, no estimate, no live call and no remembered
+     * refusal, exactly as before M17 — and still reaches the accepting ports, with the full trip amount, because a
+     * maximum is a rule about <b>storing</b> and a port does not store.
+     */
+    @Test
+    void anItemAtItsMaximumStillReachesAnOverflowPort() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(PORT_A, STACK);
+        port(PORT_A, -1);
+
+        PlanResult<String, RackPosition> result = planner.plan(withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, 30))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                .storeHeadroom(key -> 0), PORT_A).build());
+        TransportJob<String, RackPosition> job = result.job().orElseThrow().job();
+        assertEquals(PORT_A, job.target());
+        assertEquals(30, job.plannedAmount(), "the port's amount is the buffer, not the headroom");
+        assertEquals(Set.of(), result.reasons());
+        assertEquals(List.of(PORT_A), live.insertCalls, "the capped chest was never a candidate");
+        assertEquals(0, result.nextInputCursor(), "the round robin moved on as for any planned job (one input, so it wraps)");
+    }
+
+    /** A headroom below the buffered amount bounds what may be <b>stored</b> and leaves a port's amount alone. */
+    @Test
+    void aHeadroomSmallerThanTheBufferBoundsStorageButNotThePort() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(PORT_A, STACK);
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, STACK))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                .storeHeadroom(key -> 10), PORT_A);
+
+        port(PORT_A, 2); // a diversion takes the whole trip
+        TransportJob<String, RackPosition> diverted = planner.plan(base.build()).job().orElseThrow().job();
+        assertEquals(PORT_A, diverted.target());
+        assertEquals(STACK, diverted.plannedAmount());
+
+        port(PORT_A, -2); // an overflow loses to the chest, which may take exactly the headroom
+        live.insertCalls.clear();
+        TransportJob<String, RackPosition> stored = planner.plan(base.build()).job().orElseThrow().job();
+        assertEquals(chest, stored.target());
+        assertEquals(10, stored.plannedAmount(), "the maximum still bounds storing, exactly as in M15");
+    }
+
+    /**
+     * The user's row "only surplus cobblestone leaves, everything else backs up": a port's filter is a <b>hard</b> rule,
+     * so a port that does not name the item is dropped before the capacity estimate and before any live call — a rack
+     * wall of filtered ports can no more eat the live-simulation budget than a partitioned warehouse can (ADR-021).
+     */
+    @Test
+    void aPortWhoseFilterRejectsCostsNoLiveCallAndNoBudget() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(PORT_A, STACK);
+        port(PORT_A, -1);
+        filter(PORT_A, DIAMOND);
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                .storeHeadroom(key -> 0), PORT_A);
+
+        // Iron at its maximum: the chest is no candidate and the cobblestone port refuses the iron, so it backs up.
+        PlanResult<String, RackPosition> iron = planner.plan(base.inputBuffers(location -> slots(0, IRON, 8)).build());
+        assertFalse(iron.hasJob());
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), iron.reasons(),
+                "a rejecting port is no reason to report a full port");
+        assertEquals(List.of(), live.insertCalls, "nothing was simulated at all");
+
+        // Its own item leaves, and only its own item.
+        TransportJob<String, RackPosition> diamonds = storeJob(base, DIAMOND, 8);
+        assertEquals(PORT_A, diamonds.target());
+        assertEquals(List.of(PORT_A), live.insertCalls);
+    }
+
+    /** Two ports compete by filter first, then strength, then travel time, then index order — never by anything else. */
+    @Test
+    void severalPortsRankByFilterThenStrengthThenTravelThenIndexOrder() {
+        RackPosition nearPort = rack(2, 0, Side.RIGHT);
+        RackPosition farPort = rack(9, 0, Side.RIGHT);
+        RackPosition twinOfNear = rack(2, 0, Side.LEFT); // same x and y, so the same travel time
+        for (RackPosition port : List.of(nearPort, farPort, twinOfNear)) {
+            live.insertable.put(port, STACK);
+            port(port, -1);
+        }
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A)).storeHeadroom(key -> 0);
+
+        // (1) A dedicated port before an unfiltered one, however much further away it is.
+        filter(farPort, IRON);
+        assertEquals(farPort, storeJob(withPorts(base, nearPort, farPort), IRON, 8).target());
+        assertEquals(List.of(farPort), live.insertCalls);
+
+        // (2) Within one filter class the stronger overflow first.
+        storeFilters.clear();
+        live.insertCalls.clear();
+        port(farPort, -5);
+        assertEquals(farPort, storeJob(withPorts(base, nearPort, farPort), IRON, 8).target(),
+                "strength 4 beats strength 0");
+
+        // (3) Equal strength: the nearer port.
+        live.insertCalls.clear();
+        port(farPort, -1);
+        assertEquals(nearPort, storeJob(withPorts(base, farPort, nearPort), IRON, 8).target());
+
+        // (4) Equal strength and equal travel time: list order, which makes planning deterministic.
+        live.insertCalls.clear();
+        assertEquals(twinOfNear, storeJob(withPorts(base, twinOfNear, nearPort), IRON, 8).target());
+        live.insertCalls.clear();
+        assertEquals(nearPort, storeJob(withPorts(base, nearPort, twinOfNear), IRON, 8).target());
+    }
+
+    /**
+     * A full <b>diversion</b> port falls through to storage: one full chest behind a diversion port must not be able to
+     * stop the whole warehouse from storing, which is the "a diversion swallows everything" risk in its worst form.
+     */
+    @Test
+    void aFullDiversionPortFallsThroughToStorage() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(PORT_A, 0);
+        port(PORT_A, 3);
+
+        PlanResult<String, RackPosition> result = planner.plan(withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, 8))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK)),
+                PORT_A).build());
+        assertEquals(chest, result.job().orElseThrow().job().target());
+        assertEquals(LocationKind.STORAGE, result.job().orElseThrow().job().targetKind());
+        assertEquals(List.of(PORT_A, chest), live.insertCalls, "the port was tried first and simply gave nothing");
+    }
+
+    /**
+     * A full <b>overflow</b> port is the last candidate, so nothing takes the items and <b>the input backs up</b> —
+     * exactly as an input does when a warehouse is full, with nothing destroyed and nothing dropped. It is reported as
+     * {@link NoJobReason#PORT_FULL}, which is the thing a player can go and fix.
+     */
+    @Test
+    void aFullOverflowPortBacksTheInputUpAndReportsPortFull() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(PORT_A, 0);
+        port(PORT_A, -1);
+
+        PlanResult<String, RackPosition> result = planner.plan(withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, 8))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                .storeHeadroom(key -> 0), PORT_A).build());
+        assertFalse(result.hasJob(), "the items stay in the input");
+        assertEquals(Set.of(NoJobReason.PORT_FULL), result.reasons());
+        assertEquals(NoJobReason.PORT_FULL, result.primaryReason().orElseThrow());
+        assertEquals(List.of(PORT_A), live.insertCalls);
+    }
+
+    /**
+     * The reason ladder: a full port is the more specific answer than a maximum (a maximum is not a fault, a backed-up
+     * overflow is), and a storage location that was ranked and gave nothing is a genuinely full warehouse again.
+     */
+    @Test
+    void portFullBeatsAtMaximumAndLosesToAFullWarehouse() {
+        assertTrue(NoJobReason.PORT_FULL.ordinal() < NoJobReason.AT_MAXIMUM.ordinal(),
+                "declared in priority order, so primaryReason() picks it over a maximum");
+        assertTrue(NoJobReason.WAREHOUSE_FULL.ordinal() < NoJobReason.PORT_FULL.ordinal());
+
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, 0);
+        live.insertable.put(PORT_A, 0);
+        port(PORT_A, -1);
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, 8)), PORT_A);
+
+        PlanResult<String, RackPosition> capped = planner.plan(base.storeHeadroom(key -> 0).build());
+        assertEquals(Set.of(NoJobReason.PORT_FULL), capped.reasons(), "the maximum is not what the player must fix");
+
+        PlanResult<String, RackPosition> full = planner.plan(base.storeHeadroom(PlannerInput.UNLIMITED_HEADROOM).build());
+        assertEquals(Set.of(NoJobReason.WAREHOUSE_FULL), full.reasons(),
+                "a chest that was ranked and gave nothing is a full warehouse, not a full port");
+    }
+
+    /**
+     * A port that is listed but ranks 0 is no accepting port: that is what a content layer answers for a port whose
+     * policy it could not read, and exporting is irreversible, so the candidate is dropped rather than guessed at.
+     */
+    @Test
+    void aPortRankOfZeroIsNoAcceptingPort() {
+        live.insertable.put(PORT_A, STACK);
+        PlanResult<String, RackPosition> result = planner.plan(withPorts(input().inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, IRON, 8)).storeHeadroom(key -> 0), PORT_A).build());
+        assertFalse(result.hasJob());
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), result.reasons());
+        assertEquals(List.of(), live.insertCalls, "an unresolved port is never simulated");
+    }
+
+    /**
+     * Store leftovers reach a port only after every storage location and every input buffer (§8, M17): putting items
+     * back into an input is reversible and exporting them is not, and it converges to the same outcome anyway because the
+     * next store plan offers them to the port. The port's own rank does not lift it above the input.
+     */
+    @Test
+    void storeLeftoversReachAPortAfterStorageAndInputs() {
+        RackPosition failed = rack(2, 0, Side.LEFT);
+        RackPosition chest = rack(4, 0, Side.LEFT);
+        stock.update(failed, slots(27));
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(IN_A, STACK);
+        live.insertable.put(PORT_A, STACK);
+        port(PORT_A, PortSettings.MAX_RANK); // the strongest diversion: still last on a reroute
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().crane(2, 0)
+                .storageLocations(List.of(failed, chest)).inputs(List.of(IN_A)).outputs(List.of(OUT_A)), PORT_A);
+
+        assertEquals(chest, planner.planReroute(base.build(), IRON, 10, JobType.STORE, failed).orElseThrow().location(),
+                "another storage location first");
+
+        live.insertable.put(chest, 0);
+        RerouteTarget<RackPosition> toInput = planner.planReroute(base.build(), IRON, 10, JobType.STORE, failed)
+                .orElseThrow();
+        assertEquals(IN_A, toInput.location(), "then back into an input buffer");
+        assertEquals(LocationKind.INPUT, toInput.kind());
+
+        live.insertable.put(IN_A, 0);
+        RerouteTarget<RackPosition> toPort = planner.planReroute(base.build(), IRON, 10, JobType.STORE, failed)
+                .orElseThrow();
+        assertEquals(PORT_A, toPort.location(), "and only then out through the port");
+        assertEquals(LocationKind.OUTPUT, toPort.kind());
+        assertEquals(10, toPort.amount());
+
+        live.insertable.put(PORT_A, 0);
+        assertTrue(planner.planReroute(base.build(), IRON, 10, JobType.STORE, failed).isEmpty(),
+                "with nothing left the crane holds, as it always did");
+    }
+
+    /**
+     * Retrieve and supply leftovers are <b>never</b> exported (M17): only items the warehouse chose not to store may
+     * leave through a port, so a player can reason that what comes out of one is surplus and the mod never quietly feeds
+     * a shredder with items somebody requested. An accepting port is therefore not even an "output station that did not
+     * ask for these items", which is the last resort of a retrieve reroute.
+     */
+    @Test
+    void retrieveAndSupplyLeftoversNeverReachAPort() {
+        live.insertable.put(PORT_A, STACK);
+        port(PORT_A, -1);
+        // The port is an output station of the aisle as well, which is exactly the trap: it must be filtered out.
+        PlannerInput<String, RackPosition> in = withPorts(input().crane(2, 0).storageLocations(List.of())
+                .outputs(List.of(OUT_A, PORT_A)).inputs(List.of(IN_A)), PORT_A).build();
+
+        assertTrue(planner.planReroute(in, IRON, 10, JobType.RETRIEVE, OUT_A).isEmpty(),
+                "a retrieve reroute holds rather than exporting requested items");
+        assertTrue(planner.planReroute(in, IRON, 10, JobType.SUPPLY, IN_C).isEmpty(),
+                "and a supply reroute goes back into storage or nowhere");
+        assertEquals(List.of(), live.insertCalls, "the port was not even simulated");
+
+        // A store reroute does reach it, from the same input: the difference is the job, not the port.
+        assertEquals(PORT_A, planner.planReroute(in, IRON, 10, JobType.STORE, null).orElseThrow().location());
+    }
+
+    /**
+     * A port consults neither the capacity estimate nor the refusal memory, so every gated-open port costs one live
+     * simulation per key per run for as long as it is open — the two mechanisms that make a large restricted warehouse
+     * cheap (ADR-021) are both off for ports. The cost was argued from "the handful of ports an aisle has", which nothing
+     * enforced: an aisle has up to {@code 32 × 16 × 2} rack positions against a budget of 64, so a rack wall of accepting
+     * ports could spend the whole budget on ports every run and never reach a storage location at all.
+     * <p>
+     * {@link JobPlanner#MAX_PORT_CANDIDATES} enforces it instead, and the cap is applied <b>by rank</b>: the weakest
+     * ports are dropped, never the one the ranking wanted.
+     */
+    @Test
+    void aWallOfPortsCannotSpendTheWholeLiveBudget() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+
+        // Twice the cap in full diversion ports, which rank ahead of every storage location, all of them near the input.
+        List<RackPosition> ports = new ArrayList<>();
+        for (int i = 0; i < 2 * JobPlanner.MAX_PORT_CANDIDATES; i++) {
+            RackPosition port = rack(1 + i % 15, i / 15, Side.RIGHT); // never IN_A at (0, 0)
+            port(port, 1);
+            live.insertable.put(port, 0);
+            ports.add(port);
+        }
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK)),
+                ports.toArray(RackPosition[]::new));
+
+        assertEquals(chest, storeJob(base, IRON, 8).target(), "the items are still stored");
+        assertEquals(JobPlanner.MAX_PORT_CANDIDATES + 1, live.insertCalls.size(),
+                "at most the cap in port simulations, then the storage location");
+        assertEquals(chest, live.insertCalls.get(live.insertCalls.size() - 1));
+        assertTrue(live.insertCalls.subList(0, JobPlanner.MAX_PORT_CANDIDATES).stream().allMatch(ports::contains));
+
+        // The cap drops the weakest ports, not an arbitrary window: the last port of the list is the only one dedicated
+        // to the item, which outranks every unfiltered one however far away it stands, so it is tried first of all.
+        RackPosition dedicated = ports.get(ports.size() - 1);
+        filter(dedicated, IRON);
+        live.insertable.put(dedicated, STACK);
+        live.insertCalls.clear();
+        assertEquals(dedicated, storeJob(base, IRON, 8).target(), "the best port survives the cap");
+        assertEquals(List.of(dedicated), live.insertCalls, "and is the first candidate simulated");
+    }
+
+    /**
+     * Exactly the cap in ports changes nothing at all: every one of them is offered, in the same order the merged ranking
+     * puts them in. That is the case every aisle anybody builds is in.
+     */
+    @Test
+    void asManyPortsAsTheCapAreAllOffered() {
+        List<RackPosition> ports = new ArrayList<>();
+        for (int i = 0; i < JobPlanner.MAX_PORT_CANDIDATES; i++) {
+            RackPosition port = rack(1 + i, 0, Side.RIGHT); // never IN_A at (0, 0); further from it with every step
+            port(port, -1);
+            live.insertable.put(port, 0);
+            ports.add(port);
+        }
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().inputs(List.of(IN_A))
+                .storageLocations(List.of()), ports.toArray(RackPosition[]::new));
+
+        assertEquals(Optional.empty(), planner.plan(base.inputBuffers(location -> slots(0, IRON, 8)).build()).job());
+        assertEquals(ports, live.insertCalls, "all of them, nearest first");
+    }
+
+    /** Helpers of this section. */
+    private PlannerInput.Builder<String, RackPosition> withPorts(PlannerInput.Builder<String, RackPosition> base,
+            RackPosition... ports) {
+        return base.ports(List.of(ports)).portRank(this::portRankOf);
+    }
+
+    /** Makes {@code location} an accepting port with a signed rank (negative overflow, positive diversion). */
+    private void port(RackPosition location, int rank) {
+        portRanks.put(location, rank);
+    }
+
+    private int portRankOf(RackPosition location) {
+        return portRanks.getOrDefault(location, 0);
+    }
+
+    /** The job the store plan produces for {@code buffered} items of {@code key} at every input. */
+    private TransportJob<String, RackPosition> storeJob(PlannerInput.Builder<String, RackPosition> base, String key,
+            int buffered) {
+        return planner.plan(base.inputBuffers(location -> slots(0, key, buffered)).build()).job().orElseThrow().job();
     }
 }

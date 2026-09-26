@@ -97,7 +97,8 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
         if (pauseReason != CranePauseReason.NONE)
             WareworksLang.cranePaused(pauseReason.langKey()).forGoggles(tooltip, indent);
         job.ifPresent(summary -> {
-            WareworksLang.craneJob(summary.type(), summary.item(), summary.amount()).forGoggles(tooltip, indent);
+            WareworksLang.craneJob(summary.type(), summary.targetKind(), summary.item(), summary.amount())
+                    .forGoggles(tooltip, indent);
             WareworksLang.craneRoute(address(summary.source()), address(summary.target())).forGoggles(tooltip,
                     indent + 1);
         });

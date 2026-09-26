@@ -39,6 +39,18 @@ import dev.wareworks.core.inventory.StockView;
  *                             excluded)
  * @param inputs               input stations in round-robin order
  * @param outputs              output stations (reroute candidates)
+ * @param ports                the aisle's <b>accepting</b> warehouse ports that will take items <b>now</b> (M17, issue
+ *                             #12), in a stable index order. The content layer applies the whole policy — the direction,
+ *                             the redstone gate, the pulse token and availability — and this list is its answer; the
+ *                             planner only ranks what it is given, which is what keeps redstone out of
+ *                             {@link JobPlanner}. Every entry is an output station of the aisle, but <b>not</b>
+ *                             necessarily an {@code outputs} entry: {@code outputs} holds the output stations a reroute
+ *                             may deliver to, and the content layer already keeps accepting ports out of it
+ *                             ({@code CraneDispatch#rerouteOutputs}), so in the game the two lists are disjoint. The
+ *                             planner does not rely on either shape — {@link JobPlanner#withoutPorts} removes a port
+ *                             from {@code outputs} wherever one is passed in both. The default is the empty list: the
+ *                             answer of an aisle whose ports all request, which makes the new ranking key answer 0 for
+ *                             every pair of candidates and the planner the function it was before M17
  * @param inputBuffers         the current buffer of an input station; only called for inputs that are examined
  * @param inputCursor          index into {@code inputs} where the store round robin starts (taken modulo the size)
  * @param available            whether a location can be used now (loaded, present); unavailable ones are skipped
@@ -64,6 +76,12 @@ import dev.wareworks.core.inventory.StockView;
  *                             consolidation and item-type grouping and <b>above</b> travel time, so a preference never
  *                             overrules a filter and never mixes item types; the default is {@link #NO_PRIORITY},
  *                             i.e. 0 for every location, which makes the ranking the function it was before M16
+ * @param portRank             the signed rank of an accepting warehouse port (M17, issue #12): {@code < 0} an
+ *                             <b>overflow</b>, which every storage location outranks, {@code > 0} a <b>diversion</b>,
+ *                             which outranks every storage location, and the magnitude minus one is the strength a
+ *                             player set, compared like the storage priority. Called only for entries of {@code ports()};
+ *                             a rank of 0 means "not an accepting port" and drops the candidate, so a list and a rank
+ *                             function that disagree can never export anything. The default is {@link #NO_PORT_RANK}
  * @param storeHeadroom        how many more items of a key the warehouse may still <b>store</b> (M15, issue #3): a
  *                             stock rule's maximum, minus what is stored and on its way in, plus what an open
  *                             production order is still expected to bring back. Consulted once per key in the store
@@ -80,13 +98,13 @@ import dev.wareworks.core.inventory.StockView;
 public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speeds, int transferTicks,
         ToIntFunction<? super K> carryLimit, Function<? super K, ?> itemType, StockView<K, L> stock,
         ReservationView<K, L> reservations, List<OpenRequest<K, L>> requests, List<SupplyNeed<K, L>> supplies,
-        List<L> storageLocations, List<L> inputs, List<L> outputs,
+        List<L> storageLocations, List<L> inputs, List<L> outputs, List<L> ports,
         Function<? super L, InventorySnapshot<K>> inputBuffers, int inputCursor, Predicate<? super L> available,
         JobPlanner.InsertEstimate<K, L> insertEstimate, JobPlanner.LiveExtract<K, L> liveExtract,
         JobPlanner.LiveInsert<K, L> liveInsert, BiPredicate<? super L, ? super K> insertRefused,
         BiPredicate<? super L, ? super K> extractRefused,
         BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
-        ToLongFunction<? super K> storeHeadroom, int liveSimulationBudget) {
+        ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
      * the builder's default, so an aisle without rules plans exactly as it did before M15.
@@ -100,6 +118,12 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
      * behaves exactly as before".
      */
     public static final ToIntFunction<Object> NO_PRIORITY = location -> 0;
+    /**
+     * The port rank of a warehouse whose ports all request: 0 everywhere (M17, issue #12). It is the builder's default
+     * and is only ever called for entries of {@link #ports()}, which is empty by default, so an input built without
+     * {@link Builder#ports} is <b>literally</b> the input the planner received before M17.
+     */
+    public static final ToIntFunction<Object> NO_PORT_RANK = location -> 0;
 
     public PlannerInput {
         if (!Double.isFinite(craneX) || !Double.isFinite(craneY))
@@ -116,6 +140,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         storageLocations = List.copyOf(storageLocations);
         inputs = List.copyOf(inputs);
         outputs = List.copyOf(outputs);
+        ports = List.copyOf(ports);
         Objects.requireNonNull(inputBuffers, "inputBuffers");
         Objects.requireNonNull(available, "available");
         Objects.requireNonNull(insertEstimate, "insertEstimate");
@@ -125,6 +150,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         Objects.requireNonNull(extractRefused, "extractRefused");
         Objects.requireNonNull(storeFilter, "storeFilter");
         Objects.requireNonNull(storePriority, "storePriority");
+        Objects.requireNonNull(portRank, "portRank");
         Objects.requireNonNull(storeHeadroom, "storeHeadroom");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
@@ -181,8 +207,9 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
      * A builder with safe defaults: crane at (0, 0), stopped, no transfer time, no requests or locations, everything
      * available, every key its own item type, unknown capacity estimates, live callbacks that accept and give nothing, no
      * known refusals, no store filters ({@link FilterMatch#UNFILTERED} everywhere), no storage priorities
-     * ({@link #NO_PRIORITY}, i.e. 0 everywhere), unlimited store headroom ({@link #UNLIMITED_HEADROOM}, i.e. no stock
-     * rule) and {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}. The carry limit has no default.
+     * ({@link #NO_PRIORITY}, i.e. 0 everywhere), no accepting ports (an empty {@link #ports()} and
+     * {@link #NO_PORT_RANK}), unlimited store headroom ({@link #UNLIMITED_HEADROOM}, i.e. no stock rule) and
+     * {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}. The carry limit has no default.
      */
     public static <K, L> Builder<K, L> builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
         return new Builder<>(stock, reservations);
@@ -203,6 +230,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         private List<L> storageLocations = List.of();
         private List<L> inputs = List.of();
         private List<L> outputs = List.of();
+        private List<L> ports = List.of();
         private Function<? super L, InventorySnapshot<K>> inputBuffers = location -> InventorySnapshot.empty();
         private int inputCursor;
         private Predicate<? super L> available = location -> true;
@@ -213,6 +241,7 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         private BiPredicate<? super L, ? super K> extractRefused = (location, key) -> false;
         private BiFunction<? super L, ? super K, FilterMatch> storeFilter = (location, key) -> FilterMatch.UNFILTERED;
         private ToIntFunction<? super L> storePriority = NO_PRIORITY;
+        private ToIntFunction<? super L> portRank = NO_PORT_RANK;
         private ToLongFunction<? super K> storeHeadroom = UNLIMITED_HEADROOM;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
@@ -272,6 +301,16 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
             return this;
         }
 
+        /**
+         * The aisle's accepting warehouse ports that will take items now ({@link PlannerInput#ports()}). Left out, it is
+         * the empty list — the answer of an aisle whose ports all request, and the input the planner received before
+         * M17.
+         */
+        public Builder<K, L> ports(List<L> ports) {
+            this.ports = ports;
+            return this;
+        }
+
         public Builder<K, L> inputBuffers(Function<? super L, InventorySnapshot<K>> inputBuffers) {
             this.inputBuffers = inputBuffers;
             return this;
@@ -328,6 +367,16 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         }
 
         /**
+         * The signed rank of an accepting warehouse port ({@link PlannerInput#portRank()}). Left out, it is
+         * {@link PlannerInput#NO_PORT_RANK}, which together with an empty {@link #ports} makes this the input the
+         * planner received before M17.
+         */
+        public Builder<K, L> portRank(ToIntFunction<? super L> portRank) {
+            this.portRank = portRank;
+            return this;
+        }
+
+        /**
          * How many more items of a key the warehouse may still store ({@link PlannerInput#storeHeadroom()}). Left
          * out, it is {@link PlannerInput#UNLIMITED_HEADROOM} — the answer of an aisle that has no stock rules.
          */
@@ -343,9 +392,9 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
 
         public PlannerInput<K, L> build() {
             return new PlannerInput<>(craneX, craneY, speeds, transferTicks, carryLimit, itemType, stock, reservations,
-                    requests, supplies, storageLocations, inputs, outputs, inputBuffers, inputCursor, available,
+                    requests, supplies, storageLocations, inputs, outputs, ports, inputBuffers, inputCursor, available,
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter, storePriority,
-                    storeHeadroom, liveSimulationBudget);
+                    portRank, storeHeadroom, liveSimulationBudget);
         }
     }
 }

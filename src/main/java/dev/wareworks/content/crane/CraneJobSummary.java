@@ -10,6 +10,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.warehouse.LocationKind;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.item.Item;
@@ -19,13 +20,19 @@ import net.minecraft.world.item.Item;
  * <b>type</b> (never item components, so the size is bounded; {@code docs/architecture.md}, goggle data notes), the
  * amount and both rack positions. Reading never throws.
  *
- * @param type   store or retrieve
- * @param item   the item type
- * @param amount the held amount once picked, before that the planned amount
- * @param source aisle-local source position
- * @param target aisle-local target position (changes on a reroute)
+ * @param type       store or retrieve
+ * @param item       the item type
+ * @param amount     the held amount once picked, before that the planned amount
+ * @param source     aisle-local source position
+ * @param target     aisle-local target position (changes on a reroute)
+ * @param targetKind what kind of location the target is, which a reroute may change together with the position. Synced
+ *                   since M17 (issue #12), because the job type alone no longer says what the crane is doing: a
+ *                   {@link JobType#STORE} job whose target is an {@link LocationKind#OUTPUT} is the warehouse
+ *                   <b>handing items over</b> through an accepting port, and every surface that names the activity —
+ *                   goggles and the "Crane Status" display source — has to say so rather than "Storing"
  */
-public record CraneJobSummary(JobType type, Item item, int amount, RackPosition source, RackPosition target) {
+public record CraneJobSummary(JobType type, Item item, int amount, RackPosition source, RackPosition target,
+                              LocationKind targetKind) {
     private static final String TYPE = "Type";
     private static final String ITEM = "Item";
     private static final String AMOUNT = "Amount";
@@ -34,19 +41,31 @@ public record CraneJobSummary(JobType type, Item item, int amount, RackPosition 
     private static final String X = "X";
     private static final String Y = "Y";
     private static final String SIDE = "Side";
+    private static final String TARGET_KIND = "TargetKind";
 
     public CraneJobSummary {
         Objects.requireNonNull(type, "type");
         Objects.requireNonNull(item, "item");
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
+        // Tolerant, like every other goggle record: a packet without the kind reads as the type's planned target.
+        if (targetKind == null || !type.allowsTarget(targetKind))
+            targetKind = type.plannedTargetKind();
         amount = Math.max(0, amount);
+    }
+
+    /**
+     * Whether the crane is handing items <b>out of</b> the warehouse through an accepting port rather than storing them
+     * (M17, issue #12): a store job with an output station as its target.
+     */
+    public boolean handsOver() {
+        return type == JobType.STORE && targetKind == LocationKind.OUTPUT;
     }
 
     /** The summary of {@code job}. */
     public static CraneJobSummary of(TransportJob<ItemKey, RackPosition> job) {
         return new CraneJobSummary(job.type(), job.key().getItem(), job.picked() ? job.heldAmount() : job.plannedAmount(),
-                job.source(), job.target());
+                job.source(), job.target(), job.targetKind());
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -56,6 +75,7 @@ public record CraneJobSummary(JobType type, Item item, int amount, RackPosition 
         tag.putInt(AMOUNT, amount);
         tag.put(SOURCE, writeRack(source));
         tag.put(TARGET, writeRack(target));
+        tag.putString(TARGET_KIND, targetKind.name());
     }
 
     /** Reads a summary written by {@link #write}; empty for missing or invalid data. Never throws. */
@@ -66,7 +86,9 @@ public record CraneJobSummary(JobType type, Item item, int amount, RackPosition 
         Optional<RackPosition> target = readRack(tag.getCompound(TARGET));
         if (type.isEmpty() || item.isEmpty() || source.isEmpty() || target.isEmpty())
             return Optional.empty();
-        return Optional.of(new CraneJobSummary(type.get(), item.get(), tag.getInt(AMOUNT), source.get(), target.get()));
+        // A missing or unknown kind falls back to the type's planned target in the canonical constructor.
+        return Optional.of(new CraneJobSummary(type.get(), item.get(), tag.getInt(AMOUNT), source.get(), target.get(),
+                LocationKind.byName(tag.getString(TARGET_KIND)).orElse(null)));
     }
 
     /** NBT form of a rack position: {@code {X: int, Y: int, Side: "L"|"R"}}. */

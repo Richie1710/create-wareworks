@@ -122,11 +122,14 @@ public final class StockRuleScenes {
      * The keeper's block state with its two lamps, facing the aisle exactly as
      * {@code PonderAisle#placeStockKeeper} places it. A storyboard cannot read a state back out of the scene, so the
      * state it wants is built from scratch.
+     * <p>
+     * Package-private rather than private, because {@link PortScenes#accepting} lights the same lamp for the same reason
+     * (a rule at its maximum), and two copies of this state could drift apart.
      *
      * @param lit    any rule of the keeper bites (below its minimum, at its maximum or down to its reserve)
      * @param paused the safety stop is holding a rule, which is the other lamp and outranks the first
      */
-    private static BlockState keeperState(boolean lit, boolean paused) {
+    static BlockState keeperState(boolean lit, boolean paused) {
         return WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                 .setValue(WarehouseStockKeeperBlock.FACING, PonderAisle.outward(Side.RIGHT).getOpposite())
                 .setValue(WarehouseStockKeeperBlock.LIT, lit)

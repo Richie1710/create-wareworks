@@ -70,7 +70,10 @@ class TransportJobTest {
 
         TransportJob<String, String> store = TransportJob.store(JOB, "in", "chest", ORE, 16).withPicked(16);
         assertEquals(LocationKind.INPUT, store.withTarget("in", LocationKind.INPUT).targetKind());
-        assertThrows(IllegalArgumentException.class, () -> store.withTarget("out", LocationKind.OUTPUT));
+        // Since M17 store leftovers may also go to an accepting warehouse port, which is an OUTPUT; a production station
+        // stays forbidden, because nobody ordered those items (ADR-024).
+        assertEquals(LocationKind.OUTPUT, store.withTarget("port", LocationKind.OUTPUT).targetKind());
+        assertThrows(IllegalArgumentException.class, () -> store.withTarget("machine", LocationKind.PRODUCTION));
     }
 
     @Test
@@ -78,8 +81,8 @@ class TransportJobTest {
         assertThrows(IllegalArgumentException.class, () -> TransportJob.store(JOB, "in", "chest", ORE, 0));
         assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.STORE, "in", "chest",
                 LocationKind.STORAGE, ORE, 4, Optional.of(REQUEST), false, 0, 0), "store jobs serve no request");
-        assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.STORE, "in", "out",
-                LocationKind.OUTPUT, ORE, 4, Optional.empty(), false, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.STORE, "in", "machine",
+                LocationKind.PRODUCTION, ORE, 4, Optional.empty(), false, 0, 0));
         assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.RETRIEVE, "chest", "out",
                 LocationKind.OUTPUT, ORE, 4, Optional.empty(), false, 2, 0), "unpicked jobs hold nothing");
         assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.RETRIEVE, "chest", "out",
@@ -93,10 +96,17 @@ class TransportJobTest {
     void jobTypeEndpoints() {
         assertTrue(JobType.STORE.allowsTarget(LocationKind.STORAGE));
         assertTrue(JobType.STORE.allowsTarget(LocationKind.INPUT));
-        assertFalse(JobType.STORE.allowsTarget(LocationKind.OUTPUT));
+        // An accepting warehouse port is an OUTPUT, and a store job may drop there since M17 (issue #12).
+        assertTrue(JobType.STORE.allowsTarget(LocationKind.OUTPUT));
+        assertFalse(JobType.STORE.allowsTarget(LocationKind.PRODUCTION));
+        assertFalse(JobType.STORE.allowsTarget(LocationKind.KEEPER));
         assertTrue(JobType.RETRIEVE.allowsTarget(LocationKind.OUTPUT));
         assertTrue(JobType.RETRIEVE.allowsTarget(LocationKind.STORAGE));
         assertFalse(JobType.RETRIEVE.allowsTarget(LocationKind.INPUT));
+        assertFalse(JobType.RETRIEVE.allowsTarget(LocationKind.PRODUCTION));
+        assertTrue(JobType.SUPPLY.allowsTarget(LocationKind.PRODUCTION));
+        assertTrue(JobType.SUPPLY.allowsTarget(LocationKind.STORAGE));
+        assertFalse(JobType.SUPPLY.allowsTarget(LocationKind.OUTPUT));
         assertEquals(LocationKind.INPUT, JobType.STORE.fallbackTargetKind());
         assertEquals(LocationKind.STORAGE, JobType.RETRIEVE.fallbackTargetKind());
         assertEquals(Optional.of(JobType.RETRIEVE), JobType.byName("RETRIEVE"));

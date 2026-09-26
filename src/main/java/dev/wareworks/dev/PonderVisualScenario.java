@@ -77,10 +77,11 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("controller", WareworksBlocks.WAREHOUSE_CONTROLLER, 2),
             new Subject("interface", WareworksBlocks.WAREHOUSE_INTERFACE, 3),
             new Subject("input", WareworksBlocks.WAREHOUSE_INPUT, 1),
-            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 1),
+            // M17: retrieving, plus the two port scenes (the second of which the keeper shows as well).
+            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 3),
             new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 2),
             new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 1),
-            new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 2));
+            new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3));
 
     @Override
     public String name() {

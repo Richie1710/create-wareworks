@@ -1,33 +1,63 @@
 {
   "variants": {
-    "facing=east,powered=false": {
+    "accepting=false,facing=east,powered=false": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 90
     },
-    "facing=east,powered=true": {
+    "accepting=false,facing=east,powered=true": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 90
     },
-    "facing=north,powered=false": {
+    "accepting=false,facing=north,powered=false": {
       "model": "wareworks:block/warehouse_output/block"
     },
-    "facing=north,powered=true": {
+    "accepting=false,facing=north,powered=true": {
       "model": "wareworks:block/warehouse_output/block"
     },
-    "facing=south,powered=false": {
+    "accepting=false,facing=south,powered=false": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 180
     },
-    "facing=south,powered=true": {
+    "accepting=false,facing=south,powered=true": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 180
     },
-    "facing=west,powered=false": {
+    "accepting=false,facing=west,powered=false": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 270
     },
-    "facing=west,powered=true": {
+    "accepting=false,facing=west,powered=true": {
       "model": "wareworks:block/warehouse_output/block",
+      "y": 270
+    },
+    "accepting=true,facing=east,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_accept",
+      "y": 90
+    },
+    "accepting=true,facing=east,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_accept",
+      "y": 90
+    },
+    "accepting=true,facing=north,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_accept"
+    },
+    "accepting=true,facing=north,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_accept"
+    },
+    "accepting=true,facing=south,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_accept",
+      "y": 180
+    },
+    "accepting=true,facing=south,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_accept",
+      "y": 180
+    },
+    "accepting=true,facing=west,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_accept",
+      "y": 270
+    },
+    "accepting=true,facing=west,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_accept",
       "y": 270
     }
   }

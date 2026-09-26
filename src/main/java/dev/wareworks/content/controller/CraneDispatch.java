@@ -24,6 +24,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.job.JobPlanner;
+import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.PlanResult;
 import dev.wareworks.core.job.PlannerInput;
@@ -33,6 +34,7 @@ import dev.wareworks.core.job.ReservationLedger;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.util.LogThrottle;
@@ -67,6 +69,14 @@ import net.minecraft.world.level.Level;
  * reaches a live simulation and never enters the refusal memory. {@link NoJobReason#NO_MATCHING_FILTER} arms the same
  * {@code fullBackoffTicks} back-off as {@link NoJobReason#WAREHOUSE_FULL}: it is at least as persistent (no retrieval
  * ever makes a filter match), and the candidate scan it would repeat is longest in a heavily partitioned warehouse.
+ * <p>
+ * <b>Accepting warehouse ports</b> ({@code docs/warehouse-system.md} §3.2, M17, issue #12, ADR-029) reach the planner as
+ * {@code ports} plus {@code portRank}, answered from the controller's {@link AislePorts} cache. The <b>whole policy</b> is
+ * applied here rather than in the planner: the list contains only the ports whose direction accepts and whose redstone
+ * gate is open right now ({@code WarehouseControllerBlockEntity#acceptingPorts}), so "off means off" is a property of the
+ * list and the planner stays free of redstone. A port's filter is answered by the same {@code storeFilter} as a storage
+ * location's, so a rejecting one is dropped before any live simulation, and a port is never entered into the refusal
+ * memory: it has no snapshot round robin that would forget the entry.
  * <p>
  * <b>Reservations are derived from the crane's job</b> ({@code docs/warehouse-system.md} §7.4): every report re-tracks
  * the reported job, and every dispatch interval the ledger is rebuilt from the dock's current job
@@ -178,16 +188,40 @@ final class CraneDispatch {
             // NoJobReason.AT_MAXIMUM deliberately does not belong here (M15): a stock rule's maximum is answered by
             // one lookup before any candidate work, so there is no expensive scan to protect, and backing off would
             // stop storing for every other input of the aisle because a single item type is capped on purpose.
+            // NoJobReason.PORT_FULL does belong here (M17): unlike a maximum it is reached only after a full candidate
+            // walk with an estimate and a live simulation per candidate, which is exactly the work this back-off exists
+            // to protect, and an overflow port that is full stays full until a funnel drains it.
             if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
-                    || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER))
+                    || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
+                    || result.reasons().contains(NoJobReason.PORT_FULL))
                 backoffUntilTick = now + Math.max(1, WareworksConfig.fullBackoffTicks());
             return;
         }
         lastReason = null;
         TransportJob<ItemKey, RackPosition> job = result.job().get().job();
         track(job);
-        if (!dock.get().assignJob(job))
+        if (!dock.get().assignJob(job)) {
             ledger.releaseJob(job.id());
+            return;
+        }
+        spendPortToken(job, job.target(), job.targetKind());
+    }
+
+    /**
+     * A store job that really goes to an accepting warehouse port spends that port's pulse token (M17): a rising edge on
+     * a port in pulse mode is one trip, and the token is spent when the job is handed out, so an edge is never turned
+     * into two exports. Nothing happens for a store into storage, for a continuous port (which holds no token) or for a
+     * job the crane refused.
+     * <p>
+     * {@code targetKind} is the kind of the target that was <b>chosen</b> and is passed in rather than re-derived from
+     * {@code job}: on the reroute path the job still carries the kind of the target that <b>failed</b> (the crane's state
+     * machine applies {@code TransportJob#withTarget} only when it receives the new target), so asking the job there
+     * would answer {@code STORAGE} for the ordinary case — a store whose storage location filled up — and leave the port
+     * armed although a whole trip was exported into it.
+     */
+    private void spendPortToken(TransportJob<ItemKey, RackPosition> job, RackPosition target, LocationKind targetKind) {
+        if (job.type() == JobType.STORE && targetKind == LocationKind.OUTPUT)
+            controller.onPortSelected(target);
     }
 
     /** Open requests, production ingredients or buffered input items exist (cheap pre-check before a planner input). */
@@ -217,7 +251,7 @@ final class CraneDispatch {
                 .supplies(controller.supplyNeeds())
                 .storageLocations(storageLocations())
                 .inputs(positions(controller.inputStations()))
-                .outputs(positions(controller.outputStations()))
+                .outputs(rerouteOutputs())
                 .inputBuffers(rack -> inputBuffer(level, layout, rack))
                 .available(rack -> isLoaded(level, layout, rack))
                 .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(controller.stockIndex(), ItemKey::getMaxStackSize))
@@ -227,6 +261,11 @@ final class CraneDispatch {
                 // The player's storage priority, from the same cache: it orders only the locations the filter,
                 // consolidation and item-type grouping left equal, and it is read nowhere but when storing (ADR-028).
                 .storePriority(controller::storePriorityAt)
+                // The aisle's accepting ports, already gated: direction, redstone and the pulse token are applied here,
+                // so the planner only ranks them (M17, ADR-029). An aisle of plain outputs answers an empty list without
+                // touching the world, which is what makes it the pre-M17 planner input literally.
+                .ports(controller.acceptingPorts())
+                .portRank(controller::portRankAt)
                 // A stock rule's maximum decides even earlier, per item type instead of per location: one lookup that
                 // costs nothing while no rule governs the key (M15, issue #3).
                 .storeHeadroom(controller::storeHeadroom)
@@ -245,6 +284,21 @@ final class CraneDispatch {
                     || request.remaining() < 1)
                 continue;
             result.add(new PlannerInput.OpenRequest<>(request.id(), request.key(), request.remaining(), output.get()));
+        }
+        return result;
+    }
+
+    /**
+     * Output stations the planner may use as the last resort for retrieve leftovers ({@code PlannerInput#outputs}), i.e.
+     * every output that is <b>not</b> an accepting warehouse port (M17, issue #12). An accepting port must never receive
+     * items somebody requested: what leaves through a port has to be surplus the warehouse chose not to keep. A port that
+     * requests, and a warehouse terminal (ADR-018), are ranked as before.
+     */
+    private List<RackPosition> rerouteOutputs() {
+        List<RackPosition> result = new ArrayList<>();
+        for (LocationRecord record : controller.outputStations()) {
+            if (controller.portRankAt(record.position()) == PortSettings.REQUEST_RANK)
+                result.add(record.position());
         }
         return result;
     }
@@ -390,7 +444,13 @@ final class CraneDispatch {
             return Optional.empty();
         ledger.releaseJob(job.id());
         try {
-            return planner.planReroute(input(level, layout, dock).build(), job.key(), amount, job.type(), failedTarget);
+            Optional<RerouteTarget<RackPosition>> target = planner.planReroute(input(level, layout, dock).build(),
+                    job.key(), amount, job.type(), failedTarget);
+            // The last resort of a store reroute may be an accepting port, and that spends its pulse token too, so a
+            // single edge can never export one trip's leftovers and then a whole trip of its own (M17). The kind comes
+            // from the target that was found, never from the job, which still names the target that failed.
+            target.ifPresent(found -> spendPortToken(job, found.location(), found.kind()));
+            return target;
         } catch (RuntimeException e) {
             if (planningFailures.tryLog(level.getGameTime()))
                 LOGGER.error("Warehouse controller at {} could not plan a reroute", controller.getBlockPos(), e);

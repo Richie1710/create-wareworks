@@ -631,9 +631,11 @@ class CraneStateMachineTest {
         assertThrows(IllegalArgumentException.class, () -> MACHINE.apply(h.state, CraneEvent.dropResult(10, 5)));
         h.send(CraneEvent.dropResult(0, 16));
         h.tickUntilPhase(CranePhase.REROUTE);
+        // Store leftovers may reach an output station since M17 (an accepting warehouse port is one), but never a
+        // production station: nobody ordered those items, so a machine must not be fed with them (ADR-024).
         assertThrows(IllegalArgumentException.class,
-                () -> MACHINE.apply(h.state, CraneEvent.rerouteTo(OUTPUT, LocationKind.OUTPUT)),
-                "store leftovers cannot go to an output station");
+                () -> MACHINE.apply(h.state, CraneEvent.rerouteTo(OUTPUT, LocationKind.PRODUCTION)),
+                "store leftovers cannot go to a production station");
         assertThrows(IllegalArgumentException.class, () -> CraneEvent.<String, RackPosition>dropResult(-1, 0));
         assertThrows(IllegalArgumentException.class, () -> new CraneTimings(0, 1, 1));
     }

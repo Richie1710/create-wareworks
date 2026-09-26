@@ -36,8 +36,10 @@ import dev.wareworks.core.warehouse.LocationKind;
  *   <li>not picked, retrieve or supply: {@link Reservation.Kind#STOCK} of the planned amount at the source, with the
  *       request or production ingredient line it serves ({@link JobType#reservesSourceStock()});</li>
  *   <li>picked, items held, target is a delivery station (output or production,
- *       {@link LocationKind#isDeliveryTarget()}): {@link Reservation.Kind#TRANSIT} of the held amount, with the
- *       request or ingredient line (the picked items left the source, so the stock reservation ends);</li>
+ *       {@link LocationKind#isDeliveryTarget()}) of a {@code RETRIEVE} or {@code SUPPLY}:
+ *       {@link Reservation.Kind#TRANSIT} of the held amount, with the request or ingredient line (the picked items left
+ *       the source, so the stock reservation ends). A {@code STORE} job is excluded, so items on their way into an
+ *       accepting warehouse port hold capacity there rather than transit (M17, issue #12);</li>
  *   <li>picked, items held, any other target: {@link Reservation.Kind#CAPACITY} of the held amount at the target;</li>
  *   <li>nothing held: no reservation.</li>
  * </ul>
@@ -208,7 +210,12 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
         int held = job.heldAmount();
         if (held == 0)
             return List.of();
-        if (job.targetKind().isDeliveryTarget())
+        // TRANSIT means "items that have left the indexed stock and are owed to whoever asked for them", so a STORE job
+        // is excluded however delivery-like its target is (M17, issue #12): an accepting warehouse port is an
+        // LocationKind#OUTPUT, but a store job's items were never indexed and nobody asked for them, so they are room
+        // promised at the port — capacity — exactly like store leftovers rerouted into a chest. The kind test still
+        // decides for a RETRIEVE rerouted into storage, so nothing existing changes.
+        if (job.targetKind().isDeliveryTarget() && job.type() != JobType.STORE)
             return List.of(new Reservation<>(job.id(), Reservation.Kind.TRANSIT, job.target(), job.key(), held,
                     job.requestId()));
         return List.of(new Reservation<>(job.id(), Reservation.Kind.CAPACITY, job.target(), job.key(), held,

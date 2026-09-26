@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The **Warehouse Output** is now the warehouse's general **port**. It still requests the item in its filter slot, but it
+  can also **accept**: hold right-click with a wrench on the port's own box to turn it around, and the crane brings it the
+  items that arrived at a warehouse input and would otherwise be stored. What you build behind it — a belt, a furnace, a
+  way back to a farm — decides where they go; Wareworks itself never destroys anything, and a full port simply lets the
+  input back up
+- An accepting port has a **rank**. A *negative* rank makes it an **overflow**: every storage location wins over it, so it
+  only ever gets what the warehouse cannot keep — which is what a stock rule's maximum finally has an outlet for. A
+  *positive* rank makes it a **diversion**: it takes incoming items *before* they are stored. The filter still says which
+  items the port handles at all, and a port without a filter takes anything
+- Every port now says **when** it acts: hold right-click on the filter slot and pick a row — on a pulse (one action per
+  redstone edge, as before), while powered, or unless powered. A requesting port set to "while powered" keeps itself topped
+  up with never more than one trip in flight, so a machine stays supplied **without a redstone clock**; an accepting port
+  set to "unless powered" works with **no wiring at all**, and a single lever switches it off
+- You can see a port's direction without goggles: an accepting one turns **andesite** around the opening the crane reaches
+  into and on its back spout, and its rank is drawn on the plate on the back. Goggles add the rank, which items it
+  accepts, its redstone setting, whether it is active right now and how many items it has handed over; the controller
+  counts "Accepting ports", and an aisle display shows the same number
+- A Create clipboard copies a port's whole policy — filter, amount, redstone behaviour and rank — onto the next port, and
+  copying an unconfigured port resets a configured one
+- The crane now says "Handing over" instead of "Storing" while it carries items into an accepting port, in goggles and on a
+  Crane Status display
+- Two Ponder scenes for the port: "Supplying a Machine from a Warehouse" and "An Overflow for a Warehouse" — the second
+  one also appears on the Warehouse Stock Keeper, because a maximum is what makes an overflow useful
+- **Existing worlds are unchanged.** A warehouse output placed before this version is a port that requests on a pulse,
+  which is exactly what it did, and it writes nothing new into your save until you configure it
 - Storage locations have a **priority**: hold the click on a warehouse interface's filter slot to set a number from 0 to
   9, and among the locations that are equally suitable the crane fills the highest one first — so a large vault filtered
   to cobblestone takes the cobblestone before the general chests do, and a rack by the door fills before the far end of

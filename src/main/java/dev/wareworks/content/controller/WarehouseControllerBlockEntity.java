@@ -29,6 +29,8 @@ import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.TerminalRequestOutcome;
+import dev.wareworks.content.station.WarehouseOutputBlock;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.core.address.RackPosition;
@@ -48,6 +50,8 @@ import dev.wareworks.core.job.RerouteTarget;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.port.PortRedstone;
+import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.production.ProduciblePlanner;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
@@ -172,6 +176,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private final Function<RackPosition, Optional<AisleFilters.StoreSettings>> storeSettingsResolver =
             this::readStoreSettingsAt;
+    /** Port policies of the aisle's warehouse ports, cached for the continuous pass and for planning (M17); not saved. */
+    private final AislePorts ports = new AislePorts();
     /** The aisle's stock rules, copied from its warehouse stock keepers (M15, issue #3). <b>Saved</b>, see below. */
     private final AisleStockRules stockRules = new AisleStockRules();
     /**
@@ -203,6 +209,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private long nextSnapshotTick;
     private long nextProductionTick;
     private long nextStockRuleTick;
+    private long nextPortTick;
     /**
      * Every keeper of the aisle is re-read on the next tick. Set on load, after a layout change and on every re-link
      * check, so a keeper edited while this controller was unloaded is picked up at the latest one
@@ -380,9 +387,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * A location whose filter this controller has not read yet (restored from a save, or freshly joined and still
      * queued for its snapshot) is resolved once through {@link #readStoreSettingsAt} instead of being treated as
      * unfiltered — see {@link AisleFilters} for why that matters after every world load.
+     * <p>
+     * <b>One function for storage locations and accepting warehouse ports alike</b> (M17, issue #12): the planner asks
+     * the same {@code storeFilter} about both, and the cache that knows the answer is asked. A port's filter is one
+     * concrete item, so {@link AislePorts#filterMatch} is an equality test and answers {@code null} for everything that is
+     * no cached port — one lookup in a map that is empty for a warehouse without them.
      */
     FilterMatch storeFilterMatch(RackPosition rack, ItemKey key) {
-        return level == null ? FilterMatch.UNFILTERED : filters.match(level, rack, key, storeSettingsResolver);
+        if (level == null)
+            return FilterMatch.UNFILTERED;
+        FilterMatch port = ports.filterMatch(rack, key);
+        return port != null ? port : filters.match(level, rack, key, storeSettingsResolver);
     }
 
     /**
@@ -611,6 +626,153 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (blockEntity instanceof StorageMember member && !blockEntity.isRemoved())
             filters.set(rack, member.storeFilter(), member.storePriority());
+    }
+
+    /**
+     * From the registry: a player changed a setting of the warehouse port at {@code rack} — its direction, its rank or
+     * its redstone behaviour ({@code docs/warehouse-system.md} §3.2, M17, issue #12). Re-reads its policy at once (one
+     * block entity lookup), so the next continuous pass and the next planning run already obey it.
+     * <p>
+     * A port that <b>stopped requesting</b> also loses what it still waits for: nothing may be delivered to a port that
+     * no longer asks for anything, and the existing cancellation path aborts a crane job before its pick and reroutes
+     * its items back into storage after it, so nothing is over-delivered either.
+     */
+    void onPortChanged(RackPosition rack) {
+        if (level == null || level.isClientSide || layout == null)
+            return;
+        if (membership.kindAt(rack).orElse(null) != LocationKind.OUTPUT) {
+            ports.remove(rack);
+            return;
+        }
+        if (!readPortAt(rack))
+            return;
+        if (!ports.at(rack).isRequesting() && cancelRequestsFor(layout.rackPos(rack)))
+            setChanged();
+    }
+
+    /**
+     * Reads the policy of the warehouse port at {@code rack} straight from its block entity: the one lookup
+     * {@link AislePorts} does per port that was never read into the cache. A warehouse <b>terminal</b> is an
+     * {@link LocationKind#OUTPUT} member too (ADR-018) and carries no port settings, so it is recorded as the default
+     * policy rather than left unread for ever.
+     *
+     * @return whether it could be read; while it cannot, the port keeps its unread mark and the default policy
+     */
+    private boolean readPortAt(RackPosition rack) {
+        if (level == null || level.isClientSide || layout == null)
+            return false;
+        BlockPos pos = layout.rackPos(rack);
+        if (!level.isLoaded(pos))
+            return false;
+        BlockEntity blockEntity = level.getBlockEntity(pos);
+        if (blockEntity == null || blockEntity.isRemoved())
+            return false;
+        if (blockEntity instanceof WarehouseOutputBlockEntity port)
+            ports.set(rack, port.portSettings(), port.filterKey());
+        else
+            ports.set(rack, PortSettings.DEFAULT, Optional.empty());
+        return true;
+    }
+
+    /**
+     * The aisle's accepting warehouse ports that will take items <b>right now</b> ({@code PlannerInput#ports}, M17,
+     * issue #12): the cached accepting ports whose redstone gate is open, in index order.
+     * <p>
+     * This is where the whole policy is applied, so the planner only ever ranks what it is handed: the direction and the
+     * rank come from the cache, the <b>signal</b> from the port's block state (one {@code getBlockState}, never cached, so
+     * it cannot be stale) and the pulse token from the port's block entity — the only lookup here, and only for a port
+     * that is in pulse mode at all. An aisle whose ports all request answers the empty list without touching the world,
+     * which is what makes a warehouse without accepting ports plan exactly as it did before M17.
+     */
+    List<RackPosition> acceptingPorts() {
+        if (level == null || level.isClientSide || layout == null)
+            return List.of();
+        List<RackPosition> candidates = ports.acceptingPorts();
+        if (candidates.isEmpty())
+            return List.of();
+        List<RackPosition> open = new ArrayList<>(candidates.size());
+        for (RackPosition rack : candidates) {
+            BlockPos pos = layout.rackPos(rack);
+            if (!level.isLoaded(pos))
+                continue;
+            BlockState state = level.getBlockState(pos);
+            if (!state.hasProperty(WarehouseOutputBlock.POWERED))
+                continue;
+            PortSettings policy = ports.at(rack);
+            boolean armed = policy.redstone() == PortRedstone.PULSE && isArmed(pos);
+            if (policy.gateOpen(state.getValue(WarehouseOutputBlock.POWERED), armed))
+                open.add(rack);
+        }
+        return open;
+    }
+
+    private boolean isArmed(BlockPos pos) {
+        return level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port && !port.isRemoved()
+                && port.isArmed();
+    }
+
+    /**
+     * The signed rank of the warehouse port at {@code rack} ({@code PlannerInput#portRank}, M17): negative an overflow,
+     * positive a diversion, 0 a requesting port — and 0 is also the answer for a port this controller has not read, which
+     * is why an unresolved port can never receive anything.
+     */
+    int portRankAt(RackPosition rack) {
+        return ports.rankAt(rack);
+    }
+
+    /** How many warehouse ports of this aisle accept items instead of requesting them (M17), for the goggles. */
+    public int acceptingPortCount() {
+        return ports.acceptingCount();
+    }
+
+    /**
+     * A store job was planned into the accepting port at {@code rack}: an unused rising edge of a port in pulse mode is
+     * spent now, so "one action per edge" means one trip (M17). Continuous ports hold no token, so this is a no-op for
+     * them.
+     */
+    void onPortSelected(RackPosition rack) {
+        if (level == null || level.isClientSide || layout == null)
+            return;
+        BlockPos pos = layout.rackPos(rack);
+        if (level.isLoaded(pos) && level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port
+                && !port.isRemoved())
+            port.consumeArmed();
+    }
+
+    /**
+     * Tops up the aisle's <b>continuous requesting ports</b> ({@code docs/warehouse-system.md} §3.2, M17): a port whose
+     * redstone behaviour is not a single pulse submits again as soon as it waits for nothing at all, so a machine stays
+     * supplied without a clock and never more than one trip is promised at a time. A request can only be re-submitted
+     * once the previous one closed, which nothing but a pass like this can notice.
+     * <p>
+     * Cost: nothing at all for an aisle whose ports are plain outputs, because the cache is then empty. Otherwise one
+     * {@code isLoaded} and one {@code getBlockState} per continuous port — the redstone signal is read from the block
+     * state and never cached, so it cannot be stale — and one block entity lookup only for a port that really submits. A
+     * refused port is backed off for {@code retryTicks}, so an item that is out of stock cannot make it spin.
+     */
+    private void tickPorts(long now) {
+        for (RackPosition rack : ports.unreadPorts())
+            readPortAt(rack);
+        for (RackPosition rack : ports.continuousRequests()) {
+            if (!ports.isDue(rack, now))
+                continue;
+            BlockPos pos = layout.rackPos(rack);
+            if (!level.isLoaded(pos))
+                continue;
+            BlockState state = level.getBlockState(pos);
+            if (!state.hasProperty(WarehouseOutputBlock.POWERED)
+                    || !ports.at(rack).gateOpen(state.getValue(WarehouseOutputBlock.POWERED), false))
+                continue;
+            if (!requests.requestsFor(pos).isEmpty())
+                continue;
+            if (!(level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port) || port.isRemoved())
+                continue;
+            Optional<RequestResult> result = port.submitIfIdle();
+            if (result.isPresent() && !result.get().isAccepted())
+                ports.backOffUntil(rack, now + Math.max(1, WareworksConfig.retryTicks()));
+            else
+                ports.clearBackOff(rack);
+        }
     }
 
     /**
@@ -2306,6 +2468,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // agree within the same tick.
         if (job.type() == JobType.STORE && job.targetKind() == LocationKind.STORAGE && delivered > 0)
             onResultStored(job.key(), delivered);
+        // The mirror image: items the warehouse handed over through an accepting port instead of storing them (M17).
+        // onResultStored above is deliberately not reached by them — a product diverted out was never stored, so no
+        // restock order may count it, and ADR-027's safety stop is what catches the rule that keeps ordering.
+        if (job.type() == JobType.STORE && job.targetKind() == LocationKind.OUTPUT && delivered > 0
+                && level.getBlockEntity(layout.rackPos(target)) instanceof WarehouseOutputBlockEntity port)
+            port.recordExport(delivered);
         return requestId.map(this::hasOpenJobOwner).orElse(true);
     }
 
@@ -2384,6 +2552,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             nextRoundRobinLocation().ifPresent(this::refreshLocation);
         }
         tickStockKeepers(now);
+        if (layout != null && now >= nextPortTick) {
+            nextPortTick = now + Math.max(1, WareworksConfig.dispatchIntervalTicks());
+            tickPorts(now);
+        }
         if (layout != null)
             dispatch.tick(level, layout, now);
     }
@@ -2501,6 +2673,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         stock.clear();
         pendingSnapshots.clear();
         filters.clear();
+        ports.clear();
         stockRulesRefreshPending = true;
         sharedInventories.clear();
         requests.clear();
@@ -2529,8 +2702,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         for (LocationRecord removed : changes.removed()) {
             if (removed.kind() == LocationKind.STORAGE)
                 forgetStorageLocation(removed.position());
-            else if (removed.kind() == LocationKind.OUTPUT)
+            else if (removed.kind() == LocationKind.OUTPUT) {
                 cancelRequestsFor(current.rackPos(removed.position())); // nothing can be delivered there any more
+                ports.remove(removed.position());
+            }
             else if (removed.kind() == LocationKind.PRODUCTION)
                 cancelProductionOrdersAt(removed.position()); // its orders can never finish
             else if (removed.kind() == LocationKind.KEEPER)
@@ -2545,6 +2720,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // Read at once, not on a later tick: a keeper a player just placed governs from now on, and a plan in
                 // this very tick must not store past the maximum it carries.
                 readStockRulesAt(added.position());
+                continue;
+            }
+            if (added.kind() == LocationKind.OUTPUT) {
+                // Resolved by the next port pass (the port's own onLoad usually beats it to it): until then it keeps the
+                // default policy, which is the harmless answer in both directions (AislePorts).
+                ports.markUnread(added.position());
                 continue;
             }
             if (added.kind() != LocationKind.STORAGE)
@@ -2660,7 +2841,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         int length = layout == null ? 0 : layout.geometry().length();
         int height = layout == null ? 0 : layout.geometry().height();
         return new ControllerGoggleSummary(status, length, height, membership.storageCount(), filteredLocationCount(),
-                prioritisedLocationCount(), membership.inputCount(), membership.outputCount(), membership.productionCount(),
+                prioritisedLocationCount(), membership.inputCount(), membership.outputCount(), acceptingPortCount(),
+                membership.productionCount(),
                 membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
                 productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
                 linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), dispatch.lastReason());
@@ -2695,6 +2877,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             WareworksLang.countLine(WareworksLang.GOGGLES_PRIORITISED_LOCATIONS, shown.prioritisedLocations())
                     .forGoggles(tooltip, 2);
         WareworksLang.stationCounts(shown.inputs(), shown.outputs()).forGoggles(tooltip, 1);
+        // Indented under the station counts, and only while a port really accepts: an aisle of plain outputs shows the
+        // line it always showed (M17, issue #12).
+        if (shown.acceptingPorts() > 0)
+            WareworksLang.countLine(WareworksLang.GOGGLES_ACCEPTING_PORTS, shown.acceptingPorts())
+                    .forGoggles(tooltip, 2);
         if (shown.productionStations() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_STATIONS, shown.productionStations())
                     .forGoggles(tooltip, 1);
@@ -2785,6 +2972,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // unread keeps the planner from reading "no entry" as "accepts everything" (AisleFilters, ADR-021).
                 filters.markUnread(record.position());
             }
+            // Port policies are not saved either, and a restored port is no "added" member, so nothing else would ever
+            // ask it: a continuous port has to be found again after a load (M17, the M8 cold-cache lesson).
+            for (LocationRecord record : membership.records(LocationKind.OUTPUT))
+                ports.markUnread(record.position());
             // Requests belong to the saved layout; without it (or for another facing) they are dropped like the records.
             requests.restore(ControllerPersistence.readRequests(tag, worldPosition, registries));
             // Production orders belong to the saved layout like the requests do. Their deadlines are not saved, so

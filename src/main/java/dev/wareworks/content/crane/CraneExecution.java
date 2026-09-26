@@ -29,6 +29,7 @@ import dev.wareworks.core.crane.CraneStateMachine;
 import dev.wareworks.core.crane.CraneTimings;
 import dev.wareworks.core.job.CraneKinematics;
 import dev.wareworks.core.job.CraneSpeeds;
+import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.RerouteTarget;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.warehouse.LocationKind;
@@ -345,7 +346,12 @@ final class CraneExecution {
                 // production station that filled up between planning and the drop would otherwise be handed a full
                 // carry, deliver nothing and send all of it back into storage, one wasted round trip per slot the
                 // player's machine frees (LocationKind#isDeliveryTarget, M11 review fix).
-                if (job.targetKind().isDeliveryTarget() && simulateInsert(target, job.key()) < 1) {
+                // A STORE job is excluded, however delivery-like its target is (M17, issue #12): waiting is right when
+                // somebody is waiting for the items, and wrong for a store into an accepting port — the crane would park
+                // in front of a full overflow port and block the whole aisle. Such a job takes the storage path instead:
+                // it drops, delivers 0 and has its leftovers rerouted.
+                if (job.type() != JobType.STORE && job.targetKind().isDeliveryTarget()
+                        && simulateInsert(target, job.key()) < 1) {
                     events.add(CraneEvent.outputFull());
                     return;
                 }

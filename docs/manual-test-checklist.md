@@ -899,3 +899,131 @@ went where it went.
 
     **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
     nothing about how they look.
+## T. The warehouse port (M17)
+
+Build one aisle with a **warehouse input** fed by a belt or a funnel, a **warehouse stock keeper**, a rack wall of a few
+storage locations, and **three warehouse outputs** at rack positions — some of them above your head. Put a funnel, a
+hopper or a belt behind each output, so items that leave really go somewhere. Keep a **wrench** and **Engineer's
+Goggles** on you.
+
+The automated side of M17 (`WarehousePortGameTests`, `JobPlannerTest`, `PortSettingsTest` and the `ports` visual
+scenario) already proves *what the warehouse does*: every combination of the issue's table was played in a real world and
+asserted on the server, and the screenshots were inspected. Everything below is about whether a person can **reach** the
+settings, **read** the result and **believe** what the warehouse did.
+
+116. **Can you set all three settings, on the wall, at any height?** Stand in the aisle and look at the filter slot on an
+    output's aisle-side plate.
+
+    * With an **empty hand or an item**: a short right-click still sets or clears the filter, exactly as before. **Hold**
+      the click: the board opens with the **three redstone rows** ("On a pulse", "While powered", "Unless powered") and
+      the amount on the horizontal axis. Set a row, release, and check that it stuck (the goggles say "Redstone: ...").
+      The hover tip under the slot follows the direction: "Hold to set the amount and when the port acts" while the port
+      requests, "Hold to set when the port acts" while it accepts, where the amount is no setting at all.
+    * Now hold a **wrench** and look at the same face. Exactly **one** value box must be drawn, the port's own — the
+      filter slot's outline and its hover tip must disappear, while the filter **item** stays painted on the plate. Hold
+      the click: the board opens with the three rows "Request", "Overflow — after storage", "Diversion — before storage"
+      and a magnitude 0–9, and the request row shows a dash instead of a number.
+    * Judge the aim: the two boxes sit on the same faces, 3.5 px apart, and the port's own is smaller. Does a wrench
+      click ever set the filter by accident, or an item click ever open the port board? Try it above head height and at
+      your feet, and on a port with a **non-stackable** item in its filter slot (the board must still open).
+    * A **wrench on the top or bottom face** must still rotate the station, and sneak-wrench must still dismantle it.
+    * If you have another mod's **wrench** installed (anything in `c:tools/wrench` that is not Create's): holding it must
+      leave the **filter slot's** box, label and hover tip drawn, exactly as any other item does — Create only draws the
+      port's own box for its own wrench, so refusing every wrench here would leave that face with no box at all. Only
+      Create's wrench hands the face to the port box.
+
+117. **The overflow, which is what this was built for.** Give the stock keeper a rule with a **maximum** of 8 for an item,
+    and feed 24 of it into the input. The warehouse stores 8; the rest stays in the input and the controller's goggles
+    say `at maximum`. Now turn one output into an **overflow**: wrench board, row "Overflow", magnitude 0, no filter, and
+    the redstone row "Unless powered" — and wire **nothing at all**.
+
+    The surplus must leave through that port, trip by trip, with the crane carrying it. Watch a whole trip: does it read
+    as the warehouse *giving items up* rather than as a bug? Then put a **lever** on the port and flip it on: the port
+    stops dead, the input backs up again, and the reason goes back to `at maximum`. Flip it off: it starts again.
+
+    Then the part that matters more than the feature: **fill the chest behind the port** and keep feeding. Nothing may be
+    destroyed and nothing may drop on the floor — the input must back up exactly as it does for a full warehouse, and the
+    controller must say `an accepting port was the only place left ... and it is full`. Take one stack out of the chest
+    and it must resume by itself.
+
+118. **Filtered overflow, and several ports at once.** Put **cobblestone** in the overflow port's filter slot and feed
+    cobblestone *and* iron into the input past their maximums: only the cobblestone may leave, and the iron must back up.
+    Then add a second accepting port with a different rank and no filter. Judge by eye which one the crane goes to and
+    whether that matches what the numbers say: a **filtered** port wins over an unfiltered one for its own item, and
+    among ports of the same kind the **bigger magnitude** wins. Finally set one port to **Diversion** with a positive
+    rank and power it: everything arriving at the input must now leave immediately, **even while the racks are empty** —
+    that is the point of a diversion, and it should feel deliberate rather than broken. Unpower it and the warehouse must
+    store again on the next trip.
+
+119. **Feed a machine without a clock.** Set another output to **Request**, put an ingredient in its filter slot, set the
+    amount, and choose the row **"While powered"**. Put a funnel behind it onto a belt into a machine, then hold a signal
+    with a **lever** — no clock, no pulse extender.
+
+    The port must keep itself supplied: one trip arrives, the port asks again by itself, and at no moment may the
+    goggles show more than **one** open request ("Items requested: N (requests: 1)"). Judge the rhythm — does the pause
+    between trips feel like the warehouse working or like it being stuck? Then drop the lever **while a trip is on its
+    way**: that load must still arrive, and no further trip may start. Let the warehouse run out of the item: the port
+    must say "not in stock" and must not hammer the controller (watch the goggle line change at most a few times a
+    second, not every tick).
+
+120. **Can you read a port without goggles?** Stand **in the aisle** and look down the rack wall. An accepting port's
+    ring around the opening and its back spout are **andesite**, a requesting port's are **brass**. Is that difference
+    obvious at a glance, from the far end of the aisle, and at night? Then stand **behind** the ports, where the wiring
+    is: each accepting port shows its **signed rank** (`-1`, `+4`) on the back plate, and a requesting port shows no
+    number at all. Read it from a step away, from ~7 blocks and at a grazing angle — beyond about 10 blocks it is not
+    drawn at all, which is Create's own filter render distance and is expected.
+
+    With goggles: the port's own lines ("Port: overflow (-1)", "Accepts: Any item", "Handed over: 24", "Redstone: Unless
+    powered", "Active" / "Waiting for a signal") and the controller's "Accepting ports: 2". Put a **Display Link** on the
+    controller with the **Aisle Summary** source: the row "Ports: 2 accepting" must appear, and must be *absent* on an
+    aisle whose outputs all request. And while the crane carries items into a port, its goggles and a **Crane Status**
+    display must say **"Handing over"**, never "Storing".
+
+    Judge one thing on purpose: "Active" and "Waiting for a signal" are drawn in the same dim grey as "Empty". Is the
+    line that tells you whether a port is doing anything right now readable enough, or should it be brighter?
+
+    Then check the one case that line exists for: set an accepting port to **"On a pulse"**, give it a single rising edge
+    with a button and look at it **before** the crane arrives. It must read "Active" — the unspent edge is the only thing
+    that says the next trip may export — and "Waiting for a signal" again once the trip is done. The token reaches the
+    client only in the goggle summary, which the server sends when it notices you looking, so allow a moment for the line
+    to settle; it must not stay wrong. For "While powered" and "Unless powered" the line is read from the block state.
+
+121. **Clipboard, saving, and an old world.** Configure one port fully — filter, amount, redstone row, direction and
+    rank — then use Create's **clipboard**: copying it onto the other ports of the wall must carry **all four**, so judge
+    whether setting up a row of ports is actually quick. Copy a **funnel's** filter onto a port as well: the funnel's
+    *amount* may set the port's amount, but the funnel's "exactly" row must **never** become a redstone behaviour, and
+    copying a port onto a funnel must not make that funnel "exactly". Then the **reset** direction: copy an unconfigured
+    output onto a configured port — everything must end up cleared, including the rank and the redstone row.
+
+    If you use **schematics**: print a configured port over a plain one (or run `/data merge block <pos> {PortRank:4}`).
+    The block must switch to the andesite model at once and the warehouse must plan by the **new** policy on the next trip,
+    without a reload — and the same in reverse, a plain output printed over an accepting one must stop exporting.
+
+    Save and reload: every setting is still there, and a port that was armed by a pulse before the save still holds that
+    one edge. Open a world created **before** this version: every output requests on a pulse, its model is the brass one,
+    no rank is drawn, and the warehouse behaves exactly as it did. Break a configured port and place it again — it comes
+    back as a plain requesting output, like any freshly placed block, and its buffer drops.
+
+122. **German (`de_de`).** Switch the language and walk the same surfaces: the port board's title
+    ("Anschluss-Richtung") and its rows ("Anfordern", "Überlauf — nach dem Lager", "Umleitung — vor dem Lager"), the
+    filter board's title in both directions ("Angeforderte Menge" / "Redstone-Verhalten") and its rows ("Bei Impuls",
+    "Bei Signal", "Ohne Signal"), both hover tips ("Halten, um Menge und Zeitpunkt zu setzen" while the port requests,
+    "Halten, um den Zeitpunkt zu setzen" while it accepts), the filter slot's label, which
+    changes with the direction ("Angeforderter Gegenstand" / "Aufgenommener Gegenstand"), the port's goggle lines
+    ("Anschluss: Überlauf (-1)", "Nimmt auf: Jeden Gegenstand", "Abgegeben: 24", "Aktiv", "Wartet auf ein Signal"), the
+    controller's "Aufnehmende Anschlüsse: 2", the aisle display's "Anschlüsse: 2 aufnehmend", the crane's "Gibt ab", the
+    planning reason "ein aufnehmender Anschluss war der letzte mögliche Platz ..." and the output's Shift tooltip, which
+    now has a **fifth** section, "Beim Einstellen der Richtung" — which must not read like the terminal's rotation
+    section, because it is about holding the click on a box. Nothing may show a raw key, run out of its box
+    or be cut off — German is the longer language and the screenshot runs only ever render English, so this is the only
+    place clipping shows up. The longest lines to watch are the new tooltip paragraphs and the planning reason.
+
+    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
+    nothing about how they look.
+
+123. **Read both Ponder scenes at normal speed.** Hold **W** over a Warehouse Output: after "Retrieving from a
+    Warehouse" it now has "Supplying a Machine from a Warehouse" and "An Overflow for a Warehouse", and the **Warehouse
+    Stock Keeper** shows the overflow scene as its third one. Judge the pacing and whether the beat lands where the text
+    says it does — in particular whether the pulse beat's trip arrives while its text is still up, and whether the
+    control icon in the accepting scene's closing beat obscures the `+4` on the back plate for longer than it should.
+    Then read them again in German.

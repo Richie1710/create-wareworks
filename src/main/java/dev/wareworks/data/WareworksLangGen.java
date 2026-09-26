@@ -7,6 +7,8 @@ import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.port.PortRedstone;
+import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.StockRuleAdjustment;
@@ -68,6 +70,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_LOCATIONS), "Storage locations: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FILTERED_LOCATIONS), "Filtered locations: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRIORITISED_LOCATIONS), "Prioritised locations: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ACCEPTING_PORTS), "Accepting ports: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATIONS), "Inputs: %1$s, outputs: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_COUNT), "Misaligned blocks: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ITEM_TYPES), "Item types: %1$s");
@@ -132,6 +135,35 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_LAST_REJECTION), "Last request refused: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_REQUEST_FILTER), "Requested Item");
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_REQUEST_AMOUNT), "Requested Amount");
+        lang.accept(WareworksLang.key(WareworksLang.OUTPUT_ACCEPT_FILTER), "Accepted Item");
+        // The same board in the accepting direction, where the amount column means nothing and only the rows do: the
+        // title therefore names what it really sets there, in the words the goggles use ("Redstone: While powered").
+        lang.accept(WareworksLang.key(WareworksLang.OUTPUT_PORT_BOARD), "Redstone Behaviour");
+        lang.accept(WareworksLang.key(WareworksLang.OUTPUT_PORT_RANK), "Port Direction");
+        lang.accept(WareworksLang.key(WareworksLang.OUTPUT_PORT_REDSTONE_TIP), "Hold to set when the port acts");
+        // The same tip on a requesting port, where the column is the amount too: naming only one of the two settings is
+        // what Create's own "Hold to set amount" did, and it is the amount every pre-M17 world was built on.
+        lang.accept(WareworksLang.key(WareworksLang.OUTPUT_REQUEST_AMOUNT_TIP),
+                "Hold to set the amount and when the port acts");
+        for (PortRedstone mode : PortRedstone.values()) {
+            lang.accept(WareworksLang.key(mode.langKey()), switch (mode) {
+                case PULSE -> "On a pulse";
+                case WHILE_POWERED -> "While powered";
+                case UNLESS_POWERED -> "Unless powered";
+            });
+        }
+        lang.accept(WareworksLang.key(PortSettings.rowLangKey(PortSettings.REQUEST_ROW)), "Request");
+        lang.accept(WareworksLang.key(PortSettings.rowLangKey(PortSettings.OVERFLOW_ROW)), "Overflow — after storage");
+        lang.accept(WareworksLang.key(PortSettings.rowLangKey(PortSettings.DIVERSION_ROW)),
+                "Diversion — before storage");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_REDSTONE), "Redstone: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_ACTIVE), "Active");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_WAITING), "Waiting for a signal");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_OVERFLOW), "Port: overflow (%1$s)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_DIVERSION), "Port: diversion (%1$s)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_ACCEPTS), "Accepts: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_ACCEPTS_ANY), "Any item");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_EXPORTED), "Handed over: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_STATUS), "Status: %1$s");
         for (CranePhase phase : CranePhase.values()) {
             lang.accept(WareworksLang.key(WareworksLang.cranePhaseKey(phase)), switch (phase) {
@@ -164,6 +196,7 @@ public final class WareworksLangGen {
         }
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_STORE), "Storing %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_RETRIEVE), "Retrieving %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_HAND_OVER), "Handing over %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_ROUTE), "From %1$s to %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HOLDING), "Holding:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HEAD_EMPTY), "Grabber empty");
@@ -172,6 +205,7 @@ public final class WareworksLangGen {
             lang.accept(WareworksLang.key(WareworksLang.noJobReasonKey(reason)), switch (reason) {
                 case WAREHOUSE_FULL -> "no storage location accepts the input items";
                 case NO_MATCHING_FILTER -> "no storage location has a filter that accepts the input items";
+                case PORT_FULL -> "an accepting port was the only place left for the input items and it is full";
                 case AT_MAXIMUM -> "a stock rule for the input items is at its maximum";
                 case OUTPUT_FULL -> "an output is full";
                 case PRODUCTION_FULL -> "a production station cannot take more ingredients";
@@ -344,6 +378,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_RULES),
                 "Rules: %1$s · below min %2$s · at max %3$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_RULES_PAUSED), "Rules paused: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS), "Ports: %1$s accepting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No aisle");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");
@@ -353,6 +388,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_STORING), "Storing");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_RETRIEVING), "Retrieving");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_SUPPLYING), "Supplying");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_HANDING_OVER), "Handing over");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_PAUSED), "Paused");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_JOB), "%1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_TARGET), "To %1$s");
@@ -406,20 +442,33 @@ public final class WareworksLangGen {
                 "Shows its _address_ and the _buffered items_.");
 
         tooltip(lang, "block.wareworks.warehouse_output",
-                "A _station_ of a warehouse _aisle_ where retrieved items _leave_ the warehouse. _Funnels_, _chutes_, "
-                        + "_hoppers_ and _Mechanical Arms_ can pull them out.",
+                "The _port_ of a warehouse _aisle_: it _requests_ items, or it _accepts_ what the warehouse cannot keep. "
+                        + "_Funnels_, _chutes_, _hoppers_ and _Mechanical Arms_ can pull them out.",
                 "When placed",
-                "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle.",
+                "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle. A new port "
+                        + "_requests_, exactly as before.",
                 "When setting the filter",
                 "Click the _filter slot_ with the item to request. It sits on the _top_, the _back_ and both _side_ "
                         + "faces, never in the _aisle opening_, where the crane reaches in. Hold _Right-Click_ on it to "
-                        + "set the _amount_, at most one _stack_.",
+                        + "set the _amount_ and _when_ the port acts: on a _pulse_, _while powered_, or _unless "
+                        + "powered_.",
+                "When setting the direction",
+                "Hold _Right-Click_ with the _wrench_ on the port's own box — a small box on the same _top_, _back_ and "
+                        + "_side_ faces, just above the filter slot — to set the _direction_: _Request_, or _Accept_ "
+                        + "with a rank. An _overflow_ ranks after every storage location, a _diversion_ before them, and "
+                        + "the _filter_ then says which items the port takes at all. An accepting port turns _andesite_ "
+                        + "around the aisle opening and on the spout, and shows its rank on the _back_.",
                 "When powered by Redstone",
-                "Each _pulse_ requests the filter item from the _warehouse controller_: up to the set _amount_, at most "
-                        + "what is _in stock_. The _stacker crane_ then brings the items here; pulse again for more.",
+                "A _requesting_ port asks the _warehouse controller_ for the filter item: up to the set _amount_, at "
+                        + "most what is _in stock_. An _accepting_ one takes items that arrived at an _input_ and would "
+                        + "otherwise be stored. _On a pulse_ it acts once per signal; _while powered_ it keeps going, "
+                        + "with _one_ open request at a time, so a machine is fed without a _clock_; _unless powered_ "
+                        + "does the same until a _lever_ switches it off. Nothing is ever _destroyed_: a full port lets "
+                        + "the _input_ back up.",
                 "When looked at with Goggles",
-                "Shows its _address_, the _buffered items_, the _pending request_ with the items _delivered_ so far, "
-                        + "and why the last request was _refused_.");
+                "Shows its _address_, the _buffered items_ and its _redstone_ setting. A _requesting_ port adds its "
+                        + "_pending request_ with the items _delivered_ so far and why the last one was _refused_; an "
+                        + "_accepting_ one its _rank_, which items it _accepts_ and how many it has _handed over_.");
 
         tooltip(lang, "block.wareworks.warehouse_terminal",
                 "A _station_ of a warehouse _aisle_ with a _screen_: ask for items here and the _stacker crane_ fetches "

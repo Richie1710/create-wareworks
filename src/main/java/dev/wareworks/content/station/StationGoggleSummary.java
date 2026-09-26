@@ -25,11 +25,20 @@ import net.minecraft.world.item.Item;
  * @param requestedItems items these requests still wait for
  * @param deliveredItems items of these requests that were already dropped into the buffer
  * @param lastRejection  why the last request of this output was refused, if it was
+ * @param exportedItems  items an <b>accepting</b> warehouse port has handed over since it was built (M17, issue #12): a
+ *                       single number, and the one line that tells a player whether their overflow ever did anything —
+ *                       and, in the loop of risk 2, how much it is churning
+ * @param portArmed      whether an <b>accepting</b> warehouse port in {@code PULSE} mode holds a rising edge nobody has
+ *                       spent yet (M17). It has to travel here because the token is a server field and a goggle tooltip
+ *                       is built on the client: without it the "may act now" line of an accepting pulse port would read
+ *                       "waiting for a signal" for ever, which is the one combination that line exists for — the rank,
+ *                       the mode and the signal all reach the client by themselves
  */
 public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<Item> buffer, int openRequests,
-                                   long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection) {
+                                   long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection,
+                                   long exportedItems, boolean portArmed) {
     public static final StationGoggleSummary NONE = new StationGoggleSummary(AisleAssignment.NONE,
-            InventorySummary.empty(), 0, 0L, 0L, Optional.empty());
+            InventorySummary.empty(), 0, 0L, 0L, Optional.empty(), 0L, false);
 
     private static final String ASSIGNMENT = "Assignment";
     private static final String BUFFER = "Buffer";
@@ -37,6 +46,8 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
     private static final String REQUESTED_ITEMS = "RequestedItems";
     private static final String DELIVERED_ITEMS = "DeliveredItems";
     private static final String LAST_REJECTION = "LastRejection";
+    private static final String EXPORTED_ITEMS = "ExportedItems";
+    private static final String PORT_ARMED = "PortArmed";
 
     public StationGoggleSummary {
         if (assignment == null)
@@ -48,12 +59,20 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
         openRequests = Math.max(0, openRequests);
         requestedItems = Math.max(0L, requestedItems);
         deliveredItems = Math.max(0L, deliveredItems);
+        exportedItems = Math.max(0L, exportedItems);
     }
 
     /** This summary with other request data. */
     public StationGoggleSummary withRequests(int open, long requested, long delivered,
             Optional<RequestRejection> rejection) {
-        return new StationGoggleSummary(assignment, buffer, open, requested, delivered, rejection);
+        return new StationGoggleSummary(assignment, buffer, open, requested, delivered, rejection, exportedItems,
+                portArmed);
+    }
+
+    /** This summary with a warehouse port's export counter and its unspent rising edge (M17). */
+    public StationGoggleSummary withPort(long exported, boolean armed) {
+        return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
+                exported, armed);
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -68,6 +87,12 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
         tag.putLong(REQUESTED_ITEMS, requestedItems);
         tag.putLong(DELIVERED_ITEMS, deliveredItems);
         lastRejection.ifPresent(rejection -> tag.putString(LAST_REJECTION, rejection.name()));
+        // Only a port that really exported something, or that holds a rising edge, writes these, so no other station's
+        // packet grows by a byte (M17).
+        if (exportedItems > 0)
+            tag.putLong(EXPORTED_ITEMS, exportedItems);
+        if (portArmed)
+            tag.putBoolean(PORT_ARMED, true);
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -75,6 +100,7 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
         return new StationGoggleSummary(AisleAssignment.read(tag.getCompound(ASSIGNMENT)),
                 ItemTypeSummaries.read(tag.getCompound(BUFFER)), tag.getInt(OPEN_REQUESTS), tag.getLong(REQUESTED_ITEMS),
                 tag.getLong(DELIVERED_ITEMS), tag.contains(LAST_REJECTION, Tag.TAG_STRING)
-                        ? RequestRejection.byName(tag.getString(LAST_REJECTION)) : Optional.empty());
+                        ? RequestRejection.byName(tag.getString(LAST_REJECTION)) : Optional.empty(),
+                tag.getLong(EXPORTED_ITEMS), tag.getBoolean(PORT_ARMED));
     }
 }

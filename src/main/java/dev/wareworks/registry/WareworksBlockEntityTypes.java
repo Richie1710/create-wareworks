@@ -1,12 +1,12 @@
 package dev.wareworks.registry;
 
-import com.simibubi.create.foundation.blockEntity.renderer.SmartBlockEntityRenderer;
 import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.tterrag.registrate.util.entry.BlockEntityEntry;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.client.render.StackerCraneRenderer;
 import dev.wareworks.client.render.WarehouseInterfaceRenderer;
+import dev.wareworks.client.render.WarehouseOutputRenderer;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
@@ -65,14 +65,14 @@ public final class WareworksBlockEntityTypes {
             .register();
 
     /**
-     * Warehouse output: Create's {@code SmartBlockEntityRenderer} draws the item in the request filter slot (the only
-     * renderer registration for this type; the lambda is only evaluated on the client). Item capability: extract-only
-     * view.
+     * Warehouse port (the output station): {@code client.render.WarehouseOutputRenderer} draws the item in the request
+     * filter slot and, for an accepting port, its signed rank on the plate on the back (M17; the only renderer
+     * registration for this type, and the lambda is only evaluated on the client). Item capability: extract-only view.
      */
     public static final BlockEntityEntry<WarehouseOutputBlockEntity> WAREHOUSE_OUTPUT = REGISTRATE
             .blockEntity("warehouse_output", WarehouseOutputBlockEntity::new)
             .validBlocks(WareworksBlocks.WAREHOUSE_OUTPUT)
-            .renderer(() -> SmartBlockEntityRenderer::new)
+            .renderer(() -> WarehouseOutputRenderer::new)
             .register();
 
     /**

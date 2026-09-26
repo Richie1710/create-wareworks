@@ -45,8 +45,10 @@ can watch it happen.
   priority on the same slot decides which of the suitable locations fills first.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse.
-* **Warehouse Output**: the brass hand-over point that requests the item in its filter slot on a redstone pulse;
-  funnels, chutes, hoppers and Mechanical Arms take the delivered items out.
+* **Warehouse Output**: the warehouse's **port**. It either **requests** the item in its filter slot — on a redstone
+  pulse, or continuously while a signal is held, which keeps a machine supplied without a clock — or it **accepts** what
+  the warehouse cannot keep, as an overflow behind every rack or as a diversion in front of them. Funnels, chutes, hoppers
+  and Mechanical Arms take the items out either way. Details in the **The warehouse port** section below.
 * **Warehouse Terminal**: a searchable screen showing the aisle's whole stock; click an item and the crane delivers it
   into the terminal.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
@@ -108,15 +110,16 @@ The build *is* the configuration; there is no setup screen.
    chute, hopper or Mechanical Arm. The crane stores whatever arrives.
 7. **Place a Warehouse Output** the same way. Put the item you want into its filter slot, hold right-click to set the
    amount, and give it a **redstone pulse**: the crane fetches the items and drops them into the output, where a funnel,
-   chute or Mechanical Arm can pull them out.
+   chute or Mechanical Arm can pull them out. The same block is also the warehouse's **overflow** — hold right-click on
+   it with a **wrench** to turn it around (see **The warehouse port**).
 8. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
 Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Every block has one: the crane and the
 rail share the overview, the controller shows storing and retrieving, the interface adds addressing and storage
 filters, the terminal and the production station have their own scenes (placing and requesting, and feeding a machine
-from the warehouse), and the stock keeper has two (what each of its three numbers governs, and a warehouse that restocks
-itself).
+from the warehouse), the output has two more for its port directions, and the stock keeper has three (what each of its
+three numbers governs, a warehouse that restocks itself, and the overflow a maximum makes necessary).
 
 ## Requesting items
 
@@ -133,7 +136,47 @@ never onto the port. Right-click with an empty hand to open it.
   them onward.
 
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
-path for your factory.
+path for your factory — and the same block can keep asking by itself, or take items *in*, which is the next section.
+
+## The warehouse port
+
+The **Warehouse Output** is the warehouse's general **port**. It has three settings, all on the block: the **filter** you
+already know, a **redstone behaviour**, and a **direction with a rank**.
+
+**When it acts.** *Hold* right-click on the filter slot and pick one of the three rows:
+
+* **On a pulse** — one action per rising edge. This is what an output has always done, and what a pulse clock drives.
+* **While powered** — it keeps going while the signal is high.
+* **Unless powered** — it keeps going while the signal is *low*, so the port works with no wiring at all and a single
+  lever switches it off.
+
+**What it does.** *Hold* right-click on the port's own box with a **wrench** — hold a wrench to configure the port,
+anything else to set the filter, so the two never get in each other's way:
+
+* **Request** (the default): the crane brings what the filter names. Set to *while powered*, the port asks again by
+  itself as soon as the last load has arrived, with **never more than one trip in flight** — so a machine behind it stays
+  supplied without you building a clock.
+* **Accept** with a rank: the crane brings the items that arrived at a **warehouse input** and would otherwise be stored.
+  A **negative** rank makes the port an **overflow** — every storage location wins over it, so it only ever gets what the
+  warehouse cannot keep. A **positive** rank makes it a **diversion** — it takes incoming items *before* they are stored.
+  Several accepting ports are ranked among each other by their number.
+
+The filter still says which items an accepting port handles at all; a port **without** a filter takes anything. What you
+build behind the port decides where the items go — a belt, a furnace, a way back to a farm. **Wareworks never destroys
+anything:** if a port is full, the input backs up exactly as it does when the warehouse is full, and the controller's
+goggles say so.
+
+An accepting port is easy to spot: it turns **andesite** around the opening the crane reaches into and on its back spout,
+and its rank is drawn on the plate on the back. Goggles add what it accepts, its redstone setting, whether it is active
+right now and how many items it has handed over, and the controller counts "Accepting ports". A Create **clipboard**
+copies a port's whole policy — filter, amount, redstone behaviour and rank — onto the next one.
+
+The combination this was built for: a stock rule's **maximum** keeps 8 of something, everything above it leaves through
+an unwired overflow (*accept*, *unless powered*, rank −1, no filter) instead of jamming your input belt — and a lever
+turns that off again when you want the warehouse to fill up.
+
+Items in a port are **not stock**: they are never counted, never fetched back and never stored again. An output placed
+before this feature existed is a port that requests on a pulse, which is exactly what it did.
 
 ## Storage filters and priorities
 

@@ -234,6 +234,46 @@ class ReservationLedgerTest {
         assertEquals(0, ledger.reservedCapacityFor(IRON));
     }
 
+    /**
+     * A store job into an accepting warehouse port reserves <b>capacity</b> at the port, before and after the pick (M17,
+     * issue #12). Its target is an {@link LocationKind#OUTPUT}, so the plain "is a delivery target" rule would have made
+     * it transit — but transit means "left the indexed stock and is owed to whoever asked", and these items were never
+     * indexed and nobody asked for them. Capacity is also what stops two jobs from planning into the same port slots.
+     */
+    @Test
+    void storeIntoAnAcceptingPortReservesCapacityAtThePort() {
+        TransportJob<String, String> job = TransportJob.storeToPort(JOB2, IN, OUT, IRON, 20);
+        ledger.track(job);
+        assertEquals(List.of(reservation(JOB2, Reservation.Kind.CAPACITY, OUT, IRON, 20, null)),
+                ledger.reservationsOf(JOB2));
+        assertEquals(20, ledger.reservedCapacity(OUT), "room promised at the port bounds the next plan");
+        assertEquals(0, ledger.inTransit(IRON), "nothing is owed to anybody");
+
+        job = job.withPicked(20).plusDelivered(5);
+        ledger.track(job);
+        assertEquals(List.of(reservation(JOB2, Reservation.Kind.CAPACITY, OUT, IRON, 15, null)),
+                ledger.reservationsOf(JOB2));
+        assertEquals(0, ledger.inTransit(IRON), "still capacity after the pick, never transit");
+
+        // The leftovers going back into an input are capacity there, exactly as for a store into storage.
+        job = job.withTarget(IN, LocationKind.INPUT);
+        ledger.track(job);
+        assertEquals(15, ledger.reservedCapacity(IN));
+        assertEquals(0, ledger.reservedCapacity(OUT));
+    }
+
+    /** A retrieve to an output is unchanged: its items left the stock and are owed to the request that asked. */
+    @Test
+    void retrieveToAnOutputStillReservesTransit() {
+        TransportJob<String, String> job = TransportJob.retrieve(JOB1, A, OUT, DIAMOND, 16, REQ1).withPicked(16);
+        ledger.track(job);
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.TRANSIT, OUT, DIAMOND, 16, REQ1)),
+                ledger.reservationsOf(JOB1));
+        assertEquals(16, ledger.inTransit(DIAMOND));
+        assertEquals(16, ledger.committedToRequest(REQ1));
+        assertEquals(0, ledger.reservedCapacity(OUT));
+    }
+
     @Test
     void retrieveLeftoversRoutedToStorageReserveCapacity() {
         TransportJob<String, String> job = TransportJob.retrieve(JOB1, A, OUT, DIAMOND, 16, REQ1).withPicked(16)

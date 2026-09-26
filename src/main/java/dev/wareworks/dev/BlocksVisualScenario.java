@@ -14,6 +14,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
@@ -85,12 +86,14 @@ public final class BlocksVisualScenario implements VisualScenario {
      * The distance is what the widest exhibit row needs, not a round number: with the terminal as the seventh exhibit
      * (M6) the row spanned {@code 6 · }{@value #SPACING}{@code  + 1} blocks, and from 8 blocks away the dock's mast ran
      * out of the frame at the left edge — which is what the committed {@code docs/screenshots/blocks.png} showed until
-     * M8. Since M11 the production station is the <b>eighth</b> exhibit and the row spans
-     * {@code 7 · }{@value #SPACING}{@code  + 1} blocks, so these two distances are the widest the row has ever needed;
-     * the {@code blocks-row} and {@code blocks-far} shots are what to check after adding a ninth.
+     * M8. Since M17 the accepting warehouse port is the <b>tenth</b> exhibit and the row spans
+     * {@code 9 · }{@value #SPACING}{@code  + 1} blocks, so these two distances are the widest the row has ever needed;
+     * the {@code blocks-row} and {@code blocks-far} shots are what to check after adding an eleventh. The row distance
+     * grew with the tenth exhibit, because at 10 blocks the dock's mast ran out of the frame again, exactly as it did
+     * before M8.
      */
     private static final double ROW_HEIGHT = 5.5;
-    private static final double ROW_DISTANCE = 10.0;
+    private static final double ROW_DISTANCE = 11.5;
     private static final double FAR_HEIGHT = 10.0;
     private static final double FAR_DISTANCE = 26.0;
 
@@ -104,6 +107,9 @@ public final class BlocksVisualScenario implements VisualScenario {
     private static final double EYE_DISTANCE = 2.0;
     /** Looked at slightly above the block centre, so the screen rather than the floor sits in the middle of the frame. */
     private static final double EYE_LOOK_HEIGHT = 0.62;
+
+    /** Rank of the accepting port exhibit: an overflow of strength 0, i.e. the weakest one a board can name (M17). */
+    private static final int ACCEPT_EXHIBIT_RANK = -1;
 
     /** One exhibit: its label and how it is placed at its position (server thread). */
     private record Exhibit(String label, BiConsumer<ServerLevel, BlockPos> placer) {
@@ -126,6 +132,17 @@ public final class BlocksVisualScenario implements VisualScenario {
                     .getDefaultState().setValue(WarehouseInputBlock.FACING, Direction.SOUTH))),
             new Exhibit("output", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_OUTPUT
                     .getDefaultState().setValue(WarehouseOutputBlock.FACING, Direction.SOUTH))),
+            // The same port in the accepting direction (M17, issue #12): the andesite ring around the aisle opening and
+            // the andesite spout on the back are the one cue a player reads without goggles and without the crosshair
+            // resting on the block. Placed by setting the <b>rank</b>, never the block state, because the state is
+            // derived from it — which is also what makes this exhibit a check of that derivation.
+            new Exhibit("port_accept", (level, pos) -> {
+                level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
+                        .setValue(WarehouseOutputBlock.FACING, Direction.SOUTH));
+                if (!(level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port)
+                        || !port.setPortRank(ACCEPT_EXHIBIT_RANK))
+                    throw new VisualTestException("the accepting port exhibit could not be configured at " + pos);
+            }),
             // The terminal's FACING is its intake port, and its screen sits opposite (display = back, the default), so a
             // port towards -Z turns the screen towards the front camera: the side a player reads (ADR-022).
             new Exhibit(TERMINAL_LABEL, (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_TERMINAL

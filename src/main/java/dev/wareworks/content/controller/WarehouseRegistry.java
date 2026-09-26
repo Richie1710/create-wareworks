@@ -94,6 +94,21 @@ public final class WarehouseRegistry {
     }
 
     /**
+     * A player changed a setting of the warehouse port at {@code member} — its direction, its rank or its redstone
+     * behaviour ({@code docs/warehouse-system.md} §3.2, M17): every loaded controller whose aisle contains the position
+     * re-reads that one policy at once, so the next planning run and the next continuous pass already obey it. Entries
+     * of controllers that are loaded but gone are dropped.
+     * <p>
+     * The redstone <b>signal</b> does not go through here: it lives in the port's block state and is read where it is
+     * needed, so an edge invalidates nothing.
+     *
+     * @return the number of controllers notified
+     */
+    public static int portChanged(Level level, BlockPos member) {
+        return notifyContaining(level, member, WarehouseControllerBlockEntity::onPortChanged);
+    }
+
+    /**
      * The rules of the warehouse stock keeper at {@code member} changed, or that keeper was loaded or removed
      * ({@code docs/warehouse-system.md} §3.6, M15): every loaded controller whose aisle contains the position re-reads
      * that one keeper at once, so the next plan and the next request already obey the new rule. Entries of controllers

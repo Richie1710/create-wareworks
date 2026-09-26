@@ -8,10 +8,10 @@ import com.simibubi.create.content.redstone.displayLink.DisplayLinkContext;
 import com.simibubi.create.content.redstone.displayLink.target.DisplayTargetStats;
 
 import dev.wareworks.content.crane.CraneGoggleInfo;
+import dev.wareworks.content.crane.CraneJobSummary;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.core.inventory.KeyCount;
-import dev.wareworks.core.job.JobType;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.item.Item;
@@ -50,11 +50,18 @@ public class CraneStatusDisplaySource extends DisplaySource {
     private static String activityKey(CraneGoggleInfo info) {
         if (info.pauseReason() != CranePauseReason.NONE)
             return WareworksLang.DISPLAY_CRANE_PAUSED;
-        return info.job().map(job -> jobKey(job.type())).orElse(WareworksLang.DISPLAY_CRANE_IDLE);
+        return info.job().map(CraneStatusDisplaySource::jobKey).orElse(WareworksLang.DISPLAY_CRANE_IDLE);
     }
 
-    private static String jobKey(JobType type) {
-        return switch (type) {
+    /**
+     * The activity of a job. The <b>target</b> decides for a store job (M17, issue #12): one whose target is an
+     * accepting warehouse port is carrying items out of the warehouse, so a board that said "Storing" would contradict
+     * the port's own goggles ("Handed over: N") and the crane's.
+     */
+    private static String jobKey(CraneJobSummary job) {
+        if (job.handsOver())
+            return WareworksLang.DISPLAY_CRANE_HANDING_OVER;
+        return switch (job.type()) {
             case STORE -> WareworksLang.DISPLAY_CRANE_STORING;
             case RETRIEVE -> WareworksLang.DISPLAY_CRANE_RETRIEVING;
             case SUPPLY -> WareworksLang.DISPLAY_CRANE_SUPPLYING;

@@ -53,6 +53,14 @@ public class AisleSummaryDisplaySource extends DisplaySource {
                 WareworksLang.number(stock.distinctKeys())));
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEMS,
                 WareworksLang.number(stock.totalItems())));
+        // Only for an aisle that really has an accepting warehouse port (M17, issue #12), by the same rule the stock
+        // rule lines below follow: a display has few rows, and "Ports: 0 accepting" would push a number a player asked
+        // for off a four-tube board. It is the count the controller's goggles show, so both surfaces agree, and it is
+        // the other explanation — next to "at max" — for a warehouse input that is backing up. The count is a cached
+        // field on the controller, so a pull stays a handful of field reads (ADR-026).
+        if (controller.acceptingPortCount() > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_PORTS,
+                    WareworksLang.number(controller.acceptingPortCount())));
         // Only for an aisle that really has stock rules (M15, issue #3): a display has few rows, and a line reading
         // "Rules: 0 · below min 0 · at max 0" would push a number a player asked for off a four-tube board. All three
         // counts are the controller's own cached ones, so a pull stays a handful of field reads (ADR-026). The

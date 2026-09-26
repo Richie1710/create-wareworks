@@ -74,6 +74,20 @@ public record TransportJob<K, L>(UUID id, JobType type, L source, L target, Loca
                 false, 0, 0);
     }
 
+    /**
+     * A new store job from an input station to an <b>accepting warehouse port</b> (M17, issue #12): items that arrived
+     * at an input and that the warehouse hands over instead of storing.
+     * <p>
+     * A {@code STORE} job with an {@link LocationKind#OUTPUT} target, so everything downstream treats it as the store
+     * job it is: nothing asked for the items ({@link JobType#mayCarryRequestId()}), they reserve capacity rather than
+     * transit ({@code ReservationLedger#reservationsFor}), they are never counted as stored, and the crane uses the same
+     * delivery context it uses for a retrieve.
+     */
+    public static <K, L> TransportJob<K, L> storeToPort(UUID id, L input, L port, K key, int amount) {
+        return new TransportJob<>(id, JobType.STORE, input, port, LocationKind.OUTPUT, key, amount, Optional.empty(),
+                false, 0, 0);
+    }
+
     /** A new retrieve job from a storage location to an output station, serving {@code requestId} if not null. */
     public static <K, L> TransportJob<K, L> retrieve(UUID id, L storage, L output, K key, int amount,
             @Nullable UUID requestId) {

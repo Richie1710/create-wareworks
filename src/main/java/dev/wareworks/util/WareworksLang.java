@@ -9,6 +9,7 @@ import dev.wareworks.core.inventory.InventorySummary;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.warehouse.LocationKind;
 import net.createmod.catnip.lang.LangBuilder;
 import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.ChatFormatting;
@@ -61,6 +62,8 @@ public final class WareworksLang {
     public static final String GOGGLES_STORAGE_PRIORITY = "gui.goggles.storage_priority";
     /** {@code "Prioritised locations: %1$s"}: storage locations of an aisle that carry a storage priority (M16). */
     public static final String GOGGLES_PRIORITISED_LOCATIONS = "gui.goggles.prioritised_locations";
+    /** {@code "Accepting ports: %1$s"}: warehouse ports of an aisle that accept items instead of requesting (M17). */
+    public static final String GOGGLES_ACCEPTING_PORTS = "gui.goggles.accepting_ports";
     /** {@code "Stored Items"}: label of the warehouse interface's store filter slot. */
     public static final String INTERFACE_STORE_FILTER = "interface.store_filter";
     /** {@code "Storage Priority"}: title of the interface's hold-to-edit board (M16). */
@@ -243,6 +246,42 @@ public final class WareworksLang {
     public static final String OUTPUT_REQUEST_FILTER = "output.request_filter";
     /** {@code "Requested Amount"}: title of the output's hold-to-edit amount board. */
     public static final String OUTPUT_REQUEST_AMOUNT = "output.request_amount";
+    /**
+     * {@code "Accepted Item"}: label of the same filter slot in the {@code ACCEPT} direction, where the filter says
+     * which items the port takes at all rather than which one to fetch (M17, issue #12).
+     */
+    public static final String OUTPUT_ACCEPT_FILTER = "output.accept_filter";
+    /**
+     * {@code "Port"}: title of the same board in the accepting direction, where the amount is not a setting and only
+     * the rows — the redstone behaviour — mean anything (M17).
+     */
+    public static final String OUTPUT_PORT_BOARD = "output.port_board";
+    /** {@code "Port Direction"}: label and board title of the port's wrench-only direction and rank box (M17). */
+    public static final String OUTPUT_PORT_RANK = "output.port_rank";
+    /** Hover tip under the filter slot of an <b>accepting</b> port: hold the click to set when the port acts (M17). */
+    public static final String OUTPUT_PORT_REDSTONE_TIP = "output.port_redstone_tip";
+    /**
+     * The same hover tip on a <b>requesting</b> port, where the board's column is the requested amount as well (M17):
+     * Create's own "Hold to set amount" would leave the rows unsaid, and this key's counterpart would leave the amount
+     * unsaid.
+     */
+    public static final String OUTPUT_REQUEST_AMOUNT_TIP = "output.request_amount_tip";
+    /** {@code "Redstone: %1$s"}: when a port acts, with a {@code PortRedstone} text (M17). */
+    public static final String GOGGLES_PORT_REDSTONE = "gui.goggles.port_redstone";
+    /** {@code "Active"}: a continuous port whose redstone gate is open right now (M17). */
+    public static final String GOGGLES_PORT_ACTIVE = "gui.goggles.port_active";
+    /** {@code "Waiting for a signal"}: a continuous port whose redstone gate is closed (M17). */
+    public static final String GOGGLES_PORT_WAITING = "gui.goggles.port_waiting";
+    /** {@code "Port: overflow (%1$s)"}: an accepting port that ranks after storage; the argument is the signed rank. */
+    public static final String GOGGLES_PORT_OVERFLOW = "gui.goggles.port_overflow";
+    /** {@code "Port: diversion (%1$s)"}: an accepting port that ranks before storage; the argument is the signed rank. */
+    public static final String GOGGLES_PORT_DIVERSION = "gui.goggles.port_diversion";
+    /** {@code "Accepts: %1$s"}: which items an accepting port handles at all (M17). */
+    public static final String GOGGLES_PORT_ACCEPTS = "gui.goggles.port_accepts";
+    /** {@code "Any item"}: an accepting port without a filter (M17). */
+    public static final String GOGGLES_PORT_ACCEPTS_ANY = "gui.goggles.port_accepts_any";
+    /** {@code "Handed over: %1$s"}: items an accepting port has exported since it was built (M17). */
+    public static final String GOGGLES_PORT_EXPORTED = "gui.goggles.port_exported";
     /** {@code "Status: %1$s"}: the phase of a stacker crane. */
     public static final String GOGGLES_CRANE_STATUS = "gui.goggles.crane_status";
     /** Prefix of the crane phase texts, {@code gui.goggles.crane_phase.<phase>} ({@link #cranePhaseKey}). */
@@ -253,6 +292,11 @@ public final class WareworksLang {
     public static final String GOGGLES_CRANE_JOB_STORE = "gui.goggles.crane_job.store";
     /** {@code "Retrieving %1$s x%2$s"}: a retrieve job. */
     public static final String GOGGLES_CRANE_JOB_RETRIEVE = "gui.goggles.crane_job.retrieve";
+    /**
+     * {@code "Handing over %1$s x%2$s"}: a store job whose target is an accepting warehouse port, i.e. items the
+     * warehouse hands out instead of storing (M17, issue #12).
+     */
+    public static final String GOGGLES_CRANE_JOB_HAND_OVER = "gui.goggles.crane_job.hand_over";
     /** {@code "From %1$s to %2$s"}: source and target address of a job. */
     public static final String GOGGLES_CRANE_ROUTE = "gui.goggles.crane_route";
     /** {@code "Holding:"}: header of the handling head listing. */
@@ -401,6 +445,11 @@ public final class WareworksLang {
     public static final String DISPLAY_AISLE_LINE_RULES = "display_source.aisle.line_rules";
     /** {@code "Rules paused: %1$s"}: rules of the aisle the safety stop is holding (M15 part 2). */
     public static final String DISPLAY_AISLE_LINE_RULES_PAUSED = "display_source.aisle.line_rules_paused";
+    /**
+     * {@code "Ports: %1$s accepting"}: warehouse ports of the aisle that accept items instead of requesting them
+     * (M17, issue #12). Left out entirely while none does, exactly like the two stock rule lines.
+     */
+    public static final String DISPLAY_AISLE_LINE_PORTS = "display_source.aisle.line_ports";
     /** {@code "No aisle"}: the source block belongs to no loaded aisle. */
     public static final String DISPLAY_AISLE_NO_AISLE = "display_source.aisle.no_aisle";
     /**
@@ -422,6 +471,11 @@ public final class WareworksLang {
     public static final String DISPLAY_CRANE_RETRIEVING = "display_source.crane.retrieving";
     /** Crane activity on a display: a {@code SUPPLY} job. */
     public static final String DISPLAY_CRANE_SUPPLYING = "display_source.crane.supplying";
+    /**
+     * Crane activity on a display: the items are on their way to an accepting warehouse port, i.e. out of the warehouse
+     * (M17, issue #12). A store job that is really an export must not read as "Storing".
+     */
+    public static final String DISPLAY_CRANE_HANDING_OVER = "display_source.crane.handing_over";
     /** Crane activity on a display: paused, whatever the reason. */
     public static final String DISPLAY_CRANE_PAUSED = "display_source.crane.paused";
     /** {@code "%1$s x%2$s"}: the item and amount of the crane's job. */
@@ -480,9 +534,18 @@ public final class WareworksLang {
                 .style(ChatFormatting.GOLD);
     }
 
-    /** "Storing item x N" / "Retrieving item x N", using the item's generic name. */
-    public static LangBuilder craneJob(JobType type, Item item, long amount) {
-        String key = type == JobType.STORE ? GOGGLES_CRANE_JOB_STORE : GOGGLES_CRANE_JOB_RETRIEVE;
+    /**
+     * "Storing item x N" / "Retrieving item x N" / "Handing over item x N", using the item's generic name.
+     * <p>
+     * The third case is a store job into an accepting warehouse port (M17, issue #12): the type alone would call it
+     * "Storing" although the items are leaving the warehouse, so the target's kind decides.
+     */
+    public static LangBuilder craneJob(JobType type, LocationKind targetKind, Item item, long amount) {
+        String key;
+        if (type != JobType.STORE)
+            key = GOGGLES_CRANE_JOB_RETRIEVE;
+        else
+            key = targetKind == LocationKind.OUTPUT ? GOGGLES_CRANE_JOB_HAND_OVER : GOGGLES_CRANE_JOB_STORE;
         return translate(key, item.getDescription(), number(amount).style(ChatFormatting.GOLD))
                 .style(ChatFormatting.GRAY);
     }

@@ -5,6 +5,7 @@ import com.tterrag.registrate.providers.RegistrateBlockstateProvider;
 import com.tterrag.registrate.util.nullness.NonNullBiConsumer;
 
 import dev.wareworks.content.station.TerminalDisplaySide;
+import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import net.minecraft.core.Direction;
@@ -88,6 +89,33 @@ public final class WareworksBlockStateGen {
                     .modelFile(state.getValue(WarehouseStockKeeperBlock.PAUSED) ? paused
                             : state.getValue(WarehouseStockKeeperBlock.LIT) ? lit : dark)
                     .rotationY(rotationOnto(state.getValue(WarehouseStockKeeperBlock.FACING)))
+                    .build());
+        };
+    }
+
+    /**
+     * The warehouse port's blockstate ({@code docs/warehouse-system.md} §3.2, M17, issue #12): the hand-made
+     * {@code block} model turned onto {@code FACING}, with {@code block_accept} in its place while the port accepts
+     * items instead of requesting them.
+     * <p>
+     * The two models are the same geometry and differ in one texture: the ring around the aisle opening and the spout on
+     * the back are <b>andesite</b> instead of brass, which is ADR-017's material language applied to the direction —
+     * andesite is the dumb intake, brass the smart filtered output, and "whatever the warehouse cannot keep" is the dumb
+     * direction. The cue therefore reads both from <b>inside the aisle</b>, where no value box and no drawn digit may go,
+     * and from outside, where the funnel is.
+     * <p>
+     * Create's {@code BlockStateGen.horizontalBlockProvider} would give every {@code accepting} value the same model —
+     * which is right for {@code POWERED}, a stored edge nobody can see, and wrong here.
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            warehousePortBlockProvider() {
+        return (context, provider) -> {
+            String folder = "block/" + context.getName() + "/";
+            ModelFile request = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+            ModelFile accept = provider.models().getExistingFile(provider.modLoc(folder + "block_accept"));
+            provider.getVariantBuilder(context.getEntry()).forAllStates(state -> ConfiguredModel.builder()
+                    .modelFile(state.getValue(WarehouseOutputBlock.ACCEPTING) ? accept : request)
+                    .rotationY(rotationOnto(state.getValue(WarehouseOutputBlock.FACING)))
                     .build());
         };
     }
