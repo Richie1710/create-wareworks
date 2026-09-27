@@ -240,6 +240,47 @@ public final class WareworksConfig {
                 maxRestockIngredientItems());
     }
 
+    // --- chunkLoading --------------------------------------------------------------------------------------------
+
+    /**
+     * How many aisles of one dimension may hold their own chunks loaded while they have work (M19, issue #10, ADR-031).
+     * <p>
+     * <b>0 switches the whole feature off, and that is the default</b> — the same "0 means off" shape
+     * {@link #maxRestockOrders()} uses, so one integer is both the master switch and the bound.
+     */
+    public static int maxTicketedAislesPerLevel() {
+        return get(SERVER.maxTicketedAislesPerLevel);
+    }
+
+    /** Whether chunk loading is switched on at all ({@link #maxTicketedAislesPerLevel()} above 0). */
+    public static boolean chunkLoadingEnabled() {
+        return maxTicketedAislesPerLevel() > 0;
+    }
+
+    /** How many chunks one aisle may hold; an aisle that needs more holds <b>nothing</b> (never a partial hold). */
+    public static int maxChunksPerAisle() {
+        return get(SERVER.maxChunksPerAisle);
+    }
+
+    /** How long a holding aisle lingers after its last work before it lets go (the anti-thrash linger). */
+    public static int chunkReleaseDelayTicks() {
+        return get(SERVER.releaseDelayTicks);
+    }
+
+    /** The longest single uninterrupted hold; 0 is unlimited (and then a stuck aisle is a permanent chunk loader). */
+    public static int maxChunkHoldTicks() {
+        return get(SERVER.maxHoldTicks);
+    }
+
+    /**
+     * How many aisles of one dimension may hold their chunks <b>only</b> because a collecting port has something pending
+     * (M19, issue #10). 0 switches that opt-in off, which is the default; these aisles also count against
+     * {@link #maxTicketedAislesPerLevel()}, so the smaller of the two wins.
+     */
+    public static int maxCollectHoldAislesPerLevel() {
+        return get(SERVER.maxCollectHoldAislesPerLevel);
+    }
+
     /** The config values. Read them through the static getters of {@link WareworksConfig}. */
     public static final class Server {
         public final ModConfigSpec.IntValue maxAisleLength;
@@ -281,6 +322,12 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxRestockOrdersPerRule;
         public final ModConfigSpec.IntValue maxRestockOrderAmount;
         public final ModConfigSpec.IntValue maxRestockIngredientItems;
+
+        public final ModConfigSpec.IntValue maxTicketedAislesPerLevel;
+        public final ModConfigSpec.IntValue maxChunksPerAisle;
+        public final ModConfigSpec.IntValue releaseDelayTicks;
+        public final ModConfigSpec.IntValue maxHoldTicks;
+        public final ModConfigSpec.IntValue maxCollectHoldAislesPerLevel;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -477,6 +524,66 @@ public final class WareworksConfig {
                                     + "cannot be cut in half. The bound is about repeats, and "
                                     + "maxRestockOrdersPerRule then sequences a large shortfall one order at a time.")
                     .defineInRange("maxRestockIngredientItems", 64, 1, 65536);
+            builder.pop();
+
+            builder.comment("Chunk loading for aisles that have work - THIS IS A CHUNK LOADER").push("chunkLoading");
+            maxTicketedAislesPerLevel = builder
+                    .comment("How many aisles of ONE dimension may hold their own chunks loaded while they have work: "
+                            + "a crane job, an open request or an open production order (an automatic restock order is "
+                            + "one of those).",
+                            "0 switches the whole feature off, and that is the default: a server that does not want "
+                                    + "this pays nothing, and every aisle behaves exactly as before - the crane pauses "
+                                    + "while its chunks are away and continues when they come back.",
+                            "Above 0 this IS a chunk loader. A holding aisle keeps its chunks loaded with no player "
+                                    + "nearby and keeps its whole dimension ticking, and it loads a slightly LARGER "
+                                    + "area than the number of chunks below, because a force-loaded chunk also lets "
+                                    + "its 8 neighbours tick their blocks (the same footprint vanilla /forceload has).",
+                            "Random ticks and mob spawning are NOT enabled in held chunks: crops do not grow and mobs "
+                                    + "do not spawn there. This loads a warehouse, not a farm.",
+                            "An aisle lets go as soon as it is idle, so this is never a permanent loader. A collecting "
+                                    + "port can only notice its machine while its own chunk ticks, so this keeps a "
+                                    + "RUNNING collection going; it cannot start one.")
+                    .defineInRange("maxTicketedAislesPerLevel", 0, 0, 64);
+            maxChunksPerAisle = builder
+                    .comment("How many chunks ONE aisle may hold. An aisle whose footprint needs more holds NOTHING "
+                            + "(never a partial hold) and says so when looked at through goggles. Lowering this under "
+                            + "an aisle that is ALREADY holding makes it let go, and extending an aisle past this "
+                            + "while it holds does the same: the number is a bound on the hold, not only on taking it.",
+                            "The footprint is the aisle box plus one block on every horizontal side, which covers the "
+                                    + "controller, the dock, the rails, every rack position, the inventories behind "
+                                    + "them and the machine behind a collecting port.",
+                            "Worst case by aisle length: 8 chunks at aisle.maxAisleLength = 32 (the default), 12 at "
+                                    + "64, 20 at 128. The default below is exactly the worst case of the default "
+                                    + "length cap, so raising aisle.maxAisleLength means raising this too.")
+                    .defineInRange("maxChunksPerAisle", 8, 1, 64);
+            releaseDelayTicks = builder
+                    .comment("[in Ticks] How long a holding aisle waits after its last work before it lets its chunks "
+                            + "go.",
+                            "This is what keeps a burst of jobs from making the tickets thrash: work that arrives "
+                                    + "again inside this window never releases in between. Default 100 ticks = 5 "
+                                    + "seconds.")
+                    .defineInRange("releaseDelayTicks", 100, 0, 1200);
+            maxHoldTicks = builder
+                    .comment("[in Ticks] The longest a single aisle may hold its chunks without a break. Default 72000 "
+                            + "ticks = 1 hour.",
+                            "When it runs out the aisle lets go, says so through goggles and may only hold again once "
+                                    + "its work really changed - another job, another set of requests or orders - or "
+                                    + "that work is finished. That is what bounds a request that can never be served "
+                                    + "or a crane stuck holding items, and it is remembered across a restart, so "
+                                    + "coming back does not start the hour again for the same stuck work.",
+                            "0 means unlimited, and then one stuck aisle IS a permanent chunk loader.")
+                    .defineInRange("maxHoldTicks", 72000, 0, 1728000);
+            maxCollectHoldAislesPerLevel = builder
+                    .comment("Separate opt-in: how many aisles of one dimension may hold their chunks ONLY because a "
+                            + "collecting warehouse port has items waiting, with no job, request or order of their "
+                            + "own. 0 switches it off, which is the default.",
+                            "It keeps a production loop alive across the gap between one machine output and the next. "
+                                    + "It does not make an idle aisle notice a machine that starts producing later: "
+                                    + "an aisle with nothing pending releases its chunks and unloads.",
+                            "These aisles also count against maxTicketedAislesPerLevel, so the smaller of the two "
+                                    + "wins. An aisle that is only waiting for a slot under THIS cap says so through "
+                                    + "goggles, so it can be told apart from an idle one.")
+                    .defineInRange("maxCollectHoldAislesPerLevel", 0, 0, 64);
             builder.pop();
         }
     }

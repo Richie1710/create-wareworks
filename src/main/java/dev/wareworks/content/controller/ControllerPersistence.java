@@ -46,6 +46,7 @@ import net.minecraft.util.Mth;
  *                 Destination: int[3] (offset from the controller) } ]        (queue order)
  * StockRules: [ { X: int, Y: int, Side: "L"|"R",
  *                 Rules: [ { Item: &lt;ItemKey&gt;, Min: long, Max: long, Reserve: long } ] } ]  (keeper order)
+ * ChunkKeep:  { GaveUp: true, Work: long }                              (absent unless the aisle gave up, M19)
  * </pre>
  * The stock rules are the controller's own copy of what the aisle's warehouse stock keepers hold. They are saved
  * <b>here</b> rather than only in the keepers, because a rule gates item movement in both directions and a keeper's
@@ -64,6 +65,9 @@ final class ControllerPersistence {
     static final String PRODUCTION_ORDERS_TAG = "ProductionOrders";
     static final String STOCK_RULES_TAG = "StockRules";
     static final String STOCK_PAUSES_TAG = "StockPauses";
+    static final String CHUNK_KEEP_TAG = "ChunkKeep";
+    private static final String GAVE_UP = "GaveUp";
+    private static final String WORK = "Work";
     private static final String CAUSE = "Cause";
     private static final String UNRECOVERED = "Unrecovered";
     private static final String RULES = "Rules";
@@ -114,6 +118,17 @@ final class ControllerPersistence {
     /** Saved membership and per-location stock counts (positive counts only). */
     record SavedLocations(List<LocationRecord> records, List<RackPosition> misaligned,
                           Map<RackPosition, Map<ItemKey, Long>> stock) {
+    }
+
+    /**
+     * The chunk-hold give-up flag and the fingerprint of the work it refuses (M19, §11.4). The <b>one</b> thing the
+     * chunk-loading feature saves: the hold itself is derived state and the tickets are NeoForge's own saved data, but
+     * the bound "this aisle may not hold again until its work really changes" has to outlive the block entity instance —
+     * the work it refuses is saved too, so a flag that did not would let every reload take the whole footprint again for
+     * work that had already proved unservable (M19 review).
+     */
+    record SavedChunkKeep(boolean gaveUp, long workFingerprint) {
+        static final SavedChunkKeep NONE = new SavedChunkKeep(false, 0L);
     }
 
     private ControllerPersistence() {
@@ -492,6 +507,29 @@ final class ControllerPersistence {
             }
         }
         return pauses;
+    }
+
+    /**
+     * Writes the chunk-hold give-up state, and <b>only</b> while it is set: an aisle that has not given up adds nothing
+     * to the save, so the default server's controllers keep exactly the tag they had before M19.
+     */
+    static void writeChunkKeep(CompoundTag tag, boolean gaveUp, long workFingerprint) {
+        if (!gaveUp)
+            return;
+        CompoundTag chunkKeep = new CompoundTag();
+        chunkKeep.putBoolean(GAVE_UP, true);
+        chunkKeep.putLong(WORK, workFingerprint);
+        tag.put(CHUNK_KEEP_TAG, chunkKeep);
+    }
+
+    /** Reads what {@link #writeChunkKeep} wrote; {@link SavedChunkKeep#NONE} when the tag is absent. */
+    static SavedChunkKeep readChunkKeep(CompoundTag tag) {
+        if (!tag.contains(CHUNK_KEEP_TAG, Tag.TAG_COMPOUND))
+            return SavedChunkKeep.NONE;
+        CompoundTag chunkKeep = tag.getCompound(CHUNK_KEEP_TAG);
+        if (!chunkKeep.getBoolean(GAVE_UP))
+            return SavedChunkKeep.NONE;
+        return new SavedChunkKeep(true, chunkKeep.getLong(WORK));
     }
 
     /** NBT form of a rack position: {@code {X: int, Y: int, Side: "L"|"R"}}. */

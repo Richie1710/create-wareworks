@@ -152,6 +152,15 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * placed ({@code docs/warehouse-system.md} §3.5).
      */
     private static final long FINISHED_ORDER_RETENTION_TICKS = 600;
+    /**
+     * How often a <b>holding</b> aisle re-decides its hold without an event (M19, issue #10). The hooks below drive every
+     * real transition; this is the bounded safety net that makes the release independent of every one of them being
+     * perfect, and it is what makes a changed server config, a freed level slot or a work change nobody hinted at take
+     * effect. An aisle that holds nothing schedules no re-check at all.
+     */
+    private static final int CHUNK_KEEP_RECHECK_TICKS = 20;
+    /** The footprint of an aisle that has none (no dock). */
+    private static final int[] EMPTY_FOOTPRINT = new int[0];
 
     /**
      * "Aisle" value box. Assigned in {@link #addBehaviours}, which {@code SmartBlockEntity} calls from its constructor, so
@@ -288,6 +297,49 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private Map<ItemKey, ItemKey> restockMissing = Map.of();
     /** The outcomes {@link #ruleEvaluations} was computed with, by identity (see {@link #restockOutcomes}). */
     private Map<ItemKey, RestockOutcome> ruleEvaluationRestock = Map.of();
+
+    // --- chunk loading (M19, issue #10, ADR-031); server only, and only the give-up bound is saved ------------------
+    /**
+     * Re-decide the chunk hold on the next tick. Set from every place that changes what the aisle has to do (a job, a
+     * request, an order, a collecting port), from every place that changes the aisle itself, and from {@link #onLoad()}.
+     * <p>
+     * <b>Flag and defer</b> is the whole point ({@code AisleChunkTickets}): taking a ticket loads a chunk synchronously,
+     * which loads block entities, which would take tickets — re-entrantly, and from inside
+     * {@code Level#tickBlockEntities}' fresh-block-entity pass in the case of {@code onLoad()}. Only {@link #tick()} ever
+     * calls into NeoForge.
+     */
+    private boolean chunkKeepDirty = true;
+    /**
+     * Game tick at which the hold must be re-decided without any event ({@link ChunkKeepDecision#NO_RECHECK} while
+     * nothing is pending): the linger and the give-up deadline, and while holding a bounded safety re-check. An aisle that
+     * holds nothing schedules nothing at all, so a server with the feature off pays one boolean and one long compare per
+     * controller tick. A <b>refused</b> aisle therefore waits for an event too, and is woken by
+     * {@code AisleChunkTickets#wakeRefused} when a slot of its dimension frees up.
+     */
+    private long chunkKeepRecheckTick = ChunkKeepDecision.NO_RECHECK;
+    /** When the last work disappeared, for the release linger; {@link ChunkKeepDecision#NOT_SET} while there is work. */
+    private long chunkKeepIdleSince = ChunkKeepDecision.NOT_SET;
+    /** What the goggles say about the hold. Derived, synced inside {@link ControllerGoggleSummary}. */
+    private ChunkKeepReason chunkKeepReason = ChunkKeepReason.NONE;
+    /** Chunks held right now, or (while refused) how many the footprint would need. */
+    private int chunkKeepChunks;
+    /**
+     * The hold gave up on this work and must not be taken again until the work really changed — or disappeared, which is
+     * the escape hatch. <b>Saved</b> together with {@link #chunkKeepFingerprint} ({@code ControllerPersistence}): the work
+     * it refuses is saved, so a flag that lived only as long as this instance would let every reload and every restart
+     * take the whole footprint again for work that had already proved unservable (M19 review).
+     */
+    private boolean chunkKeepGaveUp;
+    /** Which work {@link #chunkKeepGaveUp} was decided on: the job, request and order ids ({@link #chunkWorkFingerprint}). */
+    private long chunkKeepFingerprint;
+    /** The config generation this controller last decided with, so a config reload takes effect within one tick. */
+    private int chunkKeepConfigGeneration = Integer.MIN_VALUE;
+    /** The aisle's chunk footprint, cached per layout instance ({@link AisleChunkSpan}); recomputed nowhere else. */
+    private int[] chunkFootprintCache = EMPTY_FOOTPRINT;
+    @Nullable
+    private AisleLayout chunkFootprintOf;
+    /** Rate limit for the "cannot hold chunks" line, so a permanently capped aisle does not fill the log. */
+    private final LogThrottle chunkKeepRefusals = new LogThrottle();
 
     public WarehouseControllerBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -533,6 +585,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public void adoptCraneJob(Optional<TransportJob<ItemKey, RackPosition>> craneJob) {
         dispatch.adopt(Objects.requireNonNull(craneJob, "craneJob"));
+        markChunkKeepDirty(); // M19: the job this controller knows about changed
     }
 
     /** Whether the storage location at {@code rack} waits for a snapshot (content hint, joined, load verification). */
@@ -726,6 +779,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private boolean refreshCollection(RackPosition rack) {
         if (level == null || level.isClientSide || layout == null)
             return false;
+        // M19: what a collecting port has pending is work only with the separate opt-in, so only then can a port poll
+        // change the hold at all. Below the guards above and behind the opt-in on purpose: hinting unconditionally made
+        // every port poll of every server pay an evaluation for a decision that was already NONE (M19 review).
+        if (WareworksConfig.chunkLoadingEnabled() && WareworksConfig.maxCollectHoldAislesPerLevel() > 0)
+            markChunkKeepDirty();
         if (membership.kindAt(rack).orElse(null) != LocationKind.OUTPUT || !ports.at(rack).isCollecting())
             return false;
         BlockPos pos = layout.rackPos(rack);
@@ -1362,6 +1420,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (!productionOrders.add(order))
             return 0;
         setChanged();
+        markChunkKeepDirty(); // M19: an open order is work, and an automatic restock order is one of these
         return promised;
     }
 
@@ -1505,6 +1564,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private void onProductionOrderFinished(ProductionOrder<ItemKey, RackPosition> order) {
         cancelSupplyJobsOf(order);
+        markChunkKeepDirty(); // M19: one fewer order, so the aisle may be idle now
         // The safety stop (M15 part 2): an order the warehouse started by itself ended with ingredients already in a
         // machine and nothing coming back. Those items are unrecoverable, so the rule stops ordering and waits for the
         // player rather than feeding the same machine again. An order that gave up while the crane was still fetching
@@ -1545,6 +1605,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (requests.reduce(id, amount).isEmpty())
             onRequestsGone(List.of(before.get()));
         setChanged();
+        markChunkKeepDirty(); // M19: what the aisle has to do changed
     }
 
     /**
@@ -1556,6 +1617,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         for (RetrievalRequest<ItemKey, BlockPos> request : gone)
             productionOrders.detachRequest(request.id());
         dispatch.onRequestsCancelled(gone);
+        markChunkKeepDirty(); // M19: what the aisle has to do changed
     }
 
     private static int configuredMaxProductionOrders() {
@@ -1785,6 +1847,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (granted < 1)
             return TerminalRequestOutcome.of(RequestResult.rejected(nothingAvailableReason(key, patterns, access)));
         setChanged();
+        markChunkKeepDirty(); // M19: an open request is work
         return TerminalRequestOutcome.of(RequestResult.accepted(requests.get(accepted.id()).orElse(accepted), granted,
                 added.merged(), producing));
     }
@@ -1850,6 +1913,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             if (outside || (level.isLoaded(destination) && !isOutputStation(current, destination)))
                 cancelled |= cancelRequestsFor(destination);
         }
+        if (cancelled)
+            markChunkKeepDirty(); // M19: what the aisle has to do changed
         return cancelled;
     }
 
@@ -2371,6 +2436,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (!productionOrders.add(order))
             return false;
         setChanged();
+        markChunkKeepDirty(); // M19: an automatic restock order is work like any other order
         return true;
     }
 
@@ -2644,8 +2710,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public int deliverRequest(UUID id, int amount) {
         int counted = requests.deliver(id, amount);
-        if (counted > 0)
+        if (counted > 0) {
             setChanged();
+            markChunkKeepDirty(); // M19: a delivered request may have been the last thing to do
+        }
         return counted;
     }
 
@@ -2654,7 +2722,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Optional<RetrievalRequest<ItemKey, BlockPos>> cancelled = requests.cancel(id);
         if (cancelled.isPresent()) {
             setChanged();
-            onRequestsGone(List.of(cancelled.get()));
+            onRequestsGone(List.of(cancelled.get())); // marks the chunk hold dirty (M19)
         }
         return cancelled;
     }
@@ -2677,6 +2745,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public void onCranePicked(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
         if (!acceptsReportsFrom(crane))
             return;
+        markChunkKeepDirty(); // M19: the crane is carrying items, so the aisle has work whatever else changed
         dispatch.track(job);
         if (job.sourceKind() == LocationKind.STORAGE)
             refreshLocation(job.source());
@@ -2749,15 +2818,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     /** Everything picked was delivered: release the job's reservations. */
     public void onCraneJobFinished(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
-        if (acceptsReportsFrom(crane))
+        if (acceptsReportsFrom(crane)) {
             dispatch.release(job.id());
+            markChunkKeepDirty(); // M19: the job is done, so the aisle may be idle now
+        }
     }
 
     /** The crane gave up the job with nothing held ({@code onJobAborted}): release it; requests keep their amount. */
     public void onCraneJobAborted(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job,
             AbortReason reason) {
-        if (acceptsReportsFrom(crane))
+        if (acceptsReportsFrom(crane)) {
             dispatch.release(job.id());
+            markChunkKeepDirty(); // M19
+        }
     }
 
     /**
@@ -2765,8 +2838,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * reservations; a request keeps its remaining amount ({@code docs/warehouse-system.md} §8).
      */
     public void onCraneJobLost(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
-        if (acceptsReportsFrom(crane))
+        if (acceptsReportsFrom(crane)) {
             dispatch.release(job.id());
+            markChunkKeepDirty(); // M19
+        }
     }
 
     /**
@@ -2790,6 +2865,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         long now = level.getGameTime();
         if (relinkRequested || now >= nextRelinkTick)
             relink(now);
+        // Before the layout guard on purpose: an aisle that just lost its dock (or came back from a save without one)
+        // still has to let its chunks go.
+        if (chunkKeepDirty || now >= chunkKeepRecheckTick
+                || chunkKeepConfigGeneration != AisleChunkTickets.configGeneration())
+            evaluateChunkKeep(now);
         if (layout == null)
             return;
         if (membership.isDirty())
@@ -2881,6 +2961,250 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return Optional.empty();
     }
 
+
+    // --- chunk loading (M19, issue #10, ADR-031) ------------------------------------------------------------------
+
+    /**
+     * The aisle re-decides its chunk hold on its next tick (M19, issue #10). Called from every place that changes what the
+     * aisle has to do, from every place that changes the aisle itself, and from the crane when its state machine falls
+     * back to idle — which is one tick after it reports a finished job and therefore the moment the job is really gone.
+     * <p>
+     * A hint, never an action: only {@link #tick()} ever calls into NeoForge's chunk API ({@link AisleChunkTickets}).
+     */
+    public void markChunkKeepDirty() {
+        chunkKeepDirty = true;
+    }
+
+    /**
+     * Gives up the hold until the work really changes (an operator's {@code /wareworks chunks release}). The chunks go in
+     * the same tick and nothing is taken again for the same job, request or order — across a reload and a restart too,
+     * because the flag and its fingerprint are saved (M19 review).
+     */
+    void giveUpChunkKeep() {
+        setChunkKeepGaveUp(true, chunkWorkFingerprint(linkedDockEntity()));
+        chunkKeepDirty = true;
+    }
+
+    /**
+     * Sets or clears the give-up flag and saves the change. Saved on purpose: the work it refuses is saved too, so a
+     * flag that lived only as long as one block entity instance would let every reload and every restart take the whole
+     * footprint again for work that had already proved unservable (M19 review).
+     */
+    private void setChunkKeepGaveUp(boolean gaveUp, long fingerprint) {
+        if (chunkKeepGaveUp == gaveUp && chunkKeepFingerprint == fingerprint)
+            return;
+        chunkKeepGaveUp = gaveUp;
+        chunkKeepFingerprint = fingerprint;
+        setChanged();
+    }
+
+    /** What the goggles and the display source say about this aisle's chunk hold. */
+    public ChunkKeepReason chunkKeepReason() {
+        return chunkKeepReason;
+    }
+
+    /** Chunks held right now, or how many the footprint would need while the hold is refused. */
+    public int chunkKeepChunks() {
+        return chunkKeepChunks;
+    }
+
+    /** How many chunks this aisle's footprint covers ({@link AisleChunkSpan}); 0 without a dock. */
+    public int chunkFootprintSize() {
+        return chunkFootprint().length / 2;
+    }
+
+    /**
+     * The chunk columns of this aisle, cached per layout instance ({@link AisleChunkSpan}). {@link #applyLayout} is the
+     * only place the layout changes, and a layout is a value object that is replaced only when it really differs, so
+     * identity is the right comparison and this is never recomputed per tick.
+     */
+    private int[] chunkFootprint() {
+        if (layout == null) {
+            chunkFootprintOf = null;
+            chunkFootprintCache = EMPTY_FOOTPRINT;
+            return chunkFootprintCache;
+        }
+        if (chunkFootprintOf != layout) {
+            chunkFootprintOf = layout;
+            chunkFootprintCache = AisleChunkSpan.chunks(layout.dock().getX(), layout.dock().getZ(),
+                    layout.facing().getStepX(), layout.facing().getStepZ(), layout.geometry().length());
+        }
+        return chunkFootprintCache;
+    }
+
+    /**
+     * Decides whether this aisle holds its chunks, and carries the decision out ({@link ChunkKeepDecision},
+     * {@link AisleChunkTickets}). The only place that ever calls into NeoForge's chunk API.
+     * <p>
+     * Cost: a handful of field reads plus the one block entity lookup for the linked dock. It runs when a hook marked the
+     * aisle dirty, on the deadlines the decision itself asked for, and at most every {@value #CHUNK_KEEP_RECHECK_TICKS}
+     * ticks while the aisle really holds something.
+     */
+    private void evaluateChunkKeep(long now) {
+        chunkKeepDirty = false;
+        chunkKeepRecheckTick = ChunkKeepDecision.NO_RECHECK;
+        chunkKeepConfigGeneration = AisleChunkTickets.configGeneration();
+        if (!(level instanceof ServerLevel serverLevel) || isVirtual())
+            return;
+        // The default server's path, and the reason "a server that does not want this pays nothing" is literally true:
+        // two map lookups instead of the ledger reads, five config reads, the dock lookup and a possible collect count.
+        // A holder still gets the whole body, which is what makes switching the setting off release at once (M19 review).
+        if (!WareworksConfig.chunkLoadingEnabled()) {
+            AisleChunkTickets.forget(serverLevel, worldPosition);
+            if (AisleChunkTickets.heldChunkCount(serverLevel, worldPosition) == 0) {
+                chunkKeepReason = ChunkKeepReason.NONE;
+                chunkKeepChunks = 0;
+                return;
+            }
+        }
+        boolean unclaimed = AisleChunkTickets.isUnclaimed(serverLevel, worldPosition);
+        AisleChunkTickets.claim(serverLevel, worldPosition);
+        int[] footprint = chunkFootprint();
+        // The opt-in alone can hold nothing, so without the master switch it must not make chunkKeepWork read the world
+        // for a collect count either.
+        boolean collectHoldEnabled = WareworksConfig.chunkLoadingEnabled()
+                && WareworksConfig.maxCollectHoldAislesPerLevel() > 0;
+        Optional<StackerCraneBlockEntity> dock = linkedDockEntity();
+        ChunkKeepDecision.Work work = chunkKeepWork(dock, collectHoldEnabled);
+        // A hold reinstated from the save cannot be judged while the dock's chunk is still away: a crane job is the one
+        // kind of work only the dock knows about. Extending the hold loads it, and the next evaluation decides for real -
+        // at worst one extra round for an aisle whose work is gone.
+        if (unclaimed && layout != null && !level.isLoaded(dockPos()))
+            work = new ChunkKeepDecision.Work(true, work.openRequests(), work.openOrders(), work.collectPending());
+        boolean collectCapAllows = AisleChunkTickets.collectCapAllows(serverLevel, worldPosition);
+        boolean collectCounts = collectHoldEnabled && collectCapAllows;
+        if (work.any(collectCounts))
+            chunkKeepIdleSince = ChunkKeepDecision.NOT_SET;
+        else {
+            if (chunkKeepIdleSince == ChunkKeepDecision.NOT_SET && !unclaimed)
+                // A reinstated hold does not linger: the linger smooths out bursts of work, and a world that has just
+                // been loaded had none.
+                chunkKeepIdleSince = now;
+            // Nothing to be refused for any more, so the flag goes: an aisle that gave up and then became idle would
+            // otherwise keep reporting GAVE_UP for ever, because the fingerprint of an empty aisle never changes again
+            // (M19 review). This is also the escape hatch for the saved flag - finished work always re-arms an aisle.
+            setChunkKeepGaveUp(false, 0L);
+        }
+        // The re-arm needs the whole work to be visible. While the dock's chunk is away the crane job is not, and the
+        // fingerprint would differ for that reason alone - which would re-arm a hold that gave up on that very job.
+        if (chunkKeepGaveUp && (layout == null || dock.isPresent())
+                && chunkWorkFingerprint(dock) != chunkKeepFingerprint)
+            setChunkKeepGaveUp(false, 0L); // real progress, so it may hold again
+        ChunkKeepDecision.Limits limits = new ChunkKeepDecision.Limits(WareworksConfig.chunkLoadingEnabled(),
+                collectHoldEnabled, AisleChunkTickets.levelCapAllows(serverLevel, worldPosition), collectCapAllows,
+                footprint.length / 2, WareworksConfig.maxChunksPerAisle(), WareworksConfig.chunkReleaseDelayTicks(),
+                WareworksConfig.maxChunkHoldTicks());
+        ChunkKeepDecision.State state = new ChunkKeepDecision.State(
+                AisleChunkTickets.heldChunkCount(serverLevel, worldPosition) > 0,
+                AisleChunkTickets.heldSince(serverLevel, worldPosition), chunkKeepIdleSince, chunkKeepGaveUp);
+        ChunkKeepDecision.Decision decision = ChunkKeepDecision.decide(work, limits, state, now);
+        applyChunkKeep(serverLevel, decision, work, footprint, dock, now);
+    }
+
+    /**
+     * What this aisle has to do, for {@link ChunkKeepDecision}. Buffered input items are deliberately <b>not</b> work: a
+     * buffer cannot change while its own chunk does not tick, so it can never appear while the aisle is unloaded, and the
+     * moment it is planned it becomes a crane job. As a hold reason it would let one forgotten item hold chunks forever.
+     * <p>
+     * The collect count is read only with the opt-in, so the default path never touches the world for it.
+     */
+    private ChunkKeepDecision.Work chunkKeepWork(Optional<StackerCraneBlockEntity> dock, boolean collectHoldEnabled) {
+        boolean craneJob = dock.map(crane -> crane.currentJob().isPresent()).orElse(false);
+        int collectPending = collectHoldEnabled && layout != null ? collectSources().size() : 0;
+        return new ChunkKeepDecision.Work(craneJob, requests.openCount(), productionOrders.openCount(), collectPending);
+    }
+
+    /**
+     * The identity of the work the aisle is doing: the crane job, the open requests and the open production orders. A
+     * changed fingerprint is what re-arms a hold that gave up, so "gave up" ends on real progress and not on a timer.
+     * Saved together with the flag, so the bound survives a reload and a restart.
+     */
+    private long chunkWorkFingerprint(Optional<StackerCraneBlockEntity> dock) {
+        // Order-independent inside each collection (a sum plus its count, not a positional hash), because this value is
+        // saved and compared after a reload, where the queues are rebuilt from NBT: an equal set of work has to give an
+        // equal fingerprint (M19 review). The ids are UUIDs, whose hashCode is stable across restarts by contract.
+        long requestIds = 0;
+        int requestCount = 0;
+        for (RetrievalRequest<ItemKey, BlockPos> request : requests.requests()) {
+            requestIds += request.id().hashCode() & 0xFFFF_FFFFL;
+            requestCount++;
+        }
+        long orderIds = 0;
+        int orderCount = 0;
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.all()) {
+            orderIds += order.id().hashCode() & 0xFFFF_FFFFL;
+            orderCount++;
+        }
+        long hash = 1125899906842597L;
+        hash = 31 * hash + dock.flatMap(StackerCraneBlockEntity::currentJob).map(job -> job.id().hashCode()).orElse(0);
+        hash = 31 * hash + requestIds;
+        hash = 31 * hash + requestCount;
+        hash = 31 * hash + orderIds;
+        hash = 31 * hash + orderCount;
+        return hash;
+    }
+
+    private void applyChunkKeep(ServerLevel serverLevel, ChunkKeepDecision.Decision decision,
+            ChunkKeepDecision.Work work, int[] footprint, Optional<StackerCraneBlockEntity> dock, long now) {
+        switch (decision.action()) {
+            case TAKE, KEEP -> {
+                // collectOnly: this hold exists only because a collecting port has something pending, which is what the
+                // separate cap counts.
+                if (!AisleChunkTickets.hold(serverLevel, worldPosition, footprint, decision.reason(), !work.hard(), now))
+                    chunkKeepDirty = true; // the rest of the footprint on the next tick (bounded chunks per tick)
+            }
+            case RELEASE -> {
+                if (decision.reason() == ChunkKeepReason.GAVE_UP) {
+                    // Only the maxHoldTicks deadline reaches this with the flag still clear; an operator's release sets
+                    // it and lets the chunks go itself, so the WARN below cannot claim a timeout that did not happen.
+                    boolean timedOut = !chunkKeepGaveUp;
+                    setChunkKeepGaveUp(true, chunkWorkFingerprint(dock));
+                    if (timedOut)
+                        Wareworks.LOGGER.warn("Aisle at {} held its chunks for the configured maximum without finishing "
+                                + "its work and gave up; it holds again once its work really changes", worldPosition);
+                }
+                AisleChunkTickets.release(serverLevel, worldPosition,
+                        decision.reason() == ChunkKeepReason.GAVE_UP ? AisleChunkTickets.Cause.GAVE_UP
+                                : AisleChunkTickets.Cause.DECIDED);
+                // A cap that no longer allows the hold is a refusal that happens to release first: it is remembered and
+                // logged like any other refusal, so a lowered cap is visible rather than silent (M19 review).
+                if (decision.reason() == ChunkKeepReason.GAVE_UP)
+                    AisleChunkTickets.forget(serverLevel, worldPosition); // its own WARN above says all there is to say
+                else
+                    rememberRefusal(serverLevel, decision.reason(), footprint, now);
+            }
+            case REFUSE -> rememberRefusal(serverLevel, decision.reason(), footprint, now);
+            case NONE -> AisleChunkTickets.forget(serverLevel, worldPosition);
+        }
+        int held = AisleChunkTickets.heldChunkCount(serverLevel, worldPosition);
+        chunkKeepReason = decision.reason();
+        // The one number the goggle line is about: what is held while holding, what would be needed while refused, and
+        // nothing at all when there is nothing to report (which keeps the synced summary empty on a default server).
+        chunkKeepChunks = switch (decision.reason()) {
+            case NONE -> 0;
+            case CRANE_JOB, OPEN_REQUESTS, PRODUCTION_ORDERS, COLLECTING, RELEASING -> held;
+            case AT_LEVEL_LIMIT, AT_COLLECT_LIMIT, TOO_MANY_CHUNKS, GAVE_UP -> footprint.length / 2;
+        };
+        // Only a real hold schedules a re-check; a refused or idle aisle waits for an event, so it costs nothing at all.
+        if (held > 0)
+            chunkKeepRecheckTick = Math.min(decision.recheckAtTick(), now + CHUNK_KEEP_RECHECK_TICKS);
+    }
+
+    /**
+     * An aisle that wants to hold and may not: remembered for the cap wake-up while the cap is the kind that frees up
+     * again, and reported once per throttle window. The two permanent refusals ({@code TOO_MANY_CHUNKS}, {@code GAVE_UP})
+     * are deliberately forgotten instead — nothing another aisle does can change them.
+     */
+    private void rememberRefusal(ServerLevel serverLevel, ChunkKeepReason reason, int[] footprint, long now) {
+        if (reason == ChunkKeepReason.AT_LEVEL_LIMIT || reason == ChunkKeepReason.AT_COLLECT_LIMIT)
+            AisleChunkTickets.refuse(serverLevel, worldPosition);
+        else
+            AisleChunkTickets.forget(serverLevel, worldPosition);
+        if (reason != ChunkKeepReason.NONE && chunkKeepRefusals.tryLog(now))
+            Wareworks.LOGGER.warn("Aisle at {} may not hold its chunks: {} (its footprint needs {} chunks)",
+                    worldPosition, reason.name(), footprint.length / 2);
+    }
+
     private void relink(long now) {
         relinkRequested = false;
         nextRelinkTick = now + Math.max(MIN_RELINK_INTERVAL_TICKS, WareworksConfig.geometryRefreshTicks());
@@ -2924,6 +3248,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         }
         layout = next;
+        // M19: a changed (or lost) aisle is a changed (or empty) chunk footprint. Deliberately below the early return
+        // above: an unchanged layout - which is what every periodic re-link check finds - changes nothing to decide.
+        markChunkKeepDirty();
         if (next == null) {
             WarehouseRegistry.unregister(level, worldPosition);
             // The keepers lose their warehouse, so they stop calling for items. Their world positions come from the
@@ -2957,6 +3284,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * ones that really are no keeper any more, on the evidence of a loaded block.
      */
     private void clearAisleState() {
+        markChunkKeepDirty(); // M19: no members, so no requests and no orders either
         membership.clear();
         stock.clear();
         pendingSnapshots.clear();
@@ -2979,6 +3307,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     /** The linked dock (if loaded) loses this controller as its owner; another controller's link is left alone. */
     private void unlinkDock() {
+        markChunkKeepDirty(); // M19: without a dock there is no crane job to hold chunks for
         BlockPos dockPos = linkedDock;
         linkedDock = null;
         if (dockPos != null && level != null && level.isLoaded(dockPos)
@@ -3075,6 +3404,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (layout != null)
             WarehouseRegistry.register(level, worldPosition, layout);
         relinkRequested = true;
+        // Flag only, never a ticket: this runs inside Level#tickBlockEntities' fresh-block-entity pass, and forcing a
+        // chunk loads block entities, which would re-enter this method (M19, ADR-031).
+        markChunkKeepDirty();
     }
 
     @SuppressWarnings("deprecation")
@@ -3097,6 +3429,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             unlinkDock();
             clearAllKeeperRuleStates(layout);
             WarehouseRegistry.unregister(level, worldPosition);
+            // The owner of the tickets is gone, so the tickets go with it, in this tick. A ticket that outlives its
+            // owner is the one defect this whole feature must not have (M19, ADR-031).
+            AisleChunkTickets.releaseOnRemove(level, worldPosition);
         }
     }
 
@@ -3107,8 +3442,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     @Override
     public void invalidate() {
         super.invalidate();
-        if (level instanceof ServerLevel)
+        if (level instanceof ServerLevel) {
             WarehouseRegistry.unregister(level, worldPosition);
+            // A safety net: our own ticket keeps this chunk loaded, so a runtime unload while holding is pathological.
+            // During a shutdown this must NOT release, or the save would lose the hold and with it an in-progress job.
+            AisleChunkTickets.releaseOnInvalidate(level, worldPosition);
+        }
     }
 
     // --- goggles -------------------------------------------------------------------------------------------------
@@ -3135,6 +3474,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 collectingPortCount(), membership.productionCount(),
                 membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
                 productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
+                chunkKeepReason, chunkKeepChunks,
                 linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), dispatch.lastReason());
     }
 
@@ -3205,12 +3545,34 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 WareworksLang.countLine(WareworksLang.GOGGLES_RULES_PAUSED, shown.rulesPaused())
                         .style(ChatFormatting.RED).forGoggles(tooltip, 2);
         }
+        // What this aisle is doing with chunks (M19, issue #10). Left out entirely while there is nothing to report,
+        // which is every aisle on a server that has chunk loading switched off - the default.
+        if (shown.chunkKeepReason() != ChunkKeepReason.NONE)
+            chunkKeepLine(shown).forGoggles(tooltip, 1);
         shown.crane().ifPresent(crane -> {
             WareworksLang.translate(WareworksLang.GOGGLES_STACKER_CRANE).style(ChatFormatting.GRAY).forGoggles(tooltip, 1);
             crane.addGoggleLines(tooltip, 2, false);
         });
         shown.lastPlanReason().ifPresent(reason -> WareworksLang.lastPlan(reason).forGoggles(tooltip, 1));
         return true;
+    }
+
+    /**
+     * The goggle line for the chunk hold: what is held and why, or what stops the aisle from holding. The two refusals
+     * that are about a number name both numbers, because "needs 12 of 8 chunks" is the only form a player can act on.
+     */
+    private static net.createmod.catnip.lang.LangBuilder chunkKeepLine(ControllerGoggleSummary shown) {
+        ChunkKeepReason reason = shown.chunkKeepReason();
+        if (reason.isHolding())
+            return WareworksLang.chunkLoading(shown.chunkKeepChunks(), reason);
+        return switch (reason) {
+            case AT_LEVEL_LIMIT -> WareworksLang.chunkLoadingAtLimit(WareworksConfig.maxTicketedAislesPerLevel());
+            case AT_COLLECT_LIMIT ->
+                WareworksLang.chunkLoadingAtCollectLimit(WareworksConfig.maxCollectHoldAislesPerLevel());
+            case TOO_MANY_CHUNKS -> WareworksLang.chunkLoadingTooMany(shown.chunkKeepChunks(),
+                    WareworksConfig.maxChunksPerAisle());
+            default -> WareworksLang.chunkLoadingNone(reason);
+        };
     }
 
     // --- persistence and sync ------------------------------------------------------------------------------------
@@ -3236,6 +3598,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // The safety stop is saved with the rules and for the same reason: a restart must not quietly resume ordering
         // into a machine that already swallowed a batch (M15 part 2, issue #3).
         ControllerPersistence.writeStockPauses(tag, stockPauses, registries);
+        // The one thing M19 saves, and only while it is set: the bound "this aisle may not hold its chunks again until
+        // its work really changes" has to outlive this block entity instance, because the work it refuses does (§11.4).
+        ControllerPersistence.writeChunkKeep(tag, chunkKeepGaveUp, chunkKeepFingerprint);
     }
 
     @Override
@@ -3255,6 +3620,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 .orElse(null);
         status = statusOf(layout);
         clearAisleState();
+        // M19: the give-up bound belongs to the work it refuses, so it is restored with that work and dropped whenever
+        // the work is (a layout that was not saved, or was saved for another facing, drops the requests and orders too).
+        ControllerPersistence.SavedChunkKeep savedChunkKeep = layout == null
+                ? ControllerPersistence.SavedChunkKeep.NONE : ControllerPersistence.readChunkKeep(tag);
+        chunkKeepGaveUp = savedChunkKeep.gaveUp();
+        chunkKeepFingerprint = savedChunkKeep.workFingerprint();
+        chunkKeepDirty = true;
         if (layout != null) {
             ControllerPersistence.SavedLocations saved = ControllerPersistence.readLocations(tag, registries);
             membership.restore(saved.records(), saved.misaligned());

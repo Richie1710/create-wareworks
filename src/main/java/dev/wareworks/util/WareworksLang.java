@@ -66,6 +66,34 @@ public final class WareworksLang {
     public static final String GOGGLES_ACCEPTING_PORTS = "gui.goggles.accepting_ports";
     /** {@code "Collecting ports: %1$s"}: warehouse ports of an aisle that fetch items out of a machine (M18). */
     public static final String GOGGLES_COLLECTING_PORTS = "gui.goggles.collecting_ports";
+    /** {@code "Chunk loading: %1$s chunks (%2$s)"}: an aisle that holds its chunks loaded and why (M19, issue #10). */
+    public static final String GOGGLES_CHUNK_LOADING = "gui.goggles.chunk_loading";
+    /** {@code "Chunk loading: none (%1$s)"}: why an aisle with work holds nothing (M19). */
+    public static final String GOGGLES_CHUNK_LOADING_NONE = "gui.goggles.chunk_loading_none";
+    /** {@code "Chunk loading: none (server limit: %1$s aisles)"}: the level cap is reached (M19). */
+    public static final String GOGGLES_CHUNK_LOADING_AT_LIMIT = "gui.goggles.chunk_loading_at_limit";
+    /** {@code "Chunk loading: none (collecting limit: %1$s aisles)"}: the collect opt-in's own cap is reached (M19). */
+    public static final String GOGGLES_CHUNK_LOADING_AT_COLLECT_LIMIT = "gui.goggles.chunk_loading_at_collect_limit";
+    /** {@code "Chunk loading: none (this aisle needs %1$s of %2$s chunks)"}: over the per-aisle cap (M19). */
+    public static final String GOGGLES_CHUNK_LOADING_TOO_MANY = "gui.goggles.chunk_loading_too_many";
+    /** Header of {@code /wareworks chunks} for one dimension. */
+    public static final String COMMAND_CHUNKS_HEADER = "command.chunks.header";
+    /** One holding aisle in {@code /wareworks chunks}. */
+    public static final String COMMAND_CHUNKS_ROW = "command.chunks.row";
+    /** An aisle whose reinstated hold no controller has claimed yet. */
+    public static final String COMMAND_CHUNKS_ROW_UNCLAIMED = "command.chunks.row_unclaimed";
+    /** No aisle of the server holds anything. */
+    public static final String COMMAND_CHUNKS_NONE = "command.chunks.none";
+    /** Totals of {@code /wareworks chunks} over the whole server. */
+    public static final String COMMAND_CHUNKS_TOTAL = "command.chunks.total";
+    /** The dimension's block-ticket count (any mod) next to its whole force-loaded count. */
+    public static final String COMMAND_CHUNKS_RAW = "command.chunks.raw";
+    /** One aisle was released by command. */
+    public static final String COMMAND_CHUNKS_RELEASED = "command.chunks.released";
+    /** Nothing was held at the given position in the dimension the command looked in. */
+    public static final String COMMAND_CHUNKS_NOT_HELD = "command.chunks.not_held";
+    /** Every aisle of every dimension was released by command. */
+    public static final String COMMAND_CHUNKS_RELEASED_ALL = "command.chunks.released_all";
     /** {@code "Stored Items"}: label of the warehouse interface's store filter slot. */
     public static final String INTERFACE_STORE_FILTER = "interface.store_filter";
     /** {@code "Storage Priority"}: title of the interface's hold-to-edit board (M16). */
@@ -490,6 +518,8 @@ public final class WareworksLang {
     public static final String DISPLAY_AISLE_LINE_PORTS_BOTH = "display_source.aisle.line_ports_both";
     /** {@code "Ports: %1$s collecting"}: an aisle with collecting ports and no accepting one (M18). */
     public static final String DISPLAY_AISLE_LINE_PORTS_COLLECTING = "display_source.aisle.line_ports_collecting";
+    /** {@code "Chunks: %1$s held"}: the aisle is holding its own chunks loaded (M19, issue #10). */
+    public static final String DISPLAY_AISLE_LINE_CHUNKS = "display_source.aisle.line_chunks";
     /** {@code "No aisle"}: the source block belongs to no loaded aisle. */
     public static final String DISPLAY_AISLE_NO_AISLE = "display_source.aisle.no_aisle";
     /**
@@ -608,6 +638,36 @@ public final class WareworksLang {
     public static LangBuilder productionState(dev.wareworks.core.production.ProductionOrderState state) {
         return translate(GOGGLES_PRODUCTION_STATE, translate(state.langKey()).style(ChatFormatting.WHITE))
                 .style(ChatFormatting.GRAY);
+    }
+
+    /** "Chunk loading: 6 chunks (crane job)" for an aisle that is holding its chunks (M19, issue #10). */
+    public static LangBuilder chunkLoading(int chunks, dev.wareworks.content.controller.ChunkKeepReason reason) {
+        return translate(GOGGLES_CHUNK_LOADING, number(chunks).style(ChatFormatting.GOLD),
+                translate(reason.langKey()).style(ChatFormatting.WHITE)).style(ChatFormatting.GRAY);
+    }
+
+    /** "Chunk loading: none (let go; holds again when its work changes)" for an aisle that holds nothing (M19). */
+    public static LangBuilder chunkLoadingNone(dev.wareworks.content.controller.ChunkKeepReason reason) {
+        return translate(GOGGLES_CHUNK_LOADING_NONE, translate(reason.langKey()).style(ChatFormatting.WHITE))
+                .style(ChatFormatting.GOLD);
+    }
+
+    /** "Chunk loading: none (server limit: 4 aisles)" (M19). */
+    public static LangBuilder chunkLoadingAtLimit(int maxAisles) {
+        return translate(GOGGLES_CHUNK_LOADING_AT_LIMIT, number(maxAisles).style(ChatFormatting.WHITE))
+                .style(ChatFormatting.GOLD);
+    }
+
+    /** "Chunk loading: none (collecting limit: 1 aisles)" (M19). */
+    public static LangBuilder chunkLoadingAtCollectLimit(int maxAisles) {
+        return translate(GOGGLES_CHUNK_LOADING_AT_COLLECT_LIMIT, number(maxAisles).style(ChatFormatting.WHITE))
+                .style(ChatFormatting.GOLD);
+    }
+
+    /** "Chunk loading: none (this aisle needs 12 of 8 chunks)" (M19). */
+    public static LangBuilder chunkLoadingTooMany(int needed, int allowed) {
+        return translate(GOGGLES_CHUNK_LOADING_TOO_MANY, number(needed).style(ChatFormatting.WHITE),
+                number(allowed).style(ChatFormatting.WHITE)).style(ChatFormatting.GOLD);
     }
 
     /** "Last planning: reason". */

@@ -1124,3 +1124,131 @@ whether a person can **find** the direction, **read** what the port is doing and
     carry on the moment the chunk is back: it must never sit at the port with no reason given while the whole aisle
     waits behind it. This is the one M18 review fix nothing automated can reach — a GameTest force-loads its own area,
     and the robustness run can only unload a whole scene.
+
+## V. Optional chunk loading (M19)
+
+Setup for this whole section: a world (a **dedicated** server is the honest setting, but a single-player world works if
+you keep the view distance small), one aisle built **far away from the world spawn** — at least 300 blocks, because the
+spawn chunks stay loaded whatever you do — and something the warehouse does by itself: a stock rule with a minimum plus a
+production station, or a **collecting** port pointed at a machine that keeps producing. `F3+G` draws chunk borders and the
+`C:` line of `F3` counts loaded chunks; both are worth having on screen. The setting lives in
+`config/wareworks-server.toml` (per world: `<world>/serverconfig/wareworks-server.toml`), section `chunkLoading`, and it
+needs a server restart or a `/reload` to be re-read.
+
+133. **The shipped default, first.** Do not touch the config yet. Start a job — or let the warehouse start one for itself
+    — and walk away until the aisle unloads (watch the `C:` count drop, or simply go 500 blocks and wait). Come back. The
+    job must be **unfinished and then resume**: the crane picks up where it stopped, nothing is duplicated and nothing is
+    missing. With goggles on the crane while you are still in range of the far end, the pause line reads "Paused: area not
+    loaded". The controller's goggles must show **no chunk line at all** — not "Chunk loading: none", nothing. This is the
+    behaviour every server gets unless somebody changes the config, and it is the thing M19 must not have broken.
+
+134. **Turn it on, then walk away and come back.** Set `chunkLoading.maxTicketedAislesPerLevel = 4`, restart, and check
+    the controller's goggles: while the aisle is working they must read **"Chunk loading: N chunks (crane job)"** — or
+    "(open requests)", "(production orders)". Note N; on a normal aisle it is 2 to 8.
+
+    Now walk 500 blocks away with a job running and **wait longer than the job needs**. Come back: the job must be
+    **finished**, the items where they belong. That is the whole feature in one observation, and the difference from check
+    133 is the only proof a player can see.
+
+    While you are away, `F3`'s `C:` count is not the check — you are far away and your own chunks are loaded around you.
+    Use the command instead (check 136).
+
+135. **It lets go, and it says so.** Stand at the controller with goggles and watch the line after the last job finishes:
+    it changes to **"Chunk loading: N chunks (idle, letting go)"** for about 5 seconds (`releaseDelayTicks`) and then
+    disappears entirely. Feed the aisle again within those 5 seconds — the line must go straight back to "(crane job)"
+    without ever vanishing. This is the anti-thrash linger; if the line flickers off and on between two jobs of a busy
+    warehouse, that is a defect.
+
+136. **`/wareworks chunks`, the operator's view.** With the aisle holding, run `/wareworks chunks`. You must get: a header
+    naming the dimension, one row per holding aisle with its position, aisle letter, chunk count, reason and how many
+    seconds it has held, a line with **two** numbers for that dimension — how many chunks are force-loaded there by
+    **block tickets** (any mod) and how many in total (entity tickets and `/forceload` included) — and a totals line. On a
+    server with no other chunk loader the block-ticket number must equal the totals line above it; that is the leak check
+    in your own hands. The total may legitimately be larger if you have used `/forceload` yourself, so try that too:
+    `/forceload add ~ ~` somewhere and watch only the second number grow.
+
+    Then `/wareworks chunks release <the controller's x y z>`: it answers, the goggle line changes to **"Chunk loading:
+    none (let go; holds again when its work changes)"**, and a second `/wareworks chunks` lists nothing. The aisle must
+    **not** take the chunks straight back although its job is unchanged. Give it a genuinely new request and it holds
+    again. Finally check `/wareworks chunks` with no aisle holding at all: "No Wareworks aisle is holding any chunks".
+
+    **Scope**, worth checking once: `release <x y z>` acts on the dimension you run it in, exactly as `/forceload` does.
+    From the server console (always the overworld) a Nether aisle needs
+    `/execute in the_nether run wareworks chunks release <x y z>`, and running it without that must answer "No aisle at
+    ... is holding chunks in minecraft:overworld" — naming the dimension it looked in. `release all`, by contrast, covers
+    **every** dimension and answers with how many aisles in how many dimensions.
+
+    Check the permission too: a non-op player must not see the command at all.
+
+137. **Hunt for leftovers — the check that matters most.** Do all five of these and run `/wareworks chunks` after each
+    one. Every single time the answer must be that nothing is held any more.
+    * **Break the controller** while the aisle is holding (it is easiest to see with a job running). The chunks must be
+      gone in the same tick, and the crane must fall back to the pre-M19 behaviour.
+    * **Save, quit and rejoin** with a job running and the aisle holding. In the server log look for the line about a
+      **reinstated seed chunk**; the interrupted job must finish, and the hold must be back at its full count within a
+      second or two. Then let the aisle go idle and confirm nothing is left.
+    * **Restart with the controller gone**: quit while the aisle holds, then remove the controller before the world comes
+      back (a `/setblock ... air` right after joining is close enough, but the real case is a world edit or a rollback).
+      Within about 5 seconds the log must carry a `WARN` about *releasing a reinstated chunk ticket nobody claimed*, and
+      `/wareworks chunks` must be empty.
+    * **Set `maxTicketedAislesPerLevel` back to 0** while an aisle is holding and `/reload`. Everything must be released
+      within a second although the work is still there, and nothing may come back.
+    * **Give up, then restart.** Set `maxHoldTicks` short (say 200 ticks) and give an aisle work it can never finish — a
+      request for an item with the crane's motor removed. Wait for it to let go ("let go; holds again when its work
+      changes") and check `/wareworks chunks` is empty. Now quit and come back. It must **still** hold nothing and still
+      say it let go, although the request is still there: the bound survives the restart. Then cancel the request — the
+      goggle line must disappear entirely — and give the aisle a new one, which must hold again.
+
+    A ticket that survives one of these is the defect that makes a server operator remove a mod. `/forceload query`
+    cannot help you here — it does not see mod tickets, which is why `/wareworks chunks` exists.
+
+138. **The caps, and that a refusal costs nothing.** Set `maxChunksPerAisle` **below** what your aisle needs (check 134
+    told you the number) and restart. The goggles must read **"Chunk loading: none (this aisle needs 6 of 3 chunks)"**,
+    naming both numbers — and the warehouse must go on working exactly as in check 133, pause and all. Nothing may be
+    held partially: `/wareworks chunks` lists nothing.
+
+    Then the level cap: set `maxTicketedAislesPerLevel = 1`, give two aisles work at the same time, and check that the
+    second one reads **"Chunk loading: none (server limit: 1 aisles)"** while still serving its request. Let the first aisle finish — the second must take the freed slot by itself, without you doing anything.
+
+    Then lower a cap **under** a holding aisle: with the aisle holding N chunks, set `maxChunksPerAisle` to N − 1 and
+    `/reload`. It must let go within a second and read "Chunk loading: none (this aisle needs N of N−1 chunks)"; a hold
+    that stays above the number you just set is a defect. The same with `maxTicketedAislesPerLevel` lowered below the
+    number of aisles currently holding: enough of them must let go to respect it.
+
+    And the emergency valve against a cap: with `maxTicketedAislesPerLevel = 1`, one aisle holding and a second waiting
+    with "server limit", run `/wareworks chunks release all`. Afterwards **nothing** may be held — the waiting aisle must
+    not take the freed slot — and both must read "let go; holds again when its work changes".
+
+139. **No crops, no mobs, and German.** Put wheat on farmland and a dark spawning space **inside** a held chunk (F3+G to
+    be sure it really is one), raise `randomTickSpeed`, and leave with the aisle holding. Come back: the crane's work must
+    have progressed, and the **wheat must not have grown** and **no mobs must have spawned** in that chunk. Do the same
+    with yourself standing nearby to see the difference. This is the promise "this loads a warehouse, not a farm", and it
+    is the one part of the feature only a real world can show.
+
+    Note also that the loaded area is **larger** than the number the goggles name: a forced chunk lets its eight
+    neighbours tick their blocks too, exactly as vanilla `/forceload` does. A furnace one chunk beyond the aisle keeps
+    burning. That is intended and documented, not a leak — `/wareworks chunks` counts the chunks the mod *holds*, not
+    every chunk that ticks because of them.
+
+    Then switch the client to **German** and read every line again: "Chunks geladen: 4 (Auftrag des
+    Regalbediengeräts)", "(offene Anforderungen)", "(Produktionsaufträge)", "(holt aus einer Maschine ab)", "(untätig,
+    gibt frei)", "Chunks geladen: keine (Serverlimit: 1 Gänge)", "Chunks geladen: keine (Abhol-Limit: 1 Gänge)",
+    "Chunks geladen: keine (dieser Gang braucht 6 von 3 Chunks)", "Chunks geladen: keine (hat losgelassen; hält erst wieder, wenn sich die Arbeit ändert)", the display row
+    "Chunks: 4 geladen" and the command's own answers ("Kein Wareworks-Gang hält Chunks geladen", "Die Chunks des Gangs
+    bei ... wurden freigegeben", "Kein Gang bei ... hält in ... Chunks geladen"). Nothing may show a raw key, run out
+    of its box or be cut off.
+
+    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
+    nothing about how they look. The screenshot runs render English only.
+
+140. **The collecting limitation, stated so you can check it.** With `maxCollectHoldAislesPerLevel` still at 0 (the
+    default), point a collecting port at a machine that produces slowly, leave while the port has items **waiting**, and
+    come back: the aisle unloaded and fetched nothing in between. Now set the opt-in to 1 and repeat — the collection
+    that was **already running** keeps going while you are away, and the goggles read "(collecting from a machine)".
+
+    With the opt-in still at 1, give a **second** aisle a collecting port with items waiting as well. One of the two holds
+    and the other must read **"Chunk loading: none (collecting limit: 1 aisles)"** — an aisle queued behind this cap has
+    to say so rather than look idle. Raise the opt-in to 2 and both must hold.
+    Finally let the machine run empty, leave, and start it again from a distance (a redstone clock, a timer): the aisle
+    must **not** notice. It cannot, and the docs say so. If you ever see it fetch from a machine it could not have read,
+    something polls an unloaded chunk and that is a defect.

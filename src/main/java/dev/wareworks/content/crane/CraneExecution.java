@@ -14,6 +14,7 @@ import com.mojang.logging.LogUtils;
 
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.head.HandlingHead;
 import dev.wareworks.content.crane.head.TransferContext;
 import dev.wareworks.content.crane.head.TransferContexts;
@@ -301,6 +302,11 @@ final class CraneExecution {
                 syncRequested = true;
                 if (changed.to() == CranePhase.TRAVEL_TO_SOURCE || changed.to() == CranePhase.TRAVEL_TO_TARGET)
                     nextLocationCheckTick = CHECK_NOW;
+                // M19 (issue #10): the job is only really gone one tick after ReportComplete, when the state machine
+                // falls back to IDLE — that is the moment the aisle may have nothing left to do, so its chunk hold is
+                // re-decided then rather than at the next bounded re-check. It covers an aborted and a lost job too.
+                if (changed.to() == CranePhase.IDLE)
+                    crane.linkedControllerEntity().ifPresent(WarehouseControllerBlockEntity::markChunkKeepDirty);
                 crane.onPhaseChanged(changed.from(), changed.to());
             }
         }

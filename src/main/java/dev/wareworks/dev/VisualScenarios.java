@@ -18,6 +18,7 @@ final class VisualScenarios {
             Map.entry(CollectVisualScenario.NAME, CollectVisualScenario::new),
             Map.entry(CollectLoopVisualScenario.NAME, CollectLoopVisualScenario::new),
             Map.entry(RobustnessVisualScenario.NAME, RobustnessVisualScenario::new),
+            Map.entry(ChunkLoadingVisualScenario.NAME, ChunkLoadingVisualScenario::new),
             Map.entry(PonderVisualScenario.NAME, PonderVisualScenario::new),
             Map.entry(TerminalVisualScenario.NAME, TerminalVisualScenario::new),
             Map.entry(StockKeeperVisualScenario.NAME, StockKeeperVisualScenario::new),

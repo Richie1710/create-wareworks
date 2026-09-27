@@ -852,6 +852,7 @@ blocks, so it is readable. The same honesty as the belt loop of §3.2.3: the mod
 | The machine **hands nothing out** through that face | `COLLECT_SOURCE_EMPTY`: an honest reason of its own that does **not** arm the back-off, so storing from the aisle's inputs runs on undisturbed (M18 review). |
 | A Create machine **inserts into the same inventory** | Never fought over: the collect context only ever extracts, slot by slot through the item capability, with real results. |
 | **Chunk with the machine not loaded** | The port is no source while its attached position is not loaded, and a crane that is already there **pauses** with `CHUNK_NOT_LOADED` and retries: the crane's stop check asks whether the block one beyond the rack position is loaded for a collect source exactly as it does for a storage location's inventory, which is derived from the job rather than from the location kind (M18 review). |
+| The **aisle's own chunks** are not loaded (nobody nearby) | Nothing is collected, and this is the honest limit of the feature: presence **and** contents both come from reads of that inventory, so an unloaded port cannot notice that a machine finished. **M19** can keep a *running* collection alive — the optional, separately capped `chunkLoading.maxCollectHoldAislesPerLevel` holds the aisle's chunks while a gated-open port still has something pending (§11.1) — but an idle aisle with nothing pending releases its chunks and unloads, and does not see the furnace that finishes five minutes later. There is no polling of an unloaded machine, by the hard rules and by design. |
 
 ##### What a player can read, and where
 
@@ -950,7 +951,7 @@ Owns the logical warehouse state of one aisle:
 
 #### 3.3.1 Implementation (M2)
 Classes:
-* `content.controller`: `WarehouseControllerBlock` / `WarehouseControllerBlockEntity`, `AisleLetterBehaviour`, `WarehouseRegistry`, `WarehouseMember` / `StorageMember`, `ControllerStatus`, `ControllerGoggleSummary`, `AisleAssignment`, and the package-private `ControllerPersistence`.
+* `content.controller`: `WarehouseControllerBlock` / `WarehouseControllerBlockEntity`, `AisleLetterBehaviour`, `WarehouseRegistry`, `WarehouseMember` / `StorageMember`, `ControllerStatus`, `ControllerGoggleSummary`, `AisleAssignment`, and the package-private `ControllerPersistence`; since M19 also `AisleChunkSpan`, `ChunkKeepDecision`, `ChunkKeepReason` and `AisleChunkTickets` (§11.8).
 * `core.warehouse`: `LocationKind`, `LocationRecord`, `RackProbe`, `AisleMembership`, `MembershipChanges`.
 * `core.inventory.StockView`.
 
@@ -984,11 +985,11 @@ Registered as `WareworksBlocks.WAREHOUSE_CONTROLLER` / `WareworksBlockEntityType
   * A geometry change marks all positions dirty; unloaded records are kept.
   * A changed dock position or aisle direction clears records, stock counts, pending snapshots, shared inventories and requests, then rebuilds the list with a full scan (unloaded positions are not kept), so every member joins again and is snapshotted. **M2 review fix:** before, only the list was invalidated, and a record of the same kind at the same aisle-local position (for example after wrenching the controller from one dock straight to a dock on an adjacent face) kept the old aisle's per-location counts without a snapshot.
   * `NO_DOCK` unregisters the aisle and clears the same state. A new dock rebuilds it with a full scan; joining storage locations are snapshotted through the bounded queue (§5). There is no grace period for a transient `NO_DOCK` (a dock rotated and rotated back): the throttled rebuild bounds the cost, and requests of the old layout could not be served anyway.
-* **Tick (server)**: re-link if due, reconcile dirty membership, read at most `maxSnapshotsPerTick` queued storage locations (§5), and every `snapshotIntervalTicks` take one round-robin snapshot of a storage location that counts its own inventory. From M3 on the tick ends with a dispatch attempt every `dispatchIntervalTicks` (§7.5). Nothing else.
+* **Tick (server)**: re-link if due, reconcile dirty membership, read at most `maxSnapshotsPerTick` queued storage locations (§5), and every `snapshotIntervalTicks` take one round-robin snapshot of a storage location that counts its own inventory. From M3 on the tick ends with a dispatch attempt every `dispatchIntervalTicks` (§7.5). **M19:** between the re-link and the layout guard — deliberately before it, so an aisle that just lost its dock still lets its chunks go — the chunk hold is re-decided when a hook marked it dirty, when a deadline of its own is due or when the server config generation changed (§11.5). Nothing else.
 * **API for M3/M4**: `layout()`, `status()`, `aisleLetter()`, `isLinkedTo(BlockPos)`, `locations()`, `storageLocations()`, `inputStations()`, `outputStations()`, `misalignedCount()`, `stockIndex()` (read-only `StockView<ItemKey, RackPosition>`), `countOf(ItemKey)`, `isSnapshotPending(RackPosition)`, `pendingSnapshotCount()`, `sharedInventoryOf(RackPosition)` (the location whose index entry counts the inventory; M3 plans capacity and extraction there), `locationsSharingInventory(RackPosition)`, `addressOf(BlockPos)`, `locationAt(BlockPos)`, `worldPosOf(RackPosition)`, `refreshLocation(RackPosition)`, `requestRelink()`.
   * The location id is the aisle-local `RackPosition`: stable across restarts and independent of world coordinates.
   * Requests (stations task, §7.2): `request(outputPos, ItemKey, amount)` → `RequestResult`, `availableStock(ItemKey)`, `reservedStock(ItemKey)` (M3: the ledger formula, §7.5), `deliveredFor(BlockPos)` (M3), `openRequests()`, `openRequestCount()`, `oldestOpenRequest()`, `requestsFor(BlockPos)`, `requestedFor(BlockPos)`, `deliverRequest(UUID, amount)`, `cancelRequest(UUID)`.
-* **Goggles** (observer-driven through `GoggleObservers`): "Warehouse Controller:", "Aisle X", the status, "Aisle: L long, mast H high", "Storage locations: N", "Inputs: N, outputs: M", "Misaligned blocks: N" (only if > 0), "Item types: N", "Items stored: N", "Open requests: N"; from M3 on also the linked crane's status and job and the last planning result (§7.5).
+* **Goggles** (observer-driven through `GoggleObservers`): "Warehouse Controller:", "Aisle X", the status, "Aisle: L long, mast H high", "Storage locations: N", "Inputs: N, outputs: M", "Misaligned blocks: N" (only if > 0), "Item types: N", "Items stored: N", "Open requests: N"; from M3 on also the linked crane's status and job and the last planning result (§7.5). **M19:** above the crane block, one line about the aisle's chunk hold — what it holds and why, or what stops it from holding — omitted entirely while there is nothing to report, which is every aisle while `chunkLoading` is off (§11.7).
   * Synced as a `ControllerGoggleSummary`: a status name and numbers only, so it has a fixed size.
   * Recomputed in O(1) on observation and sent only when changed, at most once per `GoggleObservers.SUMMARY_SYNC_MIN_INTERVAL_TICKS` (20, `SyncThrottle`).
 * **Persistence** (`ControllerPersistence`): `Layout {Facing, Length, Height}`, `Locations [{X, Y, Side, Kind, Stock [{Item: ItemKey, Count: long}]}]`, `Misaligned` (int array of x, y, side ordinal), `Requests [{Id: UUID, Item: ItemKey, Requested, Remaining, Destination: int[3] offset from the controller}]` in queue order.
@@ -2419,7 +2420,10 @@ Checked without a change: clamping and refusal of requests (§7.2), the `WAREHOU
 | `HOLDING` | Keep the items, show them in goggles, retry reroute every `holdRetryTicks` (default 40). A retry may choose the target that failed before (M3 review). |
 | Controller removed during a job | The crane finishes the job if the target is valid, otherwise it holds. A new controller adopts the crane's job and rebuilds its reservations. |
 | Crane (dock) broken | Grabber contents drop at the dock position. The controller aborts the job and releases reservations. |
-| Needed chunk not loaded | The crane waits in the current phase and retries. |
+| Needed chunk not loaded | The crane waits in the current phase and retries. **M19:** unchanged, and still the behaviour of every aisle on a default server. Where `chunkLoading` is switched on and the aisle is allowed to hold, this case simply does not arise for the aisle's own chunks while it has work (§11); where it is refused by a cap or has given up, the pause path is what carries it, exactly as before. |
+| Chunk loading on, and the aisle has work (M19) | It holds the chunks of its own footprint — the aisle box plus one block horizontally — with a non-ticking block ticket, so the crane, the controller and the player's own machines in those chunks keep running with nobody nearby. Crops still do not grow and mobs still do not spawn there. It lets go `releaseDelayTicks` after its last work (§11.4). |
+| A ticket's owner is broken, replaced or unloaded, or the level or server goes down (M19) | The tickets go with the owner: `remove()` releases in the same tick, `invalidate()` releases unless the level or the server is going down (then the hold has to reach the save, or a restart would throw away an in-progress job), and on the next load the validation callback keeps one seed chunk per owner and a watchdog releases every seed no controller claims within 100 ticks (§11.6). A ticket that outlives its owner is the one defect this feature must not have, and the leak probe of every chunk GameTest is what proves it does not. |
+| Chunk loading on, and the aisle cannot finish (M19) | After `maxHoldTicks` (default 1 hour) the aisle lets go with one `WARN` and may only hold again once its work really changed. This bounds exactly the two cases §8 already documents as recoverable-but-open-ended: a request whose output can never be served, and a crane in `HOLDING` that nothing accepts (§11.4). |
 | No rotation / overstressed | Motion and transfer timers pause. |
 | Server restart | Controller (locations, ledger, requests) and crane (phase, positions, job, grabber) are persisted and resume. |
 | Aisle shrinks while the crane is beyond the new length | A location outside the new geometry counts as missing: before the pick the job aborts, after it the held items are rerouted into what is left of the aisle. A resting crane (`IDLE`, `HOLDING`, `REROUTE`) clamps its target back into the aisle and drives home (`stacker-crane.md` §3). The inventory left outside keeps its items and leaves the index. |
@@ -2511,6 +2515,11 @@ The table above is covered by automated tests. What only a running game can reac
 | `maxRestockOrdersPerRule` | 1 | automatic orders **one rule** may have open at a time. At the default a rule waits for its own order before it asks for more, which is what keeps a slow machine from collecting a queue of identical runs; 0 switches restocking off as well (§3.6.3) |
 | `maxRestockOrderAmount` | 512 | the largest amount of the **product** one automatic order may ask for, so a minimum of 100 000 is refilled in several bounded orders instead of one with hundreds of crane trips. The pattern rounds it up to whole runs, which is why a warehouse settles a little above its minimum — but never past the whole runs the rule's own maximum leaves room for (§3.6.3) |
 | `maxRestockIngredientItems` | 64 | the largest number of **ingredient items** one automatic order may spend — the bound that really limits what a broken machine can swallow before the safety stop fires, because the amount above counts the product and a pattern of nine ingots to one block would turn 512 blocks into 4608 ingots. One run is always allowed even when it costs more; `maxRestockOrdersPerRule` then sequences the rest (§3.6.3) |
+| `maxTicketedAislesPerLevel` | **0 (off)** | how many aisles of **one dimension** may hold their own chunks loaded while they have work. **0 switches the whole feature off, and that is the default**, so a server that does not want a chunk loader pays nothing and every aisle behaves exactly as before M19. Above 0 this **is** a chunk loader; the aisle lets go as soon as it is idle (§11) |
+| `maxChunksPerAisle` | 8 | how many chunks **one** aisle may hold. An aisle whose footprint needs more holds **nothing** (never a partial hold) and says so through goggles. 8 is exactly the worst case of the default `maxAisleLength` of 32 — 12 at 64, 20 at 128 — so raising the length cap means raising this too (§11.3) |
+| `releaseDelayTicks` | 100 | how long a holding aisle lingers after its last work before it lets go (5 s). The anti-thrash bound: work that comes back inside the window never releases in between (§11.4) |
+| `maxHoldTicks` | 72000 | the longest a single aisle may hold without a break (1 hour). When it runs out the aisle lets go, says so, and may only hold again once its work really changed. **0 means unlimited, and then one stuck aisle is a permanent chunk loader** (§11.4) |
+| `maxCollectHoldAislesPerLevel` | **0 (off)** | separate opt-in: how many aisles of one dimension may hold their chunks **only** because a collecting port has items waiting, with no job, request or order of their own. It keeps a **running** collection alive across the gap between one machine output and the next; it cannot make an idle aisle notice a machine that starts producing later (§11.1). These aisles also count against `maxTicketedAislesPerLevel`, so the smaller of the two wins |
 
 Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (`1/384 = 0.0026041666…`). The TOML file groups the keys into sections, so the full path of a key is `<section>.<key>`:
 
@@ -2520,6 +2529,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 1–200, 1–27, 1–1728 |
 | `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–8 |
 | `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–256, 5–1200, 0–64, 0–16, 1–65536 |
+| `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 
@@ -2565,9 +2575,10 @@ Ports: 2 accepting      only while a warehouse port of the aisle really accepts 
                         "Ports: 1 collecting"), each half only while it is above 0
 Rules: 4 · below min 1 · at max 1    only while the aisle really applies stock rules (M15)
 Rules paused: 1                      only while the safety stop holds a rule (M15 part 2)
+Chunks: 4 held          only while the aisle really holds its own chunks loaded (M19, §11.7)
 ```
 
-The port line and the two rule lines are **left out entirely** unless they say something: a display has few rows, and
+The port line, the two rule lines and the chunk line are **left out entirely** unless they say something: a display has few rows, and
 "Rules: 0 · below min 0 · at max 0" or "Ports: 0 accepting" would push a number a player asked for off a four-tube
 board. The port count is the other explanation — next to the at-maximum count — for a warehouse input that is backing up,
 and it is the same number the controller's goggles show, so board and goggles agree (§3.2.3). The at-maximum count is
@@ -2741,3 +2752,322 @@ every shot the scenario compares each line against the controller's own numbers 
 every flap section fits its flap count, then the warehouse changes under the displays and the same views are shot
 again. It photographs the boards at 192 RPM, above Create's 128 RPM instant-flip threshold, so no shot catches
 half-turned flaps.
+
+## 11. Chunk loading for aisles that have work (M19, issue #10)
+
+> Decision and reasons: **ADR-031**. Operator view: `/wareworks chunks`. Config: §9, section `chunkLoading`.
+
+**This is a chunk loader, and it is switched off in the shipped config.** Everything below only happens once a server
+operator raises `chunkLoading.maxTicketedAislesPerLevel` above 0.
+
+### 11.1 The problem this solves, and the one it does not
+
+Until M18 an aisle only ever acted on something a player did: a redstone pulse, a click in a terminal, items dropped
+into a warehouse input. The crane pausing when the dock's chunk stops ticking (`CHUNK_NOT_LOADED`, `stacker-crane.md`
+§4.2) was therefore invisible — nobody was there to wait for it.
+
+Three milestones changed that. Since **M15** a warehouse restocks its own minimums, since **M17** it hands surplus out
+through an accepting port, and since **M18** it fetches out of a machine. All three run without a player, so all three
+stop the moment the player walks away. The answer is deliberately narrow:
+
+> **An aisle may hold its own chunks loaded while, and only while, it has work to do.**
+
+What it still cannot do, stated plainly because a player will otherwise read the setting as more than it is:
+
+* A **collecting port cannot notice** a machine's output while its own chunk does not tick (§3.2.4 — presence and
+  contents both come from reads of that inventory). So an aisle that is idle with nothing pending releases its chunks,
+  unloads, and does not see the furnace that finishes five minutes later. What the opt-in
+  `maxCollectHoldAislesPerLevel` buys is keeping a **running** collection alive across the gap between one machine
+  output and the next; it cannot start one.
+* Nothing here makes a warehouse work **faster** or across a greater distance. It removes one interruption.
+* Held chunks grow **no crops** and spawn **no mobs** (§11.3). This is not a farm loader.
+
+### 11.2 What counts as work
+
+`content.controller.ChunkKeepDecision` (pure, JUnit) holds the whole table. An aisle *has work* when
+
+| Work | Reported reason |
+|---|---|
+| the linked crane has a job (`HOLDING` and `WAITING_FOR_TARGET` included) | `CRANE_JOB` |
+| a retrieval request is open (§7.2) | `OPEN_REQUESTS` |
+| a production order is open — an **automatic restock order is one of these** (§3.6.3) | `PRODUCTION_ORDERS` |
+| a gated-open collecting port has something pending — **only** with the separate opt-in (§3.2.4) | `COLLECTING` |
+
+The precedence is exactly that order, so the goggle line names the most specific cause. An aisle whose *only* work is a
+pending collect and which is over the opt-in's own cap reports `AT_COLLECT_LIMIT` rather than nothing: a setting that
+changes what an aisle does has to be visible to the operator who set it (M19 review).
+
+**Buffered items in a warehouse input are deliberately not work.** A buffer cannot change while its own chunk does not
+tick, so it can never *appear* while the aisle is unloaded, and the moment it is planned it becomes a crane job. As a
+hold reason it would let one forgotten item in one input hold four chunks for ever — the failure mode this whole
+feature has to avoid.
+
+### 11.3 What is held, and what a held chunk does
+
+`content.controller.AisleChunkSpan` (pure integer maths, no Minecraft imports) turns the aisle box **inflated by one
+block horizontally** — aisle-local `x` in `[-1, length + 1]`, lateral `-2..+2` — into the rectangle of chunk columns
+between its corners, sorted by `(chunkX, chunkZ)` and de-duplicated by construction. Nothing is searched for. That one
+inflation is what covers every position the feature needs:
+
+* the **controller itself**, at aisle-local `x = -1`, which lies outside `AisleLayout#bounds()` and is the ticket
+  *owner*, so its own chunk has to tick;
+* the dock at `x = 0` and the rails at `x = 1..length`;
+* every rack position (interfaces, stations, ports, keepers, terminals) at lateral `±1`;
+* the **inventories behind them**, and the **machine behind a collecting port**, at lateral `±2` — no port reaches
+  further, by construction (ADR-030);
+* a double chest whose other half pairs one block past either end of the aisle, through the `x` inflation.
+
+Chunks are columns, so the mast height never costs a chunk. The footprint is cached per `AisleLayout` instance and
+recomputed only when the layout really changes.
+
+**The ticket is a non-ticking block ticket.** `TicketController#forceChunk(level, owner, x, z, add, ticking = false)`
+adds a region ticket at distance 2, i.e. chunk level `33 - 2 = 31`, which is `ENTITY_TICKING_LEVEL`. Verified in the
+NeoForge sources rather than assumed, because the whole feature stands on it:
+
+* `Level#tickBlockEntities` gates on `shouldTickBlocksAt` → `DistanceManager#inBlockTickingRange`, and level 31 passes
+  it. So a held chunk **runs** the crane, the controller, furnaces, funnels, belts, hoppers and dropped items.
+* The `ticking` flag feeds only `DistanceManager#shouldForceTicks`, which gates one branch of
+  `ServerChunkCache#tickChunks`: inhabited time, natural mob spawning and `Level#tickChunk` (random ticks). With
+  `ticking = false` none of those run for our chunks. **Crops do not grow and mobs do not spawn in a held chunk.**
+* A ticket of level 31 propagates outward, so the 8 neighbouring chunks reach level 32 and tick their blocks too. The
+  loaded area is therefore slightly **larger** than the chunk count a player is shown — exactly the footprint vanilla
+  `/forceload` has, since `ForceLoadCommand` uses the same distance of 2. The config comment says so.
+
+### 11.4 The rule: take, keep, release, refuse, give up
+
+| Action | When | Reported |
+|---|---|---|
+| **Take** | in the very tick the transition to "has work" is observed, while the footprint fits and a level slot is free | the work's reason |
+| **Keep** | while there is work and the hold is younger than `maxHoldTicks` (and top the footprint up, at most `AisleChunkTickets.TAKE_BUDGET_PER_TICK` = 2 chunks per tick, because `forceChunk(add)` loads a chunk synchronously) | the work's reason |
+| **Release** | `releaseDelayTicks` after the last work disappeared | `RELEASING` during the linger, then nothing |
+| **Give up** | after `maxHoldTicks` of uninterrupted holding, or on an operator's `/wareworks chunks release`: let go and refuse to take again until the work really changed — or is gone | `GAVE_UP` |
+| **Refuse** | over any cap: hold **nothing at all** — never a partial hold — and behave exactly as before M19 | `AT_LEVEL_LIMIT` / `AT_COLLECT_LIMIT` / `TOO_MANY_CHUNKS` |
+
+Two rules the table only implies, both of them M19 review findings:
+
+* **Idle beats every refusal.** An aisle with nothing to do reports nothing at all, whatever flag it carries. Otherwise
+  `/wareworks chunks release` during the release linger left an aisle saying "let go; holds again when its work changes"
+  about work it did not have, and logging a `WARN` about the same.
+* **The caps bound a hold that exists, not only one being taken.** A cap lowered while an aisle holds, and an aisle
+  extended while it holds, both release it — with the cap's own reason, so a lowered cap is visible rather than silent.
+  A holder counts itself out of the level cap (`AisleChunkTickets#levelCapAllows`), so a level merely *at* its cap never
+  evicts its own holders; only a genuinely lowered one does.
+
+Three of those rows are what make the bounds real rather than aspirational:
+
+* The **linger** (`releaseDelayTicks`, default 100) is the anti-thrash mechanism: work that arrives again inside the
+  window never releases in between, so a burst of jobs does not make the tickets flap.
+* **Give up** is what makes "never a permanent loader" true. A retrieval request whose output can never be served, or a
+  crane stuck in `HOLDING` with items nothing accepts (§8), would otherwise hold chunks until somebody noticed. After
+  `maxHoldTicks` (default 72000 = 1 hour) the aisle lets go, logs one `WARN`, and may only hold again once its **work
+  fingerprint** — the crane job id plus the open request and order ids — really changed. `maxHoldTicks = 0` switches
+  that bound off, and then a stuck aisle *is* a permanent chunk loader; the config comment says that too.
+
+  The flag and that fingerprint are the **one thing this feature saves** (`ControllerPersistence`, tag `ChunkKeep`,
+  written only while it is set). They have to be: the work they refuse is saved too, so a bound that lived only as long
+  as one block entity instance would let every reload — a player walking back into the chunk, or a restart — take the
+  whole footprint again for another hour, for work that had already proved unservable. An aisle that becomes **idle**
+  drops the flag, which is also the escape hatch: finished work always re-arms an aisle, whatever its fingerprint was.
+  The fingerprint is order-independent inside each queue, because after a load those queues are rebuilt from NBT and an
+  equal set of work has to give an equal number. (M19 review.)
+* **Refuse is all or nothing.** A partial hold would load the controller's chunk and leave the far end of the aisle
+  away, which is worse than not holding at all: the crane would run and pause at every stop it cannot reach.
+
+An aisle **without a dock** releases at once rather than lingering, because its footprint is empty and an aisle that
+lost its dock cannot serve the requests it still holds (checked before the work; JUnit `ChunkKeepDecisionTest`).
+
+### 11.5 Event-driven, never polled
+
+Taking and releasing are driven from the places that already exist, never from a scan:
+
+`CraneDispatch` on job assignment · the crane's `onCranePicked`, `onCraneJobFinished`, `onCraneJobAborted`,
+`onCraneJobLost` and its **fall back to `CranePhase.IDLE`** · request add, deliver, cancel, reduce and prune ·
+production order start and finish · an automatic restock order · a collect refresh · `applyLayout`, `clearAisleState`
+and `unlinkDock` · `onLoad()` · a bumped config generation (`ModConfigEvent.Loading` / `Reloading`).
+
+Each of them only sets one boolean, `chunkKeepDirty`. **Only `WarehouseControllerBlockEntity#tick()` ever calls into
+NeoForge**, because forcing a chunk loads its block entities synchronously — from `onLoad()` that would re-enter the
+fresh-block-entity pass of `Level#tickBlockEntities`. The phase-change hook is the one the design did not name and a
+GameTest found: `ReportComplete` fires while the job is still attached to the crane state, so the job is really gone
+only one tick later, when the state machine reaches `IDLE`; hooking only `onCraneJobFinished` left the release waiting
+for the periodic re-check. It covers an aborted and a lost job as well.
+
+Beyond the hooks, a **holding** aisle re-decides at most every 20 ticks
+(`WarehouseControllerBlockEntity.CHUNK_KEEP_RECHECK_TICKS`). That bounded re-check is what makes a changed server
+config, a freed level slot and a work change nobody hinted at take effect, and it is the safety net that keeps the
+release from depending on every single hook being perfect. An aisle that holds **nothing** schedules nothing at all, so
+a default server pays one boolean and one long compare per controller tick — and with the feature switched off the
+evaluation itself returns after two map lookups, so the ~18 hooks cost nothing beyond them (M19 review). A port poll only
+hints while the collect opt-in is on, because nothing else it observes can change the decision.
+
+A **refused** aisle therefore waits for an event too. A cap that frees up wakes it directly:
+`AisleChunkTickets#wakeRefused` marks every refused controller of the level dirty when a hold is released, and it drops
+entries whose chunk is away (they decide again on their first tick after a load) so the bounded set of 64 remembered
+refusals per level cannot fill with dead ones. Past those 64 an aisle is not woken by a freed slot and waits for its own
+next event; that needs more than 64 aisles refused at the same time in one dimension, and each of them still works
+exactly as it did before M19.
+
+### 11.6 Why nothing leaks
+
+NeoForge persists these tickets whether the mod wants it or not, and that persistence **is** the feature: a restart
+must not throw away an in-progress job. So the safety lives in the **load path**, not in a release on shutdown — which
+could not work anyway, because `saveAllChunks` runs before `LevelEvent.Unload` and a crash writes nothing at all. Four
+layers, all in `content.controller.AisleChunkTickets`:
+
+1. **The validation callback**, the only place NeoForge ever names our owners. Per owner it keeps exactly **one seed
+   chunk** — the owner's own — and removes every other saved chunk, every ticking ticket (the mod never takes one, so
+   one under our id comes from a hand-edited save) and, while the feature is off or over the level cap, everything.
+   Loading that one chunk loads the controller, whose first tick either grows the hold to the full footprint (the work
+   survived) or releases the seed (it did not). Owners are sorted by `(x, z, y)`, so which owners survive a cap is
+   reproducible across restarts.
+2. **The seed watchdog** (`AisleChunkTickets.SEED_GRACE_TICKS` = 100), for the case the callback structurally cannot
+   see: a controller removed while the server was down (world edit, another mod, a rollback) cannot be asked whether it
+   still wants its ticket. A seed no controller claimed in time is released with a `WARN` naming the position. The
+   listener returns immediately while no seed is pending, so it self-disables a few seconds after a load.
+3. **The owner's own lifecycle.** `remove()` releases in the same tick — a ticket that outlives its owner block is the
+   one defect this feature must not have. `invalidate()` releases too, **unless** the server or the level is going down;
+   during a shutdown it must not, or the save would lose the hold and with it the in-progress job.
+4. **One single-writer record**, rebuilt exactly from `TicketHelper#getBlockTickets()` in the callback, so the mod's
+   view cannot drift from NeoForge's own data at load. Server thread only, one `WorldAttached` map per level, cleared
+   with the level exactly as `WarehouseRegistry` is. None of that state is thread safe, and `LevelEvent.Load` /
+   `LevelEvent.Unload` are posted for **client** levels too, on the render thread, while an integrated server is still
+   ticking (`ClientLevel`'s constructor, `Minecraft#setLevel` / `#clearLevel` / `#disconnect`). Every entry point a client
+   could reach therefore tests for a `ServerLevel` first — the two handlers and `releaseOnInvalidate` — exactly as
+   `WarehouseRegistry` does at each of its own (M19 review).
+
+### 11.7 What a player and an operator can read
+
+* **Goggles on the controller**, one line, left out entirely while there is nothing to report — which is every aisle on
+  a default server:
+  * `Chunk loading: 4 chunks (crane job)`, and the same with "open requests", "production orders", "collecting from a
+    machine" or "idle, letting go".
+  * `Chunk loading: none (server limit: 2 aisles)` — `AT_LEVEL_LIMIT`.
+  * `Chunk loading: none (collecting limit: 1 aisles)` — `AT_COLLECT_LIMIT`, the collect opt-in's own cap. Its own line
+    rather than none at all: an aisle queued behind it used to be byte-for-byte an idle aisle, so an operator who set the
+    opt-in could not see who was waiting (M19 review).
+  * `Chunk loading: none (this aisle needs 12 of 8 chunks)` — `TOO_MANY_CHUNKS`, naming **both** numbers, because that
+    is the only form a player can act on. Also the line of an aisle whose cap was **lowered** under it while it held.
+  * `Chunk loading: none (let go; holds again when its work changes)` — `GAVE_UP`. The text says what the aisle *is*
+    doing rather than which of the two causes it was (the timeout, or an operator's release): the cause is in the
+    server log for the first and in the command's own answer for the second. Found by the `chunks` visual scenario,
+    which shot the earlier wording claiming a timeout after an operator release.
+* **An aisle display** (§10.1) gains `Chunks: 4 held`, and only while the aisle really holds — the same rule the port
+  and rule lines follow, for the same reason: a four-tube board has few rows.
+* **`/wareworks chunks`** (`command.WareworksCommands`, permission level 2, the same as `/forceload`). Per dimension it
+  prints one row per holding aisle (position, aisle letter, chunk count, reason, seconds held), then the totals, and per
+  dimension **two** numbers: how many chunks are force-loaded there by **block tickets** of any mod — the number the rows
+  are comparable with, so a discrepancy is what a leak looks like — and how many are force-loaded in total, entity tickets
+  and vanilla `/forceload` included. Those are three independent stores in `ForcedChunksSavedData`, so the first number is
+  emphatically not a total, and the line used to claim it was (M19 review). A dimension where the mod holds nothing is
+  listed as soon as anything at all is force-loaded in it, because "we hold nothing here and NeoForge tracks four block
+  tickets" is exactly what a leak looks like and leaving the line out in that state hid it.
+
+  **Scope.** `release <x y z>` acts on the **sender's** dimension, as every subcommand of vanilla `/forceload` does, and
+  its answer names that dimension (`/execute in the_nether run wareworks chunks release ...` for another one). It arms
+  only an aisle that really held, so a controller at the same coordinates in another dimension cannot be armed by mistake.
+  `release all` acts on **all** dimensions, so the scope of the word matches the scope of the listing it answers, and it
+  additionally tells the aisles a cap had refused to give up — otherwise the freed slots went to the next aisles in the
+  queue within a tick or two and the operator saw the same number of holders again. (All three: M19 review.) The
+  give-up is saved, so a restart does not undo it; a controller in an unloaded chunk cannot be told and re-decides when it
+  loads, which is the documented limit of the command.
+
+  **This command is a hard requirement of the feature, not a convenience.** `/forceload query` reads only the level's
+  own vanilla set (`ForceLoadCommand` → `ServerLevel#getForcedChunks`), while a mod's tickets live in a separate
+  tracker whose owner type is package-private — so nothing outside NeoForge's own validation callback can name their
+  owners. An operator who cannot find every ticket a mod holds has no way to tell a working feature from a leak.
+* **The log** carries one `INFO` when a hold starts — naming the **whole footprint** it is taking, not what happens to be
+  forced in that first tick, so it reconciles with the release line instead of reading like a 2-taken / 4-released
+  imbalance; a hold that grew out of a reinstated seed gets that line too, in its own wording — and one when it is
+  released, **with its cause** (the aisle decided to, it gave up, an operator released it,
+  its controller went away, nobody claimed a reinstated ticket). Five very different things release a hold, and a log that
+  could not tell them apart made an ordinary idle release look like a leak (M19 review). Plus a `WARN` per dropped or
+  unclaimed saved ticket, and a rate-limited `WARN` for an aisle that wants to hold and may not.
+
+### 11.8 Classes and tests
+
+Classes: `content.controller.AisleChunkSpan` (the pure footprint), `ChunkKeepDecision` (the pure decision table with
+its `Work` / `Limits` / `State` records), `ChunkKeepReason` (the reasons and their lang keys), `AisleChunkTickets` (the
+one ticket controller `wareworks:aisle`, the per-level record, take and release, the validation adapter with its
+testable `validate` seam, the seed watchdog, and the queries the command and the tests use) and the chunk-keep part of
+`WarehouseControllerBlockEntity`; `command.WareworksCommands`. **One thing is written to disk:** the give-up flag and its
+work fingerprint (`ControllerPersistence`, tag `ChunkKeep`, written only while the flag is set), because the bound has to
+outlive the block entity instance like the work it refuses does. The hold itself stays derived state and the tickets stay
+NeoForge's own saved data.
+
+* **JUnit** `AisleChunkSpanTest` (10): all four facings, every chunk alignment on both axes, lengths
+  0/1/15/16/17/31/32/63/64/127/128, dedup, deterministic order, explicit assertions that the controller position
+  (aisle-local `x = -1`) and lateral ±2 are inside the set, and the worst-case counts 8/12/20 the config default is
+  derived from — pinned, with no alignment exceeding them.
+* **JUnit** `ChunkKeepDecisionTest` (36): the whole table — feature off, a take on each kind of work, the precedence,
+  keep, the exact linger boundary (delay − 1 against delay), zero linger, work returning inside the linger, an unknown
+  idle time (a reinstated hold) releasing at once, give-up at `maxHoldTicks` with the fingerprint re-arm, 0 as
+  unlimited, both caps including exactly-at-cap, an aisle that loses its dock releasing at once, and the goggle contract
+  (`isHolding`, lang keys, sync round trip, null and negative normalisation). Six rows come from the M19 review: a level
+  cap lowered under a holder and a footprint grown past the per-aisle cap both release with the cap's own reason (while a
+  level merely *at* its cap and a footprint exactly at it go on holding), the collect opt-in's cap refuses with
+  `AT_COLLECT_LIMIT` instead of looking idle (and does not report anything for an aisle with nothing pending, or without
+  the opt-in at all), and an aisle that gave up and then became idle reports nothing rather than `GAVE_UP`.
+* **GameTests** `gametest.AisleChunkLoadingGameTests` (16), each with a **leak probe on every tick**: the union of the
+  chunks the mod's record names must equal NeoForge's own block-ticket count for the level. (A per-owner raw count is
+  impossible — NeoForge's `TicketOwner` is package-private — which is also why `/wareworks chunks` exists. Two
+  same-tick raw deltas are still asserted where they are exact: the controller broken and the controller replaced.)
+  * `chunkloadingoffbydefault`: a whole store job with the shipped config takes no ticket on any tick — the guard for
+    "a server that does not want this pays nothing".
+  * `chunkticketheldwhileajobruns`: the held set equals `AisleChunkSpan`'s footprint, the reason is `CRANE_JOB`, the
+    goggle count agrees, and `/wareworks chunks` plus `release <pos>` are driven through the real command dispatcher,
+    with the aisle not taking straight back afterwards.
+  * `chunkticketreleasedwhenidle`: `RELEASING` during the linger, released only at or after `releaseDelayTicks`, then
+    the anti-thrash guard — two jobs half a linger apart, with every tick asserting the hold never drops to 0.
+  * `chunkticketreleasedwhenthecontrollerisbroken` / `...isreplaced`: broken mid job, and `/setblock` over the
+    controller; NeoForge loses exactly the chunks it held, in the same tick, with an `ItemCensus` on every tick.
+  * `chunkticketrefusedoverthelevelcap` (on `aisle_pair_16x10x13`): the refused aisle reports `AT_LEVEL_LIMIT`, holds
+    nothing and still serves its request exactly as before M19; when the holder lets go it takes the freed slot without
+    a poll.
+  * `chunkticketrefusedwhentheaisleneedstoomanychunks`: `TOO_MANY_CHUNKS`, nothing held at all, the work untouched.
+  * `chunkticketgivesupafterthemaximum`: an unservable request gives up after `maxHoldTicks` with reason `GAVE_UP` and
+    one `WARN`, never takes again for the same work, and a genuinely new request re-arms it.
+  * `chunkticketfollowsashrinkingaisle`: rails removed under a holding controller shrink the held set to the new
+    footprint, which is always a subset of the old one.
+  * `chunkticketreleasedwhenthefeatureisswitchedoff`: the setting set to 0 mid-hold releases everything and nothing
+    comes back although the work is still there.
+  * `chunkticketvalidationdropsanorphan`: the restart decision driven through `AisleChunkTickets.validate` against the
+    real level — one seed for the real controller, the other saved chunk and a stray ticking ticket removed, an owner
+    beyond the cap dropped wholesale, the controller then claiming its seed and growing back to its footprint, and the
+    real watchdog releasing the seed nobody claimed.
+  * `chunkticketcollectholdisoptin`: a gated-open collecting port with items pending holds nothing without the opt-in,
+    holds with reason `COLLECTING` once it is on, and lets go after the linger when the machine is empty.
+
+  Four tests come from the M19 review:
+  * `chunkticketreleasedwhenacapislowered`: `maxChunksPerAisle` lowered under a **holding** aisle releases everything at
+    once with reason `TOO_MANY_CHUNKS` and the number it would need, nothing comes back while the cap stays, and the
+    refusal is not sticky. (The per-aisle cap is the deterministic half of this pair: which chunk columns an aisle covers
+    depends on where it sits inside them, so a test that *grew* an aisle could not promise the footprint really got
+    bigger — that direction is a JUnit row.)
+  * `chunkticketgiveupsurvivesareload`: an aisle that gave up on an unservable request is saved and replaced by a copy
+    built from that save with `BlockEntity.loadStatic` — the way a chunk load builds one, since a GameTest cannot unload
+    its own area — and holds **nothing on any tick** of the window afterwards, although it read the same request back.
+    Then the escape hatch: the request cancelled makes it report nothing at all, and a new one makes it hold again.
+  * `chunkticketreleaseallleavesnothingheld` (on `aisle_pair_16x10x13`): with one aisle holding and one refused by the
+    level cap, `/wareworks chunks release all` leaves **both** at zero and both saying `GAVE_UP`, instead of handing the
+    freed slot to the aisle that was queued behind the cap.
+  * `chunkticketcollectcapnamesitself` (on `aisle_pair_16x10x13`): with two collecting aisles and a collect cap of 1,
+    exactly one holds with `COLLECTING` and the other reports `AT_COLLECT_LIMIT` with the chunks it would need (asserted
+    symmetrically, because which one gets the slot is a race by design); raising the cap to 2 makes both hold.
+* **`./gradlew runRobustnessTest`**: the three pre-M19 phases run unchanged with the feature **off** — the
+  no-regression proof for the pause path, the censuses and the "the dock block entity is really removed" probe (§8.1).
+  Two phases were added: with chunk loading on, a running job **finishes while nobody is anywhere near the aisle** and
+  the dock's block entity is the *same* instance throughout (the inverse of the unload phase, and the only proof
+  possible — a GameTest area is force-loaded by vanilla itself); then the idle aisle lets go, and only then does the
+  dock really become removed.
+* **`./gradlew runVisualTest -Pwareworks.visualTest=chunks`** (`dev.ChunkLoadingVisualScenario`, its own throw-away
+  world `wareworks_visual_chunks`, about 3 minutes, 15 shots): one aisle **far outside the spawn chunks** whose work the
+  warehouse drives itself — a collecting port with a barrel full of planks — run twice with the player teleported 1405
+  blocks away. With the setting **off** the aisle unloads mid collection, holds nothing on any tick of the away window,
+  the dock's chunk is asserted unloaded on every one of them, and on return a *new* block entity resumes the unfinished
+  work. With it **on**, the held set equals the footprint and 128 items are collected with nobody within 900 blocks, the
+  dock being the same object throughout. Then a **real restart**: saved mid hold, quit to the title screen, rejoined —
+  NeoForge's callback reinstates one seed, the controller claims it and grows back, and the interrupted collection
+  finishes with nobody near (the rejoined world reads the setting from a real config file in its own `serverconfig/`
+  folder, the way a server does). Four more chapters cover the refused aisle, the operator command read back out of the
+  chat, the controller broken mid hold and the setting switched off mid hold; every tick of every chapter runs the leak
+  probe and every item move is bracketed by a `SceneItemCensus`. The run ends with 0 force-loaded chunks in every level.

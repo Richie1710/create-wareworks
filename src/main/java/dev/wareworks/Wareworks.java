@@ -8,7 +8,9 @@ import com.simibubi.create.foundation.item.ItemDescription;
 import com.simibubi.create.foundation.item.KineticStats;
 import com.simibubi.create.foundation.item.TooltipModifier;
 
+import dev.wareworks.command.WareworksCommands;
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.crane.CraneServerHooks;
 import dev.wareworks.data.WareworksDatagen;
 import dev.wareworks.network.WareworksNetwork;
@@ -80,6 +82,12 @@ public final class Wareworks {
         //    crane's per-server-run diagnostics, which must be reset when a new server starts in the same JVM.
         NeoForge.EVENT_BUS.addListener(GoggleObservers::onPlayerTick);
         CraneServerHooks.register(NeoForge.EVENT_BUS);
+        // 5. Optional chunk loading for aisles that have work (M19, issue #10, ADR-031). The ticket controller must be
+        //    registered on the MOD bus and unconditionally: an unregistered controller has its saved tickets stripped
+        //    from the level. Its lifecycle hooks and the operator command live on the game bus.
+        AisleChunkTickets.register(modEventBus);
+        AisleChunkTickets.registerHooks(NeoForge.EVENT_BUS);
+        WareworksCommands.register(NeoForge.EVENT_BUS);
     }
 
     public static CreateRegistrate registrate() {

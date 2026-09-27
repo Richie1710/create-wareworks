@@ -222,6 +222,9 @@ final class CraneDispatch {
             ledger.releaseJob(job.id());
             return;
         }
+        // M19 (issue #10): the aisle now has a crane job, which is the most common reason to hold its chunks. Event
+        // driven on purpose — the controller never polls for this.
+        controller.markChunkKeepDirty();
         spendPortToken(job, job.target(), job.targetKind());
         spendCollectToken(job);
     }

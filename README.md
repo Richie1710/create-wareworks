@@ -82,6 +82,11 @@ English and German translations, and recipes at mid-game Create tier.
 Items only ever move in the crane's grabber, and nothing is lost or duplicated when blocks break, chunks unload or the
 server restarts.
 
+**A server operator can let an aisle keep itself loaded while it has work**, so a warehouse that restocks, exports or
+collects on its own does not stop the moment you walk away. It is a **chunk loader** and it is **switched off** in the
+shipped configuration; the **Chunk loading** section below says what it does, what bounds it and how to see every chunk
+the mod holds.
+
 ## Requirements
 
 | | |
@@ -289,6 +294,53 @@ An aisle may hold several keepers; their rows together are the aisle's rules, up
 second rule for the same item is ignored and says so, so you can always see which row is in charge. Setting
 `maxRestockOrders` to 0 in the server config switches the automatic ordering off, while every rule keeps capping and
 reserving.
+
+## Chunk loading (for server operators)
+
+A warehouse does things on its own now: it refills its own minimums, hands surplus out through a port and fetches a
+machine's result back into storage. All of that stops when the chunks around the aisle stop ticking — which is the moment
+you walk away.
+
+Wareworks can keep those chunks loaded, and it is honest about what that means:
+
+> **This is a chunk loader.** It is **switched off** in the shipped configuration, and nothing about it happens until a
+> server operator turns it on.
+
+Turn it on by raising `chunkLoading.maxTicketedAislesPerLevel` in `config/wareworks-server.toml` (per world:
+`<world>/serverconfig/wareworks-server.toml`). What you get, and what bounds it:
+
+* **Only while the aisle has work.** An aisle holds chunks while its crane has a job, a request is open or a production
+  order is running (an automatic restock is one of those). The moment it is idle it lets go — after a short linger, so a
+  burst of jobs cannot make it flap. It is never a permanent loader for a warehouse that is standing still.
+* **Only its own chunks.** The aisle box plus one block on every side: the controller, the dock, the rails, the racks,
+  the inventories behind them and the machine behind a collecting port. Usually 2 to 8 chunks.
+* **Three caps, and going over one costs nothing.** `maxTicketedAislesPerLevel` limits how many aisles of one dimension
+  may hold at once, `maxChunksPerAisle` how many chunks one aisle may hold, and `maxHoldTicks` how long a single hold may
+  last (1 hour by default) before the aisle lets go and waits for its work to really change. An aisle over a cap holds
+  **nothing at all** and behaves exactly as it did before: the crane pauses while its chunks are away and continues when
+  they come back. Its goggles say which cap stopped it, with both numbers — and lowering a cap under an aisle that is
+  already holding makes it let go, rather than leaving the hold above the number you just set.
+* **No crops, no mobs.** Held chunks tick blocks and block entities — the crane, your furnaces, funnels and belts — but
+  not random ticks, mob spawning or inhabited time. This loads a warehouse, not a farm. (A forced chunk also lets its
+  eight neighbours tick their blocks, exactly as vanilla `/forceload` does, so the loaded area is a little larger than
+  the chunk count you are shown.)
+* **You can find every ticket.** `/wareworks chunks` (permission level 2, the same as `/forceload`) lists every holding
+  aisle of every dimension with its position, aisle letter, chunk count, reason and age, then the totals and, per
+  dimension, how many chunks any mod force-loads there with block tickets next to how many are force-loaded in total.
+  `/wareworks chunks release <x y z>` frees one aisle in the dimension you run it in — like every `/forceload`
+  subcommand — and `release all` frees every dimension, including the aisles that were queued behind a cap, so nothing at
+  all is left holding. You need this command: `/forceload query` cannot see a mod's tickets.
+* **Nothing survives its owner.** Break, replace or remove the warehouse controller and its chunks are released in the
+  same tick. A hold does survive a restart on purpose, so a job that was running is still running afterwards — but only
+  as a single chunk until the controller has confirmed it still has work, and a hold whose controller is gone is dropped
+  with a line in the log. An aisle that let go because its hold ran out of time, or because you released it, stays that
+  way across a restart too: it holds again when its work really changes, or once that work is done.
+
+One thing it deliberately cannot do: a **collecting** port only notices its machine while its own chunk ticks, so an
+idle aisle with nothing pending unloads and will not see a furnace that finishes later. The separate opt-in
+`chunkLoading.maxCollectHoldAislesPerLevel` keeps a collection that is **already running** alive across the gap between
+one machine output and the next; it cannot start one. It is a cap of its own, and an aisle waiting behind it says so on
+its goggles.
 
 ## Building from source
 

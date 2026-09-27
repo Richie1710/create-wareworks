@@ -48,6 +48,13 @@ import net.minecraft.nbt.Tag;
  * @param rulesPaused       rules the safety stop is holding (M15 part 2, issue #3): an automatic restock order of
  *                          theirs ended with ingredients already in a machine and nothing coming back, so the
  *                          warehouse stopped ordering for them and waits for the player
+ * @param chunkKeepReason   whether this aisle is holding its chunks loaded right now and why, or why it is not
+ *                          (M19, issue #10, ADR-031). {@link ChunkKeepReason#NONE} means "nothing to report", which is
+ *                          every aisle while the feature is off, and is left out of the synced tag entirely
+ * @param chunkKeepChunks   the chunk count the line above is about: how many chunks are held while
+ *                          {@link ChunkKeepReason#isHolding()}, and how many the aisle's footprint would need while it
+ *                          is refused. A single number rather than two, so the tag stays as bounded as the record's
+ *                          contract requires
  * @param crane             the linked crane's goggle data (empty without a loaded, linked dock)
  * @param lastPlanReason    why the last planning run created no job (empty if it created one or never ran)
  */
@@ -57,7 +64,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                                       int productionStations,
                                       int misaligned, int itemTypes, long totalItems, int openRequests,
                                       int productionOrders, int stockRules, int rulesBelowMinimum, int rulesAtMaximum,
-                                      int rulesPaused, Optional<CraneGoggleInfo> crane,
+                                      int rulesPaused, ChunkKeepReason chunkKeepReason, int chunkKeepChunks,
+                                      Optional<CraneGoggleInfo> crane,
                                       Optional<NoJobReason> lastPlanReason) {
     public static final ControllerGoggleSummary NONE =
             counts(ControllerStatus.NO_DOCK, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0, 0, 0, 0, 0, 0);
@@ -78,6 +86,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
     private static final String RULES_BELOW_MINIMUM = "RulesBelowMinimum";
     private static final String RULES_AT_MAXIMUM = "RulesAtMaximum";
     private static final String RULES_PAUSED = "RulesPaused";
+    private static final String CHUNK_KEEP = "ChunkKeep";
+    private static final String CHUNK_KEEP_CHUNKS = "ChunkKeepChunks";
     private static final String MISALIGNED = "Misaligned";
     private static final String ITEM_TYPES = "ItemTypes";
     private static final String TOTAL_ITEMS = "TotalItems";
@@ -107,6 +117,9 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         rulesBelowMinimum = Math.max(0, rulesBelowMinimum);
         rulesAtMaximum = Math.max(0, rulesAtMaximum);
         rulesPaused = Math.max(0, rulesPaused);
+        if (chunkKeepReason == null)
+            chunkKeepReason = ChunkKeepReason.NONE;
+        chunkKeepChunks = Math.max(0, chunkKeepChunks);
         if (crane == null)
             crane = Optional.empty();
         if (lastPlanReason == null)
@@ -132,15 +145,19 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes,
                 totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused,
-                Optional.empty(), Optional.empty());
+                ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty());
     }
 
-    /** This summary without crane data and planning result (the counts only, filtered locations included). */
+    /**
+     * This summary without crane data and planning result (the counts only, filtered locations included). The chunk
+     * loading state is kept: it is a property of the aisle, not of the crane, and it reads {@link ChunkKeepReason#NONE}
+     * for every aisle while the feature is off.
+     */
     public ControllerGoggleSummary withoutCrane() {
-        return counts(status, aisleLength, mastHeight, storageLocations, filteredLocations, prioritisedLocations,
-                inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned, itemTypes, totalItems,
-                openRequests,
-                productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused);
+        return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
+                prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
+                itemTypes, totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum,
+                rulesPaused, chunkKeepReason, chunkKeepChunks, Optional.empty(), Optional.empty());
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -184,6 +201,12 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
             tag.putInt(RULES_AT_MAXIMUM, rulesAtMaximum);
         if (rulesPaused > 0)
             tag.putInt(RULES_PAUSED, rulesPaused);
+        // Left out entirely while there is nothing to report, which is every aisle on a server that has chunk loading
+        // switched off - the default (M19, issue #10). A missing key reads back as NONE / 0.
+        if (chunkKeepReason != ChunkKeepReason.NONE) {
+            tag.putString(CHUNK_KEEP, chunkKeepReason.name());
+            tag.putInt(CHUNK_KEEP_CHUNKS, chunkKeepChunks);
+        }
         crane.ifPresent(info -> {
             CompoundTag craneTag = new CompoundTag();
             info.write(craneTag);
@@ -204,7 +227,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 tag.getInt(MISALIGNED), tag.getInt(ITEM_TYPES),
                 tag.getLong(TOTAL_ITEMS), tag.getInt(OPEN_REQUESTS), tag.getInt(PRODUCTION_ORDERS),
                 tag.getInt(STOCK_RULES), tag.getInt(RULES_BELOW_MINIMUM), tag.getInt(RULES_AT_MAXIMUM),
-                tag.getInt(RULES_PAUSED), crane, reasonByName(tag.getString(LAST_PLAN)));
+                tag.getInt(RULES_PAUSED), ChunkKeepReason.byName(tag.getString(CHUNK_KEEP)),
+                tag.getInt(CHUNK_KEEP_CHUNKS), crane, reasonByName(tag.getString(LAST_PLAN)));
     }
 
     private static Optional<NoJobReason> reasonByName(String name) {

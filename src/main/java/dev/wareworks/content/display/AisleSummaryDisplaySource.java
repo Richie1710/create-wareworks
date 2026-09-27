@@ -89,6 +89,13 @@ public class AisleSummaryDisplaySource extends DisplaySource {
         if (controller.pausedStockRuleCount() > 0)
             lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_RULES_PAUSED,
                     WareworksLang.number(controller.pausedStockRuleCount())));
+        // Only while the aisle really holds chunks (M19, issue #10), by the same rule the port and rule lines follow: a
+        // display has few rows, and on a server with chunk loading switched off — the default — this line would always
+        // read 0 and push a number a player asked for off a four-tube board. It reads two cached controller fields, so a
+        // pull is still a handful of field reads (ADR-026).
+        if (controller.chunkKeepReason().isHolding())
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS,
+                    WareworksLang.number(controller.chunkKeepChunks())));
         return WarehouseDisplays.limit(lines, stats);
     }
 

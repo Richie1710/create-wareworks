@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Optional chunk loading for aisles that have work.** A warehouse does things on its own now — it refills its own
+  minimums, hands surplus out through a port and fetches a machine's result back into storage — and all of that used to
+  stop the moment you walked away. An aisle can now hold **its own chunks** loaded while it has something to do: a crane
+  job, an open request or a production order, an automatic restock included. Walk away mid job and come back to a finished
+  one
+- **This is a chunk loader, and it ships switched off.** Nothing about it happens until a server operator raises
+  `chunkLoading.maxTicketedAislesPerLevel` in the server config, and a server that leaves it alone behaves exactly as
+  before: the crane pauses while its chunks are away and continues when they come back
+- **Bounded, and going over a bound costs nothing.** Three caps — how many aisles of one dimension may hold at once, how
+  many chunks one aisle may hold, and how long a single hold may last (one hour by default) — and an aisle over a cap
+  holds **nothing at all** and works exactly as it did before, saying which cap stopped it and with which numbers. Lower a
+  cap under an aisle that is already holding and it lets go. Every aisle lets go as soon as it is idle, after a short
+  linger so a busy warehouse cannot make the tickets flap
+- **Held chunks grow no crops and spawn no mobs.** They tick blocks and block entities — the crane, the controller and
+  your own furnaces, funnels and belts — but not random ticks, mob spawning or inhabited time. This loads a warehouse, not
+  a farm
+- **You can find and free every chunk the mod holds.** The warehouse controller's goggles say whether this aisle is
+  holding, how many chunks and why, or what is stopping it; an aisle display shows the count while it holds; and
+  `/wareworks chunks` (permission level 2, the same as `/forceload`) lists every holding aisle of every dimension with its
+  reason and age, next to how many chunks block tickets of any mod hold there and how many are force-loaded in total.
+  `release <x y z>` frees one aisle in the dimension you run it in, and `release all` frees every dimension and leaves
+  nothing at all holding. `/forceload query` cannot see a mod's tickets, which is why this command exists
+- **Nothing outlives its owner.** Break, replace or remove a warehouse controller and its chunks are released in the same
+  tick. A hold deliberately survives a restart, so a job that was running is still running afterwards — as a single chunk
+  until the controller has confirmed there is still work, and dropped with a line in the log if the controller is gone. An
+  aisle that let go because its hold ran out of time, or because you released it, stays that way across a restart as well
+- A **separate opt-in**, `chunkLoading.maxCollectHoldAislesPerLevel`, keeps a **running** collection from a machine alive
+  across the gap between one output and the next. It is off by default and honest about its limit: an idle aisle with
+  nothing pending unloads and will not see a machine that starts producing later
+- **Existing worlds are unchanged.** The only thing Wareworks writes for this is a note on a controller that has let go of
+  work it could not finish, so that it stays let go after a restart; the hold itself is not stored at all
+
 ## [0.4.0-alpha] - 2026-09-27
 
 ### Added

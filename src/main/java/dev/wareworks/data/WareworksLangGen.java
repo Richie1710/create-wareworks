@@ -3,6 +3,7 @@ package dev.wareworks.data;
 import java.util.function.BiConsumer;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.controller.ChunkKeepReason;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.core.crane.CranePhase;
@@ -72,6 +73,54 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRIORITISED_LOCATIONS), "Prioritised locations: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ACCEPTING_PORTS), "Accepting ports: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_COLLECTING_PORTS), "Collecting ports: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING), "Chunk loading: %1$s chunks (%2$s)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_NONE), "Chunk loading: none (%1$s)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_AT_LIMIT),
+                "Chunk loading: none (server limit: %1$s aisles)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_AT_COLLECT_LIMIT),
+                "Chunk loading: none (collecting limit: %1$s aisles)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_TOO_MANY),
+                "Chunk loading: none (this aisle needs %1$s of %2$s chunks)");
+        for (ChunkKeepReason reason : ChunkKeepReason.values()) {
+            if (reason == ChunkKeepReason.NONE)
+                continue;
+            lang.accept(WareworksLang.key(reason.langKey()), switch (reason) {
+                case CRANE_JOB -> "crane job";
+                case OPEN_REQUESTS -> "open requests";
+                case PRODUCTION_ORDERS -> "production orders";
+                case COLLECTING -> "collecting from a machine";
+                case RELEASING -> "idle, letting go";
+                case AT_LEVEL_LIMIT -> "as many aisles hold chunks as the server allows";
+                // Its own reason rather than AT_LEVEL_LIMIT: the collect opt-in is a second setting, and an aisle
+                // queued behind it would otherwise look byte-for-byte like an idle one (M19 review).
+                case AT_COLLECT_LIMIT -> "as many aisles collect with held chunks as the server allows";
+                case TOO_MANY_CHUNKS -> "this aisle needs more chunks than the server allows";
+                // Two things reach this state: the longest allowed hold running out, and an operator's
+                // "/wareworks chunks release". The line must be true of both, so it says what the aisle IS doing
+                // rather than guessing why; the cause is in the server log and in the command's own answer.
+                case GAVE_UP -> "let go; holds again when its work changes";
+                case NONE -> throw new IllegalStateException("skipped above");
+            });
+        }
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_HEADER), "Chunks held in %1$s:");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_ROW),
+                "  %1$s: aisle %2$s, %3$s chunk(s), %4$s, held for %5$s s");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_ROW_UNCLAIMED),
+                "  %1$s: %2$s chunk(s) reinstated from the save, no warehouse controller has claimed them yet");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_NONE), "No Wareworks aisle is holding any chunks");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_TOTAL),
+                "Wareworks holds %1$s chunk(s) in %2$s aisle(s) over %3$s dimension(s)");
+        // Two numbers, because the first one is NOT a total: Wareworks takes block tickets, so that is the number the
+        // rows above are comparable with, while vanilla /forceload and entity tickets live in two other stores
+        // entirely (M19 review).
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_RAW),
+                "  %1$s has %2$s chunk(s) force-loaded by block tickets (all mods), %3$s in total "
+                        + "(entity tickets and /forceload included)");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_RELEASED), "Released the chunks of the aisle at %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_NOT_HELD),
+                "No aisle at %1$s is holding chunks in %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_RELEASED_ALL),
+                "Released the chunks of %1$s aisle(s) in %2$s dimension(s)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATIONS), "Inputs: %1$s, outputs: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_COUNT), "Misaligned blocks: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ITEM_TYPES), "Item types: %1$s");
@@ -400,6 +449,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS_BOTH),
                 "Ports: %1$s accepting, %2$s collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS_COLLECTING), "Ports: %1$s collecting");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS), "Chunks: %1$s held");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No aisle");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");

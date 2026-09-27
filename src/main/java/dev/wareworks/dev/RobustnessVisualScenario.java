@@ -14,6 +14,8 @@ import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 
+import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.controller.AisleLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
@@ -111,6 +113,13 @@ public final class RobustnessVisualScenario implements VisualScenario {
     private static final int BROKEN_OBSERVE_TICKS = 60;
     /** Ticks for dropped item entities to exist and settle before they are counted. */
     private static final int DROP_SETTLE_TICKS = 20;
+    /** Aisles allowed to hold their chunks while the chunk-hold phase runs (M19, issue #10). */
+    private static final int HOLD_AISLES = 4;
+    /**
+     * Long enough for the configured release linger plus the controller's own bounded re-check. The phase uses the
+     * shipped {@code releaseDelayTicks}, so the release it waits for is the one a real server would see.
+     */
+    private static final int HOLD_RELEASE_TIMEOUT_TICKS = 1200;
 
     private static final int STACK = 64;
 
@@ -121,6 +130,11 @@ public final class RobustnessVisualScenario implements VisualScenario {
 
     private static List<ItemStack> secondFill() {
         return List.of(new ItemStack(Items.GOLD_INGOT, STACK), new ItemStack(Items.REDSTONE, STACK));
+    }
+
+    /** The fill of the chunk-hold phase (M19): its own item type, like every other phase's. */
+    private static List<ItemStack> chunkHoldFill() {
+        return List.of(new ItemStack(Items.EMERALD, STACK));
     }
 
     private static List<ItemStack> thirdFill() {
@@ -167,6 +181,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
 
         chunkRoundTrip(script);
         saveAndReload(script);
+        chunkHold(script);
         brokenBlocks(script);
 
         script.client("robustness: every step passed",
@@ -229,6 +244,47 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         JOB_TIMEOUT_TICKS)
                 .server("robustness: census after the resumed job finished",
                         (server, context) -> census(server, "the job resumed after the reload"));
+    }
+
+    /**
+     * With chunk loading switched on (M19, issue #10), a job that is running when the player leaves <b>finishes while
+     * nobody is anywhere near the aisle</b>, and afterwards the idle aisle lets its chunks go again.
+     * <p>
+     * This is the exact inverse of {@link #chunkRoundTrip} and the only proof the feature can have. No GameTest can show
+     * it: a GameTest area is force-loaded by vanilla itself, so there a held chunk and an ordinary one look alike. The
+     * assertion is on the dock's block entity <b>identity</b> for the same reason {@link #dockUnloaded} is —
+     * {@code isLoaded} can flip while the object is still the same, and here it must not flip at all.
+     * <p>
+     * The release half then waits for the opposite: once the aisle is idle it lets go, and only then does the dock really
+     * become removed. A count of 0 in the mod's own record would not have proved that the chunk was free again.
+     */
+    private void chunkHold(VisualScript script) {
+        script.server("robustness: switch chunk loading on", (server, context) -> setChunkLoading(HOLD_AISLES))
+                .server("robustness: refill the input", (server, context) -> refill(server, context, chunkHoldFill()))
+                .serverUntil("robustness: wait until the crane carries items", this::craneCarries, JOB_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until the aisle holds its chunks", this::aisleHoldsChunks,
+                        SCENE_READY_TIMEOUT_TICKS)
+                .server("robustness: remember the dock block entity and move the camera far away", (server, context) -> {
+                    dockBeforeUnload = crane(server, context);
+                    moveAway(server, context);
+                })
+                .waitTicks(UNLOADED_TICKS)
+                .serverUntil("robustness: wait until the job finished with nobody near the aisle",
+                        this::craneIdleAndInputEmpty, JOB_TIMEOUT_TICKS)
+                .server("robustness: check that the dock was never unloaded", this::assertDockStayedLoaded)
+                .server("robustness: census after a job that ran with nobody nearby",
+                        (server, context) -> census(server, "a job that finished while nobody was near the aisle"))
+                .serverUntil("robustness: wait until the idle aisle lets its chunks go", this::aisleReleasedChunks,
+                        HOLD_RELEASE_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until the dock really unloads after the release", this::dockUnloaded,
+                        UNLOAD_TIMEOUT_TICKS)
+                .server("robustness: switch chunk loading off again and come back", (server, context) -> {
+                    setChunkLoading(0);
+                    moveToBuildSite(server, context);
+                })
+                .serverUntil("robustness: wait until the aisle is loaded again", this::sceneLoaded, CHUNK_TIMEOUT_TICKS)
+                .server("robustness: census after the chunk hold phase",
+                        (server, context) -> census(server, "the aisle held and released its own chunks"));
     }
 
     /** The controller and then the dock are broken while the crane carries items. */
@@ -380,6 +436,41 @@ public final class RobustnessVisualScenario implements VisualScenario {
                 now.craneState().phase(), now.heldItems().totalCount());
     }
 
+    /**
+     * The whole aisle held and released its chunks while nobody was there: the dock's block entity is the <b>same</b>
+     * instance it was before the camera left, so its chunk never unloaded (M19, issue #10).
+     */
+    private void assertDockStayedLoaded(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity now = crane(server, context);
+        if (now != dockBeforeUnload || now.isRemoved())
+            throw new VisualTestException("the aisle did not hold its chunks: the dock block entity was unloaded and read "
+                    + "again while nobody was near it");
+        LOGGER.info(PREFIX + "robustness: the job finished with nobody near the aisle; the dock is the same block entity "
+                + "and the aisle holds {} chunk(s)", heldChunks(server, context));
+    }
+
+    private boolean aisleHoldsChunks(MinecraftServer server, VisualContext context) {
+        return heldChunks(server, context) > 0;
+    }
+
+    private boolean aisleReleasedChunks(MinecraftServer server, VisualContext context) {
+        return heldChunks(server, context) == 0;
+    }
+
+    private static int heldChunks(MinecraftServer server, VisualContext context) {
+        return AisleChunkTickets.heldChunkCount(server.overworld(), controllerPos(context));
+    }
+
+    /**
+     * Chunk loading is a server config value, and the harness changes it in memory exactly as a GameTest override does
+     * ({@code ModConfigSpec.ConfigValue#set} plus {@code clearCache}): no file is written and no config event fires, so
+     * {@code wareworks-server.toml} is left as the player has it.
+     */
+    private static void setChunkLoading(int aisles) {
+        WareworksConfig.SERVER.maxTicketedAislesPerLevel.set(aisles);
+        WareworksConfig.SERVER.maxTicketedAislesPerLevel.clearCache();
+    }
+
     private boolean craneCarries(MinecraftServer server, VisualContext context) {
         return crane(server, context).heldItems().totalCount() > 0;
     }
@@ -418,6 +509,11 @@ public final class RobustnessVisualScenario implements VisualScenario {
     }
 
     // --- helpers -----------------------------------------------------------------------------------------------------
+
+    /** Position of the warehouse controller: one block behind the dock, against the aisle direction. */
+    private static BlockPos controllerPos(VisualContext context) {
+        return context.origin().relative(AISLE.getOpposite());
+    }
 
     private static AisleLayout layout(BlockPos dock) {
         return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
