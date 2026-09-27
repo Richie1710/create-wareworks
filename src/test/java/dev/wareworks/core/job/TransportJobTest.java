@@ -92,6 +92,68 @@ class TransportJobTest {
         assertThrows(NullPointerException.class, () -> TransportJob.store(JOB, null, "chest", ORE, 1));
     }
 
+    /**
+     * A collect job (M18, issue #13): it picks at a <b>collecting</b> warehouse port, stores what it fetched, and can
+     * never drop at a port — which is the churn loop of §5 answered by the constructor rather than by a rule.
+     */
+    @Test
+    void aCollectJobPicksAtAPortAndStores() {
+        TransportJob<String, String> collect = TransportJob.collect(JOB, "port", "chest", ORE, 12);
+        assertEquals(JobType.COLLECT, collect.type());
+        assertEquals(LocationKind.OUTPUT, collect.sourceKind(), "the source is the port itself");
+        assertEquals(LocationKind.STORAGE, collect.targetKind());
+        assertEquals(Optional.empty(), collect.requestId(), "nobody asked for collected items");
+        assertFalse(collect.picked());
+        assertFalse(JobType.COLLECT.reservesSourceStock(), "a machine's inventory is not indexed stock");
+    }
+
+    /** The loop answer, structural: a collect job may store or go back into an input, and nowhere else. */
+    @Test
+    void aCollectJobCannotDropAtAnOutput() {
+        assertTrue(JobType.COLLECT.allowsTarget(LocationKind.STORAGE));
+        assertTrue(JobType.COLLECT.allowsTarget(LocationKind.INPUT));
+        assertFalse(JobType.COLLECT.allowsTarget(LocationKind.OUTPUT), "a collected item is never exported");
+        assertFalse(JobType.COLLECT.allowsTarget(LocationKind.PRODUCTION));
+        assertFalse(JobType.COLLECT.allowsTarget(LocationKind.KEEPER));
+        assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.COLLECT, "port", "other port",
+                LocationKind.OUTPUT, ORE, 4, Optional.empty(), false, 0, 0));
+
+        TransportJob<String, String> held = TransportJob.collect(JOB, "port", "chest", ORE, 12).withPicked(12);
+        assertEquals(LocationKind.INPUT, held.withTarget("in", LocationKind.INPUT).targetKind(),
+                "leftovers may go back into an input buffer");
+        assertThrows(IllegalArgumentException.class, () -> held.withTarget("port", LocationKind.OUTPUT));
+        assertThrows(IllegalArgumentException.class, () -> held.withTarget("machine", LocationKind.PRODUCTION));
+    }
+
+    /** Nobody asked for collected items, so a collect job can carry no request id at all. */
+    @Test
+    void aCollectJobServesNobody() {
+        assertFalse(JobType.COLLECT.mayCarryRequestId());
+        assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.COLLECT, "port", "chest",
+                LocationKind.STORAGE, ORE, 4, Optional.of(REQUEST), false, 0, 0));
+    }
+
+    /**
+     * The two questions the pre-M18 code asked as {@code type != STORE}, now positive: which types bring items <b>in</b>
+     * (so a real drop into storage may complete a production order) and which ones <b>wait</b> at a full delivery target.
+     */
+    @Test
+    void theTwoPositiveTypeQuestions() {
+        assertTrue(JobType.STORE.bringsItemsIn());
+        assertTrue(JobType.COLLECT.bringsItemsIn());
+        assertFalse(JobType.RETRIEVE.bringsItemsIn());
+        assertFalse(JobType.SUPPLY.bringsItemsIn());
+
+        assertTrue(JobType.RETRIEVE.waitsAtAFullTarget());
+        assertTrue(JobType.SUPPLY.waitsAtAFullTarget());
+        assertFalse(JobType.STORE.waitsAtAFullTarget(), "a store into a full port must not park the crane");
+        assertFalse(JobType.COLLECT.waitsAtAFullTarget(), "and a collect has no delivery target at all");
+
+        // Every type answers exactly one of the two: there is no type that both brings items in and waits for somebody.
+        for (JobType type : JobType.values())
+            assertFalse(type.bringsItemsIn() && type.waitsAtAFullTarget(), type + " cannot be both");
+    }
+
     @Test
     void jobTypeEndpoints() {
         assertTrue(JobType.STORE.allowsTarget(LocationKind.STORAGE));
@@ -109,6 +171,10 @@ class TransportJobTest {
         assertFalse(JobType.SUPPLY.allowsTarget(LocationKind.OUTPUT));
         assertEquals(LocationKind.INPUT, JobType.STORE.fallbackTargetKind());
         assertEquals(LocationKind.STORAGE, JobType.RETRIEVE.fallbackTargetKind());
+        assertEquals(LocationKind.OUTPUT, JobType.COLLECT.sourceKind());
+        assertEquals(LocationKind.STORAGE, JobType.COLLECT.plannedTargetKind());
+        assertEquals(LocationKind.INPUT, JobType.COLLECT.fallbackTargetKind());
+        assertEquals(Optional.of(JobType.COLLECT), JobType.byName("COLLECT"), "the stable save name");
         assertEquals(Optional.of(JobType.RETRIEVE), JobType.byName("RETRIEVE"));
         assertEquals(Optional.empty(), JobType.byName("retrieve"));
         assertEquals(Optional.empty(), JobType.byName(null));

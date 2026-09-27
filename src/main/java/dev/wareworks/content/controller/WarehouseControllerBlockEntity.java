@@ -178,6 +178,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             this::readStoreSettingsAt;
     /** Port policies of the aisle's warehouse ports, cached for the continuous pass and for planning (M17); not saved. */
     private final AislePorts ports = new AislePorts();
+    /**
+     * What the inventories behind the aisle's <b>collecting</b> ports held at their last read (M18, issue #13); not saved.
+     * Deliberately not part of the stock index: collected items are not stock until they are stored.
+     */
+    private final AisleCollections collections = new AisleCollections();
+    /**
+     * Collecting ports waiting for a read of their attached inventory; not saved. A second queue rather than entries in
+     * {@link #pendingSnapshots}, because the two read different blocks and answer different questions — but both are
+     * drained in one loop under the one shared {@code maxSnapshotsPerTick} budget, so the cost bound of §5 is unchanged.
+     */
+    private final SnapshotQueue<RackPosition> pendingCollections = new SnapshotQueue<>();
     /** The aisle's stock rules, copied from its warehouse stock keepers (M15, issue #3). <b>Saved</b>, see below. */
     private final AisleStockRules stockRules = new AisleStockRules();
     /**
@@ -601,10 +612,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         membership.markDirty(rack);
     }
 
-    /** From the registry: the inventory of the storage location at {@code rack} changed; read it again soon. */
+    /**
+     * From the registry: the inventory a member at {@code rack} reads changed; read it again soon.
+     * <p>
+     * A storage location joins the stock-index queue, a <b>collecting</b> warehouse port the collect queue (M18, issue
+     * #13) — the same hint channel, the same throttle, the same per-tick budget. A port that does not collect drops the
+     * hint here rather than at the block, because a neighbour update need not find the port's settings in step.
+     */
     void onContentChanged(RackPosition rack) {
-        if (membership.kindAt(rack).orElse(null) == LocationKind.STORAGE)
+        LocationKind kind = membership.kindAt(rack).orElse(null);
+        if (kind == LocationKind.STORAGE)
             pendingSnapshots.addUrgent(rack);
+        else if (kind == LocationKind.OUTPUT && ports.at(rack).isCollecting())
+            pendingCollections.addUrgent(rack);
     }
 
     /**
@@ -641,13 +661,20 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (level == null || level.isClientSide || layout == null)
             return;
         if (membership.kindAt(rack).orElse(null) != LocationKind.OUTPUT) {
-            ports.remove(rack);
+            forgetPort(rack);
             return;
         }
         if (!readPortAt(rack))
             return;
         if (!ports.at(rack).isRequesting() && cancelRequestsFor(layout.rackPos(rack)))
             setChanged();
+    }
+
+    /** The port at {@code rack} left the aisle, or is no longer a port: its policy and its collect state go with it. */
+    private void forgetPort(RackPosition rack) {
+        ports.remove(rack);
+        collections.remove(rack);
+        pendingCollections.remove(rack);
     }
 
     /**
@@ -671,6 +698,61 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             ports.set(rack, port.portSettings(), port.filterKey());
         else
             ports.set(rack, PortSettings.DEFAULT, Optional.empty());
+        // A port that stopped collecting keeps no collect state: an entry left behind would offer a snapshot of an
+        // inventory nobody collects from any more (M18, issue #13). A port that started collecting is read at once, so
+        // the very next planning run can use it instead of waiting a poll interval.
+        if (!ports.at(rack).isCollecting()) {
+            collections.remove(rack);
+            pendingCollections.remove(rack);
+        } else if (!collections.isRead(rack)) {
+            pendingCollections.addUrgent(rack);
+        }
+        return true;
+    }
+
+    /**
+     * Server: reads the inventory behind the collecting warehouse port at {@code rack} into {@link AisleCollections}
+     * (M18, issue #13). The collect side of {@link #refreshLocation}.
+     * <p>
+     * It also resolves, in the same read and from the same {@code InventoryIdentifier} the stock index uses, whether that
+     * inventory is one this aisle already counts as a storage location — the mistake a player makes by pointing a port at
+     * the far side of a double chest that an interface already reads. Collecting from it is refused (§5, guard 3), and
+     * because it is resolved <b>here</b> rather than per plan, it costs nothing in the planner and the port's goggles can
+     * name it.
+     *
+     * @return whether a snapshot was taken; false if {@code rack} is no collecting port, or it or its inventory is not
+     * loaded, or the inventory failed to read (the last read is kept in these cases)
+     */
+    private boolean refreshCollection(RackPosition rack) {
+        if (level == null || level.isClientSide || layout == null)
+            return false;
+        if (membership.kindAt(rack).orElse(null) != LocationKind.OUTPUT || !ports.at(rack).isCollecting())
+            return false;
+        BlockPos pos = layout.rackPos(rack);
+        if (!level.isLoaded(pos))
+            return false;
+        if (!(level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port) || port.isRemoved()) {
+            membership.markDirty(rack); // gone without a notification: probe it again
+            return false;
+        }
+        BlockPos attached = port.attachedPos();
+        if (!level.isLoaded(attached))
+            return false;
+        InventorySnapshot<ItemKey> snapshot;
+        boolean ownStorage;
+        Object identity;
+        try {
+            identity = inventoryIdentity(attached, port.facing());
+            ownStorage = sharedInventories.holds(identity);
+            snapshot = ownStorage ? InventorySnapshot.empty() : port.collectSnapshot();
+        } catch (RuntimeException e) {
+            if (snapshotFailures.tryLog(level.getGameTime()))
+                Wareworks.LOGGER.warn("Warehouse controller at {} could not read the inventory behind the port {}",
+                        worldPosition, rack, e);
+            return false;
+        }
+        pendingCollections.remove(rack);
+        collections.set(rack, snapshot, level.getGameTime(), ownStorage, identity);
         return true;
     }
 
@@ -704,6 +786,121 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 open.add(rack);
         }
         return open;
+    }
+
+    /**
+     * The aisle's <b>collecting</b> warehouse ports that will hand items out <b>right now</b>
+     * ({@code PlannerInput#collectSources}, M18, issue #13), in index order.
+     * <p>
+     * The whole policy is applied here, so the planner only ranks what it is handed. A port is a source only if all of
+     * this holds:
+     * <ul>
+     * <li>its direction is {@code COLLECT} (from the cache, so a port this controller never read is <b>not</b> one —
+     * "not read" never means "collect", the same safe asymmetry as M17);</li>
+     * <li>its redstone gate is open right now: the signal from the block state (never cached, so it cannot be stale) and
+     * the pulse token from the block entity — the only world lookup here, and only for a port in pulse mode;</li>
+     * <li>its rack position and the inventory behind it are loaded;</li>
+     * <li>the last read of that inventory found something <b>the port's own filter names</b>, and it is not an inventory
+     * this aisle already indexes ({@link AisleCollections#hasItems}, which is one map read because a port's filter is one
+     * item). A port whose machine holds only items it does not name is therefore no source at all, rather than a candidate
+     * that spends a live extract on a certain refusal on every run (M18 review).</li>
+     * </ul>
+     * An aisle without a collecting port answers the empty list without touching the world at all: the cache is empty, so
+     * the candidate list is, which is what makes a warehouse without them plan exactly as it did before M18.
+     */
+    List<RackPosition> collectSources() {
+        if (level == null || level.isClientSide || layout == null || collections.isEmpty())
+            return List.of();
+        List<RackPosition> candidates = ports.collectingPorts();
+        if (candidates.isEmpty())
+            return List.of();
+        List<RackPosition> open = new ArrayList<>(candidates.size());
+        for (RackPosition rack : candidates) {
+            if (!collections.hasItems(rack, ports.filterKeyAt(rack)))
+                continue;
+            BlockPos pos = layout.rackPos(rack);
+            if (!level.isLoaded(pos))
+                continue;
+            BlockState state = level.getBlockState(pos);
+            if (!state.hasProperty(WarehouseOutputBlock.POWERED))
+                continue;
+            PortSettings policy = ports.at(rack);
+            boolean armed = policy.redstone() == PortRedstone.PULSE && isArmed(pos);
+            if (!policy.gateOpen(state.getValue(WarehouseOutputBlock.POWERED), armed))
+                continue;
+            // The inventory has to be loaded too, or the crane would travel there and wait; the port's own block entity
+            // knows where it is, and it is already resolved because the snapshot was read through it.
+            if (!(level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port) || port.isRemoved()
+                    || !level.isLoaded(port.attachedPos()))
+                continue;
+            open.add(rack);
+        }
+        return open;
+    }
+
+    /** What the collecting port at {@code rack} may hand out, as of its last read ({@code PlannerInput#collectBuffers}). */
+    InventorySnapshot<ItemKey> collectBuffer(RackPosition rack) {
+        return collections.snapshotOf(rack);
+    }
+
+    /** How many warehouse ports of this aisle collect items out of a machine (M18), for the goggles and the displays. */
+    public int collectingPortCount() {
+        return ports.collectingCount();
+    }
+
+    /**
+     * Whether the port at {@code rack} collects (M18, issue #13). Asked by {@code CraneDispatch#rerouteOutputs}: a
+     * collecting port is <b>no delivery target at all</b>, so it must not even be offered to a retrieve reroute — its
+     * context refuses every insertion anyway, but offering it would spend a live simulation on a certain refusal.
+     */
+    boolean isCollectingPort(RackPosition rack) {
+        return ports.at(rack).isCollecting();
+    }
+
+    /**
+     * Items the last read of the inventory behind the collecting port at the world position {@code portPos} found
+     * <b>that the port may fetch</b>, for that port's own goggle line; 0 for anything that is no collecting port of this
+     * aisle (M18, issue #13).
+     * <p>
+     * Filtered by the port's own filter, so the "Ready: N" line counts what the next collect job may work with and never
+     * contradicts the "Collects: X" line above it (M18 review).
+     */
+    public long collectableAt(BlockPos portPos) {
+        Objects.requireNonNull(portPos, "portPos");
+        if (layout == null)
+            return 0L;
+        return layout.worldToLocal(portPos).map(rack -> collections.totalAt(rack, ports.filterKeyAt(rack))).orElse(0L);
+    }
+
+    /**
+     * Why the warehouse did not take what waits behind the collecting port at the world position {@code portPos}, for that
+     * port's own goggle line; empty while it has no such answer (M18 review).
+     * <p>
+     * It is the aisle's last planning reason, narrowed to the answers a collect plan produces about the <b>warehouse</b>
+     * ({@link NoJobReason#refusesCollecting()}) and only while this port really has something ready. A planning run that
+     * produced a job clears the reason, so a port that is being served never shows one. Two map reads, no world access:
+     * this is asked while a player looks at the port through goggles.
+     */
+    public Optional<NoJobReason> collectRefusalAt(BlockPos portPos) {
+        Objects.requireNonNull(portPos, "portPos");
+        if (layout == null)
+            return Optional.empty();
+        Optional<NoJobReason> reason = lastPlanReason().filter(NoJobReason::refusesCollecting);
+        if (reason.isEmpty())
+            return Optional.empty();
+        return layout.worldToLocal(portPos)
+                .filter(rack -> collections.hasItems(rack, ports.filterKeyAt(rack))).isPresent()
+                ? reason : Optional.empty();
+    }
+
+    /**
+     * Whether the port at the world position {@code portPos} is pointed at an inventory this aisle already counts as a
+     * storage location, so collecting from it is refused (§5, guard 3) — the one line a player needs to see to understand
+     * why their port does nothing (M18, issue #13).
+     */
+    public boolean collectsFromOwnStorage(BlockPos portPos) {
+        Objects.requireNonNull(portPos, "portPos");
+        return layout != null && layout.worldToLocal(portPos).map(collections::isOwnStorage).orElse(false);
     }
 
     private boolean isArmed(BlockPos pos) {
@@ -753,6 +950,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private void tickPorts(long now) {
         for (RackPosition rack : ports.unreadPorts())
             readPortAt(rack);
+        pollCollectingPorts(now);
         for (RackPosition rack : ports.continuousRequests()) {
             if (!ports.isDue(rack, now))
                 continue;
@@ -772,6 +970,44 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 ports.backOffUntil(rack, now + Math.max(1, WareworksConfig.retryTicks()));
             else
                 ports.clearBackOff(rack);
+        }
+    }
+
+    /**
+     * Queues a read of the inventory behind every <b>gated-open collecting</b> port whose last read is older than
+     * {@code collectPollIntervalTicks} ({@code docs/warehouse-system.md} §3.2.4, M18, issue #13).
+     * <p>
+     * This is what covers the machines that change their inventory <b>without</b> firing a neighbour-change hint — a
+     * furnace's result slot, several Create blocks — which is the same problem the warehouse interface answers with its
+     * clean-summary refresh. A collect can therefore lag by up to {@code collectPollIntervalTicks + dispatchIntervalTicks};
+     * the alternative is a per-tick scan, which the hard rules forbid.
+     * <p>
+     * Cost: nothing at all for an aisle without a collecting port (the cache is empty, so the list is), and otherwise one
+     * {@code isLoaded} plus one {@code getBlockState} per collecting port per pass — the cost the continuous-request pass
+     * already pays — plus one block entity lookup only for a port in pulse mode. The reads themselves are
+     * <b>background</b>, so a hint always overtakes a poll, and they share the one {@code maxSnapshotsPerTick} budget with
+     * the stock index.
+     */
+    private void pollCollectingPorts(long now) {
+        List<RackPosition> collecting = ports.collectingPorts();
+        if (collecting.isEmpty())
+            return;
+        long interval = Math.max(1, WareworksConfig.collectPollIntervalTicks());
+        for (RackPosition rack : collecting) {
+            if (!collections.isStale(rack, now, interval) || pendingCollections.contains(rack))
+                continue;
+            BlockPos pos = layout.rackPos(rack);
+            if (!level.isLoaded(pos))
+                continue;
+            BlockState state = level.getBlockState(pos);
+            if (!state.hasProperty(WarehouseOutputBlock.POWERED))
+                continue;
+            PortSettings policy = ports.at(rack);
+            boolean armed = policy.redstone() == PortRedstone.PULSE && isArmed(pos);
+            // A port whose gate is shut costs nothing at all: "off means off" holds for the reading, not only for the
+            // planning, so a switched-off port never touches its machine's inventory.
+            if (policy.gateOpen(state.getValue(WarehouseOutputBlock.POWERED), armed))
+                pendingCollections.addBackground(rack);
         }
     }
 
@@ -842,8 +1078,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * of an item vault share one), or the position for inventories Create does not identify.
      */
     private Object inventoryIdentity(StorageMember member, BlockPos attached) {
-        InventoryIdentifier identifier = InventoryIdentifier.get(level,
-                new BlockFace(attached, member.facing().getOpposite()));
+        return inventoryIdentity(attached, member.facing().getOpposite());
+    }
+
+    /**
+     * The same identity for a position and the face of that block which touches the member reading it, so a storage
+     * location and a <b>collecting</b> warehouse port resolve one double chest to the <b>same</b> identity however they
+     * face (M18, issue #13) — which is what makes "a port never collects from an inventory this aisle counts" an identity
+     * comparison rather than a position comparison.
+     */
+    private Object inventoryIdentity(BlockPos attached, Direction attachedFace) {
+        InventoryIdentifier identifier = InventoryIdentifier.get(level, new BlockFace(attached, attachedFace));
         return identifier != null ? identifier : attached.immutable();
     }
 
@@ -2435,6 +2680,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         dispatch.track(job);
         if (job.sourceKind() == LocationKind.STORAGE)
             refreshLocation(job.source());
+        // A collect job's pick is the moment the items crossed the port's threshold, so that is where the port's counter
+        // grows — and the inventory it came out of just changed, so its snapshot is read again at once rather than at the
+        // next poll (M18, issue #13).
+        if (job.type() == JobType.COLLECT) {
+            if (job.pickedAmount() > 0
+                    && level.getBlockEntity(layout.rackPos(job.source())) instanceof WarehouseOutputBlockEntity port)
+                port.recordCollected(job.pickedAmount());
+            // Whatever was picked, including nothing at all: a pick of 0 is the one outcome that *proves* the cached
+            // snapshot wrong (the machine was emptied between the plan and the pick), and extracting through an item
+            // handler fires no neighbour update, so without this the stale entry would survive until the next poll. Every
+            // port that reads the same inventory is invalidated with it, or a second port would keep offering the items
+            // this one just took (M18 review).
+            for (RackPosition source : collections.sharing(job.source()))
+                pendingCollections.addUrgent(source);
+        }
     }
 
     /**
@@ -2463,10 +2723,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         dispatch.track(job);
         if (job.targetKind() == LocationKind.STORAGE)
             refreshLocation(target);
-        // Items that came in through a warehouse input and were really stored: the one arrival a production order may
-        // count as its machine's product (M15 part 2). Reported after the snapshot, so the stock index and the order
-        // agree within the same tick.
-        if (job.type() == JobType.STORE && job.targetKind() == LocationKind.STORAGE && delivered > 0)
+        // Items that came into the warehouse and were really stored: the one arrival a production order may count as its
+        // machine's product (M15 part 2). Reported after the snapshot, so the stock index and the order agree within the
+        // same tick.
+        // Both arrivals count (JobType#bringsItemsIn, M18, issue #13): a restock order that ordered 32 planks and now
+        // collects them out of the crafter's output chest has to see its product arrive, or it times out and the safety
+        // stop fires for no reason. This single line is what makes "collecting closes the production loop" true rather
+        // than decorative.
+        if (job.type().bringsItemsIn() && job.targetKind() == LocationKind.STORAGE && delivered > 0)
             onResultStored(job.key(), delivered);
         // The mirror image: items the warehouse handed over through an accepting port instead of storing them (M17).
         // onResultStored above is deliberately not reached by them — a product diverted out was never stored, so no
@@ -2570,12 +2834,36 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private void drainPendingSnapshots() {
         for (int budget = Math.max(1, WareworksConfig.maxSnapshotsPerTick()); budget > 0; budget--) {
             Optional<RackPosition> next = pendingSnapshots.poll();
-            if (next.isEmpty())
+            if (next.isPresent()) {
+                RackPosition rack = next.get();
+                if (!refreshLocation(rack) && isRackUnloaded(rack))
+                    pendingSnapshots.addBackground(rack); // keep it queued until its chunk is loaded again
+                continue;
+            }
+            // The collect queue shares the same budget, so an aisle with collecting ports never reads more inventories
+            // per tick than one without (M18, issue #13). Storage first: a stale stock index is what a player's request
+            // and every plan depend on, while a collect that waits one tick costs nothing.
+            Optional<RackPosition> collect = pendingCollections.poll();
+            if (collect.isEmpty())
                 return;
-            RackPosition rack = next.get();
-            if (!refreshLocation(rack) && isRackUnloaded(rack))
-                pendingSnapshots.addBackground(rack); // keep it queued until its chunk is loaded again
+            RackPosition rack = collect.get();
+            if (!refreshCollection(rack) && isCollectUnloaded(rack))
+                pendingCollections.addBackground(rack); // keep it queued until its chunks are loaded again
         }
+    }
+
+    /**
+     * Whether a collecting port's read failed only because a chunk is not loaded — the one failure that is transient, so
+     * the entry is kept queued instead of waiting for the poll (the M8 review fix, applied to the collect queue).
+     */
+    private boolean isCollectUnloaded(RackPosition rack) {
+        if (level == null || layout == null)
+            return false;
+        BlockPos pos = layout.rackPos(rack);
+        if (!level.isLoaded(pos))
+            return true;
+        return level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port && !port.isRemoved()
+                && !level.isLoaded(port.attachedPos());
     }
 
     /** Whether the rack position of {@code rack} lies in an unloaded chunk (the one refresh failure that is transient). */
@@ -2674,6 +2962,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         pendingSnapshots.clear();
         filters.clear();
         ports.clear();
+        collections.clear();
+        pendingCollections.clear();
         stockRulesRefreshPending = true;
         sharedInventories.clear();
         requests.clear();
@@ -2704,7 +2994,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 forgetStorageLocation(removed.position());
             else if (removed.kind() == LocationKind.OUTPUT) {
                 cancelRequestsFor(current.rackPos(removed.position())); // nothing can be delivered there any more
-                ports.remove(removed.position());
+                forgetPort(removed.position());
             }
             else if (removed.kind() == LocationKind.PRODUCTION)
                 cancelProductionOrdersAt(removed.position()); // its orders can never finish
@@ -2842,7 +3132,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         int height = layout == null ? 0 : layout.geometry().height();
         return new ControllerGoggleSummary(status, length, height, membership.storageCount(), filteredLocationCount(),
                 prioritisedLocationCount(), membership.inputCount(), membership.outputCount(), acceptingPortCount(),
-                membership.productionCount(),
+                collectingPortCount(), membership.productionCount(),
                 membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
                 productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
                 linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), dispatch.lastReason());
@@ -2881,6 +3171,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // line it always showed (M17, issue #12).
         if (shown.acceptingPorts() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_ACCEPTING_PORTS, shown.acceptingPorts())
+                    .forGoggles(tooltip, 2);
+        // And the collecting ones, by the same rule (M18, issue #13): the third direction is the other answer to "why is
+        // nothing arriving at my input" — because the warehouse fetches instead.
+        if (shown.collectingPorts() > 0)
+            WareworksLang.countLine(WareworksLang.GOGGLES_COLLECTING_PORTS, shown.collectingPorts())
                     .forGoggles(tooltip, 2);
         if (shown.productionStations() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_STATIONS, shown.productionStations())

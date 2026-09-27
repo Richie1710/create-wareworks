@@ -235,8 +235,12 @@ public class RequestFilterBehaviour extends FilteringBehaviour {
      */
     @Override
     public MutableComponent getLabel() {
-        return WareworksLang.translateDirect(amountEditable()
-                ? WareworksLang.OUTPUT_REQUEST_FILTER : WareworksLang.OUTPUT_ACCEPT_FILTER);
+        return WareworksLang.translateDirect(switch (direction.get()) {
+            case REQUEST -> WareworksLang.OUTPUT_REQUEST_FILTER;
+            case ACCEPT -> WareworksLang.OUTPUT_ACCEPT_FILTER;
+            // A collecting port's filter names what it fetches out of the machine behind it (M18, issue #13).
+            case COLLECT -> WareworksLang.OUTPUT_COLLECT_FILTER;
+        });
     }
 
     /** The plain number, never Create's "*"; nothing at all where the amount is not a setting. */

@@ -91,6 +91,17 @@ public final class SharedInventories<L, I> {
         return Optional.ofNullable(identities.get(Objects.requireNonNull(location, "location")));
     }
 
+    /**
+     * Whether <b>any</b> location is assigned {@code identity}.
+     * <p>
+     * The question a collecting warehouse port asks before it becomes a source (M18, issue #13): if the inventory behind
+     * it is one this aisle already counts as a storage location, collecting from it would be an endless crane shuffle
+     * inside the aisle, so the port is refused and says so. Asked once per read of that inventory, never per plan.
+     */
+    public boolean holds(I identity) {
+        return locations.containsKey(Objects.requireNonNull(identity, "identity"));
+    }
+
     /** The canonical location of {@code location}'s identity (the location itself if it is canonical). */
     public Optional<L> canonicalOf(L location) {
         I identity = identities.get(Objects.requireNonNull(location, "location"));

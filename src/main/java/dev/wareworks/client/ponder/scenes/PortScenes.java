@@ -9,6 +9,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.port.PortRedstone;
+import dev.wareworks.core.port.PortSettings;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
@@ -86,6 +87,8 @@ public final class PortScenes {
     private static final int OVERFLOW_RANK = -1;
     /** The diversion the closing beat turns it into: a rank that clearly outranks every storage location. */
     private static final int DIVERSION_RANK = 4;
+    /** What the machine leaves in the chest behind the collecting port, and what the crane then stores (M18, issue #13). */
+    private static final int COLLECTED_AMOUNT = 12;
 
     /** NBT key of Create's {@code FilteringBehaviour} count, which is what the port's "Requested Amount" board sets. */
     private static final String FILTER_AMOUNT = "FilterAmount";
@@ -406,6 +409,178 @@ public final class PortScenes {
                 .placeNearTarget()
                 .pointAt(util.vector().topOf(port));
         scene.idle(TEXT_IDLE + 20);
+
+        scene.markAsFinished();
+    }
+
+    // --- when a port fetches items in --------------------------------------------------------------------------------
+
+    /**
+     * The third direction ({@code docs/warehouse-system.md} §3.2.4, M18, issue #13): the warehouse <b>fetches</b> instead
+     * of waiting. A player points the port at the inventory a machine drops its result into, and the crane reaches through
+     * the port, takes the items and stores them — so a machine needs no belt back to an input.
+     * <p>
+     * Its port stands on the {@link Side#LEFT} plane for the same reason the accepting one does: the face the camera draws
+     * there is the <b>back</b>, which is where the copper spout of the collect model is. The <b>barrel behind it</b> is the
+     * machine's output, and it stands in the inventory column of that plane, exactly where a storage location's barrel
+     * would be — which is the point of the geometry: a collecting port is an interface whose inventory is not stock.
+     * <p>
+     * The closing beat is the one thing a player has to know before they build a loop with it: collecting stops at a stock
+     * rule's maximum, so a port and an overflow can never pass the same item back and forth.
+     */
+    public static void collecting(SceneBuilder builder, SceneBuildingUtil util) {
+        CreateSceneBuilder scene = new CreateSceneBuilder(builder);
+        scene.title("warehouse_port_collecting", "Collecting from a Machine");
+
+        PonderAisle aisle = PonderAisle.WIDE;
+        scene.configureBasePlate(0, 0, aisle.plateSize());
+        scene.scaleSceneView(0.9f);
+
+        // Position 1 stays empty in front of the parked crane, as in the accepting scene.
+        int stationPosition = 2;
+        int keeperPosition = 3;
+        // The port on the other plane, so its copper back faces the camera; the position before it stays empty so that
+        // nothing covers that face.
+        int portPosition = 4;
+        int firstRack = 5;
+        int lastRack = 6;
+
+        BlockPos dock = aisle.dock(util);
+        BlockPos station = aisle.rack(util, stationPosition, 0, Side.RIGHT);
+        BlockPos keeper = aisle.rack(util, keeperPosition, 0, Side.RIGHT);
+        BlockPos port = aisle.rack(util, portPosition, 0, Side.LEFT);
+        // The machine's output: the barrel <b>behind</b> the port, which the crane reaches through the port.
+        BlockPos machine = aisle.inventory(util, portPosition, 0, Side.LEFT);
+        BlockPos lever = port.above();
+
+        aisle.placeAisle(scene, util);
+        aisle.placeProduction(scene, util, stationPosition, 0, Side.RIGHT);
+        aisle.placeStockKeeper(scene, util, keeperPosition, 0, Side.RIGHT);
+        // Placed as the plain output it is until the wrench beat below turns it around.
+        aisle.placeOutput(scene, util, portPosition, 0, Side.LEFT);
+        scene.world().setBlock(machine, Blocks.BARREL.defaultBlockState(), false);
+        scene.world().setBlock(lever, Blocks.LEVER.defaultBlockState()
+                .setValue(LeverBlock.FACE, AttachFace.FLOOR)
+                .setValue(LeverBlock.FACING, Direction.SOUTH), false);
+        for (int position = firstRack; position <= lastRack; position++)
+            aisle.placeStorage(scene, util, position, 0, Side.RIGHT);
+        scene.world().setKineticSpeed(util.select().everywhere(), CraneScript.PONDER_RPM);
+
+        Selection aisleLine = util.select().fromTo(aisle.dockX() - 1, PonderAisle.FLOOR_Y, aisle.aisleZ(),
+                aisle.lastRailX(), PonderAisle.FLOOR_Y, aisle.aisleZ());
+        Selection storage = util.select().fromTo(aisle.dockX() + firstRack, PonderAisle.FLOOR_Y, aisle.aisleZ() + 1,
+                aisle.dockX() + lastRack, PonderAisle.FLOOR_Y, aisle.aisleZ() + 2);
+        Selection members = util.select().position(station).add(util.select().position(keeper));
+        Selection signal = util.select().position(lever).add(util.select().position(port));
+
+        scene.showBasePlate();
+        scene.idle(10);
+        scene.world().showSection(aisleLine, Direction.DOWN);
+        scene.world().showSection(storage, Direction.DOWN);
+        scene.idle(FADE_IDLE + 5);
+        scene.world().showSection(members, Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        // Fading north means the two come in from the aisle side, port first and its machine behind it.
+        scene.world().showSection(util.select().position(port), Direction.NORTH);
+        scene.idle(FADE_IDLE);
+        scene.world().showSection(util.select().position(machine), Direction.NORTH);
+        scene.idle(FADE_IDLE);
+
+        // --- what the machine leaves behind --------------------------------------------------------------------------
+        scene.overlay().showOutline(PonderPalette.OUTPUT, "machine", util.select().position(machine), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A machine drops its result into a chest of its own, and nothing takes it from there")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(machine));
+        scene.idle(TEXT_IDLE);
+
+        // --- the wrench turns the port around ------------------------------------------------------------------------
+        scene.overlay().showControls(PonderAisle.portBox(util, port, BACK_LEFT), Pointing.RIGHT, CONTROL_TICKS)
+                .rightClick()
+                .withItem(AllItems.WRENCH.asStack());
+        scene.idle(CLICK_LEAD);
+        aisle.setPortRank(scene, util, port, Side.LEFT, PortSettings.COLLECT_RANK);
+        scene.overlay().showText(TEXT_TICKS + 20)
+                .text("The Collect row of its board turns the port around: now the warehouse fetches instead of waiting")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(PonderAisle.portBox(util, port, BACK_LEFT));
+        scene.idle(TEXT_IDLE + 20);
+
+        scene.overlay().showText(SHORT_IDLE + 15)
+                .text("Copper where the crane reaches in says so, and the port reads the inventory right behind it")
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(port));
+        scene.idle(SHORT_IDLE + 15);
+
+        // --- the crane fetches the result ----------------------------------------------------------------------------
+        scene.world().createItemOnBeltLike(machine, Direction.UP, new ItemStack(Items.OAK_PLANKS, COLLECTED_AMOUNT));
+        scene.idle(10);
+        scene.overlay().showOutline(PonderPalette.GREEN, "collect", util.select().position(port), TEXT_TICKS + 120);
+        scene.overlay().showText(TEXT_TICKS + 120)
+                .text("The crane reaches through the port into that inventory and stores what it finds")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(port, BACK_LEFT));
+        CraneScript crane = CraneScript.parkedAt(scene, dock);
+        crane.moveTo(CranePose.at(portPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_SOURCE);
+        crane.moveTo(new CranePose(portPosition, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_SOURCE);
+        crane.hold(Items.OAK_PLANKS, COLLECTED_AMOUNT);
+        crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
+        crane.moveTo(CranePose.at(portPosition, 0, Side.LEFT), CranePhase.RETRACT_SOURCE);
+        crane.moveTo(CranePose.at(firstRack, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
+        crane.moveTo(new CranePose(firstRack, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.dwell(CranePhase.DROP, 10);
+        crane.release();
+        crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        scene.effects().indicateSuccess(aisle.rack(util, firstRack, 0, Side.RIGHT));
+        crane.moveTo(CranePose.at(firstRack, 0, Side.RIGHT), CranePhase.RETRACT_TARGET);
+        // Parks again, so the closing beats are not read past the crane's mast.
+        crane.moveTo(CranePose.at(0, 0, Side.LEFT), CranePhase.IDLE);
+        scene.idle(10);
+
+        scene.overlay().showOutline(PonderPalette.BLUE, "loop", util.select().position(station), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("That closes the loop: the crane brings the ingredients and takes the product back")
+                .attachKeyFrame()
+                .colored(PonderPalette.BLUE)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(station, FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- the filter, and when it stops ---------------------------------------------------------------------------
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Its filter decides what is fetched at all; without one it takes whatever that side hands out")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(port, BACK_LEFT));
+        scene.idle(TEXT_IDLE);
+
+        // The keeper's lamp burns while one of its rules bites; a rule at its maximum is one of them.
+        scene.world().setBlock(keeper, StockRuleScenes.keeperState(true, false), false);
+        scene.overlay().showOutline(PonderPalette.RED, "at-maximum", util.select().position(keeper), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A port collects only while the warehouse may still store: at a maximum it stops by itself")
+                .attachKeyFrame()
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(keeper, FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- and a lever stops it too --------------------------------------------------------------------------------
+        setRedstoneMode(scene, util, port, PortRedstone.UNLESS_POWERED);
+        scene.world().showSection(util.select().position(lever), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.world().toggleRedstonePower(signal);
+        scene.effects().indicateRedstone(lever);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Unless powered it needs no wiring at all, and one lever stops the fetching")
+                .attachKeyFrame()
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(lever));
+        scene.idle(TEXT_IDLE);
 
         scene.markAsFinished();
     }

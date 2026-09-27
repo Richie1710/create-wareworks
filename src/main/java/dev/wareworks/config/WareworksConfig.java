@@ -182,6 +182,17 @@ public final class WareworksConfig {
         return get(SERVER.maxSnapshotsPerTick);
     }
 
+    /**
+     * How often a controller re-reads the inventory behind a gated-open <b>collecting</b> warehouse port without being
+     * told to ({@code docs/warehouse-system.md} §3.2.4, M18, issue #13).
+     * <p>
+     * It covers the machines that change their inventory without firing a neighbour-change hint (a furnace's result slot,
+     * several Create blocks); a hint always overtakes it, and the reads share the {@link #maxSnapshotsPerTick()} budget.
+     */
+    public static int collectPollIntervalTicks() {
+        return get(SERVER.collectPollIntervalTicks);
+    }
+
     public static int maxProductionOrders() {
         return get(SERVER.maxProductionOrders);
     }
@@ -261,6 +272,7 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxOpenRequests;
         public final ModConfigSpec.IntValue maxOpenRequestsPerOutput;
         public final ModConfigSpec.IntValue maxSnapshotsPerTick;
+        public final ModConfigSpec.IntValue collectPollIntervalTicks;
         public final ModConfigSpec.IntValue maxProductionOrders;
         public final ModConfigSpec.IntValue productionOrderTimeoutTicks;
         public final ModConfigSpec.IntValue maxStockRules;
@@ -399,6 +411,15 @@ public final class WareworksConfig {
                     .comment("Maximum number of storage locations a controller re-reads per tick after content changes, "
                             + "when locations join or after loading (the round robin comes on top).")
                     .defineInRange("maxSnapshotsPerTick", 4, 1, 64);
+            collectPollIntervalTicks = builder
+                    .comment("[in Ticks] How often a controller re-reads the inventory behind a collecting warehouse "
+                                    + "port without being told to. It covers machines that change their inventory "
+                                    + "without notifying their neighbours (a furnace result slot, several Create "
+                                    + "blocks).",
+                            "A change hint always overtakes it, and these reads share maxSnapshotsPerTick with the "
+                                    + "stock index, so a lower value costs at most one bounded read per port per "
+                                    + "interval.")
+                    .defineInRange("collectPollIntervalTicks", 20, 1, 1200);
             maxProductionOrders = builder
                     .comment("Maximum number of production orders one controller runs at the same time.",
                             "Each order promises its ingredients, so they are no longer available to other requests "

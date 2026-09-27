@@ -119,10 +119,16 @@ class CraneConservationPropertyTest {
         private void assignRandomJob() {
             UUID id = new UUID(1L, jobCounter++);
             int amount = 1 + random.nextInt(MAX_JOB_AMOUNT);
-            TransportJob<String, RackPosition> job = random.nextBoolean()
-                    ? TransportJob.store(id, INPUT, pick(STORAGE), ORE, amount)
-                    : TransportJob.retrieve(id, pick(STORAGE), pick(OUTPUTS), ORE, amount,
-                            random.nextBoolean() ? new UUID(2L, jobCounter) : null);
+            // A collect job is the third shape a crane can be given (M18, issue #13): it picks at a warehouse port and
+            // stores what it fetched, so every partial pick, failed drop, reroute, cancellation and pause has to conserve
+            // items for it exactly as for the other two.
+            int kind = random.nextInt(3);
+            TransportJob<String, RackPosition> job = switch (kind) {
+                case 0 -> TransportJob.store(id, INPUT, pick(STORAGE), ORE, amount);
+                case 1 -> TransportJob.retrieve(id, pick(STORAGE), pick(OUTPUTS), ORE, amount,
+                        random.nextBoolean() ? new UUID(2L, jobCounter) : null);
+                default -> TransportJob.collect(id, pick(OUTPUTS), pick(STORAGE), ORE, amount);
+            };
             send(CraneEvent.jobAssigned(job));
         }
 
@@ -191,9 +197,11 @@ class CraneConservationPropertyTest {
                         send(CraneEvent.noReroute());
                         return;
                     }
-                    boolean store = request.job().type() == JobType.STORE;
+                    // A store job's leftovers may go back into an input, a collect job's too (M18, issue #13, and never to
+                    // a port); everything else goes back to storage or to another output.
+                    boolean toInput = request.job().type().bringsItemsIn();
                     LocationKind kind = random.nextBoolean() ? LocationKind.STORAGE
-                            : store ? LocationKind.INPUT : LocationKind.OUTPUT;
+                            : toInput ? LocationKind.INPUT : LocationKind.OUTPUT;
                     RackPosition target = switch (kind) {
                         case STORAGE -> pick(STORAGE);
                         case INPUT -> INPUT;

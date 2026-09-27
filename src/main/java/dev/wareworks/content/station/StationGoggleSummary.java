@@ -33,12 +33,15 @@ import net.minecraft.world.item.Item;
  *                       is built on the client: without it the "may act now" line of an accepting pulse port would read
  *                       "waiting for a signal" for ever, which is the one combination that line exists for — the rank,
  *                       the mode and the signal all reach the client by themselves
+ * @param collect        what a <b>collecting</b> warehouse port fetches from and has fetched (M18, issue #13):
+ *                       {@link PortCollectSummary}, all of it server-only knowledge, and {@link PortCollectSummary#NONE}
+ *                       — written as nothing at all — for every other station and every other port direction
  */
 public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<Item> buffer, int openRequests,
                                    long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection,
-                                   long exportedItems, boolean portArmed) {
+                                   long exportedItems, boolean portArmed, PortCollectSummary collect) {
     public static final StationGoggleSummary NONE = new StationGoggleSummary(AisleAssignment.NONE,
-            InventorySummary.empty(), 0, 0L, 0L, Optional.empty(), 0L, false);
+            InventorySummary.empty(), 0, 0L, 0L, Optional.empty(), 0L, false, PortCollectSummary.NONE);
 
     private static final String ASSIGNMENT = "Assignment";
     private static final String BUFFER = "Buffer";
@@ -48,6 +51,7 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
     private static final String LAST_REJECTION = "LastRejection";
     private static final String EXPORTED_ITEMS = "ExportedItems";
     private static final String PORT_ARMED = "PortArmed";
+    private static final String COLLECT = "Collect";
 
     public StationGoggleSummary {
         if (assignment == null)
@@ -56,6 +60,8 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
             buffer = InventorySummary.empty();
         if (lastRejection == null)
             lastRejection = Optional.empty();
+        if (collect == null)
+            collect = PortCollectSummary.NONE;
         openRequests = Math.max(0, openRequests);
         requestedItems = Math.max(0L, requestedItems);
         deliveredItems = Math.max(0L, deliveredItems);
@@ -66,13 +72,19 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
     public StationGoggleSummary withRequests(int open, long requested, long delivered,
             Optional<RequestRejection> rejection) {
         return new StationGoggleSummary(assignment, buffer, open, requested, delivered, rejection, exportedItems,
-                portArmed);
+                portArmed, collect);
     }
 
     /** This summary with a warehouse port's export counter and its unspent rising edge (M17). */
     public StationGoggleSummary withPort(long exported, boolean armed) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exported, armed);
+                exported, armed, collect);
+    }
+
+    /** This summary with what a collecting warehouse port fetches from and has fetched (M18, issue #13). */
+    public StationGoggleSummary withCollect(PortCollectSummary collect) {
+        return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
+                exportedItems, portArmed, collect);
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -93,6 +105,12 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
             tag.putLong(EXPORTED_ITEMS, exportedItems);
         if (portArmed)
             tag.putBoolean(PORT_ARMED, true);
+        // Only a collecting port writes this at all, so no other station's packet grows by a byte (M18).
+        if (!collect.isEmpty()) {
+            CompoundTag collectTag = new CompoundTag();
+            collect.write(collectTag);
+            tag.put(COLLECT, collectTag);
+        }
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -101,6 +119,7 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
                 ItemTypeSummaries.read(tag.getCompound(BUFFER)), tag.getInt(OPEN_REQUESTS), tag.getLong(REQUESTED_ITEMS),
                 tag.getLong(DELIVERED_ITEMS), tag.contains(LAST_REJECTION, Tag.TAG_STRING)
                         ? RequestRejection.byName(tag.getString(LAST_REJECTION)) : Optional.empty(),
-                tag.getLong(EXPORTED_ITEMS), tag.getBoolean(PORT_ARMED));
+                tag.getLong(EXPORTED_ITEMS), tag.getBoolean(PORT_ARMED),
+                PortCollectSummary.read(tag.getCompound(COLLECT)));
     }
 }

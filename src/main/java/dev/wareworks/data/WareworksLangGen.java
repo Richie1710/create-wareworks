@@ -71,6 +71,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FILTERED_LOCATIONS), "Filtered locations: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRIORITISED_LOCATIONS), "Prioritised locations: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ACCEPTING_PORTS), "Accepting ports: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_COLLECTING_PORTS), "Collecting ports: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATIONS), "Inputs: %1$s, outputs: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_COUNT), "Misaligned blocks: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ITEM_TYPES), "Item types: %1$s");
@@ -136,6 +137,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_REQUEST_FILTER), "Requested Item");
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_REQUEST_AMOUNT), "Requested Amount");
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_ACCEPT_FILTER), "Accepted Item");
+        lang.accept(WareworksLang.key(WareworksLang.OUTPUT_COLLECT_FILTER), "Collected Item");
         // The same board in the accepting direction, where the amount column means nothing and only the rows do: the
         // title therefore names what it really sets there, in the words the goggles use ("Redstone: While powered").
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_PORT_BOARD), "Redstone Behaviour");
@@ -156,6 +158,9 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(PortSettings.rowLangKey(PortSettings.OVERFLOW_ROW)), "Overflow — after storage");
         lang.accept(WareworksLang.key(PortSettings.rowLangKey(PortSettings.DIVERSION_ROW)),
                 "Diversion — before storage");
+        // The fourth row, whose column means nothing at all (M18, issue #13): the only row that turns the port around.
+        lang.accept(WareworksLang.key(PortSettings.rowLangKey(PortSettings.COLLECT_ROW)),
+                "Collect — out of a machine");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_REDSTONE), "Redstone: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_ACTIVE), "Active");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_WAITING), "Waiting for a signal");
@@ -164,6 +169,15 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_ACCEPTS), "Accepts: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_ACCEPTS_ANY), "Any item");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_EXPORTED), "Handed over: %1$s");
+        // The collect direction (M18, issue #13). No rank line: a collecting port has no magnitude at all.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECTING), "Port: collects into the warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECTS), "Collects: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_READY), "Ready: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECTED), "Collected: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_NO_INVENTORY), "No inventory behind the port");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_OWN_STORAGE),
+                "This inventory is already a storage location");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_REFUSED), "Not fetched: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_STATUS), "Status: %1$s");
         for (CranePhase phase : CranePhase.values()) {
             lang.accept(WareworksLang.key(WareworksLang.cranePhaseKey(phase)), switch (phase) {
@@ -197,21 +211,25 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_STORE), "Storing %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_RETRIEVE), "Retrieving %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_HAND_OVER), "Handing over %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_COLLECT), "Collecting %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_ROUTE), "From %1$s to %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HOLDING), "Holding:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HEAD_EMPTY), "Grabber empty");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_LAST_PLAN), "Last planning: %1$s");
         for (NoJobReason reason : NoJobReason.values()) {
             lang.accept(WareworksLang.key(WareworksLang.noJobReasonKey(reason)), switch (reason) {
-                case WAREHOUSE_FULL -> "no storage location accepts the input items";
-                case NO_MATCHING_FILTER -> "no storage location has a filter that accepts the input items";
-                case PORT_FULL -> "an accepting port was the only place left for the input items and it is full";
-                case AT_MAXIMUM -> "a stock rule for the input items is at its maximum";
+                // No origin is named in these four (M18 review): a collecting port reports the same three of them as a
+                // warehouse input, and a collect-only aisle need not contain an input at all.
+                case WAREHOUSE_FULL -> "no storage location accepts these items";
+                case NO_MATCHING_FILTER -> "no storage location has a filter that accepts these items";
+                case PORT_FULL -> "an accepting port was the only place left for these items and it is full";
+                case AT_MAXIMUM -> "a stock rule for these items is at its maximum";
                 case OUTPUT_FULL -> "an output is full";
                 case PRODUCTION_FULL -> "a production station cannot take more ingredients";
                 case NOT_IN_STOCK -> "a requested item is not in stock";
                 case LOCATION_UNAVAILABLE -> "an output is not reachable";
                 case BUDGET_EXHAUSTED -> "still searching";
+                case COLLECT_SOURCE_EMPTY -> "a machine hands out nothing its port may fetch";
                 case NO_WORK -> "nothing to do";
             });
         }
@@ -379,6 +397,9 @@ public final class WareworksLangGen {
                 "Rules: %1$s · below min %2$s · at max %3$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_RULES_PAUSED), "Rules paused: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS), "Ports: %1$s accepting");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS_BOTH),
+                "Ports: %1$s accepting, %2$s collecting");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS_COLLECTING), "Ports: %1$s collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No aisle");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");
@@ -389,6 +410,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_RETRIEVING), "Retrieving");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_SUPPLYING), "Supplying");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_HANDING_OVER), "Handing over");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_COLLECTING), "Collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_PAUSED), "Paused");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_JOB), "%1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_TARGET), "To %1$s");

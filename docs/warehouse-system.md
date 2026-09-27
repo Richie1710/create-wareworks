@@ -60,7 +60,7 @@ A-03-07R    aisle A · level 03 · position 07 · rack side R
   * All three Create filter items work: **list** filter (as whitelist and as blacklist), **attribute** filter (its rules) and **package** filter (Create packages by address).
   * A filter restricts **storing only**. Retrieval is never restricted: what is already inside can always be fetched, even when the filter no longer matches it.
   * **Ranking:** a location whose filter **selects** the item ranks **above** every unfiltered location, so dedicated chests fill first; the existing rules (exact-item consolidation, item-type grouping, travel time) decide within that (§7.1, §7.4). A **deny** list (or a deny-mode attribute filter) merely does not exclude the item, which is not a dedication: such a location ranks like an unfiltered one (`FilterMatch.ALLOWED`, **M8 review fix** — before, one "anything but iron" chest outranked consolidation and item-type grouping for *every* item in the warehouse and filled with a mix of everything, the exact mixing item-type grouping was added in M3 to prevent).
-  * An item that matches no filter needs an unfiltered location. Without one the input keeps the items, exactly as for a full warehouse, and the controller reports **`NO_MATCHING_FILTER`** — its own planning reason since the **M8 review**, because a retrieval frees space but never makes a filter match: the player's fix is an unfiltered location, not more room, and a stuck "no storage location accepts the input items" must not mask a later, genuine full warehouse. It arms the same `fullBackoffTicks` back-off as `WAREHOUSE_FULL` (§7.4).
+  * An item that matches no filter needs an unfiltered location. Without one the input keeps the items, exactly as for a full warehouse, and the controller reports **`NO_MATCHING_FILTER`** — its own planning reason since the **M8 review**, because a retrieval frees space but never makes a filter match: the player's fix is an unfiltered location, not more room, and a stuck "no storage location accepts these items" must not mask a later, genuine full warehouse. It arms the same `fullBackoffTicks` back-off as `WAREHOUSE_FULL` (§7.4).
   * **Changing or clearing a filter never moves, drops or deletes stored items**, and nothing is re-shuffled retroactively. Re-balancing an existing warehouse is a post-MVP idea.
   * **In-game teaching (M13):** the Ponder scene `warehouse/filters` ("Dedicating Storage Locations", `client.ponder.scenes.WarehouseScenes#storageFilters`) shows, in this order: the slot on the aisle face, an empty slot accepting everything, a dedication by right-click, the three Create filter items, the crane driving **past** a nearer unfiltered location to fill the dedicated one, a re-dedication that moves nothing and leaves the stock retrievable, and an unmatched item going to the location without a filter. The one ranking rule it deliberately leaves out is the deny-list case above — a scene cannot show that a location does *not* rank higher — so its text speaks of **dedicated** locations, never of "locations with a filter" (**M13 review fix**: the German line said the latter and so claimed the wider, wrong rule). It is registered for the warehouse interface, which therefore has three scenes (ADR-016). Until M13 a player who learns the mod through Ponder saw no filter slot at all; the Shift tooltip and the README were the only teaching.
 * **Storage priority (M16, issue #11, ADR-028).** A number **0..9** on the same value box decides which of the **equally suitable** storage locations the crane fills first, so a player can say "the vault by the door before the far end of the aisle".
@@ -84,7 +84,7 @@ Classes: `content.storage.WarehouseInterfaceBlock`, `WarehouseInterfaceBlockEnti
   * anything else (stone, rack frames, rails): the player's horizontal look direction.
 
   Top/bottom clicks, and clicks that replace the clicked block (grass, light), use the look direction (standing in the aisle looking at the rack). Reason: attaching to the clicked inventory is what players expect, and the block-entity/interface checks avoid misaligned interfaces when a row is extended sideways. Only block states are inspected (no capability query), so client prediction and server always agree. Known limitation: inventories without a block entity (composter) fall back to the look direction; the wrench fixes any wrong facing.
-* **Attached handler**: `attachedHandler()` returns `Optional<IItemHandler>`. Server: `BlockCapabilityCache` with `isValid = !isRemoved()` and a listener that only sets the summary dirty flag; the cache is dropped in `invalidate()` and whenever `FACING` changes (`setBlockState` override, plus a facing check on every query). Client/Ponder: uncached `level.getCapability`, guarded by `level.isLoaded`.
+* **Attached handler**: `attachedHandler()` returns `Optional<IItemHandler>`. Server: `BlockCapabilityCache` with `isValid = !isRemoved()` and a listener that only sets the summary dirty flag; the cache is dropped in `invalidate()` and whenever `FACING` changes (`setBlockState` override, plus a facing check on every query). Client/Ponder: uncached `level.getCapability`, guarded by `level.isLoaded`. **M18:** this whole lifecycle moved into `content.storage.AttachedInventoryCache` and is now shared with the **collecting** warehouse port (§3.2.4), which reads its inventory the same way and with the same lifecycle; the query side became a parameter, because the two blocks face opposite ways (an interface looks *at* its inventory, a port *away* from it — both mean "the attached block's face that touches me").
 * **Snapshot**: `snapshot()` reads every slot once via `ItemHandlerSnapshots.capture`. It returns `InventorySnapshot.empty()` (zero slots) when no inventory is attached **or** the attached position is not loaded; `hasAttachedInventory()` distinguishes "no inventory" from "empty inventory". On the server every loaded read also refreshes the goggle summary (counts as a refresh and clears the dirty flag); clients receive a change on the next goggle observation.
 * **Goggle summary** (derived state, never saved): `AttachedInventorySummary(hasInventory, attachedBlock id, InventorySummary<Item>)` with used/total slots, the number of distinct **item types** and the top 3 item types (`InventorySummary.of(snapshot, 3, ItemKey::getItem)`). It is written only into client packets (`write(..., clientPacket = true)`), so goggles work on remote clients.
   * **Bounded sync (review fix):** the update tag is also part of every chunk packet, whose block entity tags clients read with a 2 MB NBT quota (`FriendlyByteBuf.readNbt`, `NbtAccounter.create(2097152)`). The first version synced full `ItemKey`s (id + all data components), so a shulker box of written books or an item with a huge name as a top entry could exceed the quota and disconnect everyone loading the chunk. The summary is therefore grouped by `Item` and synced as registry ids and counts only: under 2 KB in NBT size accounting whatever the inventory holds (`Tag#sizeInBytes`, which counts 36 + 2 bytes per character for every string and 28 + 36 bytes per compound entry, several times what is sent), and no component data (container contents, book pages, names) leaves the server. Side effect: items that differ only in components (damaged or enchanted tools, enchanted books) share one line, shown with the item's generic name (`Item#getDescription`, e.g. "Potion", not "Uncraftable Potion"). This matches §3.1 ("top 3 item types"). GameTest `interfacesummarysyncisbounded` checks the worst-case tag (shulker box of written books, a 30 000 character name, damaged tools) against `WareworksGameTests.MAX_INTERFACE_SYNC_BYTES` (2048), and the same tag with the largest reservation summary (below) against `MAX_RESERVED_INTERFACE_SYNC_BYTES` (4096). *M4 review fix:* the reservations were never part of a budget test before, and the reservation test compared the interface tag with the crane's 8 KB bound.
@@ -146,7 +146,8 @@ Classes: `content.storage.WarehouseInterfaceBlock`, `WarehouseInterfaceBlockEnti
 * **Three settings** on the block itself (§3.2.3): a **filter** (which items), a **direction and rank** (what the port does, and in which order it ranks against the storage locations) and a **redstone behaviour** (when it acts).
   * **Request** (rank 0 — the default, and everything a warehouse output did before M17): the crane brings what the filter names, up to the set amount and at most what is in stock. A redstone **rising edge** creates a retrieval request `(item, amount)` at the controller; the two continuous behaviours keep the port topped up instead, with at most one open request at a time.
   * **Accept** (rank ≠ 0): the crane brings items that arrived at a warehouse **input** and would otherwise be stored. What the player built behind the port decides what happens to them; Wareworks itself never destroys anything, and a full port lets the input back up exactly as a full warehouse does.
-* Goggles: buffer contents and the redstone behaviour; for a requesting port the pending request with its remaining amount and the last rejection reason, for an accepting one its rank, which items it accepts and how many it has handed over.
+  * **Collect** (the sentinel rank `PortSettings.COLLECT_RANK`, M18, issue #13, §3.2.4): the crane reaches **through** the port into the inventory behind it, takes what the filter names and stores it like anything that arrived at an input — so a machine's result chest needs no belt back to the aisle. The port's own buffer stays unused in this direction, and nothing is ever inserted into a player's machine.
+* Goggles: buffer contents and the redstone behaviour; for a requesting port the pending request with its remaining amount and the last rejection reason, for an accepting one its rank, which items it accepts and how many it has handed over, for a collecting one which items it fetches, what its last read of the attached inventory found and how many items it has collected.
 
 #### 3.2.1 Implementation (M2, stations)
 Classes:
@@ -358,7 +359,7 @@ general **port**, with three settings:
 | **Filter** | the filter slot, short click (as since M2) | one concrete item, or empty | both directions |
 | **Amount** | the same slot, hold-to-edit, **column** axis | `1` .. one stack of the filter item | **Request** only |
 | **Redstone behaviour** | the same board, **row** axis | on a pulse · while powered · unless powered | both directions |
-| **Direction and rank** | a second, **wrench-only** box on the same faces | `−10` .. `+10`, composed from a row (request / overflow / diversion) and a magnitude `0..9` | both directions |
+| **Direction and rank** | a second, **wrench-only** box on the same faces | `−10` .. `+10`, composed from a row (request / overflow / diversion) and a magnitude `0..9`; since M18 a fourth row, *collect*, whose one value is a sentinel with no magnitude (§3.2.4) | both directions |
 
 ##### One signed number carries the direction
 
@@ -370,6 +371,8 @@ its canonical constructor, so a number from a save, a clipboard or a packet is a
 | `+1` … `+10` | **Accept** — *diversion* | the port takes incoming items **before** they are stored |
 | `0` | **Request** | the port asks for what its filter names; it is no store target at all |
 | `−1` … `−10` | **Accept** — *overflow* | the port only receives what no storage location took |
+
+(M18 added one value above this band, `PortSettings.COLLECT_RANK`, for the **collect** direction — §3.2.4.)
 
 "Which direction" and "in which order among the others" are therefore one number and can never disagree, which is why
 `PortDirection` is *derived* (`rank == 0`) and not stored. The board's **row** carries the sign and its **column** the
@@ -519,7 +522,7 @@ This is the crux of the feature and the reason it needed #3 first. A `Candidate`
 
 | Situation | Behaviour |
 |---|---|
-| Accepting port **full** | The items stay in the input, which backs up exactly as it does for a full warehouse. Nothing is destroyed, nothing is dropped. The reason is `NoJobReason.PORT_FULL` ("an accepting port was the only place left for the input items and it is full"), and a full *diversion* simply falls through to storage. |
+| Accepting port **full** | The items stay in the input, which backs up exactly as it does for a full warehouse. Nothing is destroyed, nothing is dropped. The reason is `NoJobReason.PORT_FULL` ("an accepting port was the only place left for these items and it is full"), and a full *diversion* simply falls through to storage. |
 | Port **full while the crane carries items to it** | The crane does **not** wait: it drops what fits (usually nothing), reports 0 delivered and reroutes into storage or an input buffer. GameTest `portfullwhilecarryingreroutes` fails by timeout if that regresses. |
 | Port's policy **not read yet** (world just loaded, chunk not loaded, restored from a save) | It counts as the default — request, on a pulse. A port that would request is not topped up for a few ticks; a port that would accept is offered **nothing**. The dangerous default, "assume it accepts", is never taken. `AislePorts` marks such a port **unread** and the next port pass resolves it. |
 | Port **outside an aisle**, or misaligned | It is no member, so it receives nothing however it is configured, and its own reason stays the one it always was. |
@@ -531,7 +534,8 @@ This is the crux of the feature and the reason it needed #3 first. A `Candidate`
 ##### What a player can read, and where
 
 * **From inside the aisle, without goggles and without aiming:** an accepting port's model. `block_accept.json` is the
-  same block with the ring around the aisle opening and the back spout in **andesite** instead of brass — ADR-017's
+  same block with the ring around the aisle opening in **andesite** instead of brass (the same accent covers the back
+  spout, but only the ring is readable from every side) — ADR-017's
   material language (andesite = the dumb intake, brass = the smart filtered output), which is the only cue that can live
   on the face the crane's arm port owns. The blockstate property `accepting` selects it, is derived from the rank,
   re-asserted by the block entity on every change and once on load (so a `/setblock` with the wrong value is corrected
@@ -643,6 +647,297 @@ would be a world lookup per candidate.
 * **Visual**: the scenario `ports` (ADR-014) builds the five rows of the user's own table in one aisle and proves each
   phase on the server before the shot that claims it; the `blocks` pass carries the `port_accept` exhibit, and the
   `ponder` pass compiles both new scenes.
+
+#### 3.2.4 Collecting: the crane fetches out of a machine (M18, issue #13)
+
+> Decision and reasons: **ADR-030**. Again nothing new was registered: no second block, no new `LocationKind`, no new
+> block entity, no migration. A warehouse port placed before M18 keeps its direction, because the sentinel that means
+> "collect" is a rank the old range could never hold.
+
+Until M18 items entered a warehouse only when something **pushed** them into a warehouse input: a belt, a funnel, a
+chute, a hopper or a Mechanical Arm. Every machine therefore needed its own return path back to the aisle. Collecting
+turns that around — a player points a port at the inventory a machine drops its result into, and the crane fetches the
+items and stores them like anything that arrived at an input. Together with §3.5 that closes the production loop: the
+warehouse delivers the ingredients, the machine works, and the warehouse takes the product back.
+
+It is the **third direction of the same port**, so the three settings of §3.2.3 carry it unchanged: the **filter** says
+which items are fetched, the **redstone behaviour** says when, and the direction lives in the same signed rank.
+
+| Rank | Direction | What it means |
+|---|---|---|
+| `+11` (`PortSettings.COLLECT_RANK`) | **Collect** | the crane takes items **out of** the inventory behind the port and stores them |
+| `+1` … `+10` | Accept — *diversion* | the port takes incoming items before they are stored |
+| `0` | Request | the port asks for what its filter names |
+| `−1` … `−10` | Accept — *overflow* | the port only receives what no storage location took |
+
+##### A sentinel, not a band
+
+`COLLECT_RANK` is `MAX_RANK + 1`: one value just above the accept band, and it is the whole of the direction.
+
+* **A collecting port has no rank magnitude.** It is only ever a *source*, and a source needs no place in the store
+  plan's candidate order. Ordering against other work is answered by where the arrival stage sits in dispatch (below),
+  and ordering among several collecting ports is a **round robin**, because a priority there would starve the weaker
+  ports — the same reason the input stations have never had one. Its board row therefore shows the request row's em
+  dash, `strengthOf` answers 0 for it, and `formatRank` prints the dash rather than a `+11` nobody set.
+* **Row 3 is new, rows 0..2 are untouched**, so no save, clipboard or schematic meaning changed.
+* **No old save can hold it**: the pre-M18 constructor clamped to ±`MAX_RANK`, so the sentinel cannot appear in a world
+  that never had M18. `PortSettings.clampRank` keeps the sentinel and clamps everything else into the band, so a
+  tampered packet cannot become a collecting port by accident either. `PortRankBehaviour`'s scroll range had to be
+  widened to the sentinel because Create's `ScrollValueBehaviour#setValue` clamps to `[min, max]` — a narrower range
+  would silently have turned a collecting port into the strongest diversion. No input path reaches `setValue`:
+  `ValueSettingsPacket` only calls `setValueSettings`, which composes the rank from the board's row and column.
+* `direction()`, `directionOf(rank)` and `isCollecting()` stay functions of the one number, so "which direction" and
+  "in which order" can still never disagree.
+
+##### Where a collecting port may reach
+
+**Only the inventory it is attached to** — the block directly behind it (`pos − FACING`), queried from the face that
+touches the port, which is the side a funnel on that face would take items from. Nothing is searched for, nothing
+reaches past that block, and the crane's arm travels to the rack position and transfers one block further, exactly as it
+does for a storage location (§3.1). A furnace therefore answers what its *horizontal* face offers, not its result slot,
+which vanilla only exposes downwards — the machine's own rules decide, and the GameTest `collectdoesnotfightamachine`
+pins both halves of that.
+
+The handler comes from `content.storage.AttachedInventoryCache`, extracted from the warehouse interface in M18 and now
+used by both: a NeoForge `BlockCapabilityCache` that is invalidated when the inventory appears, disappears or is
+replaced, so **presence needs no polling at all**. The two blocks face opposite ways, which is why the query side is a
+parameter rather than derived: an interface looks *at* its inventory, a port looks *away* from it, and both mean "the
+attached block's face that touches me".
+
+##### How the warehouse knows there is something, without scanning
+
+The same three mechanisms the stock index already uses (§5), and nothing else:
+
+1. **The capability cache** answers whether an inventory is there at all, without a single `getBlockEntity` per tick.
+2. **Neighbour hints.** `WarehouseOutputBlock#onNeighborChange` (the attached block entity called `setChanged()`) and
+   `neighborChanged` (a block update at the attached position) report through `WarehouseRegistry#contentChanged`, the
+   channel the warehouse interface has always used. The controller queues that port **urgently** in a second
+   `SnapshotQueue`. The **content** hint (`onNeighborChange`) is gated at the block on the `collecting` block state,
+   the cheapest test there is: vanilla calls it from `BlockEntity#setChanged` for all six neighbours, so without the gate
+   every item moved in the chest behind an ordinary *requesting* port would walk a hint through the registry into every
+   controller of the level only to be dropped there (M18 review). A **block** update stays ungated, because it is rare
+   and a port turned around in the same tick as its inventory appeared should notice at once; the controller drops both
+   for a port that does not collect, and the poll below covers the one case the state can lag behind the settings (a
+   `/setblock` or schematic that places a configured port with a default state).
+3. **A throttled poll** for the machines that change their inventory without telling anybody — a furnace's result slot,
+   several Create blocks. `WarehouseControllerBlockEntity#pollCollectingPorts` queues a **background** read of every
+   gated-open collecting port whose last read is older than `collectPollIntervalTicks` (default 20, §9). A hint always
+   overtakes a poll, and a port whose gate is shut is not read at all: "off means off" holds for the reading, not only
+   for the planning.
+
+The crane's own **pick** queues an urgent re-read too, and it does so whatever was picked — a pick of **0** is the one
+outcome that proves the cached snapshot wrong. Every port whose last read was of the *same* inventory is queued with it
+(the identity is already resolved in the read, so this is a map walk), so a second port pointed at one machine cannot go
+on offering the items the crane just took. Neither relies on the foreign inventory calling `setChanged`, which a vanilla
+chest does but the `IItemHandler` contract does not promise (M18 review).
+
+Both queues are drained in one loop under the **one** shared `maxSnapshotsPerTick` budget, so the cost bound of §5 is
+unchanged. For an aisle without a collecting port the whole mechanism costs nothing: the cache is empty, so the
+candidate list is empty and no pass touches the world.
+
+**A collect can therefore lag** by up to `collectPollIntervalTicks + dispatchIntervalTicks` when a machine changes its
+inventory silently. The alternative is a per-tick inventory scan, which the hard rules forbid.
+
+##### Collected items are not stock until they are stored
+
+The reads land in `content.controller.AisleCollections`, a cache of its own and deliberately **not** in the stock index:
+a machine's result chest is not part of the warehouse. Putting it there would make a terminal offer items the crane has
+not fetched yet and a stock rule count them towards its maximum. The cache answers exactly one question — what may a
+collect job plan for right now, without touching the world — and **nothing in it is persisted**: after a world load it
+starts empty, and *"not read yet"* is not *"empty inventory"*, it is "collects nothing until the first read" (the M8
+cold-cache lesson, as for `AisleFilters` and `AislePorts`). Entries are kept in `RackPosition.ORDER`, so the round robin
+walks the same list before and after a reload.
+
+`WarehouseControllerBlockEntity#collectSources` applies the **whole** policy before the planner sees anything, the
+port's own **filter** included: a port whose machine holds only items it does not name is no source at all, rather than
+a candidate that spends a live `simulateExtract` on a certain refusal on every run and reports a reason about a
+warehouse that is not at fault (M18 review). A port's filter is one item key, so both questions the cache is asked —
+"is there anything this port may fetch?" and "how much?" — stay one map lookup. The same filtered number is what the
+port's **"Ready: N"** line shows, so it can never contradict the "Collects: X" line above it. The list is built **once
+per dispatch** and used by the cheap pre-check and the planner input alike.
+
+##### The job: one new type, and what it is not allowed to do
+
+`JobType.COLLECT` — source `OUTPUT`, planned target `STORAGE`, fallback `INPUT`, allowed targets `{STORAGE, INPUT}`.
+A collecting port is the one output station the crane takes items *out of*.
+
+* **It is a type of its own** rather than a `STORE` from an output, for exactly the reason `SUPPLY` was not folded into
+  `RETRIEVE` (ADR-024): the leftovers of one must not be droppable where the leftovers of the other may go. Its allowed
+  targets **exclude `OUTPUT`**, so `TransportJob`'s constructor refuses a collect job that would drop at a port.
+* **It serves nobody** (`mayCarryRequestId()` is false): nothing asked for these items, they were fetched.
+* **It reserves capacity at its target and nothing at its source.** A foreign inventory is not indexed stock, so there
+  is no stock to reserve and nothing is in `TRANSIT` either — what the job holds at its target is **room**. Two aisles
+  sharing a rack plane may both plan against the same chest; the real extract decides (§8).
+* Two questions that used to be asked as `type != STORE` are now asked positively, because the new type would have
+  answered both wrongly: `bringsItemsIn()` (a `STORE` from an input **and** a `COLLECT` — the arrivals a production
+  order may count as its machine's product, §3.6.3) and `waitsAtAFullTarget()` (a `RETRIEVE` and a `SUPPLY` — waiting is
+  right when somebody is waiting for the items, and a collect has no delivery target at all).
+
+##### Where collecting is planned: the arrival round robin
+
+A player's request always wins. The dispatch order of §7.1 gains no stage of its own: the store stage became the
+**arrival** stage, one round robin from one cursor over the input stations **followed by** the collecting ports as a
+single virtual list (`PlannerInput#inputs()` ++ `#collectSources()`, `PlanResult#nextArrivalCursor()`).
+
+* **After RETRIEVE and SUPPLY**, so collecting can never make a player at a terminal or a machine waiting for
+  ingredients wait for a machine's output.
+* **One list, not two stages**, because a separate stage after storing would starve collecting for as long as any input
+  is permanently non-empty — which is exactly the production loop collecting exists for (a belt keeps feeding the input
+  while the machine's result chest fills). The accepted consequence is the mirror image: an input can be delayed by one
+  trip behind a collecting port, which is precisely how two input stations already treat each other.
+* **Bounded**: `JobPlanner.MAX_COLLECT_CANDIDATES` (12, the same bound and the same enforced-not-assumed reason as
+  `MAX_PORT_CANDIDATES`) is how many collect sources one run may examine, because each costs one live `simulateExtract`
+  plus a storage candidate walk. Sources beyond it are not examined **this run**, and the cursor is left at the first
+  one that was skipped, so the next run starts there and nothing starves. Dropping a collect source is the safe
+  direction anyway: the items stay in the player's machine, where they already are. The cursor of a run that hit the cap
+  is honoured on **every** return of the walk, the ones that found a job included: otherwise an input station that plans
+  a job on every run would keep the cursor inside the input region and the sources beyond the cap would never be examined
+  again (M18 review, JUnit `theCapsCursorSurvivesAJobFromAnInput`).
+* The **back-off** suppresses the whole arrival stage, collecting included: the collect branch walks the same storage
+  candidates the back-off exists to protect.
+
+`JobPlanner#planCollect` is the mirror of the store branch with the port in the input station's place: the port's
+**filter is hard** and answered by the same `storeFilter` a storage location's is (so a rejected key costs no live
+call), a stock rule's **headroom** bounds the amount, one live `simulateExtract` says what the machine really hands out
+right now, and `selectStorage` ranks the targets exactly as for a store. Keys are tried in the cached snapshot's order
+and fall through to the next key and then to the next source, so one unstorable item never blocks a collecting port.
+
+**Why it got no job** is answered by `StoreSurvey#collectReason()`, not by the store branch's `reason()`. A machine that
+hands out nothing — its port's filter names none of what is in there, or the inventory refuses to hand it out through
+that face — reports `COLLECT_SOURCE_EMPTY`, never `WAREHOUSE_FULL`. Reporting a full warehouse there would be wrong on
+the goggles *and* expensive: `WAREHOUSE_FULL` is the strongest reason of a run, so it would mask an input station's
+honest answer, and it arms the aisle's `fullBackoffTicks` back-off, which suspends storing from **every** input station
+while a machine is empty — the resting state of every production loop (M18 review). A genuinely full warehouse, a
+storage filter that accepts none of the items and a stock rule's maximum are reported exactly as they are for an input
+station: those answers are about the warehouse, and the items really did reach its candidates.
+
+##### The loop answer: three independent guards (the crux of the feature)
+
+The obvious way to build an endless crane shuffle is collect → store → the item is at its M15 maximum → an overflow
+port hands it back into the same chest → collect again. It cannot close, and not because a rule forbids it:
+
+1. **A key at its maximum yields no collect job at all.** `planCollect` honours `storeHeadroom`, which is the exact
+   *opposite* of an accepting port, which deliberately ignores it (§3.2.3). The two preconditions of the churn are
+   therefore mutually exclusive: a maximum is what makes an overflow necessary and what makes collecting stop.
+   (GameTests `collectstopsatthemaximum`, `collectandoverflowdonotchurn`.)
+2. **A collected item can never leave through a port.** `JobType.COLLECT` allows no `OUTPUT` target, the collect reroute
+   is storage → input buffers → hold and never offers a port, and `TransferContexts.CollectContext` **refuses every
+   insert**, so nothing the warehouse carries can be pushed into a player's machine whatever a reroute or a retry asks
+   for. (GameTest `collectneverexports`, JUnit `aCollectJobCannotDropAtAnOutput`.)
+3. **A port may not collect from an inventory this aisle already indexes.** Resolved in the read itself, from the same
+   Create `InventoryIdentifier` the stock index uses, so a port pointed at the far side of a double chest an interface
+   already reads is refused — and its goggles say so, instead of leaving a player with a port that does nothing.
+   Without it the crane shuffles one chest around its own aisle for ever (`collectdoesnottakefromitsownstorage` catches
+   exactly that).
+
+One loop is **bounded rather than impossible** and is documented as such: collect → leftovers into an input → a
+diversion exports them into the same chest. It needs a diversion *and* a collecting port on one aisle with the drain
+wired back, it moves one trip at a time, arrivals are planned last, and both counters keep rising on two different
+blocks, so it is readable. The same honesty as the belt loop of §3.2.3: the mod cannot see what a player pipes.
+
+##### Degraded cases
+
+| Situation | Behaviour |
+|---|---|
+| **Warehouse full** while a machine holds items | Nothing is picked. The items stay in the machine, the port's goggles keep saying "Ready: N", and the reason is the ordinary `WAREHOUSE_FULL`. As soon as room appears, the next run uses it (`collectfullwarehouseleavestheitems`). |
+| The key is **at its maximum** | No collect job for that key at all, reported as `AT_MAXIMUM`; other keys in the same machine are still collected. |
+| **Nothing accepts the items after the pick** | The ordinary reroute: another storage location, then an input buffer, then `HOLDING` with the usual retry. A port is never offered (guard 2). |
+| **No inventory behind the port** | It is no collect source; goggles say "No inventory behind the port" in gold (`collectnoinventorybehind`). |
+| The attached inventory is **one this aisle counts** | Refused, and the goggles say "This inventory is already a storage location" (guard 3). |
+| The machine is **emptied between the plan and the pick** | The real pick result counts; a zero pick aborts the job cleanly after retracting and releases the reservation, as for every source (§8). |
+| **Port or machine broken mid-job** | Before the pick the job aborts, after it the held items are rerouted — the existing paths, with the port's own position as the spill position, never inside the machine. |
+| **Direction flipped mid-job** | The running job finishes or aborts on its own; the collect state of the port is dropped at once, so nothing plans against a port that no longer collects (`collectdirectionflipmidjob`). |
+| The port's policy or its inventory has **not been read yet** | It collects nothing. "Not read" never means "collect", the same safe asymmetry as M17. |
+| The port's **filter names nothing** that is in the machine | The port is no source at all (the gate applies its filter), so no plan, no live call and no reason: the aisle simply has nothing to do, "Ready" reads 0, and the filter line says why (`collectfilteredtakesonlyitsitem`). |
+| The machine **hands nothing out** through that face | `COLLECT_SOURCE_EMPTY`: an honest reason of its own that does **not** arm the back-off, so storing from the aisle's inputs runs on undisturbed (M18 review). |
+| A Create machine **inserts into the same inventory** | Never fought over: the collect context only ever extracts, slot by slot through the item capability, with real results. |
+| **Chunk with the machine not loaded** | The port is no source while its attached position is not loaded, and a crane that is already there **pauses** with `CHUNK_NOT_LOADED` and retries: the crane's stop check asks whether the block one beyond the rack position is loaded for a collect source exactly as it does for a storage location's inventory, which is derived from the job rather than from the location kind (M18 review). |
+
+##### What a player can read, and where
+
+* **From inside the aisle, without goggles:** `block_collect.json`, the same block with the ring around the aisle
+  opening in **copper** instead of brass — one texture different, exactly like the accepting variant's andesite
+  (ADR-017's material language: a third material for the third direction, unmistakable next to the brass and the
+  andesite one). The casing accent covers the back spout too, but a collecting port's spout stands against the machine
+  and its own back face is culled there, so **the ring inside the aisle is the cue that is always readable** — which is
+  where a player reads a rack wall anyway (M18 review: the docs used to promise the spout as a second cue). The blockstate property `collecting` selects it, is derived from the rank, re-asserted by
+  the block entity together with `accepting` on every change and once on load, so the one illegal combination of the two
+  booleans is corrected rather than believed.
+* **From outside:** nothing is painted on the back plate — a collecting port has no rank magnitude, so there is no
+  number to draw (`WarehouseOutputRenderer` skips every direction that is not `ACCEPT`).
+* **Goggles** on the port: "Port: collects into the warehouse", "Collects: Oak Planks" / "Any item", "Ready: N" (what
+  the last read found **that this port may fetch** — the number the warehouse plans from, so it may lag by one poll
+  interval, which is exactly what a player should see), "Collected: N" (counted at the **pick**, which is when the items
+  crossed the port's threshold, and saved under `PortCollected` only while it is above 0), plus the gold lines for the
+  two mistakes above and, in gold, **"Not fetched: &lt;reason&gt;"** — why the warehouse did not take what is waiting
+  (M18 review). That last one is the refusal a player hits most often and the only one the port cannot see by itself: it
+  is the aisle's last planning reason, narrowed to the answers a collect plan produces about the warehouse
+  (`NoJobReason#refusesCollecting()`: full, a storage filter, a maximum) and shown only while this port really has
+  something ready, so a port that is being served never carries it. All five values are server-only knowledge, so they
+  travel in `PortCollectSummary` inside the goggle summary; it is written as nothing at all for every other station, so
+  no other packet grows by a byte. On the **controller**: "Collecting ports: N".
+* **Displays** (§10.1): the aisle summary's port line carries both halves ("Ports: 2 accepting, 1 collecting", each half
+  only while it is above 0), and the crane status says **"Collecting"** instead of "Storing" while a collect job runs.
+* **Ponder:** `warehouse/port_collecting` ("Collecting from a Machine"), registered for the **port** and for the
+  **production station**, because closing the loop is exactly what that block's story needs (ADR-016).
+
+##### Persistence, sync and the clipboard
+
+One new key, `PortCollected` on the port's block entity, written only while it is above 0 — so an unconfigured port
+still writes nothing at all and no migration exists. The direction itself rides in the existing `PortRank`, the
+clipboard carries it in the existing `WarehousePort` key (so a collecting port pastes down a rack wall like any other),
+and `AisleCollections` persists nothing.
+
+##### Classes and tests
+
+* `core.port`: `PortSettings.COLLECT_RANK` / `COLLECT_ROW` / `isCollecting` / `directionOf` / `clampRank`,
+  `PortDirection.COLLECT`.
+* `core.job`: `JobType.COLLECT` / `bringsItemsIn` / `waitsAtAFullTarget`, `TransportJob.collect`,
+  `JobPlanner#planCollect` / `#MAX_COLLECT_CANDIDATES` and the arrival walk, `StoreSurvey#collectReason`,
+  `NoJobReason.COLLECT_SOURCE_EMPTY` / `#refusesCollecting`, `PlannerInput#collectSources` / `#collectBuffers` /
+  `#nothingCollected`, `PlanResult#nextArrivalCursor`, `ReservationLedger` (capacity only).
+* `content.storage`: `AttachedInventoryCache` (extracted from `WarehouseInterfaceBlockEntity`).
+* `content.controller`: `AisleCollections` (filtered `hasItems` / `totalAt`, `sharing`),
+  `WarehouseControllerBlockEntity#collectSources` / `#collectBuffer` / `#refreshCollection` / `#pollCollectingPorts` /
+  `#collectingPortCount` / `#collectableAt` / `#collectsFromOwnStorage` / `#collectRefusalAt`,
+  `AislePorts#collectingPorts` / `#rankAt` (0 for a collecting port) / `#rawRankAt` / `#filterKeyAt`,
+  `CraneDispatch#spendCollectToken` / `#rerouteOutputs` (the gated source list built once per dispatch),
+  `ControllerGoggleSummary#collectingPorts`.
+* `content.station`: `WarehouseOutputBlock.COLLECTING` / `onNeighborChange`, `WarehouseOutputBlockEntity#attachedPos` /
+  `#attachedHandler` / `#collectSnapshot` / `#recordCollected`, `PortCollectSummary`, `PortRankBehaviour` (the widened
+  range and the dashed collect row), `RequestFilterBehaviour#getLabel`.
+* `content.crane`: `TransferContexts.CollectContext` (extract only), `CraneExecution` (the positive wait test).
+* `client`: `render.WarehouseOutputRenderer`, `ponder.scenes.PortScenes#collecting`.
+* **JUnit** (27 new, 628 → **655**): `PortSettingsTest` (+5: the sentinel is its own direction and no diversion, clamping
+  keeps it and nothing else reaches it, the collect row ignores its column, the gate over all 3 × 2 × 2 combinations, row
+  lang keys and `formatRank`); `TransportJobTest` (+4: a collect picks at a port and stores, it cannot drop at an
+  `OUTPUT` or a `PRODUCTION`, it serves nobody, and the two new predicates for all four types); `ReservationLedgerTest`
+  (+2: capacity at the target, never stock at the machine, never transit, release on a zero pick, `restoreFrom`);
+  `JobPlannerTest` (+14: no collect source reproduces the pre-M18 plan over the seeded layout matrix, requests and
+  supplies beat a collect, one arrival walk serves every input and every collect source exactly once, the maximum stops
+  it and bounds the amount, a collect is never offered a port even with the strongest diversion present, the reroute
+  order, the hard filter, the live extract bound and its fall-through, one unstorable item never blocks a port, targets
+  ranked by `selectStorage`, the reason ladder including `COLLECT_SOURCE_EMPTY` and that it never masks an input
+  station's answer, both halves of the candidate cap and that its cursor survives a job); `SharedInventoriesTest` (+1:
+  `holds(identity)`); `CraneConservationPropertyTest` (its seeded event sequences now also assign `COLLECT` jobs).
+* **GameTests** (`gametest.WarehouseCollectGameTests`, 28 new, 243 → **271**, each with a per-tick `ItemCensus`):
+  `collectdefaultisoff`, `collectpullsfromachest`, `collectfilteredtakesonlyitsitem`, `collectrespectstheredstonegate`,
+  `collectstopsatthemaximum`, `collectandoverflowdonotchurn`, `collectneverexports`,
+  `collectdoesnottakefromitsownstorage`, `collectfullwarehouseleavestheitems`, `collectleftoversgotoaninput`,
+  `collectholdswhennothingaccepts`, `collectfairnesstwoports`, `collectfairnessagainstaninput`,
+  `collectsourceemptiedbeforethepick`, `collectsourcebrokenmidjob`, `collecttargetbrokenmidjob`,
+  `collectdirectionflipmidjob`, `collectdoesnotfightamachine`, `collectfromacreatedepot`,
+  `collectitemsarenotstockuntilstored`, `collectpersistence`, `collectcoldcacheafterreload`, `collectnoinventorybehind`,
+  `collectoutsideanaisletakesnothing`, `collectclosestheproductionloop`, `collectsharedrackplane`,
+  `collectclipboardandvalueboxes` and `configcollectpollextremes` (its own config batch).
+* **Visual** (ADR-014): the scenario `collect` proves the direction end to end on a stocked aisle (the crane reaches
+  through the port, the machine is emptied into the racks, counter and both goggle tooltips agree), and `collect-loop`
+  runs a **real Create factory** the mod knows nothing about — a Mechanical Arm feeds a Mechanical Crafter out of a
+  production station and a collecting port fetches the planks back, with no belt, no funnel and no second arm on the
+  return path — in four acts: the production loop closing by itself, two ports taking turns, a maximum plus an overflow
+  whose vanilla hopper drains into the very chest the port reads (the three numbers go constant and stay constant), and
+  a full warehouse leaving the items where they are. The `blocks` pass carries the `port_collect` exhibit and the
+  `ponder` pass compiles the new scene.
 
 ### 3.3 Warehouse Controller (`content.controller`)
 Owns the logical warehouse state of one aisle:
@@ -1921,6 +2216,7 @@ real path), and the physical keys stay a question for manual check 103.
   * The round robin (`AisleMembership#nextStorageLocation`) reads one location per `snapshotIntervalTicks`. A location or attached inventory that is not loaded is skipped, and its counts are kept.
   * A foreign inventory that throws keeps its last counts; the failure is logged at most once per `util.LogThrottle` interval (1200 ticks) per controller, not once for the controller's lifetime (**M5 release audit**).
   * A storage location whose block entity vanished without a notification is re-probed.
+  * **The collect cache (M18, issue #13, §3.2.4).** The inventories behind *collecting* warehouse ports are read through the same machinery and are deliberately **not** in the stock index: they are not the warehouse's stock until the crane has stored them. They have their own `SnapshotQueue` (`pendingCollections`) and their own cache (`content.controller.AisleCollections`), fed by the port block's neighbour hints (urgent, the same `WarehouseRegistry#contentChanged` channel) and by a poll every `collectPollIntervalTicks` (background, default 20) for machines that notify nobody. **Both queues are drained in one loop under the one shared `maxSnapshotsPerTick` budget**, so the per-tick cost bound above is unchanged, and an aisle without a collecting port pays nothing at all. Nothing of it is persisted: after a load the cache is empty, and an unread port collects nothing until its first read.
 * **Planning uses the index to rank candidates, but validates candidates against the live handler** with `simulate = true` before a job is created: in rank order, falling through to the next candidate when the live simulate accepts (or yields) less than needed, never only the top one. Snapshot estimates are upper bounds (§5.1), so a restricted inventory (e.g. a shulker box offered a shulker box) can rank high and still reject the item. At transfer time the live handler is authoritative, with real extract and insert results.
 
 ### 5.1 Snapshot model and capacity estimate (implemented in M1)
@@ -1943,6 +2239,8 @@ TransportJob { UUID id; JobType type; LocationRef source; LocationRef target;
 LocationRef  { BlockPos pos; int x; int y; Side side; LocationKind kind }
 JobType      STORE (input station → storage location) | RETRIEVE (storage location → output station)
              | SUPPLY (storage location → production station, M11: one ingredient of a production order, §3.5)
+             | COLLECT (collecting warehouse port → storage location, M18: items fetched out of the inventory
+                        behind the port, §3.2.4; never a port as its target)
 ```
 
 ### 7.1 Dispatch (controller, every `dispatchIntervalTicks`, default 5)
@@ -1952,12 +2250,13 @@ Dispatch runs only when a crane exists, is idle, has no held items and has speed
    * Amount = `min(remaining, carryLimit(item), liveExtractable(source) − reserved)`.
    * The output buffer must accept at least 1 (live simulate). Otherwise skip, since output is full.
    * Ranking: minimal travel time `crane → source → output`.
-2. **STORE**, otherwise, for the first input station with a non-empty buffer (round-robin over inputs):
+2. **ARRIVALS**, otherwise: one round robin from one cursor over the input stations **and** (M18, §3.2.4) the aisle's gated-open collecting warehouse ports as a single virtual list, so a player's request and a production order's ingredients are always planned first and neither kind of arrival starves the other. For an input station with a non-empty buffer this is the **STORE** branch it always was:
    * Item = first non-empty slot. Amount = `min(buffered count of item, carryLimit(item))`.
    * Candidates: locations accepting the item (live simulate insert > 0), ranked by (a) already contains the item (consolidation), then (b) travel time `crane → input → location`. (M3 refinement, §7.4: between (a) and (b), locations that are empty or hold only the item's type rank before locations holding other item types. M8, §3.1: a location whose filter **selects** the item ranks before all of them, and a rejecting one is dropped. M16, §3.1 and ADR-028: directly above travel time comes the **storage priority** a player gave the location, higher first. M17, §3.2.3 and ADR-029: the aisle's **accepting warehouse ports** are candidates of the *same* list, ordered above everything else by their target class — a diversion outranks every location, an overflow loses to every location that may take the item — so the full order is target class → filter → consolidation → item-type grouping → priority (a port's strength) → travel time → index order.)
    * Amount = `min(amount, liveInsertable(target) − reservedCapacity(target))`. A port's amount is bounded by the buffer and the carry limit but **not** by a stock rule's headroom (§3.2.3).
    * No target: set status `WAREHOUSE_FULL` and back off `fullBackoffTicks` (default 40). An accepting port that was the only place left and is full reports `PORT_FULL` and backs off the same way (§3.2.3).
-3. Create the job, reserve (STORE reserves capacity at the target, RETRIEVE reserves stock at the source), assign to the crane.
+   * For a **collecting port** of the same walk it is the **COLLECT** branch (M18, §3.2.4): item = the first key of the port's last read that its filter allows and a stock rule still leaves headroom for, amount = `min(read count, headroom, carryLimit(item), liveExtractable(port))`, and the targets are ranked by the same `selectStorage` — a port is never offered as the target. At most `MAX_COLLECT_CANDIDATES` (12) collect sources are examined per run, and the cursor is left at the first one that was skipped, so the next run reaches it.
+3. Create the job, reserve (STORE and COLLECT reserve capacity at the target, RETRIEVE reserves stock at the source), assign to the crane.
 
 `carryLimit(item) = min(grabberStacks · item.getMaxStackSize(), grabberMaxItems)` (config: `grabberStacks` default 1, `grabberMaxItems` default 64).
 
@@ -2041,7 +2340,8 @@ Pure Java in `core.job`, generic over the key `K` and the location `L` (the cont
     * **"No priority set" is the pre-M16 planner, literally.** With `NO_PRIORITY` the new key answers 0 for every pair and `thenComparing` consults the next key exactly then, so the comparator is the same function it was — which makes the entire existing suite the regression proof. `JobPlannerTest#priorityZeroEverywhereReproducesTheOldOrder` pins it head-on: 12 seeded layouts planned with and without an all-zero priority function give the identical job, reasons, cursor and live-call sequence.
     * **Free:** the priority is one map lookup in the controller's `AisleFilters` (§3.1.1) and costs no live call and no live-simulation budget, and a location the filter rejects is dropped before it is ever asked (`JobPlannerTest#priorityCostsNoLiveCallOrBudget`). A stock rule's maximum still decides before all of it, per item type (`storeHeadroom`, M15).
   * **Accepting warehouse ports (M17, issue #12, ADR-029):** `PlannerInput#ports` and `#portRank` (defaults: the empty list and `NO_PORT_RANK`, i.e. 0 everywhere, so an input built without ports is *literally* the pre-M17 input). The sign of a port's rank became the ranking's **first** key — the target class, `0` diversion, `1` storage, `2` overflow — and its magnitude minus one reuses M16's priority key, so M17 added **one** comparator key in total. Every path that does not store (retrieval sources, both station fallbacks) passes the storage class literally, so the key answers 0 for every pair there. Details, including what a port candidate deliberately does not consult and how a stock rule's maximum interacts with it, in §3.2.3.
-  * `NoJobReason` in priority order: `WAREHOUSE_FULL` (back off `fullBackoffTicks`), `PORT_FULL` (M17: same back-off, because reaching it costs a full candidate walk with an estimate and a live simulation per candidate), `AT_MAXIMUM` (M15: no back-off), `NO_MATCHING_FILTER` (back-off), `OUTPUT_FULL`, `NOT_IN_STOCK`, `LOCATION_UNAVAILABLE`, `BUDGET_EXHAUSTED`, `NO_WORK`. `JobPlanner.StoreSurvey` answers the store side of that ladder: a storage location that was ranked or skipped for room is a genuinely full warehouse, then a full accepting port (the thing to go and fix), then a maximum (not a fault at all), then a filter mismatch.
+  * `NoJobReason` in priority order: `WAREHOUSE_FULL` (back off `fullBackoffTicks`), `PORT_FULL` (M17: same back-off, because reaching it costs a full candidate walk with an estimate and a live simulation per candidate), `AT_MAXIMUM` (M15: no back-off), `NO_MATCHING_FILTER` (back-off), `OUTPUT_FULL`, `NOT_IN_STOCK`, `LOCATION_UNAVAILABLE`, `BUDGET_EXHAUSTED`, `COLLECT_SOURCE_EMPTY` (M18: no back-off), `NO_WORK`. `JobPlanner.StoreSurvey` answers the store side of that ladder: a storage location that was ranked or skipped for room is a genuinely full warehouse, then a full accepting port (the thing to go and fix), then a maximum (not a fault at all), then a filter mismatch. `StoreSurvey#collectReason()` answers the collect side with the same ladder and two ends of its own: no port can enter the ranking (only `selectStorage` is called), and the default is `COLLECT_SOURCE_EMPTY` rather than `WAREHOUSE_FULL`. It is declared **last but one** on purpose: a machine with nothing ready is the least alarming state there is, so every other honest answer of the same run wins the one line the goggles show — and, like `AT_MAXIMUM`, it must not arm the back-off, because it is answered by a map lookup and at most one live extract per item type, before any candidate is ranked (M18 review).
+  * The four storing refusals (`WAREHOUSE_FULL`, `NO_MATCHING_FILTER`, `PORT_FULL`, `AT_MAXIMUM`) name **no origin** in their texts ("no storage location accepts these items", not "the input items"): a collecting port reports three of them too, and a collect-only aisle need not contain a warehouse input at all (M18 review). Three of them are also what a collecting port's own goggles show (`NoJobReason#refusesCollecting()`, §3.2.4).
   * Reroute (§8 table): store leftovers → another storage location (consolidation, then travel from the crane) → an input buffer (travel) → **an accepting warehouse port** (M17: last, whatever its rank, and with a live-simulation budget of its own) → none; retrieve leftovers → a storage location (same ranking) → another output station that is **not** an accepting port (travel) → none. **Deviation from the §8 table as first written (M3 scenario hardening):** storage comes before outputs. Retrieve leftovers only exist when their request was lost (output broken, turned or its request cancelled), and another output never requested them; it received them on top of its own request (`scenariotwooutputsfirstremoved`, §7.6). An output stays the last resort, so a full warehouse does not block the crane. A candidate must accept at least one item in the live simulation; the failed target is excluded only in the reroute right after it failed (**M3 review fix:** a `HOLDING` retry passes none, so a former target that was emptied or placed again at the same position is used; before, every retry excluded it and the crane could hold for ever, blocking the aisle); the reroute amount is what the target accepted (the rest is rerouted again after the drop).
 
 ### 7.5 Implementation (M3, dispatch and crane reports)
@@ -2128,6 +2428,9 @@ Checked without a change: clamping and refusal of requests (§7.2), the `WAREHOU
 | A crane speed factor is 0 in the server config | Every crane of the server is held still with the pause reason `SPEED_FACTOR_ZERO` and one `WARN` naming the keys, instead of one axis stalling mid-trip while the others move (`stacker-crane.md` §4.2). |
 | Accepting warehouse port full (M17) | The items stay in the input, which backs up exactly as it does for a full warehouse: nothing is destroyed and nothing is dropped. The planning reason is `PORT_FULL`, which is reported instead of `AT_MAXIMUM` when both applied — a maximum is not a fault, a backed-up overflow is the thing to go and fix (§3.2.3). A full **diversion** falls through to storage instead, so one full chest behind a port can never stop a warehouse from storing. |
 | Accepting port fills up while the crane carries items to it (M17) | The crane does not wait: it drops what fits (usually nothing), reports 0 delivered and reroutes into storage or an input buffer. GameTest `portfullwhilecarryingreroutes` fails by timeout if that regresses. |
+| Reroute for COLLECT leftovers (M18) | A storage location, else an **input station buffer**, else `HOLDING` — the store reroute without its last stage: a warehouse **port** is never offered, because `JobType.COLLECT` allows no `OUTPUT` target and the collect context refuses every insertion anyway. That is what keeps a diversion from defeating the maximum that stopped the collecting in the first place (§3.2.4, guard 2). The station fallback gets a live-simulation budget of its own, as for a store. |
+| A collecting port's machine is emptied, broken or replaced mid-job (M18) | The existing paths: a zero pick aborts the job after retracting, a missing inventory before the pick aborts it and after the pick the held items are rerouted. Anything that has to be spilled lands at the **port's** position, never inside the machine. |
+| A collecting port is full of work but the warehouse is full (M18) | Nothing is picked: the items stay in the machine, where they already are, and the port's goggles keep saying "Ready: N". Collecting is the one arrival the warehouse can simply postpone without anything backing up (§3.2.4). |
 | A port's policy has not been read yet: world just loaded, chunk unloaded, restored from a save (M17) | It counts as "requests, on a pulse". Nothing is offered to it, and a continuous requesting port is found again by the next port pass (§3.2.3). "Assume it accepts" is never the default, because an export cannot be undone. |
 | Reroute for SUPPLY leftovers (M11) | Back into **storage only**, never to an output station: nobody requested those ingredients at a station, and an output would hand a player items they never asked for. A rejecting store filter is advisory here, as for a retrieve reroute — the items already left the warehouse. Else `HOLDING`, as always. |
 | Production station broken, or a production order cancelled or timed out (M11) | The order ends, releases every reservation and gives its backing request the unproduced amount back (`RequestQueue#reduce`, which is **not** `deliver`: nothing arrived, so "delivered so far" must not grow). **No item is invented and none is taken back**: ingredients already dropped into the station stay there, and ingredients the machine already took are gone from the warehouse's point of view (§3.5.4). |
@@ -2195,7 +2498,8 @@ The table above is covered by automated tests. What only a running game can reac
 | `retryTicks` / `holdRetryTicks` / `fullBackoffTicks` | 20 / 40 / 40 | retry cadences |
 | `maxOpenRequests` | 16 | request queue cap |
 | `maxOpenRequestsPerOutput` | 4 | open requests per output station (M2 review addition), one per item type it waits for. Since M7 it also bounds the merged amount of repeated pulses: one output request may wait for at most this many times its filter amount (§7.2) |
-| `maxSnapshotsPerTick` | 4 | queued storage location reads per tick: joins, content hints, load verification (M2 review addition) |
+| `maxSnapshotsPerTick` | 4 | queued storage location reads per tick: joins, content hints, load verification (M2 review addition). Since M18 the reads of the inventories behind **collecting** ports share this one budget (§3.2.4) |
+| `collectPollIntervalTicks` | 20 | how often a controller re-reads the inventory behind a gated-open **collecting** warehouse port without being told to (M18, issue #13). It covers the machines that change their inventory without notifying their neighbours — a furnace's result slot, several Create blocks; a change hint always overtakes it, and a port whose gate is shut is not read at all. Range 1–1200: the cost of a lower value is at most one bounded read per collecting port per interval, out of `maxSnapshotsPerTick` (§3.2.4) |
 | `productionBufferSlots` | 9 | buffer of a warehouse production station (M11, world restart) |
 | `maxProductionPatterns` | 4 | pattern slots of one production station; a pattern is a 3x3 grid plus one result (M11) |
 | `maxProductionOrders` | 8 | production orders one controller runs at the same time; each promises its ingredients (M11) |
@@ -2215,7 +2519,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks` | 1–128, 1–64, 1–1200 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 1–200, 1–27, 1–1728 |
 | `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–8 |
-| `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–64, 200–72000, 1–256, 5–1200, 0–64, 0–16, 1–65536 |
+| `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–256, 5–1200, 0–64, 0–16, 1–65536 |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 
@@ -2256,7 +2560,9 @@ Aisle A: Ready          the aisle letter and the short controller status
 Locations: 3 / 30       inventories holding at least one item, of all inventories the aisle counts
 Item types: 3           distinct item keys in the stock index
 Items: 176              total stored amount
-Ports: 2 accepting      only while a warehouse port of the aisle really accepts items (M17)
+Ports: 2 accepting      only while a warehouse port of the aisle really accepts items (M17); since M18 the same
+                        line carries the collecting ports as well ("Ports: 2 accepting, 1 collecting", or
+                        "Ports: 1 collecting"), each half only while it is above 0
 Rules: 4 · below min 1 · at max 1    only while the aisle really applies stock rules (M15)
 Rules paused: 1                      only while the safety stop holds a rule (M15 part 2)
 ```
@@ -2302,7 +2608,7 @@ works. The filter item is the whole configuration; the source adds no setting of
 **Crane Status** (dock):
 
 ```text
-Storing                 Idle · Storing · Handing over · Retrieving · Supplying · Paused (pausing wins over a job: a paused crane stands still)
+Storing                 Idle · Storing · Handing over · Collecting · Retrieving · Supplying · Paused (pausing wins over a job: a paused crane stands still)
 Iron Ingot x64          item and amount of the current job, omitted while there is none
 To A-01-04R             the job's target address, omitted while there is none
 Holding Iron Ingot x64  what the handling head carries, or "Empty"
@@ -2312,6 +2618,10 @@ Holding Iron Ingot x64  what the handling head carries, or "Empty"
 instead of storing them, and the job *type* alone cannot tell the two apart, so `CraneJobSummary` carries its
 `targetKind` in the client packet (a packet without it reads as the type's planned target). The crane's goggles say the
 same word, so neither surface contradicts the port's own "Handed over: N".
+
+**"Collecting"** (M18) is the opposite trip and gets a word of its own for the same reason: a `COLLECT` job stores its
+items like a `STORE`, but it is the warehouse *fetching* out of a machine, which is what a player is watching for while
+a production loop runs (§3.2.4). Here the job type alone is enough, so no packet field was needed.
 
 ### 10.2 Refresh, rows and columns
 

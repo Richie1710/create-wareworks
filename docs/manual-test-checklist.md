@@ -86,7 +86,7 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 19f. Give three chests three different filters and feed all three item types at once: each type lands in its own chest,
     and a **dedicated** chest is used even when an unfiltered chest already holds that item. An item matching no filter
     goes to an unfiltered chest; if there is none, the controller goggles read "Last planning: no storage location
-    accepts the input items" and the **input keeps** its items.
+    accepts these items" and the **input keeps** its items.
 19g. Fill a filtered chest, then **change its filter to something else**: nothing moves, nothing is dropped, the chest
     keeps its contents — and a request for what is inside is still delivered. The controller goggles show "Filtered
     locations: N" under the storage count.
@@ -967,7 +967,8 @@ settings, **read** the result and **believe** what the warehouse did.
     second, not every tick).
 
 120. **Can you read a port without goggles?** Stand **in the aisle** and look down the rack wall. An accepting port's
-    ring around the opening and its back spout are **andesite**, a requesting port's are **brass**. Is that difference
+    ring around the opening is **andesite**, a requesting port's is **brass** (the accent covers the back spout too, but
+    the ring inside the aisle is the cue that is always readable). Is that difference
     obvious at a glance, from the far end of the aisle, and at night? Then stand **behind** the ports, where the wiring
     is: each accepting port shows its **signed rank** (`-1`, `+4`) on the back plate, and a requesting port shows no
     number at all. Read it from a step away, from ~7 blocks and at a grazing angle — beyond about 10 blocks it is not
@@ -1027,3 +1028,99 @@ settings, **read** the result and **believe** what the warehouse did.
     says it does — in particular whether the pulse beat's trip arrives while its text is still up, and whether the
     control icon in the accepting scene's closing beat obscures the `+4` on the back plate for longer than it should.
     Then read them again in German.
+
+## U. Collecting from a machine (M18)
+
+Build one aisle with a rack wall of storage locations, a **warehouse input**, a **warehouse stock keeper** and at least
+two **warehouse outputs** at rack positions. Behind one of them put a **chest a machine drops into** — a Create
+Mechanical Crafter's output chest, a Mechanical Press dropping onto a depot, or simply a chest you fill by hand — and
+behind another a **vanilla furnace**. Keep a **wrench** and **Engineer's Goggles** on you.
+
+The automated side of M18 (`WarehouseCollectGameTests`, `JobPlannerTest`, `PortSettingsTest`, the `collect` and
+`collect-loop` visual scenarios) already proves *what the warehouse does*, including a whole production loop closing
+through a real Mechanical Arm and Mechanical Crafter, with every claim asserted on the server. Everything below is about
+whether a person can **find** the direction, **read** what the port is doing and **trust** it near their own machines.
+
+124. **Turning a port around, and the fourth row.** Hold the **wrench** and hold right-click on a port's own box: the
+    board must now have a **fourth** row, "Collect — from a machine", below "Diversion — before storage". Its cells must
+    show a **dash**, not a number — a collecting port has no rank — and picking the row must take effect at once. Check
+    it above head height and at your feet, and check that the port box is still the only box drawn while you hold the
+    wrench. Then set the row back to "Request": the port must stop collecting immediately and behave as it always did.
+
+125. **It fetches.** Put items into the chest behind the collecting port (or let your machine fill it) and watch a whole
+    trip: the crane travels to the **port**, reaches **in**, and the items end up in the racks like anything that
+    arrived at an input. Nothing may ever be pushed *into* the chest by the warehouse. Judge whether the trip reads as
+    the warehouse fetching rather than as a delivery going the wrong way, and whether "the port reaches one block
+    further" is obvious enough from the aisle. Then break the chest while the crane is on its way to it: the job must
+    end cleanly, no items may drop, and the port's goggles must say "No inventory behind the port" in gold.
+
+126. **A real machine, and its own rules.** Point one port at the **furnace** with no filter. A furnace offers its
+    **fuel** slot to a horizontal face and its result only downwards, so what the port takes is the fuel — surprising,
+    but it is the machine's rule, not the warehouse's. Put coal in the fuel slot and watch it be collected. Then set the
+    port's **filter** to what your machine really produces and point a port at that machine's own output chest instead:
+    with a filter, only that item may be fetched, and everything else must stay in the chest — and the port's goggles
+    must then count **only** what it may fetch under "Ready", not everything in the chest, so the "Collects:" line and
+    the "Ready:" line can never contradict each other. This is the check that
+    decides whether the mod's promise "the filter says what is fetched" is understandable without reading the docs.
+
+127. **It stops where it should.** Give the stock keeper a rule with a **maximum** of 16 for the collected item and fill
+    the chest behind the port with far more than that. The warehouse must stop at the maximum and simply **leave the
+    rest in your machine** — the controller says `at maximum`, and the port's goggles keep counting "Ready: N" and add
+    the gold line **"Not fetched: a stock rule for these items is at its maximum"**. Standing at the machine, is that
+    line enough to understand why the chest stops emptying, without walking to the controller? That is the whole point
+    of it. Now add
+    a second port as an **overflow** (negative rank, "Unless powered") whose chest is the **same** chest the collecting
+    port reads, wired with a hopper if you like. Nothing may churn: watch for a minute and the three numbers (collected,
+    handed over, in the chest) must go constant and stay constant. Then fill every rack chest so the warehouse is
+    genuinely full: the items must stay in the machine, nothing may drop, and the moment you empty one rack chest the
+    next trip must use the room.
+
+128. **It never shuffles its own aisle.** Point a collecting port at an inventory that is **already a storage location**
+    of the same aisle — the far half of a double chest a warehouse interface reads is the honest version of this
+    mistake. The port must collect **nothing** and its goggles must say "This inventory is already a storage location"
+    in gold. Without that line a player would be left with a port that silently does nothing.
+
+129. **Fairness, and your own requests first.** Run two collecting ports, both with a full machine behind them, while a
+    belt keeps feeding the **warehouse input**. Over a few minutes all three must make progress — neither port may
+    starve the other, and neither may starve the input. Then request something at a **terminal** while both machines are
+    full: your request must be served on the **next** trip, not after the machines are emptied. This is the one
+    behaviour a player will complain about if it is wrong, and it is only judgeable by watching.
+
+130. **Reading it, saving it, and German.** Stand **in the aisle** and look down the rack wall: a collecting port's ring
+    around the opening is **copper**, next to the **andesite** of an accepting one and the **brass** of a requesting
+    one. Is the third material obvious at a glance, from the far end of the aisle, and at night? The ring is the cue
+    that has to carry this: the casing accent covers the back spout too, but a collecting port's spout stands against
+    the machine, so from behind there is usually nothing to see. Nothing may be drawn on its back plate, because it has
+    no rank. With goggles the port must show "Port: collects into the warehouse", "Collects: <item>" or "Any item",
+    "Ready: N", "Collected: N" and its redstone line — plus, while the warehouse refuses the items, the gold "Not
+    fetched: <reason>" line and no such line once it is being served again — the controller
+    "Collecting ports: N", and a **Display Link** with the **Aisle Summary** source the row "Ports: 1 accepting, 1
+    collecting" (each half only while it is above 0). While the crane carries a collected load, its goggles and a
+    **Crane Status** display must say **"Collecting"**, never "Storing". Copy the port with a Create **clipboard** onto
+    the next one — the direction must travel with the rest of the policy — then save, reload and check that everything
+    survived, and that a port that was armed by a pulse still holds its edge.
+
+    Then switch the client to **German** and walk the same surfaces: the board row ("Abholen — aus einer Maschine"), the
+    filter slot's label ("Abgeholter Gegenstand"), the goggle lines ("Anschluss: holt ins Lager", "Holt ab: ...",
+    "Bereit: 24", "Abgeholt: 152", "Kein Inventar hinter dem Anschluss", "Dieses Inventar ist bereits ein Lagerplatz",
+    "Nicht abgeholt: kein Lagerplatz nimmt diese Gegenstände an"),
+    the controller's "Abholende Anschlüsse: 1", the display's "Anschlüsse: 1 aufnehmend, 1 abholend" and the crane's
+    "Holt ab". Nothing may show a raw key, run out of its box or be cut off — German is the longer language and the
+    screenshot runs only ever render English, so this is the only place clipping shows up.
+
+    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
+    nothing about how they look.
+
+131. **Read the new Ponder scene at normal speed.** Hold **W** over a Warehouse Output: after the two port scenes it now
+    has "Collecting from a Machine", and the **Warehouse Production Station** shows the same scene as its second one.
+    Judge the pacing and whether each beat lands where its text says it does — in particular whether the wrench beat's
+    control icon leaves the port's copper back readable, and whether the closing beats (the maximum, and the lever) are
+    understood as *reasons the port stops* rather than as faults. Then read it again in German.
+
+132. **A machine in a chunk of its own.** Build a collecting port so that its machine sits in a **different chunk** than
+    the rack wall (F3+G draws the borders), let a collect job start, and then get that chunk unloaded while the aisle
+    stays loaded — a spare chunk loader switched off, or simply walking away far enough on a server with a small view
+    distance. The crane must **pause** with "Paused: area not loaded" in its goggles and on a Crane Status display, and
+    carry on the moment the chunk is back: it must never sit at the port with no reason given while the whole aisle
+    waits behind it. This is the one M18 review fix nothing automated can reach — a GameTest force-loads its own area,
+    and the robustness run can only unload a whole scene.

@@ -10,6 +10,7 @@ import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.client.model.generators.ConfiguredModel;
 import net.neoforged.neoforge.client.model.generators.ModelFile;
 import net.neoforged.neoforge.client.model.generators.MultiPartBlockStateBuilder;
@@ -94,15 +95,16 @@ public final class WareworksBlockStateGen {
     }
 
     /**
-     * The warehouse port's blockstate ({@code docs/warehouse-system.md} §3.2, M17, issue #12): the hand-made
-     * {@code block} model turned onto {@code FACING}, with {@code block_accept} in its place while the port accepts
-     * items instead of requesting them.
+     * The warehouse port's blockstate ({@code docs/warehouse-system.md} §3.2, M17, issue #12; M18, issue #13): the
+     * hand-made {@code block} model turned onto {@code FACING}, with {@code block_accept} in its place while the port
+     * accepts items instead of requesting them and {@code block_collect} while it collects them out of a machine.
      * <p>
-     * The two models are the same geometry and differ in one texture: the ring around the aisle opening and the spout on
-     * the back are <b>andesite</b> instead of brass, which is ADR-017's material language applied to the direction —
-     * andesite is the dumb intake, brass the smart filtered output, and "whatever the warehouse cannot keep" is the dumb
-     * direction. The cue therefore reads both from <b>inside the aisle</b>, where no value box and no drawn digit may go,
-     * and from outside, where the funnel is.
+     * The three models are the same geometry and differ in one texture: the ring around the aisle opening and the spout on
+     * the back are <b>andesite</b> (accept) or <b>copper</b> (collect) instead of brass, which is ADR-017's material
+     * language applied to the direction — andesite is the dumb intake, brass the smart filtered output, "whatever the
+     * warehouse cannot keep" is the dumb direction, and copper is Create's "moves things through itself" material, which is
+     * exactly what a collecting port does. The cue therefore reads both from <b>inside the aisle</b>, where no value box
+     * and no drawn digit may go, and from outside, where the funnel is.
      * <p>
      * Create's {@code BlockStateGen.horizontalBlockProvider} would give every {@code accepting} value the same model —
      * which is right for {@code POWERED}, a stored edge nobody can see, and wrong here.
@@ -113,10 +115,25 @@ public final class WareworksBlockStateGen {
             String folder = "block/" + context.getName() + "/";
             ModelFile request = provider.models().getExistingFile(provider.modLoc(folder + "block"));
             ModelFile accept = provider.models().getExistingFile(provider.modLoc(folder + "block_accept"));
+            ModelFile collect = provider.models().getExistingFile(provider.modLoc(folder + "block_collect"));
             provider.getVariantBuilder(context.getEntry()).forAllStates(state -> ConfiguredModel.builder()
-                    .modelFile(state.getValue(WarehouseOutputBlock.ACCEPTING) ? accept : request)
+                    .modelFile(modelFor(state, request, accept, collect))
                     .rotationY(rotationOnto(state.getValue(WarehouseOutputBlock.FACING)))
                     .build());
+        };
+    }
+
+    /**
+     * The model of one port state (M18, issue #13): the accepting one, the collecting one, or the requesting one for both
+     * of the states that are not a direction — the default, and the illegal "accepting and collecting at once" that only a
+     * {@code /setblock} can produce and that the block entity corrects on the next load
+     * ({@code WarehouseOutputBlock#directionOf}).
+     */
+    private static ModelFile modelFor(BlockState state, ModelFile request, ModelFile accept, ModelFile collect) {
+        return switch (WarehouseOutputBlock.directionOf(state)) {
+            case ACCEPT -> accept;
+            case COLLECT -> collect;
+            case REQUEST -> request;
         };
     }
 

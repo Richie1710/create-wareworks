@@ -100,6 +100,26 @@ class SharedInventoriesTest {
         assertEquals(0, shared.aliasCount());
     }
 
+    /**
+     * "Is this inventory one we already count?" — the question a collecting warehouse port asks before it becomes a source
+     * (M18, issue #13), so that a port pointed at the far half of a double chest an interface already reads is refused
+     * instead of shuffling items inside its own aisle for ever.
+     */
+    @Test
+    void holdsAnswersWhetherAnyLocationCountsAnIdentity() {
+        SharedInventories<String, String> shared = new SharedInventories<>();
+        assertFalse(shared.holds(DOUBLE_CHEST));
+        shared.assign("left", DOUBLE_CHEST);
+        assertTrue(shared.holds(DOUBLE_CHEST), "the identity the left half counts");
+        assertFalse(shared.holds(VAULT));
+        shared.assign("left", VAULT);
+        assertFalse(shared.holds(DOUBLE_CHEST), "the identity nobody counts any more");
+        assertTrue(shared.holds(VAULT));
+        shared.remove("left");
+        assertFalse(shared.holds(VAULT), "and nothing at all once the location is gone");
+        assertThrows(NullPointerException.class, () -> shared.holds(null));
+    }
+
     @Test
     void nullArgumentsAreRejected() {
         SharedInventories<String, String> shared = new SharedInventories<>();

@@ -19,6 +19,7 @@ import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
+import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
@@ -142,6 +143,16 @@ public final class BlocksVisualScenario implements VisualScenario {
                 if (!(level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port)
                         || !port.setPortRank(ACCEPT_EXHIBIT_RANK))
                     throw new VisualTestException("the accepting port exhibit could not be configured at " + pos);
+            }),
+            // And in the collecting direction (M18, issue #13): the same geometry with a <b>copper</b> ring and spout,
+            // Create's "moves things through itself" material, which is what a port that fetches out of a machine does.
+            // Placed by setting the rank to the collect sentinel, so this exhibit checks that derivation as well.
+            new Exhibit("port_collect", (level, pos) -> {
+                level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
+                        .setValue(WarehouseOutputBlock.FACING, Direction.SOUTH));
+                if (!(level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity port)
+                        || !port.setPortRank(PortSettings.COLLECT_RANK))
+                    throw new VisualTestException("the collecting port exhibit could not be configured at " + pos);
             }),
             // The terminal's FACING is its intake port, and its screen sits opposite (display = back, the default), so a
             // port towards -Z turns the screen towards the front camera: the side a player reads (ADR-022).

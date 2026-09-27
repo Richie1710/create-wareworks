@@ -45,10 +45,12 @@ can watch it happen.
   priority on the same slot decides which of the suitable locations fills first.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse.
-* **Warehouse Output**: the warehouse's **port**. It either **requests** the item in its filter slot — on a redstone
-  pulse, or continuously while a signal is held, which keeps a machine supplied without a clock — or it **accepts** what
-  the warehouse cannot keep, as an overflow behind every rack or as a diversion in front of them. Funnels, chutes, hoppers
-  and Mechanical Arms take the items out either way. Details in the **The warehouse port** section below.
+* **Warehouse Output**: the warehouse's **port**, in three directions. It either **requests** the item in its filter slot
+  — on a redstone pulse, or continuously while a signal is held, which keeps a machine supplied without a clock — or it
+  **accepts** what the warehouse cannot keep, as an overflow behind every rack or as a diversion in front of them, or it
+  **collects**: the crane reaches through the port into the inventory behind it and fetches a machine's result into
+  storage, so no belt has to lead back to the aisle. Funnels, chutes, hoppers and Mechanical Arms take the items out of a
+  requesting or accepting port either way. Details in the **The warehouse port** section below.
 * **Warehouse Terminal**: a searchable screen showing the aisle's whole stock; click an item and the crane delivers it
   into the terminal.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
@@ -118,8 +120,10 @@ The build *is* the configuration; there is no setup screen.
 Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Every block has one: the crane and the
 rail share the overview, the controller shows storing and retrieving, the interface adds addressing and storage
 filters, the terminal and the production station have their own scenes (placing and requesting, and feeding a machine
-from the warehouse), the output has two more for its port directions, and the stock keeper has three (what each of its
-three numbers governs, a warehouse that restocks itself, and the overflow a maximum makes necessary).
+from the warehouse), the output has three more for its port directions — requesting, accepting and collecting, the last
+of which the production station shows as well, because it is how a machine's result comes home — and the stock keeper
+has three (what each of its three numbers governs, a warehouse that restocks itself, and the overflow a maximum makes
+necessary).
 
 ## Requesting items
 
@@ -160,16 +164,30 @@ anything else to set the filter, so the two never get in each other's way:
   A **negative** rank makes the port an **overflow** — every storage location wins over it, so it only ever gets what the
   warehouse cannot keep. A **positive** rank makes it a **diversion** — it takes incoming items *before* they are stored.
   Several accepting ports are ranked among each other by their number.
+* **Collect**: the crane reaches *through* the port into the inventory right behind it — a machine's output chest, a
+  barrel under a drop-off, a buffer — takes what is there and stores it. This is the way back for a machine: the crane
+  brings the ingredients to a production station, your machine works, and the same warehouse fetches the result without
+  you building a return belt. This row has no number, because a collecting port never competes for a place in the racks.
 
 The filter still says which items an accepting port handles at all; a port **without** a filter takes anything. What you
 build behind the port decides where the items go — a belt, a furnace, a way back to a farm. **Wareworks never destroys
 anything:** if a port is full, the input backs up exactly as it does when the warehouse is full, and the controller's
 goggles say so.
 
-An accepting port is easy to spot: it turns **andesite** around the opening the crane reaches into and on its back spout,
-and its rank is drawn on the plate on the back. Goggles add what it accepts, its redstone setting, whether it is active
-right now and how many items it has handed over, and the controller counts "Accepting ports". A Create **clipboard**
-copies a port's whole policy — filter, amount, redstone behaviour and rank — onto the next one.
+An accepting port is easy to spot from inside the aisle: it turns **andesite** around the opening the crane reaches into,
+and its rank is drawn on the plate on the back. A **collecting** one turns **copper** there. Goggles add what a port
+accepts or collects, its redstone setting, whether it is active right now, how many items it has handed over or fetched
+and — while it collects — what its last look into the machine found and, if the warehouse did not take those items, why;
+the controller counts "Accepting ports" and "Collecting ports". A Create **clipboard** copies a port's whole policy — filter, amount, redstone behaviour and rank
+— onto the next one.
+
+**What a collecting port will not do.** It only ever reaches into the one inventory directly behind it — nothing is
+searched for, and whatever that side of the machine hands out is what it takes, so a filter is worth setting. It stops at
+a stock rule's **maximum** and leaves the items where they are when the warehouse is full, it never pushes anything
+*into* your machine, and it refuses an inventory that is already a storage location of the same aisle (its goggles say
+so). Whenever the warehouse will not take what is waiting, the port itself says why, so you can read it standing at your
+machine instead of walking to the controller. Your own requests always come first, and several collecting ports take turns with each other and with the warehouse
+inputs.
 
 The combination this was built for: a stock rule's **maximum** keeps 8 of something, everything above it leaves through
 an unwired overflow (*accept*, *unless powered*, rank −1, no filter) instead of jamming your input belt — and a lever

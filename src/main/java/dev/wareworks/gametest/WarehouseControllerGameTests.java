@@ -723,8 +723,8 @@ public final class WarehouseControllerGameTests {
                     // trailing ones are the stock rule counts of an aisle without keepers: governing, below minimum, at
                     // maximum and paused (M15).
                     ControllerGoggleSummary expected = ControllerGoggleSummary.counts(ControllerStatus.READY, RAILS,
-                            defaultMastHeight(), STORAGE_LOCATIONS, 0, 0, 0, 0, 0, 0, 1, ITEM_TYPES, TOTAL_ITEMS, 0, 0,
-                            0, 0, 0, 0);
+                            defaultMastHeight(), STORAGE_LOCATIONS, 0, 0, 0, 0, 0, 0, 0, 1, ITEM_TYPES, TOTAL_ITEMS, 0,
+                            0, 0, 0, 0, 0);
                     // The crane part depends on the (running) crane; the counts are compared here.
                     helper.assertValueEqual(controller.summary().withoutCrane(), expected, "summary after observation");
 
@@ -845,7 +845,7 @@ public final class WarehouseControllerGameTests {
                     // The motor below the dock runs at Create's default speed, so the crane may already work: counts only.
                     helper.assertValueEqual(controller.summary().withoutCrane(),
                             ControllerGoggleSummary.counts(ControllerStatus.READY, geometry.length(), geometry.height(),
-                                    STORAGE_LOCATIONS, 0, 0, 1, 1, 0, 0, 1, ITEM_TYPES, TOTAL_ITEMS, 0, 0, 0, 0, 0,
+                                    STORAGE_LOCATIONS, 0, 0, 1, 1, 0, 0, 0, 1, ITEM_TYPES, TOTAL_ITEMS, 0, 0, 0, 0, 0,
                                     0),
                             "controller goggle summary");
                 })

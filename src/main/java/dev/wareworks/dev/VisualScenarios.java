@@ -15,6 +15,8 @@ final class VisualScenarios {
             Map.entry(FiltersVisualScenario.NAME, FiltersVisualScenario::new),
             Map.entry(PrioritiesVisualScenario.NAME, PrioritiesVisualScenario::new),
             Map.entry(PortsVisualScenario.NAME, PortsVisualScenario::new),
+            Map.entry(CollectVisualScenario.NAME, CollectVisualScenario::new),
+            Map.entry(CollectLoopVisualScenario.NAME, CollectLoopVisualScenario::new),
             Map.entry(RobustnessVisualScenario.NAME, RobustnessVisualScenario::new),
             Map.entry(PonderVisualScenario.NAME, PonderVisualScenario::new),
             Map.entry(TerminalVisualScenario.NAME, TerminalVisualScenario::new),

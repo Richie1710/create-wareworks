@@ -57,30 +57,45 @@ public class PortRankBehaviour extends ScrollValueBehaviour {
 
     public PortRankBehaviour(SmartBlockEntity be, ValueBoxTransform slot) {
         super(WareworksLang.translateDirect(WareworksLang.OUTPUT_PORT_RANK), be, slot);
-        between(PortSettings.MIN_RANK, PortSettings.MAX_RANK);
+        // Up to the collect sentinel, not to MAX_RANK (M18, issue #13): Create's setValue clamps to this range, so a
+        // narrower one would silently turn a collecting port into the strongest diversion. No input path reaches setValue
+        // directly — Create's ValueSettingsPacket only ever calls setValueSettings, which composes the rank from the
+        // board's row and column, and setRank clamps with PortSettings.clampRank before handing the number over — so the
+        // widened range adds no way to reach the sentinel other than meaning it.
+        between(PortSettings.MIN_RANK, PortSettings.COLLECT_RANK);
         requiresWrench();
         // The box text is the signed rank, the same number the block renderer paints on the back plate.
         withFormatter(PortSettings::formatRank);
     }
 
-    /** The signed rank, clamped on read so a number saved under a wider range is never silently rewritten. */
+    /**
+     * The signed rank, clamped on read so a number saved under a wider range is never silently rewritten. The clamp keeps
+     * the collect sentinel and clamps everything else into the accept band ({@link PortSettings#clampRank}).
+     */
     public int rank() {
-        return Mth.clamp(value, PortSettings.MIN_RANK, PortSettings.MAX_RANK);
+        return PortSettings.clampRank(value);
     }
 
     /** What the port does. */
     public PortDirection direction() {
-        return rank() == PortSettings.REQUEST_RANK ? PortDirection.REQUEST : PortDirection.ACCEPT;
+        return PortSettings.directionOf(rank());
     }
 
     /**
-     * Sets the signed rank as the hold-to-edit board would (out-of-range values are clamped).
+     * Sets the signed rank as the hold-to-edit board would: out-of-range values are clamped into the accept band, and only
+     * the sentinel itself makes a collecting port ({@link PortSettings#clampRank}).
+     * <p>
+     * The clamp is applied <b>here</b> and not left to Create's {@code setValue}, whose range ends at the sentinel since
+     * M18: a number above the accept band would otherwise land on the sentinel and turn the port around, while the same
+     * number read from a save or a clipboard through {@link #read} becomes the strongest diversion. One stored number
+     * must not mean two directions depending on which path it took (M18 review); {@code between(...)} now only keeps
+     * {@code setValue} from rewriting a legitimate sentinel, which is all it was widened for.
      *
      * @return whether it changed
      */
     public boolean setRank(int rank) {
         int before = rank();
-        setValue(rank);
+        setValue(PortSettings.clampRank(rank));
         return rank() != before;
     }
 
@@ -110,9 +125,13 @@ public class PortRankBehaviour extends ScrollValueBehaviour {
         playFeedbackSound(this);
     }
 
-    /** A magnitude means nothing in the request row, so that row shows a dash instead of a number. */
+    /**
+     * A magnitude means nothing in the request row and none in the <b>collect</b> row either (M18, issue #13), so both
+     * show a dash instead of a number: ordering against other work is where the arrival stage sits in dispatch, and
+     * ordering among several collecting ports is a round robin, because a priority there would starve the weaker ports.
+     */
     private static MutableComponent formatSettings(ValueSettings settings) {
-        if (settings.row() == PortSettings.REQUEST_ROW)
+        if (settings.row() == PortSettings.REQUEST_ROW || settings.row() == PortSettings.COLLECT_ROW)
             return Component.literal(PortSettings.NO_VALUE);
         return Component.literal(String.valueOf(Mth.clamp(settings.value(), 0, PortSettings.MAX_STRENGTH)));
     }
@@ -145,7 +164,7 @@ public class PortRankBehaviour extends ScrollValueBehaviour {
     /** A missing key reads as rank 0, i.e. a requesting port: a world, schematic or clipboard from before M17. */
     @Override
     public void read(CompoundTag nbt, HolderLookup.Provider registries, boolean clientPacket) {
-        value = Mth.clamp(nbt.getInt(RANK_TAG), PortSettings.MIN_RANK, PortSettings.MAX_RANK);
+        value = PortSettings.clampRank(nbt.getInt(RANK_TAG));
     }
 
     @Override

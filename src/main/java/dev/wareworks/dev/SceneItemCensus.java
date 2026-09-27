@@ -5,18 +5,25 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
+import com.simibubi.create.content.kinetics.mechanicalArm.ArmBlockEntity;
+
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.ChestType;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
@@ -27,7 +34,14 @@ import net.neoforged.neoforge.items.IItemHandler;
  * needs a {@code GameTestHelper}.
  * <p>
  * Counted once each: all inventories reachable through {@code Capabilities.ItemHandler.BLOCK} (chests, hoppers), all
- * warehouse station buffers, all stacker crane handling heads and all item entities inside the box. Server thread only.
+ * warehouse station buffers, all stacker crane handling heads, the claws of Create mechanical arms and all item entities
+ * inside the box. Server thread only.
+ * <p>
+ * Nothing is counted twice: stations, docks and arms are read through their own API or save data, everything else
+ * through the item capability — where the <b>second half of a double chest</b> is skipped, because both halves answer
+ * the same 54-slot handler — but only while the half that is counted lies inside the box itself
+ * ({@link #isSecondChestHalf}). The counterpart in {@code gametest.ItemCensus} makes the same
+ * two exceptions, for the same reason (M18, issue #13, whose scenes need a real double chest and a real arm).
  * <p>
  * A census reads every block position of the box once, so scenarios keep the box to their own aisle. The box is
  * inflated around that aisle and therefore normally spans several chunks: {@link #take} <b>refuses</b> to count while
@@ -63,8 +77,10 @@ final class SceneItemCensus {
      */
     static Map<ItemKey, Long> take(ServerLevel level, AABB box) {
         Map<ItemKey, Long> counts = new HashMap<>();
-        for (BlockPos pos : BlockPos.betweenClosed(Mth.floor(box.minX), Mth.floor(box.minY), Mth.floor(box.minZ),
-                Mth.ceil(box.maxX) - 1, Mth.ceil(box.maxY) - 1, Mth.ceil(box.maxZ) - 1)) {
+        BoundingBox bounds = new BoundingBox(Mth.floor(box.minX), Mth.floor(box.minY), Mth.floor(box.minZ),
+                Mth.ceil(box.maxX) - 1, Mth.ceil(box.maxY) - 1, Mth.ceil(box.maxZ) - 1);
+        for (BlockPos pos : BlockPos.betweenClosed(bounds.minX(), bounds.minY(), bounds.minZ(), bounds.maxX(),
+                bounds.maxY(), bounds.maxZ())) {
             if (!level.isLoaded(pos))
                 throw new VisualTestException("the census box " + box + " reaches the unloaded position " + pos
                         + "; a census must wait until the whole box is loaded");
@@ -76,7 +92,11 @@ final class SceneItemCensus {
             } else if (be instanceof StackerCraneBlockEntity crane) {
                 for (HeldItems.Entry entry : crane.heldItems().entries())
                     add(counts, entry.key(), entry.count());
+            } else if (be instanceof ArmBlockEntity arm) {
+                add(counts, armClaw(arm, level.registryAccess()));
             } else {
+                if (isSecondChestHalf(level.getBlockState(pos), pos, bounds))
+                    continue;
                 IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos.immutable(), null);
                 if (handler == null)
                     continue;
@@ -87,6 +107,31 @@ final class SceneItemCensus {
         for (ItemEntity entity : level.getEntitiesOfClass(ItemEntity.class, box))
             add(counts, entity.getItem());
         return counts;
+    }
+
+    /** NBT key of the stack in a Create mechanical arm's claw ({@code ArmBlockEntity#write}). */
+    private static final String ARM_HELD_ITEM_TAG = "HeldItem";
+
+    /**
+     * The stack in a mechanical arm's claw. An arm has no item capability and no accessor for it, but it saves the stack,
+     * so a census never has to wait for an arm to be empty.
+     */
+    private static ItemStack armClaw(ArmBlockEntity arm, HolderLookup.Provider registries) {
+        return ItemStack.parseOptional(registries, arm.saveWithoutMetadata(registries).getCompound(ARM_HELD_ITEM_TAG));
+    }
+
+    /**
+     * Whether {@code state} at {@code pos} is the half of a double chest whose contents the other half already reports —
+     * which is only true when that other half is inside {@code bounds} and is really visited.
+     * <p>
+     * A double chest straddling the census boundary with its counted half outside would otherwise vanish from the census
+     * entirely, and an item lost or duplicated inside it would stop failing the run (M18 review). That is exactly the
+     * boundary a scenario puts a player's machine on.
+     */
+    private static boolean isSecondChestHalf(BlockState state, BlockPos pos, BoundingBox bounds) {
+        if (!state.hasProperty(ChestBlock.TYPE) || state.getValue(ChestBlock.TYPE) != ChestType.RIGHT)
+            return false;
+        return bounds.isInside(pos.relative(ChestBlock.getConnectedDirection(state)));
     }
 
     /**

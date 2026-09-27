@@ -7,9 +7,10 @@ import net.minecraft.world.item.ItemStack;
 
 /**
  * The inventory a handling head reaches at one location of the aisle, for the current tick only
- * ({@code docs/stacker-crane.md} §6). Three kinds exist ({@link TransferContexts#resolve}): a storage location (the item
- * handler of the inventory behind a warehouse interface), an input station (its internal extract/insert API) and an
- * output station (its internal insert API; nothing can be extracted).
+ * ({@code docs/stacker-crane.md} §6). Four kinds exist ({@link TransferContexts#resolve}): a storage location (the item
+ * handler of the inventory behind a warehouse interface), an input station (its internal extract/insert API), an
+ * output station (its internal insert API; nothing can be extracted) and a <b>collecting</b> warehouse port (the item
+ * handler of the inventory behind it, extract only; M18, issue #13).
  * <p>
  * The same context serves the crane's real transfers and the controller's live simulations
  * ({@code docs/warehouse-system.md} §5): a simulated call equals the real one in the same tick for well-behaved

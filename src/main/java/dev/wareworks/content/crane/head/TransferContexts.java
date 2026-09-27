@@ -13,6 +13,7 @@ import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseDeliveryStationBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.warehouse.LocationKind;
 import net.minecraft.core.BlockPos;
@@ -104,19 +105,49 @@ public final class TransferContexts {
             }
             case INPUT -> blockEntity instanceof WarehouseInputBlockEntity input
                     ? Resolution.available(ofInput(level, input)) : Resolution.MISSING;
-            // Warehouse output, terminal (ADR-018) and production station (ADR-024) are all stations the crane
-            // delivers into, so one context serves all three; only the kind it reports differs.
-            case OUTPUT, PRODUCTION -> blockEntity instanceof WarehouseDeliveryStationBlockEntity delivery
-                    ? Resolution.available(ofDelivery(level, delivery, kind)) : Resolution.MISSING;
+            // A COLLECTING warehouse port is the one output station the crane takes items OUT of (M18, issue #13): it
+            // resolves to the inventory behind the port instead of to the port's own insert-only buffer, so the crane
+            // reaches through the port exactly as it reaches through a warehouse interface. Every other output — a
+            // requesting or accepting port, and a warehouse terminal (ADR-018) — and a production station (ADR-024) are
+            // stations the crane delivers into, so one context serves all of those; only the kind it reports differs.
+            case OUTPUT, PRODUCTION -> {
+                if (!(blockEntity instanceof WarehouseDeliveryStationBlockEntity delivery))
+                    yield Resolution.MISSING;
+                if (kind == LocationKind.OUTPUT && delivery instanceof WarehouseOutputBlockEntity port
+                        && port.isCollecting())
+                    yield resolveCollect(level, pos, port);
+                yield Resolution.available(ofDelivery(level, delivery, kind));
+            }
             // A warehouse stock keeper holds no items at all, so no job can ever name it as a source or a target
             // (M15): a crane that somehow asked for one is told the member is not there, which is exactly true.
             case KEEPER -> Resolution.MISSING;
         };
     }
 
+    /**
+     * The inventory behind a <b>collecting</b> warehouse port (M18, issue #13): {@link Status#UNLOADED} while that
+     * position is not loaded, so the crane waits and retries, and {@link Status#MISSING} when nothing there offers an item
+     * handler — the port is then treated exactly like a storage location whose chest a player broke.
+     */
+    private static Resolution resolveCollect(Level level, BlockPos pos, WarehouseOutputBlockEntity port) {
+        if (!level.isLoaded(port.attachedPos()))
+            return Resolution.UNLOADED;
+        return port.attachedHandler().map(handler -> Resolution.available(ofCollect(level, pos, handler)))
+                .orElse(Resolution.MISSING);
+    }
+
     /** A storage context over a live item handler; {@code position} is where stray items are spilled. */
     public static TransferContext ofHandler(Level level, BlockPos position, IItemHandler handler) {
         return new HandlerContext(level, position.immutable(), handler);
+    }
+
+    /**
+     * A collect context over the item handler behind a collecting warehouse port: <b>extract only</b> (M18, issue #13).
+     *
+     * @param position the port's own position, where stray items are spilled — never inside the player's machine
+     */
+    public static TransferContext ofCollect(Level level, BlockPos position, IItemHandler handler) {
+        return new CollectContext(new HandlerContext(level, position.immutable(), handler));
     }
 
     /** An input station context (extract and put back). */
@@ -289,6 +320,60 @@ public final class TransferContexts {
         @Override
         public void spill(ItemStack stack) {
             spillAt(level, position, stack);
+        }
+    }
+
+    /**
+     * The inventory behind a <b>collecting</b> warehouse port ({@code docs/warehouse-system.md} §3.2.4, M18, issue #13):
+     * the extract half of {@link HandlerContext} and <b>nothing else</b>.
+     * <p>
+     * Extraction is delegated, so a machine's own rules are respected exactly as a chest's are: slot by slot through the
+     * item capability only, real results, over-delivered stacks given back, and a foreign inventory that throws never
+     * throws into the crane. {@link #insert} <b>refuses everything</b> — it returns the stack unchanged — so nothing the
+     * warehouse carries can ever be pushed back into a player's machine, whatever a reroute, a hold retry or a future
+     * caller asks for. That is the structural half of "a collect job can never export" ({@code JobType#COLLECT} is the
+     * other half), and it is also why a Create machine inserting into the same inventory is never fought over: the crane
+     * only ever takes.
+     *
+     * @param inventory the delegate over the live handler, whose {@code position} is the <b>port's</b> position, so
+     *                  anything that has to be spilled lands in the aisle and never inside the machine
+     */
+    private record CollectContext(HandlerContext inventory) implements TransferContext {
+        @Override
+        public LocationKind kind() {
+            // The location IS an output station of the aisle; only what the crane does there differs.
+            return LocationKind.OUTPUT;
+        }
+
+        @Override
+        public BlockPos position() {
+            return inventory.position();
+        }
+
+        @Override
+        public ItemStack extract(ItemKey key, int maxAmount, boolean simulate) {
+            return inventory.extract(key, maxAmount, simulate);
+        }
+
+        /** Never: a collecting port takes items out of a machine and never puts anything into one. */
+        @Override
+        public ItemStack insert(ItemStack stack, boolean simulate) {
+            return stack;
+        }
+
+        @Override
+        public int simulateExtract(ItemKey key, int maxAmount) {
+            return inventory.simulateExtract(key, maxAmount);
+        }
+
+        @Override
+        public int simulateInsert(ItemKey key, int amount) {
+            return 0;
+        }
+
+        @Override
+        public void spill(ItemStack stack) {
+            inventory.spill(stack);
         }
     }
 

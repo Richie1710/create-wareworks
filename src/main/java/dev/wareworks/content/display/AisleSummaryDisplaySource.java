@@ -58,9 +58,20 @@ public class AisleSummaryDisplaySource extends DisplaySource {
         // for off a four-tube board. It is the count the controller's goggles show, so both surfaces agree, and it is
         // the other explanation — next to "at max" — for a warehouse input that is backing up. The count is a cached
         // field on the controller, so a pull stays a handful of field reads (ADR-026).
-        if (controller.acceptingPortCount() > 0)
+        // Since M18 (issue #13) the same line carries the collecting ports as well, each half only while it is above 0:
+        // an aisle with only collecting ports says "Ports: 2 collecting", one with both says both, and one with neither
+        // says nothing at all — which is what keeps a zero from pushing a number a player asked for off the board.
+        int accepting = controller.acceptingPortCount();
+        int collecting = controller.collectingPortCount();
+        if (accepting > 0 && collecting > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_PORTS_BOTH,
+                    WareworksLang.number(accepting), WareworksLang.number(collecting)));
+        else if (accepting > 0)
             lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_PORTS,
-                    WareworksLang.number(controller.acceptingPortCount())));
+                    WareworksLang.number(accepting)));
+        else if (collecting > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_PORTS_COLLECTING,
+                    WareworksLang.number(collecting)));
         // Only for an aisle that really has stock rules (M15, issue #3): a display has few rows, and a line reading
         // "Rules: 0 · below min 0 · at max 0" would push a number a player asked for off a four-tube board. All three
         // counts are the controller's own cached ones, so a pull stays a handful of field reads (ADR-026). The

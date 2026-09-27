@@ -64,6 +64,8 @@ public final class WareworksLang {
     public static final String GOGGLES_PRIORITISED_LOCATIONS = "gui.goggles.prioritised_locations";
     /** {@code "Accepting ports: %1$s"}: warehouse ports of an aisle that accept items instead of requesting (M17). */
     public static final String GOGGLES_ACCEPTING_PORTS = "gui.goggles.accepting_ports";
+    /** {@code "Collecting ports: %1$s"}: warehouse ports of an aisle that fetch items out of a machine (M18). */
+    public static final String GOGGLES_COLLECTING_PORTS = "gui.goggles.collecting_ports";
     /** {@code "Stored Items"}: label of the warehouse interface's store filter slot. */
     public static final String INTERFACE_STORE_FILTER = "interface.store_filter";
     /** {@code "Storage Priority"}: title of the interface's hold-to-edit board (M16). */
@@ -252,6 +254,11 @@ public final class WareworksLang {
      */
     public static final String OUTPUT_ACCEPT_FILTER = "output.accept_filter";
     /**
+     * {@code "Collected Item"}: label of the same filter slot in the {@code COLLECT} direction, where the filter says
+     * which items the port fetches out of the machine behind it (M18, issue #13).
+     */
+    public static final String OUTPUT_COLLECT_FILTER = "output.collect_filter";
+    /**
      * {@code "Port"}: title of the same board in the accepting direction, where the amount is not a setting and only
      * the rows — the redstone behaviour — mean anything (M17).
      */
@@ -282,6 +289,26 @@ public final class WareworksLang {
     public static final String GOGGLES_PORT_ACCEPTS_ANY = "gui.goggles.port_accepts_any";
     /** {@code "Handed over: %1$s"}: items an accepting port has exported since it was built (M17). */
     public static final String GOGGLES_PORT_EXPORTED = "gui.goggles.port_exported";
+    /** {@code "Port: collects into the warehouse"}: the direction line of a collecting port (M18, issue #13). */
+    public static final String GOGGLES_PORT_COLLECTING = "gui.goggles.port_collecting";
+    /** {@code "Collects: %1$s"}: which items a collecting port fetches at all (M18). */
+    public static final String GOGGLES_PORT_COLLECTS = "gui.goggles.port_collects";
+    /** {@code "Ready: %1$s"}: items the port's last read of the inventory behind it found (M18). */
+    public static final String GOGGLES_PORT_COLLECT_READY = "gui.goggles.port_collect_ready";
+    /** {@code "Collected: %1$s"}: items a collecting port has fetched into the warehouse since it was built (M18). */
+    public static final String GOGGLES_PORT_COLLECTED = "gui.goggles.port_collected";
+    /** {@code "No inventory behind the port"}: a collecting port with nothing to fetch from (M18). */
+    public static final String GOGGLES_PORT_NO_INVENTORY = "gui.goggles.port_no_inventory";
+    /**
+     * {@code "This inventory is already a storage location"}: a collecting port pointed at an inventory its own aisle
+     * counts, which is refused, because collecting from it would be an endless crane shuffle (M18, issue #13).
+     */
+    public static final String GOGGLES_PORT_COLLECT_OWN_STORAGE = "gui.goggles.port_collect_own_storage";
+    /**
+     * {@code "Not fetched: %1$s"}: why the warehouse did not take what waits behind a collecting port — the aisle's
+     * planning reason, on the block a player is pointing at (M18 review). The argument is a {@code NoJobReason} text.
+     */
+    public static final String GOGGLES_PORT_COLLECT_REFUSED = "gui.goggles.port_collect_refused";
     /** {@code "Status: %1$s"}: the phase of a stacker crane. */
     public static final String GOGGLES_CRANE_STATUS = "gui.goggles.crane_status";
     /** Prefix of the crane phase texts, {@code gui.goggles.crane_phase.<phase>} ({@link #cranePhaseKey}). */
@@ -297,6 +324,11 @@ public final class WareworksLang {
      * warehouse hands out instead of storing (M17, issue #12).
      */
     public static final String GOGGLES_CRANE_JOB_HAND_OVER = "gui.goggles.crane_job.hand_over";
+    /**
+     * {@code "Collecting %1$s x%2$s"}: a collect job, i.e. items the crane is fetching out of the inventory behind a
+     * collecting warehouse port (M18, issue #13).
+     */
+    public static final String GOGGLES_CRANE_JOB_COLLECT = "gui.goggles.crane_job.collect";
     /** {@code "From %1$s to %2$s"}: source and target address of a job. */
     public static final String GOGGLES_CRANE_ROUTE = "gui.goggles.crane_route";
     /** {@code "Holding:"}: header of the handling head listing. */
@@ -450,6 +482,14 @@ public final class WareworksLang {
      * (M17, issue #12). Left out entirely while none does, exactly like the two stock rule lines.
      */
     public static final String DISPLAY_AISLE_LINE_PORTS = "display_source.aisle.line_ports";
+    /**
+     * {@code "Ports: %1$s accepting, %2$s collecting"}: the same line when the aisle has both kinds of port (M18, issue
+     * #13). Two keys rather than one with an optional half, because a lang file cannot leave an argument out: each half is
+     * shown only while it is above 0, so a four-tube board never loses a number to a zero.
+     */
+    public static final String DISPLAY_AISLE_LINE_PORTS_BOTH = "display_source.aisle.line_ports_both";
+    /** {@code "Ports: %1$s collecting"}: an aisle with collecting ports and no accepting one (M18). */
+    public static final String DISPLAY_AISLE_LINE_PORTS_COLLECTING = "display_source.aisle.line_ports_collecting";
     /** {@code "No aisle"}: the source block belongs to no loaded aisle. */
     public static final String DISPLAY_AISLE_NO_AISLE = "display_source.aisle.no_aisle";
     /**
@@ -476,6 +516,12 @@ public final class WareworksLang {
      * (M17, issue #12). A store job that is really an export must not read as "Storing".
      */
     public static final String DISPLAY_CRANE_HANDING_OVER = "display_source.crane.handing_over";
+    /**
+     * Crane activity on a display: the items are on their way <b>out of a machine</b> into the racks, i.e. a
+     * {@code COLLECT} job (M18, issue #13). A collect must not read as "Storing": what a player wants to see is that the
+     * warehouse is fetching.
+     */
+    public static final String DISPLAY_CRANE_COLLECTING = "display_source.crane.collecting";
     /** Crane activity on a display: paused, whatever the reason. */
     public static final String DISPLAY_CRANE_PAUSED = "display_source.crane.paused";
     /** {@code "%1$s x%2$s"}: the item and amount of the crane's job. */
@@ -535,17 +581,19 @@ public final class WareworksLang {
     }
 
     /**
-     * "Storing item x N" / "Retrieving item x N" / "Handing over item x N", using the item's generic name.
+     * "Storing item x N" / "Retrieving item x N" / "Handing over item x N" / "Collecting item x N", using the item's
+     * generic name.
      * <p>
      * The third case is a store job into an accepting warehouse port (M17, issue #12): the type alone would call it
-     * "Storing" although the items are leaving the warehouse, so the target's kind decides.
+     * "Storing" although the items are leaving the warehouse, so the target's kind decides. The fourth is a collect job
+     * (M18, issue #13), which is the opposite direction and has a name of its own.
      */
     public static LangBuilder craneJob(JobType type, LocationKind targetKind, Item item, long amount) {
-        String key;
-        if (type != JobType.STORE)
-            key = GOGGLES_CRANE_JOB_RETRIEVE;
-        else
-            key = targetKind == LocationKind.OUTPUT ? GOGGLES_CRANE_JOB_HAND_OVER : GOGGLES_CRANE_JOB_STORE;
+        String key = switch (type) {
+            case COLLECT -> GOGGLES_CRANE_JOB_COLLECT;
+            case STORE -> targetKind == LocationKind.OUTPUT ? GOGGLES_CRANE_JOB_HAND_OVER : GOGGLES_CRANE_JOB_STORE;
+            case RETRIEVE, SUPPLY -> GOGGLES_CRANE_JOB_RETRIEVE;
+        };
         return translate(key, item.getDescription(), number(amount).style(ChatFormatting.GOLD))
                 .style(ChatFormatting.GRAY);
     }

@@ -34,8 +34,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  * @param plannedAmount   amount the planner reserved, at least 1
  * @param requestId       who is waiting for these items: the retrieval request a {@code RETRIEVE} job serves, or the
  *                        ingredient line ({@code core.production.SupplyLine}) of the production order a
- *                        {@code SUPPLY} job serves. Always empty for store jobs — nothing asked for those items, they
- *                        simply arrived at an input ({@link JobType#mayCarryRequestId()})
+ *                        {@code SUPPLY} job serves. Always empty for store and collect jobs — nothing asked for those
+ *                        items, they simply arrived at an input or were fetched out of a machine
+ *                        ({@link JobType#mayCarryRequestId()})
  * @param picked          whether the pick happened
  * @param pickedAmount    real pick result, {@code 0..plannedAmount}; 0 while not picked
  * @param deliveredAmount sum of the real drop results, {@code 0..pickedAmount}; 0 while not picked
@@ -103,6 +104,20 @@ public record TransportJob<K, L>(UUID id, JobType type, L source, L target, Loca
             @Nullable UUID lineId) {
         return new TransportJob<>(id, JobType.SUPPLY, storage, station, LocationKind.PRODUCTION, key, amount,
                 Optional.ofNullable(lineId), false, 0, 0);
+    }
+
+    /**
+     * A new collect job from a <b>collecting</b> warehouse port to a storage location ({@code
+     * docs/warehouse-system.md} §3.2.4, M18, issue #13): items the crane fetches out of the inventory the port is
+     * attached to and stores like anything that arrived at an input.
+     * <p>
+     * Nobody asked for them ({@link JobType#mayCarryRequestId()} is false), they were never indexed stock
+     * ({@link JobType#reservesSourceStock()} is false, so the job reserves capacity at its target), and they can never be
+     * exported: {@link JobType#COLLECT} does not allow an {@link LocationKind#OUTPUT} target at all.
+     */
+    public static <K, L> TransportJob<K, L> collect(UUID id, L port, L storage, K key, int amount) {
+        return new TransportJob<>(id, JobType.COLLECT, port, storage, LocationKind.STORAGE, key, amount,
+                Optional.empty(), false, 0, 0);
     }
 
     /** The kind of {@link #source()}. */

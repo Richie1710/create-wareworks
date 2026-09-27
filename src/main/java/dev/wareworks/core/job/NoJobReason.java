@@ -59,6 +59,34 @@ public enum NoJobReason {
     LOCATION_UNAVAILABLE,
     /** The planner ran out of live simulations for this run; the next run continues. */
     BUDGET_EXHAUSTED,
+    /**
+     * A <b>collecting</b> warehouse port was the only arrival with anything at all, and the machine behind it hands out
+     * nothing the port may fetch right now (M18, issue #13): its filter names none of what is in there, or the inventory
+     * refuses to hand it out through the face the port reads.
+     * <p>
+     * Declared this late on purpose. It is the least alarming and the least actionable of all the reasons — a machine
+     * that has nothing ready is the normal resting state of a production loop — so every honest answer of the same run,
+     * from a full warehouse down to a request that waits, must win the one line the goggles show.
+     * <p>
+     * Like {@link #AT_MAXIMUM} it must <b>not</b> arm the dispatcher's {@code fullBackoffTicks} back-off, and for the
+     * same reason: reaching it costs one map lookup per item type plus at most one live extract per type, never the
+     * candidate walk with an estimate and a live simulation per candidate that the back-off exists to protect. Backing
+     * off here would suspend storing from every input station of the aisle because one machine is empty — which is what
+     * a collecting port's machine is most of the time.
+     */
+    COLLECT_SOURCE_EMPTY,
     /** No open request needs a job and no input station holds items. */
-    NO_WORK
+    NO_WORK;
+
+    /**
+     * Whether this reason is one a <b>collecting</b> port's own goggles may show as "the warehouse did not take these
+     * items" (M18, issue #13): the three answers a collect plan really produces about the warehouse, and none of the ones
+     * that are about a request, an output or an accepting port.
+     * <p>
+     * {@link #COLLECT_SOURCE_EMPTY} is deliberately not one of them: it says the machine has nothing ready, which the
+     * port's own "Ready: 0" already says better.
+     */
+    public boolean refusesCollecting() {
+        return this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER || this == AT_MAXIMUM;
+    }
 }

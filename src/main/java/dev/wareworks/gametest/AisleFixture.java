@@ -143,6 +143,30 @@ final class AisleFixture {
     }
 
     /**
+     * A warehouse port at {@code rack} with an inventory of {@code block} holding {@code contents} <b>behind</b> it — the
+     * machine a collecting port fetches from (M18, issue #13). That is the same world position a storage location's
+     * inventory occupies ({@link #inventoryPos}), because the port faces the aisle and the interface faces away from it.
+     *
+     * @return the inventory position
+     */
+    BlockPos portInventory(RackPosition rack, BlockState block, ItemStack... contents) {
+        BlockPos inventory = inventoryPos(rack);
+        helper.setBlock(inventory, block);
+        if (contents.length > 0) {
+            IItemHandler handler = handlerAt(inventory);
+            for (ItemStack stack : contents)
+                insertAll(handler, stack);
+        }
+        output(rack);
+        return inventory;
+    }
+
+    /** A chest with {@code contents} behind a warehouse port at {@code rack} ({@link #portInventory}). */
+    BlockPos portInventory(RackPosition rack, ItemStack... contents) {
+        return portInventory(rack, Blocks.CHEST.defaultBlockState(), contents);
+    }
+
+    /**
      * An aligned warehouse terminal at {@code rack}: the intake port looks into the aisle and the screen sits on the
      * face opposite it, where a player stands ({@code docs/warehouse-system.md} §3.4.3). This is also exactly the state
      * a terminal built before M10 loads as, because the new {@code DISPLAY} property defaults to

@@ -51,8 +51,23 @@ import dev.wareworks.core.inventory.StockView;
  *                             from {@code outputs} wherever one is passed in both. The default is the empty list: the
  *                             answer of an aisle whose ports all request, which makes the new ranking key answer 0 for
  *                             every pair of candidates and the planner the function it was before M17
+ * @param collectSources       the aisle's <b>collecting</b> warehouse ports that will hand items out <b>now</b> (M18,
+ *                             issue #13), in a stable index order. As with {@code ports}, the content layer applies the
+ *                             whole policy — the direction, the redstone gate, the pulse token, whether the rack and the
+ *                             attached inventory are loaded, whether an inventory is there at all, whether it is one this
+ *                             aisle already indexes, and whether the cached snapshot holds anything — so this list is its
+ *                             answer and {@link JobPlanner} stays free of redstone. Every entry is an output station of
+ *                             the aisle and is never an entry of {@code ports}: a port has one direction. The default is
+ *                             the empty list, which together with {@link #collectBuffers()} makes an input built without
+ *                             them <b>literally</b> the input the planner received before M18
+ * @param collectBuffers       the last read snapshot of the inventory behind a collecting port; only called for sources
+ *                             the arrival walk really examines. It is the controller's cached snapshot, never a live
+ *                             read: the live {@link JobPlanner.LiveExtract} decides the amount and the real pick stays
+ *                             authoritative (§3.2.4)
  * @param inputBuffers         the current buffer of an input station; only called for inputs that are examined
- * @param inputCursor          index into {@code inputs} where the store round robin starts (taken modulo the size)
+ * @param inputCursor          index into the <b>arrival</b> round robin — {@code inputs} followed by
+ *                             {@code collectSources} as one virtual list — where the walk starts (taken modulo the
+ *                             combined size)
  * @param available            whether a location can be used now (loaded, present); unavailable ones are skipped
  * @param insertEstimate       upper-bound estimate of what a storage location accepts, for pre-filtering
  * @param liveExtract          simulated extraction from a storage location
@@ -98,7 +113,8 @@ import dev.wareworks.core.inventory.StockView;
 public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speeds, int transferTicks,
         ToIntFunction<? super K> carryLimit, Function<? super K, ?> itemType, StockView<K, L> stock,
         ReservationView<K, L> reservations, List<OpenRequest<K, L>> requests, List<SupplyNeed<K, L>> supplies,
-        List<L> storageLocations, List<L> inputs, List<L> outputs, List<L> ports,
+        List<L> storageLocations, List<L> inputs, List<L> outputs, List<L> ports, List<L> collectSources,
+        Function<? super L, InventorySnapshot<K>> collectBuffers,
         Function<? super L, InventorySnapshot<K>> inputBuffers, int inputCursor, Predicate<? super L> available,
         JobPlanner.InsertEstimate<K, L> insertEstimate, JobPlanner.LiveExtract<K, L> liveExtract,
         JobPlanner.LiveInsert<K, L> liveInsert, BiPredicate<? super L, ? super K> insertRefused,
@@ -125,6 +141,15 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
      */
     public static final ToIntFunction<Object> NO_PORT_RANK = location -> 0;
 
+    /**
+     * The collect snapshot of an aisle that has no collecting port: nothing, for every location (M18, issue #13). It is
+     * the builder's default and is only ever called for entries of {@link #collectSources()}, which is empty by default,
+     * so an input built without either is <b>literally</b> the input the planner received before M18.
+     */
+    public static <K> Function<Object, InventorySnapshot<K>> nothingCollected() {
+        return location -> InventorySnapshot.empty();
+    }
+
     public PlannerInput {
         if (!Double.isFinite(craneX) || !Double.isFinite(craneY))
             throw new IllegalArgumentException("crane position must be finite: " + craneX + ", " + craneY);
@@ -141,6 +166,8 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         inputs = List.copyOf(inputs);
         outputs = List.copyOf(outputs);
         ports = List.copyOf(ports);
+        collectSources = List.copyOf(collectSources);
+        Objects.requireNonNull(collectBuffers, "collectBuffers");
         Objects.requireNonNull(inputBuffers, "inputBuffers");
         Objects.requireNonNull(available, "available");
         Objects.requireNonNull(insertEstimate, "insertEstimate");
@@ -209,7 +236,8 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
      * known refusals, no store filters ({@link FilterMatch#UNFILTERED} everywhere), no storage priorities
      * ({@link #NO_PRIORITY}, i.e. 0 everywhere), no accepting ports (an empty {@link #ports()} and
      * {@link #NO_PORT_RANK}), unlimited store headroom ({@link #UNLIMITED_HEADROOM}, i.e. no stock rule) and
-     * {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}. The carry limit has no default.
+     * {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}, no collecting ports (an empty {@link #collectSources()} and
+     * empty collect snapshots). The carry limit has no default.
      */
     public static <K, L> Builder<K, L> builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
         return new Builder<>(stock, reservations);
@@ -231,6 +259,8 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         private List<L> inputs = List.of();
         private List<L> outputs = List.of();
         private List<L> ports = List.of();
+        private List<L> collectSources = List.of();
+        private Function<? super L, InventorySnapshot<K>> collectBuffers = location -> InventorySnapshot.empty();
         private Function<? super L, InventorySnapshot<K>> inputBuffers = location -> InventorySnapshot.empty();
         private int inputCursor;
         private Predicate<? super L> available = location -> true;
@@ -308,6 +338,25 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
          */
         public Builder<K, L> ports(List<L> ports) {
             this.ports = ports;
+            return this;
+        }
+
+        /**
+         * The aisle's collecting warehouse ports that will hand items out now ({@link PlannerInput#collectSources()}).
+         * Left out, it is the empty list — the answer of an aisle without a collecting port, and the input the planner
+         * received before M18.
+         */
+        public Builder<K, L> collectSources(List<L> collectSources) {
+            this.collectSources = collectSources;
+            return this;
+        }
+
+        /**
+         * The cached snapshot of the inventory behind a collecting port ({@link PlannerInput#collectBuffers()}). Left
+         * out, every source answers an empty snapshot, which is what an aisle without collecting ports means.
+         */
+        public Builder<K, L> collectBuffers(Function<? super L, InventorySnapshot<K>> collectBuffers) {
+            this.collectBuffers = collectBuffers;
             return this;
         }
 
@@ -392,7 +441,8 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
 
         public PlannerInput<K, L> build() {
             return new PlannerInput<>(craneX, craneY, speeds, transferTicks, carryLimit, itemType, stock, reservations,
-                    requests, supplies, storageLocations, inputs, outputs, ports, inputBuffers, inputCursor, available,
+                    requests, supplies, storageLocations, inputs, outputs, ports, collectSources, collectBuffers,
+                    inputBuffers, inputCursor, available,
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter, storePriority,
                     portRank, storeHeadroom, liveSimulationBudget);
         }

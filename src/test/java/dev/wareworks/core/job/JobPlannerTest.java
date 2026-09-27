@@ -163,7 +163,7 @@ class JobPlannerTest {
         assertFalse(result.hasJob());
         assertEquals(Set.of(NoJobReason.NO_WORK), result.reasons());
         assertEquals(Optional.of(NoJobReason.NO_WORK), result.primaryReason());
-        assertEquals(0, result.nextInputCursor());
+        assertEquals(0, result.nextArrivalCursor());
         assertEquals(List.of(), live.insertCalls);
     }
 
@@ -464,7 +464,7 @@ class JobPlannerTest {
                 .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, 3)).build());
         assertFalse(result.hasJob());
         assertEquals(Set.of(NoJobReason.WAREHOUSE_FULL), result.reasons());
-        assertEquals(1, result.nextInputCursor(), "the cursor stays when nothing was planned");
+        assertEquals(1, result.nextArrivalCursor(), "the cursor stays when nothing was planned");
     }
 
     @Test
@@ -479,10 +479,10 @@ class JobPlannerTest {
 
         PlanResult<String, RackPosition> first = planner.plan(base.inputCursor(0).build());
         assertEquals(IN_A, first.job().orElseThrow().job().source());
-        assertEquals(1, first.nextInputCursor());
-        PlanResult<String, RackPosition> second = planner.plan(base.inputCursor(first.nextInputCursor()).build());
+        assertEquals(1, first.nextArrivalCursor());
+        PlanResult<String, RackPosition> second = planner.plan(base.inputCursor(first.nextArrivalCursor()).build());
         assertEquals(IN_C, second.job().orElseThrow().job().source(), "the empty input is skipped");
-        assertEquals(0, second.nextInputCursor());
+        assertEquals(0, second.nextArrivalCursor());
         assertEquals(IN_C, planner.plan(base.inputCursor(-1).build()).job().orElseThrow().job().source(),
                 "cursors are taken modulo the input count");
         assertEquals(IN_A, planner.plan(base.inputCursor(6).build()).job().orElseThrow().job().source());
@@ -505,7 +505,7 @@ class JobPlannerTest {
                 .storageLocations(List.of(chest)).inputBuffers(buffers::get).build());
         assertEquals(IN_B, nextInput.job().orElseThrow().job().source());
         assertEquals(Set.of(NoJobReason.WAREHOUSE_FULL), nextInput.reasons());
-        assertEquals(0, nextInput.nextInputCursor());
+        assertEquals(0, nextInput.nextArrivalCursor());
     }
 
     @Test
@@ -521,7 +521,7 @@ class JobPlannerTest {
         assertFalse(result.hasJob());
         assertEquals(3, live.insertCalls.size());
         assertTrue(result.reasons().contains(NoJobReason.BUDGET_EXHAUSTED));
-        assertEquals(1, result.nextInputCursor(), "the next run starts at the next input");
+        assertEquals(1, result.nextArrivalCursor(), "the next run starts at the next input");
         assertThrows(IllegalArgumentException.class, () -> input().liveSimulationBudget(-1).build());
     }
 
@@ -801,7 +801,7 @@ class JobPlannerTest {
         assertEquals(Set.of(NoJobReason.AT_MAXIMUM), result.reasons());
         assertEquals(NoJobReason.AT_MAXIMUM, result.primaryReason().orElseThrow());
         assertEquals(List.of(), live.insertCalls, "nothing was even simulated");
-        assertEquals(0, result.nextInputCursor(), "the cursor stays when nothing was planned");
+        assertEquals(0, result.nextArrivalCursor(), "the cursor stays when nothing was planned");
     }
 
     /** One capped item blocks neither the buffer's other item types nor the next input. */
@@ -1206,7 +1206,7 @@ class JobPlannerTest {
             String scene = "seed " + seed + ", storage " + storage;
             assertEquals(describe(before), describe(zeroed), scene);
             assertEquals(before.reasons(), zeroed.reasons(), scene);
-            assertEquals(before.nextInputCursor(), zeroed.nextInputCursor(), scene);
+            assertEquals(before.nextArrivalCursor(), zeroed.nextArrivalCursor(), scene);
             assertEquals(callsBefore, live.insertCalls, "the same candidates in the same order: " + scene);
         }
     }
@@ -1417,7 +1417,7 @@ class JobPlannerTest {
             String scene = "seed " + seed + ", storage " + storage;
             assertEquals(describe(before), describe(withEmptyPorts), scene);
             assertEquals(before.reasons(), withEmptyPorts.reasons(), scene);
-            assertEquals(before.nextInputCursor(), withEmptyPorts.nextInputCursor(), scene);
+            assertEquals(before.nextArrivalCursor(), withEmptyPorts.nextArrivalCursor(), scene);
             assertEquals(callsBefore, live.insertCalls, "the same candidates in the same order: " + scene);
         }
     }
@@ -1498,7 +1498,7 @@ class JobPlannerTest {
         assertEquals(30, job.plannedAmount(), "the port's amount is the buffer, not the headroom");
         assertEquals(Set.of(), result.reasons());
         assertEquals(List.of(PORT_A), live.insertCalls, "the capped chest was never a candidate");
-        assertEquals(0, result.nextInputCursor(), "the round robin moved on as for any planned job (one input, so it wraps)");
+        assertEquals(0, result.nextArrivalCursor(), "the round robin moved on as for any planned job (one input, so it wraps)");
     }
 
     /** A headroom below the buffered amount bounds what may be <b>stored</b> and leaves a port's amount alone. */
@@ -1823,5 +1823,443 @@ class JobPlannerTest {
     private TransportJob<String, RackPosition> storeJob(PlannerInput.Builder<String, RackPosition> base, String key,
             int buffered) {
         return planner.plan(base.inputBuffers(location -> slots(0, key, buffered)).build()).job().orElseThrow().job();
+    }
+
+    // --- collecting warehouse ports (M18, issue #13) -----------------------------------------------------------------
+
+    /**
+     * An aisle without a collecting port is the builder's default, so every other test in this class plans as before M18.
+     */
+    @Test
+    void collectSourcesAreAbsentByDefault() {
+        assertEquals(List.of(), input().build().collectSources());
+        assertTrue(input().build().collectBuffers().apply(PORT_A).isEmpty());
+        assertThrows(NullPointerException.class, () -> input().collectSources(null).build());
+        assertThrows(NullPointerException.class, () -> input().collectBuffers(null).build());
+    }
+
+    /**
+     * The identity proof of M18, in the shape M16 and M17 used: with no collect source the planner produces the
+     * <b>same</b> job, the same reasons, the same cursor and the same live-call sequence as an input that was never told
+     * about collecting at all. Structurally it holds because the arrival walk is {@code inputs ++ collectSources} and the
+     * second half is empty, so the loop is the loop it was; this walks the same seeded layout matrix the M17 proof walks.
+     */
+    @Test
+    void noCollectSourceReproducesTheOldOrder() {
+        List<String> keys = List.of(IRON, DIAMOND, WORN_SWORD, NEW_SWORD, SHULKER);
+        for (long seed = 1; seed <= 12; seed++) {
+            Random random = new Random(seed);
+            stock.clear();
+            storeFilters.clear();
+            denyLists.clear();
+            priorities.clear();
+            portRanks.clear();
+            live.insertable.clear();
+            live.extractable.clear();
+            List<RackPosition> storage = new ArrayList<>();
+            for (int i = 0; i < 8; i++) {
+                RackPosition location = rack(1 + random.nextInt(12), random.nextInt(3),
+                        random.nextBoolean() ? Side.LEFT : Side.RIGHT);
+                if (storage.contains(location))
+                    continue;
+                storage.add(location);
+                String held = keys.get(random.nextInt(keys.size()));
+                stock.update(location, random.nextBoolean() ? slots(27) : slots(26, held, 1 + random.nextInt(20)));
+                live.insertable.put(location, random.nextInt(4) == 0 ? 0 : STACK);
+                if (random.nextInt(3) == 0)
+                    filter(location, keys.get(random.nextInt(keys.size())));
+                else if (random.nextInt(5) == 0)
+                    denyFilter(location, keys.get(random.nextInt(keys.size())));
+                if (random.nextInt(3) == 0)
+                    priority(location, random.nextInt(10));
+            }
+            String buffered = keys.get(random.nextInt(keys.size()));
+            PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A, IN_B))
+                    .inputCursor(random.nextInt(2)).storageLocations(storage).storePriority(this::priorityOf)
+                    .itemType(key -> key.split(ITEM_TYPE_SEPARATOR, 2)[0])
+                    .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                    .inputBuffers(location -> slots(0, buffered, 7));
+
+            live.insertCalls.clear();
+            PlanResult<String, RackPosition> before = planner.plan(base.build());
+            List<RackPosition> callsBefore = List.copyOf(live.insertCalls);
+            live.insertCalls.clear();
+            PlanResult<String, RackPosition> withEmptyCollect = planner.plan(base.collectSources(List.of())
+                    .collectBuffers(location -> InventorySnapshot.empty()).build());
+
+            String scene = "seed " + seed + ", storage " + storage;
+            assertEquals(describe(before), describe(withEmptyCollect), scene);
+            assertEquals(before.reasons(), withEmptyCollect.reasons(), scene);
+            assertEquals(before.nextArrivalCursor(), withEmptyCollect.nextArrivalCursor(), scene);
+            assertEquals(callsBefore, live.insertCalls, "the same candidates in the same order: " + scene);
+        }
+    }
+
+    /** The happy path: what the machine behind the port holds is fetched and stored, and the job says so. */
+    @Test
+    void aCollectSourceIsStoredLikeAnythingElse() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.extractable.put(PORT_A, 20);
+
+        TransportJob<String, RackPosition> job = collectJob(collecting(input().storageLocations(List.of(chest)), PORT_A),
+                IRON, 20);
+        assertEquals(JobType.COLLECT, job.type());
+        assertEquals(PORT_A, job.source());
+        assertEquals(chest, job.target());
+        assertEquals(LocationKind.STORAGE, job.targetKind());
+        assertEquals(20, job.plannedAmount());
+        assertEquals(Optional.empty(), job.requestId());
+    }
+
+    /** A player's request and a production order's ingredients are always planned first: collecting never makes one wait. */
+    @Test
+    void requestsAndSuppliesBeatACollect() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(26, DIAMOND, 30));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(OUT_A, STACK);
+        live.insertable.put(IN_C, STACK);
+        live.extractable.put(chest, 30);
+        live.extractable.put(PORT_A, 20);
+        PlannerInput.Builder<String, RackPosition> base = collecting(input()
+                .storageLocations(List.of(chest)).outputs(List.of(OUT_A)), PORT_A);
+
+        TransportJob<String, RackPosition> retrieve = planner.plan(base
+                .requests(List.of(request(id(1), DIAMOND, 8, OUT_A))).build()).job().orElseThrow().job();
+        assertEquals(JobType.RETRIEVE, retrieve.type(), "a waiting player first");
+
+        TransportJob<String, RackPosition> supply = planner.plan(base.requests(List.of())
+                .supplies(List.of(new PlannerInput.SupplyNeed<>(id(2), DIAMOND, 8, IN_C))).build())
+                .job().orElseThrow().job();
+        assertEquals(JobType.SUPPLY, supply.type(), "then a production order's ingredients");
+
+        assertEquals(JobType.COLLECT, planner.plan(base.supplies(List.of()).build()).job().orElseThrow().job().type(),
+                "and only then the arrivals");
+    }
+
+    /**
+     * Fairness (risk 4): the input stations and the collecting ports are <b>one</b> round robin from one cursor, so within
+     * one full walk every input and every collect source is served exactly once — and an always-full input can therefore
+     * not starve a collecting port, which is exactly the production loop collecting exists for.
+     */
+    @Test
+    void oneArrivalWalkServesEveryInputAndEveryCollectSource() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.extractable.put(PORT_A, STACK);
+        live.extractable.put(PORT_B, STACK);
+        PlannerInput.Builder<String, RackPosition> base = input().storageLocations(List.of(chest))
+                .inputs(List.of(IN_A, IN_B)).collectSources(List.of(PORT_A, PORT_B))
+                .collectBuffers(location -> slots(0, IRON, 8))
+                .inputBuffers(location -> slots(0, IRON, 8));
+
+        List<String> served = new ArrayList<>();
+        int cursor = 0;
+        for (int run = 0; run < 4; run++) {
+            PlanResult<String, RackPosition> result = planner.plan(base.inputCursor(cursor).build());
+            TransportJob<String, RackPosition> job = result.job().orElseThrow().job();
+            served.add(job.type() + "@" + job.source());
+            cursor = result.nextArrivalCursor();
+        }
+        assertEquals(List.of("STORE@" + IN_A, "STORE@" + IN_B, "COLLECT@" + PORT_A, "COLLECT@" + PORT_B), served,
+                "every arrival exactly once per walk, inputs first because the cursor started there");
+        assertEquals(0, cursor, "and the walk wraps");
+    }
+
+    /**
+     * Loop guard 1 (§5), the cheap one: a key at its M15 maximum yields <b>no collect job at all</b>, and a headroom
+     * smaller than what the machine holds bounds the amount. The moment an overflow can fire, collecting of that key has
+     * already stopped, so the churn cycle cannot start.
+     */
+    @Test
+    void aCollectStopsAtTheMaximum() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.extractable.put(PORT_A, 40);
+        PlannerInput.Builder<String, RackPosition> base = collecting(input().storageLocations(List.of(chest)), PORT_A);
+
+        PlanResult<String, RackPosition> capped = planner.plan(base.storeHeadroom(key -> 0L)
+                .collectBuffers(location -> slots(0, IRON, 40)).build());
+        assertTrue(capped.job().isEmpty(), "nothing is fetched out of the machine");
+        assertTrue(capped.reasons().contains(NoJobReason.AT_MAXIMUM), "and the aisle says why");
+        assertEquals(List.of(), live.extractCalls, "the maximum decides before any live call");
+
+        assertEquals(6, collectJob(base.storeHeadroom(key -> 6L), IRON, 40).plannedAmount(),
+                "a headroom smaller than the offer bounds the amount; the rest stays in the machine");
+    }
+
+    /**
+     * Loop guard 2 (§5): a collect is never offered a <b>port</b>, not even the strongest diversion standing right next to
+     * it — the one candidate that ignores the headroom guard 1 relies on. It is structural (JobType.COLLECT allows no
+     * OUTPUT target), and the planner never even simulates the port.
+     */
+    @Test
+    void aCollectIsNeverOfferedAPort() {
+        RackPosition chest = rack(8, 0, Side.LEFT); // far away, so only the ranking could prefer it
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(PORT_B, STACK);
+        live.extractable.put(PORT_A, 20);
+        port(PORT_B, PortSettings.MAX_RANK); // the strongest diversion there is, right at the aisle mouth
+
+        TransportJob<String, RackPosition> job = collectJob(withPorts(collecting(input()
+                .storageLocations(List.of(chest)), PORT_A), PORT_B), IRON, 20);
+        assertEquals(chest, job.target(), "the far storage location, never the near diversion");
+        assertFalse(live.insertCalls.contains(PORT_B), "the port was not even simulated");
+    }
+
+    /** And the same on the reroute path: storage, then the input stations, and nothing else — never a port. */
+    @Test
+    void aCollectRerouteOffersStorageThenInputsAndNothingElse() {
+        RackPosition failed = rack(2, 0, Side.LEFT);
+        RackPosition chest = rack(4, 0, Side.LEFT);
+        stock.update(failed, slots(27));
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(IN_A, STACK);
+        live.insertable.put(PORT_B, STACK);
+        port(PORT_B, PortSettings.MAX_RANK);
+        PlannerInput.Builder<String, RackPosition> base = withPorts(input().crane(2, 0)
+                .storageLocations(List.of(failed, chest)).inputs(List.of(IN_A)).outputs(List.of(OUT_A)), PORT_B);
+
+        assertEquals(chest, planner.planReroute(base.build(), IRON, 10, JobType.COLLECT, failed).orElseThrow()
+                .location(), "another storage location first");
+
+        live.insertable.put(chest, 0);
+        RerouteTarget<RackPosition> toInput = planner.planReroute(base.build(), IRON, 10, JobType.COLLECT, failed)
+                .orElseThrow();
+        assertEquals(IN_A, toInput.location(), "then an input buffer, from where they are stored normally");
+        assertEquals(LocationKind.INPUT, toInput.kind());
+
+        live.insertable.put(IN_A, 0);
+        assertTrue(planner.planReroute(base.build(), IRON, 10, JobType.COLLECT, failed).isEmpty(),
+                "and then the crane holds rather than pushing them anywhere");
+        assertFalse(live.insertCalls.contains(PORT_B), "the strong diversion was never even simulated");
+    }
+
+    /**
+     * The port's own filter is a <b>hard</b> rule and is answered before any live call, exactly as an accepting port's is:
+     * an unfiltered port collects anything the machine hands out, a filtered one only its item.
+     */
+    @Test
+    void aPortFilterDecidesWhatIsCollectedAtAll() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.extractable.put(PORT_A, STACK);
+        filter(PORT_A, DIAMOND);
+        PlannerInput.Builder<String, RackPosition> base = collecting(input().storageLocations(List.of(chest)), PORT_A);
+
+        PlanResult<String, RackPosition> rejected = planner.plan(base.collectBuffers(location -> slots(0, IRON, 8))
+                .build());
+        assertTrue(rejected.job().isEmpty(), "the iron the port does not name stays in the machine");
+        assertEquals(List.of(), live.extractCalls, "and costs no live call");
+        assertEquals(Set.of(NoJobReason.COLLECT_SOURCE_EMPTY), rejected.reasons(),
+                "and says the machine has nothing this port may fetch, never that the warehouse is full: that reason "
+                        + "would arm the aisle's back-off against every input station");
+
+        assertEquals(DIAMOND, collectJob(base, DIAMOND, 8).key(), "its own item is collected");
+    }
+
+    /**
+     * A stale snapshot is normal: the machine may have consumed the items since. The live extract bounds the amount, a key
+     * the machine no longer hands out falls through to the next key, and a source that hands out nothing at all falls
+     * through to the next source.
+     */
+    @Test
+    void theLiveExtractBoundsTheAmountAndFallsThrough() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.extractable.put(PORT_A, 5);
+        PlannerInput.Builder<String, RackPosition> base = collecting(input().storageLocations(List.of(chest)), PORT_A);
+        assertEquals(5, collectJob(base, IRON, 40).plannedAmount(), "what the machine really hands out");
+
+        live.extractable.put(PORT_A, 0);
+        live.extractable.put(PORT_B, 7);
+        PlanResult<String, RackPosition> next = planner.plan(base.collectSources(List.of(PORT_A, PORT_B)).build());
+        TransportJob<String, RackPosition> job = next.job().orElseThrow().job();
+        assertEquals(PORT_B, job.source(), "an empty source falls through to the next one");
+        assertEquals(7, job.plannedAmount());
+    }
+
+    /** A key that fits nowhere falls through to the next key of the same machine, then to the next source. */
+    @Test
+    void oneUnstorableItemNeverBlocksACollectingPort() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.extractable.put(PORT_A, STACK);
+        filter(chest, DIAMOND); // the chest takes diamonds only
+        PlannerInput.Builder<String, RackPosition> base = collecting(input().storageLocations(List.of(chest)), PORT_A)
+                .collectBuffers(location -> slots(0, IRON, 8, DIAMOND, 4));
+
+        TransportJob<String, RackPosition> job = planner.plan(base.build()).job().orElseThrow().job();
+        assertEquals(DIAMOND, job.key(), "the iron nothing takes is skipped, the diamond is collected");
+        assertEquals(4, job.plannedAmount());
+    }
+
+    /** The target ranking is {@code selectStorage}'s: a store filter, then consolidation, then the priority a player set. */
+    @Test
+    void collectTargetsAreRankedLikeAnyStore() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition far = rack(9, 0, Side.LEFT);
+        RackPosition dedicated = rack(12, 0, Side.LEFT);
+        for (RackPosition location : List.of(near, far, dedicated)) {
+            stock.update(location, slots(27));
+            live.insertable.put(location, STACK);
+        }
+        priority(far, 9);
+        PlannerInput.Builder<String, RackPosition> base = collecting(input()
+                .storageLocations(List.of(near, far, dedicated)).storePriority(this::priorityOf), PORT_A);
+        live.extractable.put(PORT_A, 8);
+
+        assertEquals(far, collectJob(base, IRON, 8).target(), "the priority a player set beats the nearer location");
+        filter(dedicated, IRON);
+        assertEquals(dedicated, collectJob(base, IRON, 8).target(), "and a dedicated filter beats the priority");
+    }
+
+    /** The reason ladder of a collect-only aisle: no room, no filter that takes it, or a maximum. */
+    @Test
+    void theReasonLadderOfACollectOnlyAisle() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.extractable.put(PORT_A, 8);
+        PlannerInput.Builder<String, RackPosition> base = collecting(input().storageLocations(List.of(chest))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK)), PORT_A);
+
+        // The chest has room per snapshot but refuses live: a genuinely full warehouse.
+        live.insertable.put(chest, 0);
+        assertEquals(Set.of(NoJobReason.WAREHOUSE_FULL),
+                planner.plan(base.build()).reasons());
+
+        // No storage location's filter accepts it at all: another problem, another answer.
+        filter(chest, DIAMOND);
+        assertEquals(Set.of(NoJobReason.NO_MATCHING_FILTER), planner.plan(base.build()).reasons());
+
+        // And a maximum, which is not a fault at all.
+        storeFilters.clear();
+        live.insertable.put(chest, STACK);
+        assertEquals(Set.of(NoJobReason.AT_MAXIMUM), planner.plan(base.storeHeadroom(key -> 0L).build()).reasons());
+
+        // Nothing in the machine at all is simply no work.
+        assertEquals(Set.of(NoJobReason.NO_WORK),
+                planner.plan(base.collectBuffers(location -> InventorySnapshot.empty()).build()).reasons());
+
+        // And the two cheap fall-throughs of the collect branch, which reach no candidate at all: the port's own filter
+        // rejecting what is in the machine, and the machine handing nothing out. Neither is a full warehouse, and neither
+        // may arm the back-off (M18 review). The builder is mutable, so the machine and the headroom are restored first.
+        base.collectBuffers(location -> slots(0, IRON, 8)).storeHeadroom(key -> Long.MAX_VALUE);
+        live.insertable.put(chest, STACK);
+        filter(PORT_A, DIAMOND);
+        assertEquals(Set.of(NoJobReason.COLLECT_SOURCE_EMPTY), planner.plan(base.build()).reasons(),
+                "the port's filter names none of it");
+        storeFilters.clear();
+        live.extractable.put(PORT_A, 0);
+        assertEquals(Set.of(NoJobReason.COLLECT_SOURCE_EMPTY), planner.plan(base.build()).reasons(),
+                "the machine hands nothing out");
+    }
+
+    /**
+     * A collect source that yields nothing must not make an <b>input station</b> of the same run report a full warehouse
+     * either: the reasons of one run are shared, {@code WAREHOUSE_FULL} is the strongest of them, and it is the one that
+     * arms {@code fullBackoffTicks} in {@code CraneDispatch} (M18 review).
+     */
+    @Test
+    void anEmptyCollectSourceNeverReportsAFullWarehouseNextToAnInput() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        live.extractable.put(PORT_A, 0); // the machine hands nothing out
+        filter(chest, DIAMOND); // and the only storage location takes no iron, which is the input's honest answer
+        PlanResult<String, RackPosition> result = planner.plan(collecting(input()
+                .storageLocations(List.of(chest)).inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, IRON, 8)), PORT_A).build());
+
+        assertTrue(result.job().isEmpty());
+        assertEquals(Set.of(NoJobReason.NO_MATCHING_FILTER, NoJobReason.COLLECT_SOURCE_EMPTY), result.reasons());
+        assertFalse(result.reasons().contains(NoJobReason.WAREHOUSE_FULL),
+                "the collect source contributes no full warehouse, which would arm the aisle's back-off");
+        assertEquals(NoJobReason.NO_MATCHING_FILTER, result.primaryReason().orElseThrow(),
+                "and never masks the input station's own answer, which is what the goggles show");
+    }
+
+    /**
+     * A rack wall of collecting ports cannot spend the live budget a storage location needs
+     * ({@link JobPlanner#MAX_COLLECT_CANDIDATES}): beyond the cap the sources are simply not examined this run, and the
+     * cursor still moves on, so the next runs reach them.
+     */
+    @Test
+    void aWallOfCollectingPortsIsBounded() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        List<RackPosition> sources = new ArrayList<>();
+        for (int i = 0; i < 3 * JobPlanner.MAX_COLLECT_CANDIDATES; i++) {
+            RackPosition source = rack(1 + i % 15, i / 15, Side.RIGHT);
+            sources.add(source);
+            live.extractable.put(source, 0); // every one of them answers "nothing", so the run walks them all
+        }
+        PlanResult<String, RackPosition> result = planner.plan(input().storageLocations(List.of(chest))
+                .collectSources(sources).collectBuffers(location -> slots(0, IRON, 8)).build());
+        assertTrue(result.job().isEmpty());
+        assertEquals(JobPlanner.MAX_COLLECT_CANDIDATES, live.extractCalls.size(),
+                "at most the cap in live extractions per run");
+        assertEquals(JobPlanner.MAX_COLLECT_CANDIDATES, result.nextArrivalCursor(),
+                "the next run starts at the first source this one skipped, so nothing beyond the cap starves");
+        // And it really continues there: the second run examines the next window rather than the same one again.
+        live.extractCalls.clear();
+        planner.plan(input().storageLocations(List.of(chest)).collectSources(sources)
+                .collectBuffers(location -> slots(0, IRON, 8)).inputCursor(result.nextArrivalCursor()).build());
+        assertEquals(sources.subList(JobPlanner.MAX_COLLECT_CANDIDATES, 2 * JobPlanner.MAX_COLLECT_CANDIDATES),
+                live.extractCalls, "the next window of sources");
+        assertEquals(Set.of(NoJobReason.COLLECT_SOURCE_EMPTY), result.reasons(),
+                "a wall of machines that hand nothing out is not a full warehouse");
+    }
+
+    /**
+     * The cap's cursor survives a job (M18 review): a run that skipped sources and then wrapped round to an input station
+     * that had work must still leave the cursor at the first skipped source. Otherwise an input station that plans a job
+     * on every run keeps the cursor inside the input region for ever and the sources beyond the cap are never examined
+     * again.
+     */
+    @Test
+    void theCapsCursorSurvivesAJobFromAnInput() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        List<RackPosition> sources = new ArrayList<>();
+        for (int i = 0; i < 2 * JobPlanner.MAX_COLLECT_CANDIDATES; i++) {
+            RackPosition source = rack(1 + i % 15, 1 + i / 15, Side.RIGHT);
+            sources.add(source);
+            live.extractable.put(source, 0); // none of them yields anything, so the run walks into the cap
+        }
+        // The walk starts at the first collect source (index 1, right after the single input station), hits the cap and
+        // wraps round to the input, which always has items.
+        PlanResult<String, RackPosition> result = planner.plan(input().storageLocations(List.of(chest))
+                .inputs(List.of(IN_A)).inputBuffers(location -> slots(0, IRON, 8)).collectSources(sources)
+                .collectBuffers(location -> slots(0, IRON, 8)).inputCursor(1).build());
+
+        assertEquals(IN_A, result.job().orElseThrow().job().source(), "the input station got the job");
+        assertEquals(1 + JobPlanner.MAX_COLLECT_CANDIDATES, result.nextArrivalCursor(),
+                "and the cursor stays at the first source the cap dropped, not at the input's successor");
+    }
+
+    // --- helpers of this section -------------------------------------------------------------------------------------
+
+    /** Makes {@code sources} collecting ports whose machines hold 8 iron each unless a test says otherwise. */
+    private PlannerInput.Builder<String, RackPosition> collecting(PlannerInput.Builder<String, RackPosition> base,
+            RackPosition... sources) {
+        return base.collectSources(List.of(sources)).collectBuffers(location -> slots(0, IRON, 8));
+    }
+
+    /** The job the collect branch produces for {@code held} items of {@code key} behind every collecting port. */
+    private TransportJob<String, RackPosition> collectJob(PlannerInput.Builder<String, RackPosition> base, String key,
+            int held) {
+        return planner.plan(base.collectBuffers(location -> slots(0, key, held)).build()).job().orElseThrow().job();
     }
 }

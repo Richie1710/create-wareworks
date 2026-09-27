@@ -14,7 +14,11 @@ import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
+import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.AttachedInventoryCache;
+import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.RequestQueue;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
@@ -27,7 +31,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
@@ -36,6 +42,7 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
+import net.neoforged.neoforge.items.IItemHandler;
 
 /**
  * Block entity of the warehouse port ({@code docs/warehouse-system.md} §3.2, §7.2): a buffer of
@@ -74,8 +81,15 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
  * <li>{@link PortRedstone#UNLESS_POWERED} — the same with the signal inverted, so the falling edge is what starts it.</li>
  * </ul>
  * Switching a continuous port off never recalls what is already on its way: cancelling an open request would strand
- * reservations and surprise the player. In the {@link PortDirection#ACCEPT} direction a rising edge only <b>arms</b> the
- * port ({@link #isArmed()}); the store plan that will consume that token arrives in the next step of M17.
+ * reservations and surprise the player. In the {@link PortDirection#ACCEPT} and {@link PortDirection#COLLECT} directions a
+ * rising edge only <b>arms</b> the port ({@link #isArmed()}); the store plan and the collect plan consume that token.
+ * <p>
+ * <b>Collecting</b> ({@code docs/warehouse-system.md} §3.2.4, M18, issue #13) adds the third direction and nothing else
+ * to this block: the crane reaches <b>through</b> the port into the inventory behind it ({@link #attachedPos()}), so the
+ * port's own buffer stays unused in that direction — moving items into it would move items without the crane's handling
+ * head, which the hard rules forbid — and the filter, the rank box and the redstone rows are the same three settings. The
+ * inventory is read through a {@link AttachedInventoryCache}, the same helper the warehouse interface uses, so presence
+ * needs no polling; contents are read only when the controller asks ({@link #collectSnapshot()}).
  * <p>
  * <b>Repeated pulses merge</b> ({@code docs/warehouse-system.md} §7.2, ADR-020): a pulse for an item this port already
  * waits for grows that request instead of queueing a second one, so a pulse clock produces one trip rather than one per
@@ -87,6 +101,8 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
     public static final String ARMED_TAG = "PortArmed";
     /** NBT key of how many items this port has handed over as an accepting port. */
     public static final String EXPORTED_TAG = "PortExported";
+    /** NBT key of how many items this port has fetched into the warehouse as a collecting port (M18, issue #13). */
+    public static final String COLLECTED_TAG = "PortCollected";
 
     /**
      * Request filter, redstone behaviour and requested amount. Assigned in {@link #addBehaviours}, which
@@ -112,6 +128,29 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
      * the port's chest back into an input, how much it is churning.
      */
     private long exported;
+
+    /**
+     * Items this port has fetched into the warehouse while collecting ({@code docs/warehouse-system.md} §3.2.4, M18,
+     * issue #13). Counted at the <b>pick</b>, not at the drop, because that is when the items crossed the port's
+     * threshold — and because the drop may end up in an input buffer after a reroute, which is still a collection.
+     * <p>
+     * Saved like {@link #exported}, and only while it is not 0, so a port that never collected anything writes nothing
+     * and a missing key reads as 0: no migration exists.
+     */
+    private long collected;
+
+    /**
+     * The capability cache of the inventory <b>behind</b> this port ({@code pos − FACING}), the same helper and the same
+     * lifecycle the warehouse interface uses for the inventory in front of it ({@link AttachedInventoryCache}, M18).
+     * Presence therefore needs no polling at all; contents are read on demand only ({@link #collectSnapshot()}).
+     * <p>
+     * Its invalidation listener only marks the goggle packet pending — no level access, the listener runs while chunks
+     * unload — so an inventory that appears or vanishes shows up on the port's tooltip at the next observation. What
+     * tells the <b>controller</b> to read the inventory again are the block's neighbour hints
+     * ({@link #onAttachedBlockChanged()}) and its throttled poll, never this listener.
+     */
+    private final AttachedInventoryCache attachedCache =
+            new AttachedInventoryCache(() -> !isRemoved(), this::markSummaryDirty);
 
     public WarehouseOutputBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.outputBufferSlots());
@@ -173,7 +212,8 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
     }
 
     /**
-     * Sets direction and rank as the wrench board would (out-of-range values are clamped).
+     * Sets direction and rank as the wrench board would: out-of-range values are clamped into the accept band, so only
+     * {@link PortSettings#COLLECT_RANK} itself ever makes a collecting port ({@link PortSettings#clampRank}).
      *
      * @return whether it changed
      */
@@ -203,6 +243,93 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
     /** How many items this port has handed over while accepting (M17). */
     public long exportedItems() {
         return exported;
+    }
+
+    /** How many items this port has fetched into the warehouse while collecting (M18, issue #13). */
+    public long collectedItems() {
+        return collected;
+    }
+
+    /** Whether the crane fetches items out of the inventory behind this port (M18, issue #13). */
+    public boolean isCollecting() {
+        return portDirection() == PortDirection.COLLECT;
+    }
+
+    // --- the inventory a collecting port reaches into (M18, issue #13) -------------------------------------------
+
+    /**
+     * Position of the inventory this port collects from: the block <b>behind</b> it.
+     * <p>
+     * {@code FACING} points at the aisle, so this is {@code pos − FACING} — the same world position and the same
+     * attached-block face a warehouse interface at this rack position would read ({@code pos + FACING} for a member that
+     * faces away from the aisle). The crane's arm therefore reaches the rack position and transfers one block further,
+     * exactly as it does for a storage location; nothing reaches past this block, and nothing is searched for.
+     */
+    public BlockPos attachedPos() {
+        return worldPosition.relative(facing().getOpposite());
+    }
+
+    /**
+     * The item handler of the inventory behind this port, queried from the face that touches the port — the side a funnel
+     * on that face would take items from, which is what makes a furnace answer "the result slot" rather than "the fuel
+     * slot".
+     * <p>
+     * Server: cached ({@link AttachedInventoryCache}); empty while the attached position is not loaded or nothing there
+     * offers an item handler. Call it every time and never keep the handler across ticks.
+     */
+    public Optional<IItemHandler> attachedHandler() {
+        if (level == null || isRemoved())
+            return Optional.empty();
+        Direction facing = facing();
+        return attachedCache.handler(level, worldPosition.relative(facing.getOpposite()), facing);
+    }
+
+    /** Whether an inventory is attached behind this port right now (live query, see {@link #attachedHandler()}). */
+    public boolean hasAttachedInventory() {
+        return attachedHandler().isPresent();
+    }
+
+    /**
+     * Reads the inventory behind this port slot by slot into a snapshot, for the controller's throttled collect queue
+     * ({@code AisleCollections}). On demand only, never per tick.
+     * <p>
+     * {@link InventorySnapshot#empty()} (zero slots) when nothing is attached or the attached position is not loaded;
+     * {@link #hasAttachedInventory()} tells "empty inventory" and "no inventory" apart.
+     */
+    public InventorySnapshot<ItemKey> collectSnapshot() {
+        if (level == null || !level.isLoaded(attachedPos()))
+            return InventorySnapshot.empty();
+        return attachedHandler().map(ItemHandlerSnapshots::capture).orElseGet(InventorySnapshot::empty);
+    }
+
+    /**
+     * Hint from the block: the inventory behind this port, or its contents, changed (a neighbour change or a block
+     * update). Asks the controllers of this rack position to read it again within a few ticks, throttled and
+     * de-duplicated on their side — the same channel the warehouse interface has always used for its own inventory
+     * ({@code WarehouseRegistry#contentChanged}). Server only.
+     * <p>
+     * The <b>content</b> hint reaches this only for a port whose block state says {@code collecting}: the state is the
+     * cheapest test there is, and without it every item moved in the chest behind an ordinary requesting port would walk a
+     * hint through the registry into every controller of the level (M18 review). A <b>block</b> update still arrives
+     * whatever the direction is, because it is rare; the controller drops the hint for a port that does not collect, and
+     * the throttled collect poll covers the one case the state can lag behind these settings.
+     */
+    void onAttachedBlockChanged() {
+        markSummaryDirty();
+        if (level instanceof ServerLevel && !isRemoved())
+            WarehouseRegistry.contentChanged(level, worldPosition);
+    }
+
+    /**
+     * Server: the crane picked {@code amount} items out of the inventory behind this port as a <b>collect</b> job
+     * ({@code WarehouseControllerBlockEntity#onCranePicked}, M18). The mirror of {@link #recordExport}, counted at the
+     * real pick, which is when the items really crossed the port's threshold.
+     */
+    public void recordCollected(int amount) {
+        if (amount < 1 || level == null || level.isClientSide || isRemoved())
+            return;
+        collected += amount;
+        setChanged();
     }
 
     /**
@@ -263,20 +390,29 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
     }
 
     /**
-     * Brings {@link WarehouseOutputBlock#ACCEPTING} in step with the rank, which is the only source of truth. One write
-     * at most, and with {@code UPDATE_CLIENTS} alone, because the direction is something a player reads and not
-     * something a neighbour reacts to (the stock keeper's lamp argument).
+     * Brings {@link WarehouseOutputBlock#ACCEPTING} and {@link WarehouseOutputBlock#COLLECTING} in step with the rank,
+     * which is the only source of truth. One write at most, and with {@code UPDATE_CLIENTS} alone, because the direction
+     * is something a player reads and not something a neighbour reacts to (the stock keeper's lamp argument).
+     * <p>
+     * Two booleans for three directions allow one illegal state — both true — which only a {@code /setblock} or a
+     * schematic can produce. It is <b>re-asserted from the rank</b> here, on every settings change, on load and from
+     * {@link #readStationData}, so it is corrected rather than believed (M18, issue #13).
      */
     private void refreshDirectionState() {
         if (level == null || level.isClientSide || isRemoved())
             return;
         BlockState state = getBlockState();
-        if (!state.hasProperty(WarehouseOutputBlock.ACCEPTING))
+        if (!state.hasProperty(WarehouseOutputBlock.ACCEPTING)
+                || !state.hasProperty(WarehouseOutputBlock.COLLECTING))
             return;
-        boolean accepting = portDirection() == PortDirection.ACCEPT;
-        if (state.getValue(WarehouseOutputBlock.ACCEPTING) == accepting)
+        PortDirection direction = portDirection();
+        boolean accepting = direction == PortDirection.ACCEPT;
+        boolean collecting = direction == PortDirection.COLLECT;
+        if (state.getValue(WarehouseOutputBlock.ACCEPTING) == accepting
+                && state.getValue(WarehouseOutputBlock.COLLECTING) == collecting)
             return;
-        level.setBlock(worldPosition, state.setValue(WarehouseOutputBlock.ACCEPTING, accepting), Block.UPDATE_CLIENTS);
+        level.setBlock(worldPosition, state.setValue(WarehouseOutputBlock.ACCEPTING, accepting)
+                .setValue(WarehouseOutputBlock.COLLECTING, collecting), Block.UPDATE_CLIENTS);
     }
 
     // --- request -------------------------------------------------------------------------------------------------
@@ -346,10 +482,12 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
         if (level == null || level.isClientSide || isRemoved())
             return;
         PortSettings settings = portSettings();
-        if (settings.direction() == PortDirection.ACCEPT) {
+        // Neither of the two directions that move items on the warehouse's own initiative submits a request: an edge only
+        // arms them, and the plan that spends the token is the store plan (M17) or the collect plan (M18, issue #13).
+        if (settings.direction() != PortDirection.REQUEST) {
             if (settings.redstone() == PortRedstone.PULSE && powered)
                 setArmed(true);
-            // A continuous accepting port needs no action here: the planner reads the gate from the block state.
+            // A continuous port needs no action here: the planner reads the gate from the block state.
             return;
         }
         switch (settings.redstone()) {
@@ -433,20 +571,58 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
     @Override
     protected void addStationGoggleLines(List<Component> tooltip, StationGoggleSummary shown) {
         PortSettings settings = portSettings();
-        if (settings.direction() == PortDirection.REQUEST)
-            super.addStationGoggleLines(tooltip, shown);
-        else
-            addAcceptLines(tooltip, settings, shown);
+        switch (settings.direction()) {
+            case REQUEST -> super.addStationGoggleLines(tooltip, shown);
+            case ACCEPT -> addAcceptLines(tooltip, settings, shown);
+            case COLLECT -> addCollectLines(tooltip, shown);
+        }
         WareworksLang.translate(WareworksLang.GOGGLES_PORT_REDSTONE,
                 WareworksLang.translateDirect(settings.redstone().langKey())).forGoggles(tooltip, 1);
         // Whether the gate is open right now, wherever that is a state at all: for every continuous port, and for an
         // accepting pulse port, whose unused rising edge is otherwise invisible — it is the one thing that says
         // whether the next store plan may export. A requesting pulse port is left out, because it acts on the edge
         // itself and is never "open": that is the line it never had before M17.
-        if (settings.redstone().isContinuous() || settings.direction() == PortDirection.ACCEPT)
+        if (settings.redstone().isContinuous() || settings.direction() != PortDirection.REQUEST)
             WareworksLang.translate(settings.gateOpen(isPowered(), shown.portArmed())
                             ? WareworksLang.GOGGLES_PORT_ACTIVE : WareworksLang.GOGGLES_PORT_WAITING)
                     .style(ChatFormatting.DARK_GRAY).forGoggles(tooltip, 2);
+    }
+
+    /**
+     * Client: what a <b>collecting</b> port fetches, out of what, and how much it has fetched (M18, issue #13).
+     * <p>
+     * There is no rank line: a collecting port has no magnitude at all, so there would be no number to show. Everything
+     * a client cannot know by itself — the inventory behind the port, what its last read found and whether that inventory
+     * is one this aisle already counts — comes from {@link PortCollectSummary} in {@code shown}.
+     */
+    private void addCollectLines(List<Component> tooltip, StationGoggleSummary shown) {
+        WareworksLang.translate(WareworksLang.GOGGLES_PORT_COLLECTING).forGoggles(tooltip, 1);
+        ItemStack filter = requestFilter.getFilter();
+        WareworksLang.translate(WareworksLang.GOGGLES_PORT_COLLECTS, filter.isEmpty()
+                        ? WareworksLang.translateDirect(WareworksLang.GOGGLES_PORT_ACCEPTS_ANY) : filter.getHoverName())
+                .forGoggles(tooltip, 2);
+        PortCollectSummary collect = shown.collect();
+        if (collect.hasInventory()) {
+            collect.attachedBlockName()
+                    .ifPresent(name -> WareworksLang.attachedInventory(name).forGoggles(tooltip, 2));
+            WareworksLang.countLine(WareworksLang.GOGGLES_PORT_COLLECT_READY, collect.ready()).forGoggles(tooltip, 2);
+        } else {
+            WareworksLang.translate(WareworksLang.GOGGLES_PORT_NO_INVENTORY).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
+        }
+        // The one mistake that would otherwise do nothing at all, silently: a port pointed at an inventory this aisle
+        // already indexes is refused, because collecting from it would be an endless crane shuffle (§5, guard 3).
+        if (collect.ownStorage())
+            WareworksLang.translate(WareworksLang.GOGGLES_PORT_COLLECT_OWN_STORAGE).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
+        // And the refusal a player hits most often, which only the controller knows: the warehouse is full, a stock rule
+        // is at its maximum, or no storage filter accepts what is waiting (M18 review). Without it a player standing at
+        // their machine reads "Ready: 24" and nothing that says why it stays 24.
+        collect.refusalReason().ifPresent(reason -> WareworksLang
+                .translate(WareworksLang.GOGGLES_PORT_COLLECT_REFUSED,
+                        WareworksLang.translateDirect(WareworksLang.noJobReasonKey(reason)))
+                .style(ChatFormatting.GOLD).forGoggles(tooltip, 2));
+        WareworksLang.countLine(WareworksLang.GOGGLES_PORT_COLLECTED, collect.collected()).forGoggles(tooltip, 2);
     }
 
     private void addAcceptLines(List<Component> tooltip, PortSettings settings, StationGoggleSummary shown) {
@@ -466,7 +642,28 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
      */
     @Override
     protected StationGoggleSummary createSummary() {
-        return super.createSummary().withPort(exported, armed);
+        StationGoggleSummary base = super.createSummary().withPort(exported, armed);
+        return isCollecting() ? base.withCollect(collectSummary()) : base;
+    }
+
+    /**
+     * Server: what a collecting port's goggles need and a client cannot know (M18, issue #13). Built only for a port that
+     * really collects, so a requesting or accepting port's packet is byte for byte its own.
+     * <p>
+     * The <b>ready</b> count is the controller's <i>cached</i> snapshot, not a fresh read: it is the number the warehouse
+     * really plans from, so a player sees what the machinery sees — including that it can lag by one poll interval — and
+     * a goggle observation costs no inventory read at all.
+     */
+    private PortCollectSummary collectSummary() {
+        Optional<WarehouseControllerBlockEntity> controller = controller();
+        long ready = controller.map(c -> c.collectableAt(worldPosition)).orElse(0L);
+        boolean ownStorage = controller.map(c -> c.collectsFromOwnStorage(worldPosition)).orElse(false);
+        NoJobReason refusal = controller.flatMap(c -> c.collectRefusalAt(worldPosition)).orElse(null);
+        ResourceLocation block = null;
+        BlockPos attached = attachedPos();
+        if (level != null && level.isLoaded(attached) && hasAttachedInventory())
+            block = BuiltInRegistries.BLOCK.getKey(level.getBlockState(attached).getBlock());
+        return new PortCollectSummary(collected, ready, block, ownStorage, refusal);
     }
 
     // --- lifecycle and persistence -------------------------------------------------------------------------------
@@ -493,6 +690,8 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
             tag.putBoolean(ARMED_TAG, true);
         if (exported > 0)
             tag.putLong(EXPORTED_TAG, exported);
+        if (collected > 0)
+            tag.putLong(COLLECTED_TAG, collected);
     }
 
     /**
@@ -513,6 +712,31 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
         super.readStationData(tag, registries);
         armed = tag.getBoolean(ARMED_TAG);
         exported = Math.max(0L, tag.getLong(EXPORTED_TAG));
+        collected = Math.max(0L, tag.getLong(COLLECTED_TAG));
         onPortSettingsChanged();
+    }
+
+    /**
+     * Rotated (wrench, structure placement): the inventory a collecting port reaches into is somewhere else now, so the
+     * capability cache and its query side are void and the controllers of this rack position re-probe it (M18, issue
+     * #13).
+     */
+    @SuppressWarnings("deprecation")
+    @Override
+    public void setBlockState(BlockState state) {
+        Direction oldFacing = facing();
+        super.setBlockState(state);
+        if (facing() == oldFacing)
+            return;
+        attachedCache.drop();
+        if (level instanceof ServerLevel && !isRemoved())
+            WarehouseRegistry.contentChanged(level, worldPosition);
+    }
+
+    /** Removal or chunk unload: a cache of a removed owner can be permanently disabled, so it is dropped. */
+    @Override
+    public void invalidate() {
+        super.invalidate();
+        attachedCache.drop();
     }
 }

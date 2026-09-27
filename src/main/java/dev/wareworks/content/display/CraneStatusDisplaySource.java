@@ -65,6 +65,8 @@ public class CraneStatusDisplaySource extends DisplaySource {
             case STORE -> WareworksLang.DISPLAY_CRANE_STORING;
             case RETRIEVE -> WareworksLang.DISPLAY_CRANE_RETRIEVING;
             case SUPPLY -> WareworksLang.DISPLAY_CRANE_SUPPLYING;
+            // Fetching out of a machine is the opposite of storing, so it gets its own word (M18, issue #13).
+            case COLLECT -> WareworksLang.DISPLAY_CRANE_COLLECTING;
         };
     }
 

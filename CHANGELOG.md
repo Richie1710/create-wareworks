@@ -45,6 +45,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the controller ("Prioritised locations: 3"). A Create clipboard copies a location's filter and priority together — and
   copying a location that has neither clears both on the location you paste it onto, so a whole rack wall can be set up,
   and reset, in a few clicks
+- A port can also **collect**: point one at the chest, barrel or buffer a machine drops its result into, set the
+  **Collect** row on the port's wrench box, and the crane reaches through the port, takes the items and stores them. No
+  belt, no funnel and no arm on the way back — the warehouse fetches by itself, which closes the loop for production:
+  the crane brings the ingredients, your machine works, and the crane brings the result home
+- A collecting port uses the settings you already know: its **filter** says what is fetched (without one it takes
+  whatever that side of the machine hands out), and the **redstone** rows say when — on a pulse, while powered, or
+  unless powered, so it works with no wiring at all and a lever stops it
+- It stops by itself where it should: at a stock rule's **maximum** nothing is collected, a **full warehouse** simply
+  leaves the items in your machine, and a port pointed at an inventory the aisle already counts as a storage location
+  says so instead of shuffling one chest around the aisle for ever. Nothing is ever pushed **into** your machine, and
+  collected items are only ever stored — never handed back out through another port
+- Your own requests always come first: collecting is planned after everything a player or a production order is waiting
+  for, and several collecting ports take turns with each other and with the warehouse inputs, so nothing starves
+- You can see it from the aisle: a collecting port turns **copper** where the crane reaches in. Goggles show what it
+  collects, what its last look into the machine found that it may fetch ("Ready: 24"), how many items it has fetched
+  and — while the warehouse will not take them — why not, so a full warehouse or a stock rule's maximum can be read at
+  your machine instead of at the controller; the controller counts "Collecting ports", an aisle display shows the same
+  number, and the crane says "Collecting" while it does
+- A Ponder scene, "Collecting from a Machine", which also appears on the Warehouse Production Station
+- New server config key `collectPollIntervalTicks` (default 20): how often a controller looks into the inventory behind
+  a collecting port when the machine does not announce its changes, e.g. a furnace
+
+### Changed
+
+- The controller's four "why nothing was stored" lines no longer say "the input items", because items now also arrive
+  through a collecting port: they read "no storage location accepts **these** items", and the same wording in German
 
 ## [0.3.0-alpha] - 2026-09-26
 

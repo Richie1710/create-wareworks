@@ -349,8 +349,9 @@ final class CraneExecution {
                 // A STORE job is excluded, however delivery-like its target is (M17, issue #12): waiting is right when
                 // somebody is waiting for the items, and wrong for a store into an accepting port — the crane would park
                 // in front of a full overflow port and block the whole aisle. Such a job takes the storage path instead:
-                // it drops, delivers 0 and has its leftovers rerouted.
-                if (job.type() != JobType.STORE && job.targetKind().isDeliveryTarget()
+                // it drops, delivers 0 and has its leftovers rerouted. The test is the positive JobType#waitsAtAFullTarget
+                // rather than "not a store" (M18, issue #13): a COLLECT job never has a delivery target either.
+                if (job.type().waitsAtAFullTarget() && job.targetKind().isDeliveryTarget()
                         && simulateInsert(target, job.key()) < 1) {
                     events.add(CraneEvent.outputFull());
                     return;
@@ -479,8 +480,15 @@ final class CraneExecution {
     }
 
     /**
-     * Whether the aisle column under the crane and the location of its current stop (for storage also its inventory)
-     * are loaded. True without a job or in a phase with no stop: there is nothing the crane would touch.
+     * Whether the aisle column under the crane and the location of its current stop are loaded — and, for a stop whose
+     * items live in the block <b>behind</b> the rack position, that block too. True without a job or in a phase with no
+     * stop: there is nothing the crane would touch.
+     * <p>
+     * Which stops those are is derived from the job, not from the location kind alone (M18 review): a storage location's
+     * inventory is one such block, and so is the machine a {@link JobType#COLLECT} job fetches out of — the same geometry
+     * one block away from the aisle, but reached through a port, whose kind is {@link LocationKind#OUTPUT}. Missing it
+     * left the crane in {@code PICK} for ever with {@code pauseReason} {@code NONE} whenever the machine's chunk unloaded
+     * mid-job, because {@code performPick} deliberately answers nothing while the source is unloaded.
      */
     private boolean stopChunksLoaded(Level level) {
         CraneState<ItemKey, RackPosition> state = crane.craneState();
@@ -492,15 +500,17 @@ final class CraneExecution {
         if (!level.isLoaded(layout.aislePos(column)))
             return false;
         RackPosition stop;
-        LocationKind kind;
+        boolean reachesBehindRack;
         switch (state.phase()) {
             case TRAVEL_TO_SOURCE, EXTEND_SOURCE, PICK, RETRACT_SOURCE -> {
                 stop = job.get().source();
-                kind = job.get().sourceKind();
+                reachesBehindRack = job.get().sourceKind() == LocationKind.STORAGE
+                        || job.get().type() == JobType.COLLECT;
             }
             case TRAVEL_TO_TARGET, EXTEND_TARGET, DROP, RETRACT_TARGET, WAITING_FOR_TARGET -> {
                 stop = job.get().target();
-                kind = job.get().targetKind();
+                // A collect job's targets are storage and input only (JobType), so no target ever reaches through a port.
+                reachesBehindRack = job.get().targetKind() == LocationKind.STORAGE;
             }
             default -> {
                 return true;
@@ -508,7 +518,7 @@ final class CraneExecution {
         }
         BlockPos pos = layout.rackPos(stop);
         return level.isLoaded(pos)
-                && (kind != LocationKind.STORAGE || level.isLoaded(pos.relative(layout.sideDirection(stop.side()))));
+                && (!reachesBehindRack || level.isLoaded(pos.relative(layout.sideDirection(stop.side()))));
     }
 
     /**

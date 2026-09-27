@@ -37,7 +37,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.capabilities.BlockCapabilityCache;
-import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
 
 /**
@@ -118,10 +117,12 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
      */
     protected StorageFilterBehaviour storeFilterBehaviour;
 
-    @Nullable
-    private BlockCapabilityCache<IItemHandler, @Nullable Direction> attachedCache;
-    @Nullable
-    private Direction cacheFacing;
+    /**
+     * The capability cache of the inventory in front of this interface ({@link AttachedInventoryCache}, shared with the
+     * collecting warehouse port since M18). Its invalidation listener only marks the goggle summary dirty.
+     */
+    private final AttachedInventoryCache attachedCache =
+            new AttachedInventoryCache(() -> !isRemoved(), () -> summaryDirty = true);
 
     private AttachedInventorySummary summary = AttachedInventorySummary.NONE;
     private AisleAssignment assignment = AisleAssignment.NONE;
@@ -259,28 +260,8 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
         if (level == null || isRemoved())
             return Optional.empty();
         Direction facing = facing();
-        BlockPos target = worldPosition.relative(facing);
-        if (!(level instanceof ServerLevel serverLevel)) {
-            if (!level.isLoaded(target))
-                return Optional.empty();
-            return Optional.ofNullable(level.getCapability(Capabilities.ItemHandler.BLOCK, target, facing.getOpposite()));
-        }
-        if (attachedCache == null || cacheFacing != facing)
-            createCache(serverLevel, target, facing);
-        try {
-            return Optional.ofNullable(attachedCache.getCapability());
-        } catch (IllegalStateException e) {
-            // The cache was disabled while this block entity was marked removed (e.g. moved by a command); rebuild it.
-            createCache(serverLevel, target, facing);
-            return Optional.ofNullable(attachedCache.getCapability());
-        }
-    }
-
-    private void createCache(ServerLevel serverLevel, BlockPos target, Direction facing) {
-        cacheFacing = facing;
-        // The listener may run while chunks unload: it only sets a flag (no level access, no getCapability()).
-        attachedCache = BlockCapabilityCache.create(Capabilities.ItemHandler.BLOCK, serverLevel, target,
-                facing.getOpposite(), () -> !isRemoved(), () -> summaryDirty = true);
+        // The face of the attached block that touches this interface, which is where a funnel would take items from.
+        return attachedCache.handler(level, worldPosition.relative(facing), facing.getOpposite());
     }
 
     /** Whether an inventory is attached right now (live query, see {@link #attachedHandler()}). */
@@ -496,8 +477,7 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
         if (facing() == oldFacing)
             return;
         // Rotated (wrench, structure placement): the attached position and query side changed.
-        attachedCache = null;
-        cacheFacing = null;
+        attachedCache.drop();
         summaryDirty = true;
         if (level instanceof ServerLevel)
             onMembershipRelevantChange();
@@ -518,8 +498,7 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
     public void invalidate() {
         super.invalidate();
         // A cache of a removed owner can be permanently disabled; drop it and rebuild lazily if needed.
-        attachedCache = null;
-        cacheFacing = null;
+        attachedCache.drop();
     }
 
     /**

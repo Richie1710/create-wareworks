@@ -302,6 +302,53 @@ class ReservationLedgerTest {
         assertEquals(0, ledger.reservedStockNotBackingRequests(DIAMOND));
     }
 
+    /**
+     * A collect job (M18, issue #13) holds <b>capacity at its target</b> and nothing else, in both stages: the planned
+     * amount before the pick and the held amount while it carries them.
+     * <p>
+     * It never reserves {@code STOCK}, because the inventory behind the port is not indexed stock and nothing may reserve
+     * a player's machine, and it never reserves {@code TRANSIT}, because transit means "left the indexed stock and owed to
+     * whoever asked" and nobody asked for collected items.
+     */
+    @Test
+    void aCollectJobReservesCapacityAtItsTargetAndNothingElse() {
+        TransportJob<String, String> planned = TransportJob.collect(JOB1, OUT, B, IRON, 24);
+        ledger.track(planned);
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.CAPACITY, B, IRON, 24, null)),
+                ledger.reservationsOf(JOB1));
+        assertEquals(24, ledger.reservedCapacity(B));
+        assertEquals(0, ledger.reservedStock(OUT, IRON), "a machine's inventory is never reserved");
+        assertEquals(0, ledger.inTransit(IRON));
+
+        TransportJob<String, String> held = planned.withPicked(10);
+        ledger.track(held);
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.CAPACITY, B, IRON, 10, null)),
+                ledger.reservationsOf(JOB1), "the held amount, still capacity");
+        assertEquals(0, ledger.totalReservedStock());
+        assertEquals(0, ledger.totalInTransit());
+
+        // Rerouted into an input buffer: still capacity, now promised there.
+        ledger.track(held.withTarget(IN, LocationKind.INPUT));
+        assertEquals(10, ledger.reservedCapacity(IN));
+        assertEquals(0, ledger.reservedCapacity(B));
+
+        // And a zero pick holds nothing at all, so an aborted collect leaves the ledger empty.
+        ledger.track(planned.withPicked(0));
+        assertTrue(ledger.isEmpty(), "a zero pick releases the capacity reservation");
+    }
+
+    /** The ledger is never saved, so a collect job has to rebuild its reservation from the crane's job like any other. */
+    @Test
+    void restoreRebuildsACollectJobsReservation() {
+        TransportJob<String, String> collect = TransportJob.collect(JOB1, OUT, B, IRON, 16).withPicked(6);
+        assertEquals(1, ledger.restoreFrom(List.of(collect)));
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.CAPACITY, B, IRON, 6, null)),
+                ledger.reservationsOf(JOB1));
+        assertEquals(6, ledger.totalReservedCapacity());
+        assertEquals(0, ledger.totalReservedStock());
+        assertEquals(0, ledger.totalInTransit());
+    }
+
     @Test
     void restoreFromJobsRebuildsEverything() {
         ledger.reserveCapacity(id(99), B, IRON, 1);

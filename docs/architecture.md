@@ -50,7 +50,11 @@ dev.wareworks
 │   │                          JobPlanner, PlannerInput, PlanResult, PlannedJob, RerouteTarget, NoJobReason, RefusalMemory (M3);
 │   │                          FilterMatch (what a location's store filter says about a key, M8, ADR-021);
 │   │                          since M17 (ADR-029) PlannerInput also carries ports / portRank and a STORE job may target
-│   │                          an OUTPUT (TransportJob.storeToPort, NoJobReason.PORT_FULL)
+│   │                          an OUTPUT (TransportJob.storeToPort, NoJobReason.PORT_FULL);
+│   │                          since M18 (ADR-030) JobType.COLLECT (a collecting warehouse port → storage, never a port
+│   │                          as its target) with TransportJob.collect, bringsItemsIn / waitsAtAFullTarget,
+│   │                          PlannerInput.collectSources / collectBuffers, PlanResult.nextArrivalCursor and
+│   │                          JobPlanner.planCollect / MAX_COLLECT_CANDIDATES
 │   ├── crane                  CranePhase, CranePose, CraneState, CraneTimings, CraneEvent, CraneEffect,
 │   │                          CraneInterruption, AbortReason, CraneStateMachine, CraneMotion (M3); CraneSoundCues
 │   │                          (when the crane makes which sound, M4); CraneResync (when a client snaps to a
@@ -67,9 +71,11 @@ dev.wareworks
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
 │   │                          ProductionOrders (a controller's orders), ProduciblePlanner (what an aisle could make)
 │   ├── port                   the policy of one warehouse port (M17, issue #12, ADR-029): PortDirection (request /
-│   │                          accept, derived from the sign of the rank), PortRedstone (on a pulse / while powered /
+│   │                          accept, derived from the sign of the rank; since M18 also collect, from one sentinel
+│   │                          rank), PortRedstone (on a pulse / while powered /
 │   │                          unless powered; its ordinal is the board row, its name the save name) and PortSettings
-│   │                          (the signed rank plus the redstone behaviour, and gateOpen)
+│   │                          (the signed rank plus the redstone behaviour, and gateOpen; COLLECT_RANK, COLLECT_ROW,
+│   │                          directionOf / clampRank, M18, ADR-030)
 │   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
 │                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
 │                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
@@ -85,7 +91,10 @@ dev.wareworks
 │   │                          StorageFilterBehaviour (the store filter slot, empty filters not synced; since M16 the
 │   │                          same box also carries the storage priority as a hold-to-edit board row, written only
 │   │                          while it is not 0, ADR-028),
-│   │                          StorageFilterValueBox (its slot on the aisle face) (M8, ADR-021)
+│   │                          StorageFilterValueBox (its slot on the aisle face) (M8, ADR-021);
+│   │                          AttachedInventoryCache (the BlockCapabilityCache lifecycle of one neighbouring
+│   │                          inventory, extracted here in M18 and shared with the collecting warehouse port,
+│   │                          ADR-030)
 │   ├── controller             AisleLayout (world mapping of an aisle), WarehouseControllerBlock / BlockEntity,
 │   │                          AisleLetterBehaviour, WarehouseRegistry, WarehouseMember / StorageMember,
 │   │                          ControllerStatus, ControllerGoggleSummary, AisleAssignment, ControllerPersistence,
@@ -98,20 +107,28 @@ dev.wareworks
 │   │                          AisleStockRules (the controller's own, saved copy of its keepers' stock rules, M15,
 │   │                          ADR-027; the pauses of the safety stop live in the controller beside it);
 │   │                          AislePorts (the port policies and filter items of the aisle's warehouse ports, cached for
-│   │                          planning and for the continuous pass, not saved, unread until read, M17, ADR-029)
+│   │                          planning and for the continuous pass, not saved, unread until read, M17, ADR-029);
+│   │                          AisleCollections (what the inventories behind the aisle's collecting ports held at their
+│   │                          last read — a cache of its own, deliberately not the stock index, not saved, M18,
+│   │                          ADR-030)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock, RailScan (M2); CraneExecution,
 │   │   │                      CranePersistence, CraneGoggleInfo, CraneJobSummary, CranePauseReason, CranePauseDecision
 │   │                      (M3; the pause priority became a pure, unit-tested function in M5); CraneSounds
 │   │   │                      (server-played crane sounds, M4); MastHeightValueBox (value box on the rail bed, M4 review);
 │   │   │                      CraneServerHooks (resets the once-per-server warning state on ServerStartingEvent, M5)
 │   │   └── head               HandlingHead (API), HeldItems, InventoryGrabber (MVP impl), TransferContext /
-│   │                          TransferContexts (storage interface, input, output) (M3)
+│   │                          TransferContexts (storage interface, input, output; since M18 a fourth kind, the
+│   │                          extract-only CollectContext over the inventory behind a collecting port, ADR-030) (M3)
 │   ├── station                WarehouseStationBlock / BlockEntity (base), WarehouseInputBlock / BE,
 │                              WarehouseOutputBlock / BE, RequestFilterBehaviour, StationBuffer, StationGoggleSummary (M2);
 │                              PortRankBehaviour (the warehouse port's direction and rank on a wrench-only value
 │                              box) and PortRankValueBox (its position: the filter slot's own faces, because only
 │                              one of the two boxes is ever eligible per hand state) (M17, ADR-029; the port's
 │                              redstone behaviour rides on the filter slot's board rows in RequestFilterBehaviour);
+│                              PortCollectSummary (what a collecting port's goggles say about the inventory behind it:
+│                              collected, ready, the attached block and whether it is already a storage location —
+│                              all server-only knowledge, written into the goggle packet only for such a port,
+│                              M18, ADR-030);
 │                              WarehouseDeliveryStationBlockEntity (shared base of the stations a crane delivers into),
 │                              WarehouseTerminalBlock / BE, TerminalStockEntry, TerminalStatus (M6, ADR-018);
 │                              WarehouseTerminalMenu, TerminalMenuLayout (window geometry both sides need),
@@ -158,7 +175,8 @@ dev.wareworks
 │   │                          most mass-placed block needs, M8 review; since M16 it also draws the storage priority
 │   │                          digit on the plate, skipped at 0, ADR-028);
 │   │                          WarehouseOutputRenderer (the port's filter item plus, for an accepting port, its signed
-│   │                          rank on the plate on the back, M17, ADR-029)
+│   │                          rank on the plate on the back, M17, ADR-029; nothing for a collecting one, which has no
+│   │                          rank magnitude, M18)
 │   └── ponder                 WareworksPonderPlugin (the one PonderPlugin), WareworksPonderScenes (which scene belongs
 │       │                      to which item), WareworksPonderTags (own tag wareworks:warehouse + Create tags),
 │       │                      WareworksPonderLang (ponder lang inside the Registrate LANG generator) (M5)
@@ -168,7 +186,8 @@ dev.wareworks
 │                              ProductionScenes (production) (M13), StockRuleScenes (stock_rules: the three
 │                              numbers; restocking: the minimum ordering by itself and the safety stop) (M15) and
 │                              PortScenes (port_requesting: feeding a machine without a clock; port_accepting: an
-│                              overflow, also registered for the stock keeper) (M17)
+│                              overflow, also registered for the stock keeper) (M17; port_collecting: the crane
+│                              fetching a machine's result, also registered for the production station, M18)
 ├── data                       WareworksDatagen (GatherDataEvent hooks), WareworksLangGen (English lang),
 │                              WareworksBlockStateGen (the blockstate generators Create's BlockStateGen does not cover:
 │                              the terminal's multipart state, M10, ADR-022; the stock keeper's three lamp models over
@@ -194,7 +213,11 @@ dev.wareworks
 │                              automatic restocking with its safety stop, and the terminal's confirmation, M15;
 │                              WarehousePortGameTests: the warehouse port's two directions and three redstone
 │                              behaviours, its two value boxes and the clipboard, the ranking against storage, a full
-│                              port, an old world's output, persistence and the cold cache, M17)
+│                              port, an old world's output, persistence and the cold cache, M17;
+│                              WarehouseCollectGameTests: the port's third direction — fetching out of a chest, a
+│                              furnace and a Create depot, the three loop guards, fairness between ports and against
+│                              an input, the degraded cases, the production loop closing, persistence, the cold cache
+│                              and the poll config, M18)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -225,6 +248,12 @@ dev.wareworks
 │                              PortsVisualScenario (the five rows of issue #12's own table in one aisle: an unwired
 │                              overflow, a filtered one, a diversion, a pulse and a machine fed through a Mechanical
 │                              Press, each phase asserted on the server before the shot that claims it, M17),
+│                              CollectVisualScenario (the third direction end to end on a stocked aisle: the crane
+│                              reaching through the port, the counter and both goggle tooltips, M18) and
+│                              CollectLoopVisualScenario (a real Create factory the mod knows nothing about — an arm
+│                              feeding a Mechanical Crafter out of a production station, a collecting port fetching
+│                              the planks back, and the maximum, the overflow and the full warehouse in four asserted
+│                              acts, M18),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -438,6 +467,8 @@ iron sheets already require a press and its brass casing already requires brass.
 * **Four scenes, one per teaching goal:** `stacker_crane/overview` (rails, dock, racks, controller, rotation from below, the crane travelling, lifting and reaching into a rack, mast height), `warehouse/interface` (inventories become addressable storage locations), `warehouse/storing` (input → controller plans → crane stores) and `warehouse/retrieving` (filter + amount + redstone pulse → crane fetches → funnel pulls out). Every one of the six items is a component of at least one scene, so each has "Hold [W] to Ponder".
   * *Extended in M13 to eight scenes* (terminal, requesting, production, filters), which also gave the terminal and the production station their first scene. See the M13 block below; each one has its own stage in `scripts/gen_ponder_schematics.py`.
   * *Extended in M15 to ten scenes* (`warehouse/stock_rules`, `warehouse/restocking`), the stock keeper's two. See the M15 block below.
+  * *Extended in M17 to twelve scenes* (`warehouse/port_requesting`, `warehouse/port_accepting`), the warehouse port's two directions; the accepting one is registered for the **stock keeper** as well, because a maximum is what makes an overflow useful (ADR-029).
+  * *Extended in M18 to thirteen scenes* (`warehouse/port_collecting`), the port's third direction; it is registered for the **production station** as well, because closing the loop — the crane brings the ingredients and takes the product back — is exactly what that block's story needs, and a player who read `warehouse/production` has to find it (ADR-030).
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
@@ -458,7 +489,7 @@ iron sheets already require a press and its brass casing already requires brass.
 * **Two scenes rather than one, for pacing.** Told as one story the keeper came to about a minute in which the three numbers — the part a player needs first — were over after the first third, and a player who only wanted to look up "what does the reserve do" had to sit through a production loop. The two now run **968** and **1051** ticks (about 48 s and 53 s) and each is watchable on its own, exactly as the terminal's placing/requesting pair is (`StockRuleScenes` carries the reason). The `text_n` renumbering rule above is why the split was made *before* release rather than later.
 * **The redstone in a scene is real block states.** A `PonderLevel` (`SchematicLevel`) runs no block ticks and no neighbour updates, so a comparator, a redstone lamp and a lever keep whatever state a scene sets, and `toggleRedstonePower` flips exactly their `POWERED`/`POWER`/`LIT`. The keeper is never in such a selection: its own `LIT` is a rule lamp and is written on its own, together with `PAUSED` for the safety stop — the same two block states the controller's rule tick writes in a real world.
 
-*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye. *M15:* keeper 2.
+*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye. *M15:* keeper 2. *M17:* output 3. *M18:* output 4 and production 2, which is what pins that the collecting scene really reaches both of its subjects.
 
 *Reason:* Scenes built entirely from instructions keep the binary assets trivial and stable, and reusing the crane's own motion means the Ponder crane can never drift from how the machine really behaves.
 
@@ -1418,7 +1449,8 @@ condition**, with the filter it already had.
   because the cost is the other way round).
 * **The direction is readable in the world, from both sides, without goggles.** From **inside the aisle** — where no
   value box and no drawn digit may go, because the crane's arm port owns that face — an accepting port turns
-  **andesite** around the aisle opening and on the back spout: ADR-017's material language (andesite = the dumb intake,
+  **andesite** around the aisle opening, and the same accent on the back spout: ADR-017's material language (andesite =
+  the dumb intake,
   brass = the smart filtered output), and "whatever the warehouse cannot keep" is the dumb direction. A second hand-made
   model `block_accept.json` differs from `block.json` in exactly that one texture, selected by the derived blockstate
   property `accepting`, which the block entity re-asserts from the rank on every change and once on load (so a
@@ -1467,6 +1499,121 @@ recorded rather than guarded: a **diversion** can swallow what a rule's minimum 
 player who pipes a port's chest back into an input makes an item at its maximum churn for ever (undetectable — the mod
 cannot see belts — bounded, because retrievals and supplies are planned before stores, and readable on the port's
 "Handed over: N").
+
+### ADR-030 — Collecting is the port's third direction: one sentinel rank, one job type, and three structural loop guards (M18, issue #13)
+
+*Context:* GitHub issue #13, from the user, and the last step of the routing picture ADR-029 sketched. Until M18 items
+entered a warehouse only when something **pushed** them into a warehouse input, so every machine needed its own belt or
+funnel run back to the aisle — the return path a player has to build again for each machine, and the one part of the
+production loop (ADR-024) the warehouse did not carry. The milestone's job was the opposite direction: the warehouse
+**fetches** out of an inventory a player points a port at, with the same filter, the same redstone condition and the
+same crane.
+
+*Decision:*
+* **The third direction of the M17 port, not a fourth block and not a new `LocationKind`.** The same argument as
+  ADR-029, one milestone later and now with evidence: the port already has the three settings collecting needs, and a
+  collecting port is a member of the aisle the crane reaches like any other. It is the same block, the same buffer
+  (unused in this direction), the same arm point, the same recipe, the same membership, the same Ponder subject. The
+  cost, accepted: a player must set the direction with a wrench before a port collects, and "Warehouse Output" now names
+  a block that also takes items *in* — the same naming debt M17 took on knowingly.
+* **The rank carries it as a sentinel, `COLLECT_RANK = MAX_RANK + 1`, not as a band.** A collecting port is only ever a
+  **source**, so it needs no magnitude: there is no candidate list it competes in. Ordering against other work is
+  *where the arrival stage sits in dispatch*, and ordering among several collecting ports is a **round robin**, because
+  a priority there would starve the weaker ports — exactly the reason input stations have never had one. The sentinel
+  keeps "which direction" and "in which order" one number (`direction()` stays derived), adds a fourth board row whose
+  column means nothing (an em dash, like the request row), and **cannot appear in an old save**, because the pre-M18
+  constructor clamped to ±`MAX_RANK`. One real trap had to be paid for: Create's `ScrollValueBehaviour#setValue` clamps
+  to the behaviour's own range, so `PortRankBehaviour` had to be widened to the sentinel — otherwise a collecting port
+  would silently have become the strongest diversion. No input path reaches `setValue` unguarded: `ValueSettingsPacket`
+  only calls `setValueSettings`, which composes the rank from row and column, and `setRank` clamps with
+  `PortSettings.clampRank` first (M18 review), so an out-of-band number lands in the accept band exactly as it does when
+  it is read from a save.
+* **A job type of its own, `COLLECT`, whose allowed targets exclude `OUTPUT`.** The alternative — a `STORE` job with an
+  `OUTPUT` source — would have made the leftovers of a collect droppable where the leftovers of a store may go, which is
+  precisely what `SUPPLY` was split off from `RETRIEVE` for (ADR-024). It also made two questions that were asked as
+  `type != STORE` wrong in both places, so they became the positive `bringsItemsIn()` (a `STORE` and a `COLLECT`: the
+  arrivals that may complete a production order) and `waitsAtAFullTarget()` (a `RETRIEVE` and a `SUPPLY`: waiting is
+  right when somebody is waiting for the items).
+* **A player's request always wins.** Collecting is planned **after** the retrieval requests and the production supplies
+  and **inside** the store stage, which became the **arrival** stage: one round robin from one cursor over the input
+  stations followed by the collecting ports, as a single virtual list. A stage of its own after storing was rejected: it
+  would starve collecting for as long as any input is permanently non-empty, which is exactly the situation collecting
+  exists for. The mirror consequence is accepted — an input can be delayed one trip behind a collecting port, which is
+  how two inputs already treat each other — and the walk is bounded by `MAX_COLLECT_CANDIDATES` (12, as
+  `MAX_PORT_CANDIDATES`), with the cursor left at the first source a run had to skip so that nothing starves.
+* **The loop is answered structurally, three times over**, rather than by a rule that says "do not do that":
+  `planCollect` honours `storeHeadroom`, so an item at its maximum yields **no collect job at all** — the exact opposite
+  of an accepting port, which ignores the headroom, so collecting and overflow are mutually exclusive by construction;
+  `JobType.COLLECT` allows no `OUTPUT` target and `TransferContexts.CollectContext` refuses **every** insert, so a
+  collected item can never leave through a port and nothing the warehouse carries can ever be pushed into a player's
+  machine; and a port pointed at an inventory this aisle already indexes (same Create `InventoryIdentifier`) is refused
+  and says so on its goggles, which is what stops the crane shuffling one chest around its own aisle. Each guard was
+  broken on purpose during the build, and each one has tests that failed while it was broken.
+* **Collected items are not stock until they are stored.** The reads live in `AisleCollections`, a cache of its own;
+  putting a machine's result chest into the stock index would make a terminal offer items the crane has not fetched yet
+  and a stock rule count them towards its maximum. Nothing of it is persisted, and an unread port collects nothing.
+* **Presence without polling, contents on demand.** The capability cache (`AttachedInventoryCache`, extracted from the
+  warehouse interface so that the two blocks share one lifecycle instead of two copies of it) answers whether an
+  inventory is there; the port block's neighbour hints queue an urgent read through the channel the interface has always
+  used; and a **background poll** every `collectPollIntervalTicks` (default 20) covers the machines that change their
+  inventory without telling anybody — a furnace's result slot, several Create blocks. Both queues share the one
+  `maxSnapshotsPerTick` budget, so the per-tick cost bound of the stock index is unchanged, and a gated-shut port is not
+  read at all. A per-tick scan was never an option: the hard rules forbid it.
+* **Extraction goes through the item capability only**, slot by slot with real results, spilling at the **port's**
+  position and never inside the machine. The crane never inserts there, so a Create machine feeding the same inventory
+  is never fought over.
+
+*Review addendum (M18 review, same milestone):* four decisions the first build got wrong, each fixed at the root rather
+than papered over:
+* **A collecting port that hands nothing over is not a full warehouse.** `planCollect`'s two cheap fall-throughs — the
+  port's own filter rejecting a key, and a live extract that gives nothing — left the survey untouched, so the run
+  defaulted to `WAREHOUSE_FULL`: the strongest reason of all, which masked every honest answer of the same run *and*
+  armed `fullBackoffTicks`, suspending storing from **every** input station of the aisle for as long as a machine was
+  empty — the resting state of a production loop. They now report `NoJobReason.COLLECT_SOURCE_EMPTY`
+  (`StoreSurvey#collectReason()`), declared last but one and, like `AT_MAXIMUM`, kept out of the back-off set with the
+  M15 argument: it is answered by a map lookup and at most one live extract per item type, before any candidate is
+  ranked, so there is no expensive scan to protect.
+* **The port's filter belongs in the gate, not only in the plan.** `collectSources()` applies it now (one map lookup,
+  because a port's filter is a single item key), so a port whose machine holds only items it does not name is no source
+  at all instead of a candidate that spends a live simulation on a certain refusal every dispatch — and the same
+  filtered number is what its "Ready: N" line shows, which could otherwise contradict the "Collects: X" line above it.
+* **The refusal is carried to the port a player is standing at.** A collecting port could explain the two mistakes it
+  can see by itself but not the one a player hits most often — full, at a maximum, no storage filter — because that
+  lives on the controller. `PortCollectSummary` now carries the aisle's last planning reason, narrowed by
+  `NoJobReason#refusesCollecting()` and only while the port has something ready, and the goggles print it in gold. This
+  is the "why is this not moving?" idea of the M15 review, scoped to the one block where the answer is unambiguous.
+* **Cost and fairness details:** the gated source list is built **once** per dispatch instead of twice (it costs world
+  lookups per port); the content hint at the block is gated on the `collecting` block state, so an ordinary requesting
+  port's neighbour no longer walks a hint into every controller of the level on every `setChanged`; the cap's cursor is
+  honoured on every return of the arrival walk, so an input station with permanent work can no longer keep the sources
+  beyond the cap from ever being examined; a collect pick queues the re-read whatever it picked, and for every port
+  reading the same inventory, rather than trusting a foreign block to notify anybody; the crane's stop check asks for
+  the machine's chunk of a collect source as it does for a storage location's inventory, derived from the job instead of
+  the location kind; and `PortRankBehaviour#setRank` clamps with `PortSettings.clampRank` before Create's `setValue`
+  sees the number, so the widened range can no longer turn an out-of-band rank into a collecting port.
+
+*Reason:* This is the smallest teachable thing that closes the loop. Everything a player already learned about the port
+carries over — filter, redstone row, wrench box, clipboard — and the one new idea is the direction itself, which the
+copper accent says from inside the aisle and one Ponder scene teaches. Everything else is a consequence rather than a
+feature: no new block, no new location kind, no new comparator key, no migration.
+
+*Correction to ADR-029:* that decision predicted a "further ranking class — a collecting source (issue #13)". It was
+wrong in a useful way: M18 adds **zero** comparator keys, because a collecting port is never a *target*, so it never
+enters the store plan's candidate list at all. What it needed instead was a place in the **dispatch order**, which cost
+no key and one cursor.
+
+*Consequences:* A machine's result chest needs no return path, and the warehouse's own restocking (ADR-027) closes
+without a belt: a collect arrival credits a production order exactly as a store from an input does. `PlannerInput` gained
+two more components and `ControllerGoggleSummary` one more `int` parameter — the hazard its javadoc warns about, now one
+parameter worse. `AislePorts#rankAt` had to start answering 0 for a collecting port and `acceptingPorts()` had to select
+by direction instead of `!isRequesting()`: with a third direction the old predicate would have made every collecting
+port an export target, the one regression of this milestone that could have destroyed a player's setup. Two behaviours
+are documented rather than guarded: an **unfiltered** collecting port takes whatever the queried side hands out (a
+furnace offers its fuel slot to a horizontal face, which the GameTest pins rather than hides), and one loop remains
+bounded rather than impossible — collect → leftovers into an input → a diversion exports them into the same chest —
+which needs a diversion *and* a collecting port on one aisle with the drain wired back, moves one trip at a time, and is
+readable on two counters. A collect can lag by up to `collectPollIntervalTicks + dispatchIntervalTicks` behind a silent
+machine, which is the price of not scanning.
 
 ## Persistence & sync
 

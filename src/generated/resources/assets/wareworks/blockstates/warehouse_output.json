@@ -1,63 +1,123 @@
 {
   "variants": {
-    "accepting=false,facing=east,powered=false": {
+    "accepting=false,collecting=false,facing=east,powered=false": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 90
     },
-    "accepting=false,facing=east,powered=true": {
+    "accepting=false,collecting=false,facing=east,powered=true": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 90
     },
-    "accepting=false,facing=north,powered=false": {
+    "accepting=false,collecting=false,facing=north,powered=false": {
       "model": "wareworks:block/warehouse_output/block"
     },
-    "accepting=false,facing=north,powered=true": {
+    "accepting=false,collecting=false,facing=north,powered=true": {
       "model": "wareworks:block/warehouse_output/block"
     },
-    "accepting=false,facing=south,powered=false": {
+    "accepting=false,collecting=false,facing=south,powered=false": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 180
     },
-    "accepting=false,facing=south,powered=true": {
+    "accepting=false,collecting=false,facing=south,powered=true": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 180
     },
-    "accepting=false,facing=west,powered=false": {
+    "accepting=false,collecting=false,facing=west,powered=false": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 270
     },
-    "accepting=false,facing=west,powered=true": {
+    "accepting=false,collecting=false,facing=west,powered=true": {
       "model": "wareworks:block/warehouse_output/block",
       "y": 270
     },
-    "accepting=true,facing=east,powered=false": {
+    "accepting=false,collecting=true,facing=east,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_collect",
+      "y": 90
+    },
+    "accepting=false,collecting=true,facing=east,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_collect",
+      "y": 90
+    },
+    "accepting=false,collecting=true,facing=north,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_collect"
+    },
+    "accepting=false,collecting=true,facing=north,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_collect"
+    },
+    "accepting=false,collecting=true,facing=south,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_collect",
+      "y": 180
+    },
+    "accepting=false,collecting=true,facing=south,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_collect",
+      "y": 180
+    },
+    "accepting=false,collecting=true,facing=west,powered=false": {
+      "model": "wareworks:block/warehouse_output/block_collect",
+      "y": 270
+    },
+    "accepting=false,collecting=true,facing=west,powered=true": {
+      "model": "wareworks:block/warehouse_output/block_collect",
+      "y": 270
+    },
+    "accepting=true,collecting=false,facing=east,powered=false": {
       "model": "wareworks:block/warehouse_output/block_accept",
       "y": 90
     },
-    "accepting=true,facing=east,powered=true": {
+    "accepting=true,collecting=false,facing=east,powered=true": {
       "model": "wareworks:block/warehouse_output/block_accept",
       "y": 90
     },
-    "accepting=true,facing=north,powered=false": {
+    "accepting=true,collecting=false,facing=north,powered=false": {
       "model": "wareworks:block/warehouse_output/block_accept"
     },
-    "accepting=true,facing=north,powered=true": {
+    "accepting=true,collecting=false,facing=north,powered=true": {
       "model": "wareworks:block/warehouse_output/block_accept"
     },
-    "accepting=true,facing=south,powered=false": {
+    "accepting=true,collecting=false,facing=south,powered=false": {
       "model": "wareworks:block/warehouse_output/block_accept",
       "y": 180
     },
-    "accepting=true,facing=south,powered=true": {
+    "accepting=true,collecting=false,facing=south,powered=true": {
       "model": "wareworks:block/warehouse_output/block_accept",
       "y": 180
     },
-    "accepting=true,facing=west,powered=false": {
+    "accepting=true,collecting=false,facing=west,powered=false": {
       "model": "wareworks:block/warehouse_output/block_accept",
       "y": 270
     },
-    "accepting=true,facing=west,powered=true": {
+    "accepting=true,collecting=false,facing=west,powered=true": {
       "model": "wareworks:block/warehouse_output/block_accept",
+      "y": 270
+    },
+    "accepting=true,collecting=true,facing=east,powered=false": {
+      "model": "wareworks:block/warehouse_output/block",
+      "y": 90
+    },
+    "accepting=true,collecting=true,facing=east,powered=true": {
+      "model": "wareworks:block/warehouse_output/block",
+      "y": 90
+    },
+    "accepting=true,collecting=true,facing=north,powered=false": {
+      "model": "wareworks:block/warehouse_output/block"
+    },
+    "accepting=true,collecting=true,facing=north,powered=true": {
+      "model": "wareworks:block/warehouse_output/block"
+    },
+    "accepting=true,collecting=true,facing=south,powered=false": {
+      "model": "wareworks:block/warehouse_output/block",
+      "y": 180
+    },
+    "accepting=true,collecting=true,facing=south,powered=true": {
+      "model": "wareworks:block/warehouse_output/block",
+      "y": 180
+    },
+    "accepting=true,collecting=true,facing=west,powered=false": {
+      "model": "wareworks:block/warehouse_output/block",
+      "y": 270
+    },
+    "accepting=true,collecting=true,facing=west,powered=true": {
+      "model": "wareworks:block/warehouse_output/block",
       "y": 270
     }
   }

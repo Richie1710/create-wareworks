@@ -38,6 +38,87 @@ class PortSettingsTest {
             assertEquals(rank, PortSettings.rankOf(port.row(), port.strength()), "rank " + rank);
             assertEquals(PortSettings.strengthOf(rank), port.strength(), "rank " + rank);
         }
+        // The sentinel is a value of the range too, so it has to round trip like every other rank (M18, issue #13).
+        PortSettings collect = new PortSettings(PortSettings.COLLECT_RANK, PortRedstone.PULSE);
+        assertEquals(PortSettings.COLLECT_RANK, collect.rank(), "the sentinel survives clamping");
+        assertEquals(PortSettings.COLLECT_ROW, collect.row());
+        assertEquals(PortSettings.COLLECT_RANK, PortSettings.rankOf(collect.row(), collect.strength()));
+    }
+
+    /**
+     * The third direction is one sentinel just above the accept band (M18, issue #13), and it is <b>not</b> a diversion:
+     * its number is the largest of the range, so a predicate that only asked "is it positive" would make every collecting
+     * port the strongest export target in the aisle — the one regression of M18 that could push items into a player's
+     * machine.
+     */
+    @Test
+    void theCollectSentinelIsItsOwnDirectionAndNoDiversion() {
+        PortSettings collect = new PortSettings(PortSettings.COLLECT_RANK, PortRedstone.PULSE);
+        assertSame(PortDirection.COLLECT, collect.direction());
+        assertTrue(collect.isCollecting());
+        assertFalse(collect.isDiversion(), "the sentinel is not an export rank, however positive it is");
+        assertFalse(collect.isOverflow());
+        assertFalse(collect.isRequesting());
+        assertEquals(PortSettings.MAX_RANK + 1, PortSettings.COLLECT_RANK, "just above the accept band");
+        // No magnitude at all: ordering is the dispatch stage plus a round robin, never a number.
+        assertEquals(0, collect.strength());
+        assertEquals(0, PortSettings.strengthOf(PortSettings.COLLECT_RANK));
+        assertEquals(PortSettings.NO_VALUE, PortSettings.formatRank(PortSettings.COLLECT_RANK));
+        // And the static form, which is what a block state, a renderer and a planner input read.
+        assertSame(PortDirection.COLLECT, PortSettings.directionOf(PortSettings.COLLECT_RANK));
+        assertSame(PortDirection.REQUEST, PortSettings.directionOf(PortSettings.REQUEST_RANK));
+        assertSame(PortDirection.ACCEPT, PortSettings.directionOf(PortSettings.MAX_RANK));
+        assertSame(PortDirection.ACCEPT, PortSettings.directionOf(PortSettings.MIN_RANK));
+    }
+
+    /**
+     * Clamping keeps the sentinel and clamps everything else into the accept band, so no number a tampered packet, an old
+     * save or a wider range could carry ever becomes a collecting port by accident.
+     */
+    @Test
+    void clampingKeepsTheSentinelAndNothingElseReachesIt() {
+        assertEquals(PortSettings.COLLECT_RANK, PortSettings.clampRank(PortSettings.COLLECT_RANK));
+        assertEquals(PortSettings.MAX_RANK, PortSettings.clampRank(PortSettings.COLLECT_RANK + 1));
+        assertEquals(PortSettings.MAX_RANK, PortSettings.clampRank(4711));
+        assertEquals(PortSettings.MIN_RANK, PortSettings.clampRank(-4711));
+        assertEquals(PortSettings.MAX_RANK, new PortSettings(PortSettings.COLLECT_RANK + 1, null).rank());
+        // A rank of 0 from a save written before M17 still reads as a plain requesting output.
+        assertSame(PortDirection.REQUEST, new PortSettings(0, null).direction());
+    }
+
+    /** The board has four rows now; three of them compose a number and the request and collect rows ignore the column. */
+    @Test
+    void theCollectRowIgnoresItsColumn() {
+        assertEquals(4, PortSettings.ROWS);
+        for (int magnitude = -2; magnitude <= PortSettings.MAX_STRENGTH + 2; magnitude++)
+            assertEquals(PortSettings.COLLECT_RANK, PortSettings.rankOf(PortSettings.COLLECT_ROW, magnitude),
+                    "column " + magnitude);
+        assertEquals(PortSettings.COLLECT_ROW, PortSettings.rowOf(PortSettings.COLLECT_RANK));
+        assertEquals("output.port.collect", PortSettings.rowLangKey(PortSettings.COLLECT_ROW));
+        // The rows 0..2 kept their indices, so no save, clipboard or schematic meaning changed.
+        assertEquals(0, PortSettings.REQUEST_ROW);
+        assertEquals(1, PortSettings.OVERFLOW_ROW);
+        assertEquals(2, PortSettings.DIVERSION_ROW);
+        assertEquals(3, PortSettings.COLLECT_ROW);
+    }
+
+    /** The gate is the redstone mode and nothing else — in the collect direction too (M18, issue #13). */
+    @Test
+    void theCollectDirectionUsesTheSameGate() {
+        for (PortRedstone mode : PortRedstone.values()) {
+            for (boolean powered : new boolean[] {false, true}) {
+                for (boolean armed : new boolean[] {false, true}) {
+                    PortSettings collect = new PortSettings(PortSettings.COLLECT_RANK, mode);
+                    boolean expected = switch (mode) {
+                        case PULSE -> armed;
+                        case WHILE_POWERED -> powered;
+                        case UNLESS_POWERED -> !powered;
+                    };
+                    assertEquals(expected, collect.gateOpen(powered, armed),
+                            mode + " powered=" + powered + " armed=" + armed);
+                }
+            }
+        }
     }
 
     @Test
@@ -115,7 +196,7 @@ class PortSettingsTest {
         assertEquals("output.port.overflow", PortSettings.rowLangKey(PortSettings.OVERFLOW_ROW));
         assertEquals("output.port.diversion", PortSettings.rowLangKey(PortSettings.DIVERSION_ROW));
         assertEquals("output.port.request", PortSettings.rowLangKey(-1), "never out of bounds");
-        assertEquals("output.port.diversion", PortSettings.rowLangKey(99));
+        assertEquals("output.port.collect", PortSettings.rowLangKey(99), "clamped to the last row");
         assertEquals("output.redstone.while_powered", PortRedstone.WHILE_POWERED.langKey());
         assertEquals("0", PortSettings.formatRank(0));
         assertEquals("+3", PortSettings.formatRank(3));

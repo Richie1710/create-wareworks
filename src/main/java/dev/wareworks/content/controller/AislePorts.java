@@ -16,6 +16,7 @@ import org.jetbrains.annotations.Nullable;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.job.FilterMatch;
+import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortSettings;
 
 /**
@@ -129,8 +130,22 @@ final class AislePorts {
         return entry == null ? PortSettings.DEFAULT : entry.policy();
     }
 
-    /** The signed rank of the port at {@code rack}; {@link PortSettings#REQUEST_RANK} for one this cache has not read. */
+    /**
+     * The signed rank of the port at {@code rack} for the planner's ranking of <b>accepting</b> ports;
+     * {@link PortSettings#REQUEST_RANK} for one this cache has not read <b>and</b> for a collecting one (M18, issue #13).
+     * <p>
+     * A collecting port must never rank as a diversion: its sentinel rank is the largest number of the range, so answering
+     * it here would make it the strongest export target in the aisle. Rank 0 means "this is no accepting port", which the
+     * planner drops and which {@code CraneDispatch#rerouteOutputs} also keeps out of the retrieve-reroute outputs — the
+     * conservative direction in both places.
+     */
     int rankAt(RackPosition rack) {
+        PortSettings policy = at(rack);
+        return policy.isCollecting() ? PortSettings.REQUEST_RANK : policy.rank();
+    }
+
+    /** The raw signed rank the port at {@code rack} carries, including the collect sentinel (for the goggle summary). */
+    int rawRankAt(RackPosition rack) {
         return at(rack).rank();
     }
 
@@ -154,6 +169,20 @@ final class AislePorts {
         return entry.filter().equals(key) ? FilterMatch.DEDICATED : FilterMatch.REJECTED;
     }
 
+    /**
+     * The one item the filter of the port at {@code rack} names, or {@code null} for a port without a filter and for one
+     * this cache has not read (both take anything).
+     * <p>
+     * A port's filter is a single {@link ItemKey}, so the two questions a <b>collecting</b> port's cached snapshot is
+     * asked — "is there anything this port may fetch?" and "how much?" — stay one map lookup each instead of a walk over
+     * the machine's item types (M18, issue #13).
+     */
+    @Nullable
+    ItemKey filterKeyAt(RackPosition rack) {
+        Entry entry = settings.get(Objects.requireNonNull(rack, "rack"));
+        return entry == null ? null : entry.filter();
+    }
+
     /** Ports whose policy still has to be read, as a snapshot the caller may resolve while iterating. */
     List<RackPosition> unreadPorts() {
         return unread.isEmpty() ? List.of() : List.copyOf(unread);
@@ -170,16 +199,39 @@ final class AislePorts {
     /**
      * Ports that <b>accept</b> items, in index order, whatever their redstone gate says (M17): the candidates the
      * controller then gates one by one before handing them to the planner.
+     * <p>
+     * Selected by {@code direction() == ACCEPT} rather than by {@code !isRequesting()} (M18, issue #13): with a third
+     * direction the old predicate would have turned every <b>collecting</b> port into an export target, which is the one
+     * regression of this milestone that could destroy a player's setup — the warehouse would push items into their
+     * machine. The controller's {@code portRankAt} answers {@link PortSettings#REQUEST_RANK} for a collecting port as the
+     * second guard, so a list and a rank function that disagree still export nothing.
      */
     List<RackPosition> acceptingPorts() {
-        return matching(policy -> !policy.isRequesting());
+        return matching(policy -> policy.direction() == PortDirection.ACCEPT);
+    }
+
+    /**
+     * Ports that <b>collect</b> items out of the inventory behind them, in index order, whatever their redstone gate says
+     * (M18, issue #13): the candidates the controller then gates one by one, exactly as it does the accepting ones.
+     */
+    List<RackPosition> collectingPorts() {
+        return matching(PortSettings::isCollecting);
     }
 
     /** How many ports accept items, for the controller's goggles; 0 for an aisle of plain outputs. */
     int acceptingCount() {
+        return count(policy -> policy.direction() == PortDirection.ACCEPT);
+    }
+
+    /** How many ports collect items, for the controller's goggles; 0 for an aisle without one (M18). */
+    int collectingCount() {
+        return count(PortSettings::isCollecting);
+    }
+
+    private int count(Predicate<PortSettings> wanted) {
         int count = 0;
         for (Entry entry : settings.values()) {
-            if (!entry.policy().isRequesting())
+            if (wanted.test(entry.policy()))
                 count++;
         }
         return count;

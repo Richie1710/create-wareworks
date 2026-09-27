@@ -7,6 +7,7 @@ import com.simibubi.create.infrastructure.config.AllConfigs;
 
 import dev.wareworks.content.station.PortRankValueBox;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
+import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortSettings;
 import net.createmod.catnip.math.VecHelper;
 import net.minecraft.client.Minecraft;
@@ -81,10 +82,14 @@ public class WarehouseOutputRenderer extends SmartBlockEntityRenderer<WarehouseO
         renderRank(be, ms, buffer);
     }
 
-    /** The signed rank on the back plate, skipped for a requesting port and beyond Create's filter item distance. */
+    /**
+     * The signed rank on the back plate, skipped beyond Create's filter item distance and for every port that has no rank
+     * magnitude: a requesting one, and a <b>collecting</b> one (M18, issue #13) — its direction is one sentinel value, not
+     * a number a player set, so the copper back spout of its model is the cue and there is nothing to paint.
+     */
     private static void renderRank(WarehouseOutputBlockEntity be, PoseStack ms, MultiBufferSource buffer) {
         int rank = be.portRank();
-        if (rank == PortSettings.REQUEST_RANK)
+        if (PortSettings.directionOf(rank) != PortDirection.ACCEPT)
             return;
         Level level = be.getLevel();
         BlockPos pos = be.getBlockPos();

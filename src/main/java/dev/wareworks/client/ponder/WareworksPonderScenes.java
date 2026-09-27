@@ -38,9 +38,10 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_input</td><td>warehouse/storing</td></tr>
- *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting</td></tr>
+ *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting,
+ *       warehouse/port_collecting</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting</td></tr>
- *   <tr><td>warehouse_production</td><td>warehouse/production</td></tr>
+ *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting</td></tr>
  *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
  *       warehouse/port_accepting</td></tr>
  * </table>
@@ -104,6 +105,13 @@ public final class WareworksPonderScenes {
         // exactly what an accepting port answers, and a player who read the one needs to find the other.
         scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT, WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
                 .addStoryBoard("warehouse/port_accepting", PortScenes::accepting,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // The third direction (M18, issue #13), last again for the same reason. Also a scene of the <b>production
+        // station</b>: closing the loop — the crane brings the ingredients and takes the product back — is exactly what
+        // that block's story needs, and a player who read warehouse/production has to find this one.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT, WareworksBlocks.WAREHOUSE_PRODUCTION)
+                .addStoryBoard("warehouse/port_collecting", PortScenes::collecting,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

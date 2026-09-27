@@ -21,6 +21,7 @@ import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.registry.WareworksBlocks;
 import net.createmod.ponder.api.scene.SceneBuildingUtil;
@@ -213,9 +214,11 @@ public record PonderAisle(int aisleZ, int dockX, int lastRailX, int plateSize) {
 
     /** The state of a port on {@code side} with {@code rank}: its opening faces the aisle. */
     private BlockState portState(Side side, int rank) {
+        PortDirection direction = PortSettings.directionOf(rank);
         return WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
                 .setValue(WarehouseOutputBlock.FACING, outward(side).getOpposite())
-                .setValue(WarehouseOutputBlock.ACCEPTING, rank != PortSettings.REQUEST_RANK);
+                .setValue(WarehouseOutputBlock.ACCEPTING, direction == PortDirection.ACCEPT)
+                .setValue(WarehouseOutputBlock.COLLECTING, direction == PortDirection.COLLECT);
     }
 
     /** Writes the rank {@link PortRankBehaviour} reads back, the number the renderer draws on the back plate. */

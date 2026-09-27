@@ -78,6 +78,13 @@ import net.minecraft.world.level.Level;
  * location's, so a rejecting one is dropped before any live simulation, and a port is never entered into the refusal
  * memory: it has no snapshot round robin that would forget the entry.
  * <p>
+ * <b>Collecting warehouse ports</b> ({@code docs/warehouse-system.md} §3.2.4, M18, issue #13) reach the planner as
+ * {@code collectSources} plus {@code collectBuffers}, answered from the controller's {@link AisleCollections} cache. The
+ * whole policy is applied there, exactly as it is for the accepting ports, and the <b>arrival</b> round robin the planner
+ * then walks covers the input stations and the collecting ports as one list from one cursor
+ * ({@link PlanResult#nextArrivalCursor()}), so neither starves the other while a player's request and a production order's
+ * ingredients are still planned first.
+ * <p>
  * <b>Reservations are derived from the crane's job</b> ({@code docs/warehouse-system.md} §7.4): every report re-tracks
  * the reported job, and every dispatch interval the ledger is rebuilt from the dock's current job
  * ({@link #adopt}), which also adopts the job of a crane that a new or reloaded controller finds. Reservations of
@@ -100,7 +107,7 @@ final class CraneDispatch {
             MAX_REMEMBERED_REFUSALS);
     private final RefusalMemory<ItemKey, RackPosition> extractRefusals = new RefusalMemory<>(REFUSAL_MEMORY_TICKS,
             MAX_REMEMBERED_REFUSALS);
-    private int inputCursor;
+    private int arrivalCursor;
     private long nextDispatchTick = NO_BACKOFF;
     private long backoffUntilTick = NO_BACKOFF;
     @Nullable
@@ -135,7 +142,7 @@ final class CraneDispatch {
         extractRefusals.clear();
         lastReason = null;
         backoffUntilTick = NO_BACKOFF;
-        inputCursor = 0;
+        arrivalCursor = 0;
     }
 
     /** The storage location at {@code rack} was read again or left the aisle: its remembered refusals are void. */
@@ -156,19 +163,26 @@ final class CraneDispatch {
         adopt(dock.get().currentJob());
         if (!dock.get().canAcceptJob())
             return;
-        // The "warehouse full" back-off only holds back storing: a retrieve serves a waiting player and frees space.
         // The "warehouse full" back-off holds back storing only. Retrieves serve a waiting player, and supplies take
         // items *out* of storage for a production order, so both free space rather than needing it (ADR-024).
         boolean retrieveOnly = isBackingOff(now);
+        // Gated once per dispatch, then used by both the pre-check and the planner input: the list costs a block state and
+        // up to two block entity lookups per collecting port, and building it twice threw one of them away and let the two
+        // answers disagree within one tick (M18 review). During a back-off nothing collects, so it is not built at all.
+        List<RackPosition> collectSources = retrieveOnly ? List.of() : controller.collectSources();
         if (retrieveOnly ? controller.openRequestCount() == 0 && controller.supplyNeeds().isEmpty()
-                : !hasWork(level, layout)) {
+                : !hasWork(level, layout, collectSources)) {
             if (!retrieveOnly)
                 lastReason = NoJobReason.NO_WORK;
             return;
         }
-        PlannerInput.Builder<ItemKey, RackPosition> builder = input(level, layout, dock.get()).inputCursor(inputCursor);
+        PlannerInput.Builder<ItemKey, RackPosition> builder = input(level, layout, dock.get(), collectSources)
+                .inputCursor(arrivalCursor);
+        // The back-off suppresses the whole arrival stage, collecting included (M18, issue #13): the collect branch walks
+        // the same storage candidates the back-off exists to protect, so leaving it in would repeat exactly the candidate
+        // scan that armed it.
         if (retrieveOnly)
-            builder.inputs(List.of());
+            builder.inputs(List.of()).collectSources(List.of());
         PlanResult<ItemKey, RackPosition> result;
         try {
             result = planner.plan(builder.build());
@@ -178,7 +192,7 @@ final class CraneDispatch {
             return;
         }
         if (!retrieveOnly)
-            inputCursor = result.nextInputCursor();
+            arrivalCursor = result.nextArrivalCursor();
         if (result.job().isEmpty()) {
             if (retrieveOnly)
                 return; // the back-off's planning result stays
@@ -191,6 +205,10 @@ final class CraneDispatch {
             // NoJobReason.PORT_FULL does belong here (M17): unlike a maximum it is reached only after a full candidate
             // walk with an estimate and a live simulation per candidate, which is exactly the work this back-off exists
             // to protect, and an overflow port that is full stays full until a funnel drains it.
+            // NoJobReason.COLLECT_SOURCE_EMPTY does not belong here either (M18 review), with M15's argument again: a
+            // machine that hands nothing out is answered by a map lookup and at most one live extract per item type,
+            // before any candidate is ranked — and it is the resting state of every production loop, so backing off would
+            // suspend storing from every input station of the aisle for as long as a machine is empty.
             if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
                     || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
                     || result.reasons().contains(NoJobReason.PORT_FULL))
@@ -205,6 +223,21 @@ final class CraneDispatch {
             return;
         }
         spendPortToken(job, job.target(), job.targetKind());
+        spendCollectToken(job);
+    }
+
+    /**
+     * A collect job spends the pulse token of the port it fetches <b>from</b> (M18, issue #13): a rising edge on a
+     * collecting port in pulse mode is one trip, the mirror of {@link #spendPortToken} keyed on the source instead of the
+     * target. Nothing happens for any other job type, for a continuous port (which holds no token) or for a job the crane
+     * refused.
+     * <p>
+     * It is <b>not</b> spent on a reroute: a collect reroute moves items the crane already holds towards storage or an
+     * input buffer, so no second trip is promised and no further edge is consumed.
+     */
+    private void spendCollectToken(TransportJob<ItemKey, RackPosition> job) {
+        if (job.type() == JobType.COLLECT)
+            controller.onPortSelected(job.source());
     }
 
     /**
@@ -224,8 +257,17 @@ final class CraneDispatch {
             controller.onPortSelected(target);
     }
 
-    /** Open requests, production ingredients or buffered input items exist (cheap pre-check before a planner input). */
-    private boolean hasWork(Level level, AisleLayout layout) {
+    /**
+     * Open requests, production ingredients, buffered input items or a collecting port with something in its machine
+     * exist (cheap pre-check before a planner input).
+     * <p>
+     * The collect half (M18, issue #13) is the <b>same list</b> the planner input is built from — gated once in
+     * {@link #tick} and passed in, so the world lookups it costs are paid once per dispatch — and it is asked last, after
+     * the three cheaper questions, so a warehouse with work to do never looks at it at all.
+     *
+     * @param collectSources the aisle's gated collecting ports, empty during a back-off
+     */
+    private boolean hasWork(Level level, AisleLayout layout, List<RackPosition> collectSources) {
         if (controller.openRequestCount() > 0 || !controller.supplyNeeds().isEmpty())
             return true;
         for (LocationRecord input : controller.inputStations()) {
@@ -234,11 +276,11 @@ final class CraneDispatch {
                     && station.hasBufferedItems())
                 return true;
         }
-        return false;
+        return !collectSources.isEmpty();
     }
 
     private PlannerInput.Builder<ItemKey, RackPosition> input(Level level, AisleLayout layout,
-            StackerCraneBlockEntity dock) {
+            StackerCraneBlockEntity dock, List<RackPosition> collectSources) {
         CranePose pose = dock.craneState().pose();
         long now = level.getGameTime();
         return PlannerInput.builder(controller.stockIndex(), ledgerView)
@@ -266,6 +308,12 @@ final class CraneDispatch {
                 // touching the world, which is what makes it the pre-M17 planner input literally.
                 .ports(controller.acceptingPorts())
                 .portRank(controller::portRankAt)
+                // The aisle's collecting ports, gated the same way (M18, issue #13): direction, redstone, the pulse
+                // token, both chunks, the port's own filter and "never an inventory this aisle already indexes" are applied
+                // by the controller, and the snapshots come from its throttled collect cache — so the planner never reads
+                // the world and a warehouse without a collecting port hands it an empty list without touching one.
+                .collectSources(collectSources)
+                .collectBuffers(controller::collectBuffer)
                 // A stock rule's maximum decides even earlier, per item type instead of per location: one lookup that
                 // costs nothing while no rule governs the key (M15, issue #3).
                 .storeHeadroom(controller::storeHeadroom)
@@ -297,7 +345,10 @@ final class CraneDispatch {
     private List<RackPosition> rerouteOutputs() {
         List<RackPosition> result = new ArrayList<>();
         for (LocationRecord record : controller.outputStations()) {
-            if (controller.portRankAt(record.position()) == PortSettings.REQUEST_RANK)
+            // A collecting port answers rank 0 like a requesting one (so that nothing can ever export through it), so it
+            // is excluded by direction here: it takes no deliveries at all (M18, issue #13).
+            if (controller.portRankAt(record.position()) == PortSettings.REQUEST_RANK
+                    && !controller.isCollectingPort(record.position()))
                 result.add(record.position());
         }
         return result;
@@ -444,8 +495,10 @@ final class CraneDispatch {
             return Optional.empty();
         ledger.releaseJob(job.id());
         try {
-            Optional<RerouteTarget<RackPosition>> target = planner.planReroute(input(level, layout, dock).build(),
-                    job.key(), amount, job.type(), failedTarget);
+            // No collect sources: a reroute looks for a new home for items the crane already holds and never plans a
+            // collect job, so gating the ports here would spend the world lookups of that pass on nothing (M18 review).
+            Optional<RerouteTarget<RackPosition>> target = planner.planReroute(
+                    input(level, layout, dock, List.of()).build(), job.key(), amount, job.type(), failedTarget);
             // The last resort of a store reroute may be an accepting port, and that spends its pulse token too, so a
             // single edge can never export one trip's leftovers and then a whole trip of its own (M17). The kind comes
             // from the target that was found, never from the job, which still names the target that failed.

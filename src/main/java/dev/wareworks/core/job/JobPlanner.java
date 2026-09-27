@@ -38,7 +38,15 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       ranking, same live validation — with the production station as the target and
  *       {@link NoJobReason#PRODUCTION_FULL} when it accepts nothing. It comes after the requests (a player waiting at
  *       a terminal is served first) and before storing, so ingredients move while new items are still arriving.</li>
- *   <li><b>STORE</b> otherwise, round robin over the input stations from the cursor, skipping empty buffers. Item = the
+ *   <li><b>ARRIVALS</b> otherwise: one round robin from the cursor over the input stations <b>and</b> the aisle's
+ *       collecting warehouse ports as a single virtual list ({@link PlannerInput#inputs()} ++
+ *       {@link PlannerInput#collectSources()}, M18, issue #13), so a player's request and a production order's
+ *       ingredients are always planned first and collecting can never make somebody wait, while within one full walk
+ *       every input and every gated-open collecting port gets its turn. A collect source is planned by
+ *       {@link #planCollect}: it stores what the machine behind the port hands out, honours a stock rule's maximum and is
+ *       never offered a port as its target. At most {@value #MAX_COLLECT_CANDIDATES} collect sources are examined per
+ *       run.</li>
+ *   <li><b>STORE</b> for an input station of that walk, skipping empty buffers. Item = the
  *       first non-empty slot. A stock rule's maximum is consulted first ({@link PlannerInput#storeHeadroom()}, M15):
  *       an item with no headroom left is skipped before any candidate work and reported as
  *       {@link NoJobReason#AT_MAXIMUM}, and a headroom smaller than the buffered amount bounds the planned amount, so
@@ -129,6 +137,19 @@ public final class JobPlanner<K, L> {
      * instead of exporting them, and exporting is the irreversible half.
      */
     public static final int MAX_PORT_CANDIDATES = 12;
+    /**
+     * How many <b>collecting</b> warehouse ports one run may really examine ({@link #planCollect}, M18, issue #13).
+     * <p>
+     * The same bound as {@link #MAX_PORT_CANDIDATES} and for the same enforced-not-assumed reason: a collect source costs
+     * one live {@code simulateExtract} plus a storage candidate walk, and an aisle has up to
+     * {@code maxAisleLength × maxMastHeight × 2} rack positions, so a rack wall of collecting ports could otherwise spend
+     * the whole {@link PlannerInput#liveSimulationBudget()} before a storage location or an input station is reached.
+     * <p>
+     * Sources beyond it are simply not examined <b>this run</b>; the arrival cursor moves on regardless, so the next runs
+     * reach them and nothing starves ({@link PlanResult#nextArrivalCursor()}). Dropping a collect source is the safe
+     * direction in any case: it leaves the items in the player's machine, where they already are.
+     */
+    public static final int MAX_COLLECT_CANDIDATES = 12;
     /** Capacity estimate meaning "unknown, ask the live inventory". */
     public static final long UNKNOWN_CAPACITY = Long.MAX_VALUE;
     /** Filter rank of a candidate no store filter applies to (stations, retrieve sources): neither better nor worse. */
@@ -241,8 +262,24 @@ public final class JobPlanner<K, L> {
         Budget budget = new Budget(input.liveSimulationBudget());
         Set<NoJobReason> reasons = EnumSet.noneOf(NoJobReason.class);
         List<L> inputs = input.inputs();
-        int start = inputs.isEmpty() ? 0 : Math.floorMod(input.inputCursor(), inputs.size());
+        List<L> collectSources = input.collectSources();
+        // One round robin over both kinds of arrival (M18, issue #13): the input stations, then the collecting ports. A
+        // separate stage after storing would starve collecting for as long as any input is permanently non-empty — which
+        // is exactly the production loop collecting exists for (a belt keeps feeding the input while the machine's result
+        // chest fills). The accepted consequence is that an input can be delayed by one trip behind a collecting port,
+        // which is precisely how two input stations already treat each other.
+        int arrivals = inputs.size() + collectSources.size();
+        int start = arrivals == 0 ? 0 : Math.floorMod(input.inputCursor(), arrivals);
         boolean work = false;
+        int collectsExamined = 0;
+        /**
+         * The first collect source this run did not examine because {@link #MAX_COLLECT_CANDIDATES} was reached, or -1.
+         * Once it is set it becomes the cursor of <b>every</b> return of the arrival walk — the empty one and the ones
+         * that found a job — because a run leaving its own cursor there would make the run after it examine the same
+         * sources again and never reach the ones beyond the cap. This is what makes "the cap drops a source for one run,
+         * not for ever" true, also next to an input station that plans a job on every single run.
+         */
+        int cappedCursor = -1;
 
         for (PlannerInput.OpenRequest<K, L> request : input.requests()) {
             long need = request.remaining() - Math.max(0L, input.reservations().committedToRequest(request.id()));
@@ -272,8 +309,39 @@ public final class JobPlanner<K, L> {
             }
         }
 
-        for (int i = 0; i < inputs.size(); i++) {
-            int index = (start + i) % inputs.size();
+        for (int i = 0; i < arrivals; i++) {
+            int index = (start + i) % arrivals;
+            // Where the next run starts, whatever this one returns: the first source the cap dropped if there was one,
+            // otherwise the arrival after this one. Honoured on *every* return of this walk, not only on the empty one —
+            // a run that hit the cap among the collect sources and then wrapped round to an input station that produced
+            // the job is exactly the run in which the skipped sources need it, and leaving the input's own cursor there
+            // would make the next run examine the same leading MAX_COLLECT_CANDIDATES sources again, for ever.
+            int next = cappedCursor >= 0 ? cappedCursor : (index + 1) % arrivals;
+            if (index >= inputs.size()) {
+                L source = collectSources.get(index - inputs.size());
+                // Beyond the cap the source is not examined this run; the cursor is left here instead, so the next run
+                // starts at the first source this one skipped (MAX_COLLECT_CANDIDATES).
+                if (collectsExamined >= MAX_COLLECT_CANDIDATES) {
+                    if (cappedCursor < 0)
+                        cappedCursor = index;
+                    continue;
+                }
+                if (!input.available().test(source))
+                    continue;
+                InventorySnapshot<K> held = input.collectBuffers().apply(source);
+                if (held == null || held.isEmpty())
+                    continue;
+                work = true;
+                collectsExamined++;
+                Optional<PlannedJob<K, L>> job = planCollect(input, source, held, budget, reasons);
+                if (job.isPresent())
+                    return new PlanResult<>(job, reasons, next);
+                if (budget.exhausted) {
+                    reasons.add(NoJobReason.BUDGET_EXHAUSTED);
+                    return new PlanResult<>(Optional.empty(), reasons, next);
+                }
+                continue;
+            }
             L station = inputs.get(index);
             if (!input.available().test(station))
                 continue;
@@ -281,7 +349,6 @@ public final class JobPlanner<K, L> {
             if (buffer == null || buffer.isEmpty())
                 continue;
             work = true;
-            int next = (index + 1) % inputs.size();
             RackPosition stationPos = position(station);
             long toStation = TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), stationPos.x(),
                     stationPos.y());
@@ -326,7 +393,7 @@ public final class JobPlanner<K, L> {
         }
         if (!work)
             reasons.add(NoJobReason.NO_WORK);
-        return new PlanResult<>(Optional.empty(), reasons, start);
+        return new PlanResult<>(Optional.empty(), reasons, cappedCursor < 0 ? start : cappedCursor);
     }
 
     /**
@@ -337,7 +404,7 @@ public final class JobPlanner<K, L> {
      * @return the best target that accepts at least one item in the live simulation, or empty (hold the items); at most
      * three times {@link PlannerInput#liveSimulationBudget()} live calls for a {@code STORE} reroute (storage, then the
      * input stations, then the accepting ports), twice for a {@code RETRIEVE} one (storage, then the output stations) and
-     * once for a {@code SUPPLY} one (storage alone)
+     * for a {@code COLLECT} one (storage, then the input stations), and once for a {@code SUPPLY} one (storage alone)
      * @throws IllegalArgumentException if {@code amount < 1}
      */
     public Optional<RerouteTarget<L>> planReroute(PlannerInput<K, L> input, K key, int amount, JobType type,
@@ -381,6 +448,16 @@ public final class JobPlanner<K, L> {
             // the mod never quietly feeds a shredder with items somebody requested.
             case SUPPLY -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, true, null)
                     .map(Selection::target);
+            // Collected items are storing items (M18, issue #13), so a rejecting filter drops the location as in the
+            // store plan, and the fallback is an input buffer — from where they are stored normally. A port is
+            // deliberately <b>not</b> the last resort here, unlike a store reroute: JobType.COLLECT does not allow an
+            // OUTPUT target at all, which is what keeps a diversion from defeating the headroom that stopped the
+            // collecting in the first place (§5, guard 2). The station fallback gets its own budget, so storage
+            // candidates that used it up never hide an input that accepts the items.
+            case COLLECT -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, false, null)
+                    .map(Selection::target)
+                    .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
+                            new Budget(input.liveSimulationBudget())).map(Selection::target));
         };
     }
 
@@ -457,6 +534,89 @@ public final class JobPlanner<K, L> {
             }
         }
         reasons.add(NoJobReason.NOT_IN_STOCK);
+        return Optional.empty();
+    }
+
+    // --- collect (M18, issue #13) --------------------------------------------------------------------------------
+
+    /**
+     * One collecting warehouse port ({@code docs/warehouse-system.md} §3.2.4, M18, issue #13): fetch items out of the
+     * inventory behind {@code source} and store them, the mirror image of the store branch with the port in the input
+     * station's place.
+     * <p>
+     * What it does <b>not</b> do, and why each is the loop answer of §5 made structural:
+     * <ul>
+     * <li>it never offers a <b>port</b> as the target — only {@link #selectStorage} is called, so a diversion, which
+     * ignores the headroom, can never receive a collected item (and {@link JobType#COLLECT} would refuse the job anyway);
+     * </li>
+     * <li>it <b>honours {@link PlannerInput#storeHeadroom()}</b>, and a key with no headroom left yields no job at all.
+     * That is the exact opposite of an accepting port, which deliberately ignores it, and the asymmetry is the point: a
+     * maximum is what makes an overflow necessary and what makes collecting stop, so the two preconditions of the churn
+     * loop are mutually exclusive;</li>
+     * <li>it reserves nothing at the source: a foreign inventory is not indexed stock, so two aisles sharing a rack plane
+     * may both plan against the same chest and the real extract decides (§8).</li>
+     * </ul>
+     * Why it got no job is answered by {@link StoreSurvey#collectReason()} rather than {@link StoreSurvey#reason()}: a
+     * machine that hands out nothing is not a full warehouse, and reporting one would both mislead and arm the aisle's
+     * back-off against every input station (M18 review).
+     * <p>
+     * The port's own <b>filter is hard</b> and answered by the same {@code storeFilter} a storage location's is, so a
+     * rejecting key is dropped before any live call. Keys are tried in the cached snapshot's order and fall through to
+     * the next key and then to the next source, so one unstorable item never blocks a collecting port — the store
+     * branch's refinement, extended.
+     *
+     * @param held the controller's <b>cached</b> snapshot of the attached inventory; the live extract bounds the amount
+     *             and the real pick stays authoritative
+     */
+    private Optional<PlannedJob<K, L>> planCollect(PlannerInput<K, L> input, L source, InventorySnapshot<K> held,
+            Budget budget, Set<NoJobReason> reasons) {
+        RackPosition sourcePos = position(source);
+        long toSource = TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), sourcePos.x(),
+                sourcePos.y());
+        StoreSurvey survey = new StoreSurvey();
+        for (K key : held.keys()) {
+            // The port's filter first: cheapest test, and a rejected key must not cost a live call (ADR-021). It is
+            // noted, because a survey with no flag at all answers "warehouse full" — which is neither true nor harmless
+            // here: it is the one reason that arms the aisle's back-off (M18 review).
+            FilterMatch filter = Objects.requireNonNull(input.storeFilter().apply(source, key), "storeFilter result");
+            if (!filter.allowsStoring()) {
+                survey.collectNothingToFetch = true;
+                continue;
+            }
+            // Then a stock rule's maximum, per item type and before any candidate work (M15): a key at its maximum is
+            // not collected at all, which is guard 1 of the churn loop.
+            long headroom = input.storeHeadroom().applyAsLong(key);
+            if (headroom <= 0) {
+                survey.atMaximum = true;
+                continue;
+            }
+            int limit = limit(Math.min(held.count(key), headroom), input.carryLimit().applyAsInt(key));
+            if (limit < 1) {
+                survey.collectNothingToFetch = true;
+                continue;
+            }
+            if (!budget.tryUse())
+                return Optional.empty();
+            // What the machine really hands out right now. A stale snapshot therefore costs one simulation rather than a
+            // wasted trip; the real pick still decides, and a zero pick aborts cleanly (§2). Nothing handed out is noted
+            // as such and never as a full warehouse: no storage candidate was even looked at yet (M18 review).
+            int extractable = input.liveExtract().simulateExtract(source, key, limit);
+            if (extractable < 1) {
+                survey.collectNothingToFetch = true;
+                continue;
+            }
+            Optional<Selection<L>> selection = selectStorage(input, key, Math.min(limit, extractable), null,
+                    sourcePos.x(), sourcePos.y(), toSource, budget, false, survey);
+            if (selection.isPresent()) {
+                L target = selection.get().location();
+                TransportJob<K, L> job = TransportJob.collect(newId(), source, target, key,
+                        selection.get().amount());
+                return Optional.of(new PlannedJob<>(job, tripTicks(input, source, target)));
+            }
+            if (budget.exhausted)
+                return Optional.empty();
+        }
+        reasons.add(survey.collectReason());
         return Optional.empty();
     }
 
@@ -782,6 +942,14 @@ public final class JobPlanner<K, L> {
         private boolean atMaximum;
         /** At least one location was skipped for another reason (unavailable, known refusal, no estimated room). */
         private boolean otherSkip;
+        /**
+         * Collect only (M18, issue #13): at least one item type in the machine behind a collecting port was skipped
+         * before any storage candidate was looked at — the port's own filter rejects it, or the live extract handed
+         * nothing out. Set at the skip sites in {@link #planCollect}, like {@link #atMaximum} and for the same reason:
+         * such a key ranks nothing at all, so a survey without it would answer "the warehouse is full" about a machine
+         * that simply has nothing ready.
+         */
+        private boolean collectNothingToFetch;
 
         /**
          * Only a run in which <b>every</b> skip was a full port, a maximum or a filter mismatch reports one of those,
@@ -797,6 +965,32 @@ public final class JobPlanner<K, L> {
             if (atMaximum)
                 return NoJobReason.AT_MAXIMUM;
             return filterRejected ? NoJobReason.NO_MATCHING_FILTER : NoJobReason.WAREHOUSE_FULL;
+        }
+
+        /**
+         * The same ladder for a <b>collect</b> run (M18, issue #13), with the two ends different because a collecting
+         * port is not an input station:
+         * <ul>
+         * <li>{@link NoJobReason#PORT_FULL} cannot happen — {@link #planCollect} only ever ranks storage locations, so
+         * no port enters the ranking and a collected item can never be handed back out (the loop answer);</li>
+         * <li>the <b>default</b> is {@link NoJobReason#COLLECT_SOURCE_EMPTY} instead of
+         * {@link NoJobReason#WAREHOUSE_FULL}. A machine that hands out nothing is the resting state of every production
+         * loop, and answering "the warehouse is full" about it would be wrong on the goggles <b>and</b> expensive: it is
+         * the reason that arms the aisle's {@code fullBackoffTicks} back-off, which would then suspend storing from
+         * every input station of the aisle for as long as the machine stays empty.</li>
+         * </ul>
+         * A genuinely full warehouse, a storage filter that accepts none of the collected items and a stock rule's
+         * maximum are reported exactly as they are for an input station: those are answers about the warehouse, and the
+         * items really did reach its candidates.
+         */
+        NoJobReason collectReason() {
+            if (storageRanked || otherSkip)
+                return NoJobReason.WAREHOUSE_FULL;
+            if (atMaximum)
+                return NoJobReason.AT_MAXIMUM;
+            if (filterRejected)
+                return NoJobReason.NO_MATCHING_FILTER;
+            return NoJobReason.COLLECT_SOURCE_EMPTY;
         }
     }
 
