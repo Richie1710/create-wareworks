@@ -1252,3 +1252,117 @@ needs a server restart or a `/reload` to be re-read.
     Finally let the machine run empty, leave, and start it again from a distance (a redstone clock, a timer): the aisle
     must **not** notice. It cannot, and the docs say so. If you ever see it fetch from a machine it could not have read,
     something polls an unloaded chunk and that is a defect.
+
+## W. Recursive production (M20)
+
+Setup for this whole section: one aisle with a **terminal**, two **warehouse production stations** each with a machine of
+the player's behind it — a **Mechanical Saw** with its recipe filter set to Oak Planks, and a **Mechanical Crafter** group
+— both feeding a **warehouse input**, and a Mechanical Arm or a funnel carrying items from each station into its machine.
+Pattern at the saw's station: `1 Oak Log → 4 Oak Planks`. Pattern at the crafter's station: `4 Oak Planks → 1 Oak Button`
+(any two-step chain of your own does as well). Put **only logs** into the warehouse. Goggles in a slot for every check
+below.
+
+141. **A chain is followable, which is the whole question.** Order the **button** at the terminal. It must be accepted
+    ("Requested Oak Button x4, producing 4"), and the order section must then show **one line**, not two: the ordered item
+    on the left, a gold **"2 steps"** badge, and on the right "now: Oak Planks" in blue while the saw's step is the one
+    working. Watch it through: when the planks have been stored and the crafter's step starts, the right half must change
+    to the item the chain is now waiting for.
+
+    Judge it as a player, not as a tester: **can you tell what the warehouse is doing from that one line, at a glance?**
+    Then check it at **GUI scale 1 and 4** and with a long item name (a named shulker box, an enchanted book). The item
+    name is trimmed first and keeps a floor; the state gives way. Nothing may be cut so far that you cannot tell which
+    order the line is about, and nothing may run into the red `x`.
+
+142. **The step panel, and the machine it sends you to.** Click the line (anywhere but the `x`). A panel must open over the
+    grid with one row per step, indented by depth, each naming a **rack address** and the step's own state — e.g.
+    `A-01-08R: Oak Button x4 - waiting for an earlier step` above `  A-01-05R: Oak Planks x4 - waiting for ingredients`.
+    The row that is actually working is aqua.
+
+    Now **walk to the address the panel names** and check that the station standing there really is the one holding that
+    step's pattern. That is what the whole panel exists for; if the address sends you to the wrong block, nothing else in
+    this section matters. Then press **Escape**: the panel must close and the terminal must stay open. Open it again and
+    press **Close**: the same. Click the grid behind the panel while it is up: nothing may happen.
+
+143. **Giving up on a chain says what it costs — and the numbers have to be the truth.** Order the button again and let
+    the crane deliver the logs to the saw, but **before** the planks come back open the step panel. The saw's step now has
+    its batch while the order above it has nothing, and that is the state to judge: the panel must say "Steps that would
+    end: **1**", not 2, and it must name **no** loss — because giving up leaves that step running and its planks still
+    come back. Click **"Give up on the chain"**, then watch: exactly one order may end, the planks must arrive in a rack a
+    moment later, and the ingredients at the saw must never have been touched. If the panel said 2, or named the saw's
+    logs as lost, that is the defect this check exists for.
+
+    Now do it one level further on, with the planks already **at the crafter**: the panel must name those planks as
+    "Ingredients already delivered" and add a **third** line, that the warehouse will stop making Oak Button until you
+    resume it at the machine. Give up, and check that sentence was true — ordering a button again must be refused, and
+    only a resume at the station may bring it back. A cost line that promises a stop and then does not arm one, or arms
+    one it never mentioned, is worse than no line at all.
+
+    Then repeat it *before* the crane has picked anything up: the panel must say every step ends, name no loss and no
+    stop, and the crane must turn around rather than finish the trip.
+
+    While a panel is open, look at the **grid behind it**: no item and no amount from a cell may be readable through the
+    panel's text, at any GUI scale. Resize the window with the panel up (or change the GUI scale): the panel must move
+    with the window and stay clickable where it is drawn.
+
+144. **The refusal names the item, and you can read it.** Empty the warehouse completely and order the **button**. The
+    status line must name the item that is really missing — "Oak Log is missing" and **not** "not in stock" about the
+    button. Read it at **GUI scale 1 and 4** and with the longest item name you can find: the item's name is the part that
+    gets trimmed, so judge whether the sentence is still useful when it is. Then try the other refusals a player can
+    reach by hand: a pattern pair that is the inverse of another ("The chain loops at …"), a stock keeper maximum of 64 on
+    the planks ("No room for Oak Planks"), and `maxProductionPlanSteps = 1` in the server config, which must bring back
+    exactly the pre-M20 answer.
+
+145. **A pause is noticeable at the machine, which is the point.** Order the button, let the crane deliver the logs to the
+    saw, then **break the saw's shaft** so nothing comes back, and wait out `productionOrderTimeoutTicks` (5 minutes by
+    default; lower it in the config if you prefer). Then:
+    * the saw's **production station** must show a lit **rose-quartz ring** around its openings. Judge this the way check
+      106 asks about the keeper's lamp: **in the dark**, from the far end of the aisle, and — if you can — with a
+      colour-blind filter. Put it next to a station that is *not* stopped and see whether you would notice the difference
+      without being told;
+    * its **goggles** must read "Stopped products: 1", "Ingredient items not recovered: N" and "Sneak-click the station to
+      make them again";
+    * the **controller's** goggles and an **aisle display** must both say "Stopped products: 1" — including on an aisle with
+      **no stock keeper at all**, which is the normal case for an intermediate;
+    * ordering the button again must be refused with "Making Oak Button is stopped" rather than "not in stock".
+
+146. **Both ways back, and what they tell you.** Repair the machine. Then lift the stop twice, once each way:
+    * **Sneak-right-click with an empty hand** on the station. The chat must say "The warehouse makes Oak Button again"
+      and, when a batch was really lost, "… %N ingredient items were delivered and never came back" — check that
+      wording against the station's own buffer: items still lying in the buffer are part of that number and you can take
+      them out by hand, which is why the line does not claim they are inside the machine. Sneak-click a station that has
+      nothing stopped: it must say so instead of staying silent. Do the sneak-click **once with a shield (or a torch) in
+      your offhand** as well: it must work exactly the same, which is the case vanilla drops before the block reaches it;
+    * with `productionBufferSlots` set to **27** (server config, a fresh world or a restart), open that station's screen
+      again: the window has no order line at all in that configuration, so the red row must take the **buffer's label
+      row** instead — it must still be there, still red and still clickable, and the tooltip of the stopped product's
+      **pattern tab** must name the sneak-click. A screen that states the problem and offers no way out of it is the
+      defect this check exists for;
+    * open the station's **screen**. Its first order line must be a **red** "Stopped: …. Click to make it again", the
+      **pattern tab** of the stopped product must be tinted red, and the tooltip must name the item, why it stopped and
+      what it cost. Click the red row with a real mouse: the same chat line, the row gone, the tab back to normal, and the
+      lamp on the block out.
+
+    Then check the lamp cannot outlive its warehouse: with a station lit, **break the controller**. The ring must go dark
+    in the same tick. Break the station instead and place it again: it must come back dark until the controller lights it.
+    Finally the case a save can hide: with a station lit, **quit to the title screen, rejoin**, and lift the stop at the
+    **stock keeper** (or delete the rule) rather than at the station — within one rule pass the ring must go out. Then
+    `/setblock` a station's `stopped` to `true` by hand: the next pass after a rejoin must put it out again.
+
+147. **A redstone port may start a chain, but only one.** Set a warehouse output's filter to the button, wire it to a
+    **redstone clock** and let it pulse for a minute with only logs in the racks. Exactly **one** chain may be open at a
+    time: the controller's goggles must never show more production orders than one chain's worth plus what you started by
+    hand, and the port's goggles must read "too many production orders are running; wait for one or give one up" for the
+    pulses it refuses. If you ever see a second chain start while the first one is still working, that is the defect this
+    guard exists for.
+
+148. **German, everywhere this feature speaks.** Restart with a German client and read every surface of this section
+    again: the chain line and its badge, the step panel with its two buttons and its cost lines, all eight refusal
+    sentences, "wartet auf einen früheren Schritt", the station's stopped row and its tooltip, the resume message with and
+    without a loss, the goggle lines on station and controller, the display board line, the Shift tooltips of the
+    production station (now six sections, the longest in the mod) and of the terminal, and the new Ponder scene
+    (`/ponder wareworks:warehouse_production`, paged to its third scene, then the same on the terminal). Nothing may show
+    a raw key, run out of its box or be cut off, at **GUI scale 1 and 4**.
+
+    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders, and that
+    every refusal sentence names its item and fits the status row — nothing about how any of it looks. The screenshot runs
+    render English only, and the harness drives every click through a screen's own API rather than with a real mouse.

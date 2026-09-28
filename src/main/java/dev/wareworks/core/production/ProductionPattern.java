@@ -130,6 +130,23 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
     }
 
     /**
+     * How many whole runs of this pattern fit into {@code room} result items — what a maximum leaves space for
+     * ({@code StockRule#headroom}), rounded <b>down</b>, because a pattern cannot be cut in half.
+     * <p>
+     * It is the shared form of one rule used in two places: an automatic restock order never overshoots its rule's own
+     * maximum ({@code RestockPlanner}, M15 review fix), and a step of a production plan is refused when its product
+     * would not fit under the maximum of the intermediate it makes ({@link PlanRefusal#NO_ROOM}, M20). Two
+     * implementations of it would be two answers to the same question.
+     *
+     * @param room result items there is space for; 0 or less fits no run at all
+     */
+    public int runsWithin(long room) {
+        if (room <= 0L)
+            return 0;
+        return (int) Math.min(Integer.MAX_VALUE, room / result.count());
+    }
+
+    /**
      * What {@code runs} runs are expected to yield, saturating at {@link Integer#MAX_VALUE}.
      * <p>
      * There is deliberately no counterpart that returns the ingredient <b>totals</b> as {@link ProductionEntry}s: an

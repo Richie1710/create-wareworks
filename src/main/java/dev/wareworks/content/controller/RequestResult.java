@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.production.PlanRefusal;
 import net.minecraft.core.BlockPos;
 
 /**
@@ -22,12 +23,24 @@ import net.minecraft.core.BlockPos;
  * @param merged    whether the items grew an open request instead of queueing a new one
  * @param producing items of {@link #granted()} that are not in stock but are being produced for this request by a
  *                  production order ({@code docs/warehouse-system.md} §3.5); 0 when everything came from stock
+ * @param refusal   why the <b>chain</b> that would have made the item could not be planned (M20, issue #4, ADR-032),
+ *                  empty when production was never the answer. It is the precise reason behind the coarse
+ *                  {@link #rejection()} a station's goggles remember — {@link RequestRejection#NOT_IN_STOCK} is the
+ *                  same sentence for an ingredient nobody has and for a chain that comes back to itself. An
+ *                  <b>accepted</b> result carries it too when the racks served only part of the click and the rest could
+ *                  not be made, which is the commonest way a player meets it at all
+ * @param about     the item the {@link #refusal()} is about, which is regularly <b>not</b> the item that was asked for:
+ *                  ordering a chest can be refused because three oak logs are missing. This is what makes a refusal
+ *                  actionable, and it is empty exactly when {@link #refusal()} is
  */
 public record RequestResult(Optional<RetrievalRequest<ItemKey, BlockPos>> request,
-                            Optional<RequestRejection> rejection, int granted, boolean merged, int producing) {
+                            Optional<RequestRejection> rejection, int granted, boolean merged, int producing,
+                            Optional<PlanRefusal> refusal, Optional<ItemKey> about) {
     public RequestResult {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(rejection, "rejection");
+        Objects.requireNonNull(refusal, "refusal");
+        Objects.requireNonNull(about, "about");
         if (request.isPresent() == rejection.isPresent())
             throw new IllegalArgumentException("exactly one of request and rejection must be present");
         if (request.isPresent() ? granted < 1 : granted != 0)
@@ -37,6 +50,8 @@ public record RequestResult(Optional<RetrievalRequest<ItemKey, BlockPos>> reques
         producing = Math.max(0, producing);
         if (producing > 0 && request.isEmpty())
             throw new IllegalArgumentException("a refused request produces nothing");
+        if (refusal.isPresent() != about.isPresent())
+            throw new IllegalArgumentException("a plan refusal always names the item it is about: " + refusal);
     }
 
     public static RequestResult accepted(RetrievalRequest<ItemKey, BlockPos> request, int granted, boolean merged) {
@@ -51,12 +66,41 @@ public record RequestResult(Optional<RetrievalRequest<ItemKey, BlockPos>> reques
     public static RequestResult accepted(RetrievalRequest<ItemKey, BlockPos> request, int granted, boolean merged,
             int producing) {
         return new RequestResult(Optional.of(Objects.requireNonNull(request, "request")), Optional.empty(), granted,
-                merged, producing);
+                merged, producing, Optional.empty(), Optional.empty());
+    }
+
+    /**
+     * An accepted request that got <b>less than it asked for</b>, with the plan refusal that says why the rest could not
+     * be made and the item it is about (M20 review fix).
+     * <p>
+     * This is the common shape of the click the feature is judged by, not an edge case: a player asking for a stack of
+     * something the aisle holds three of is served those three, and the sentence that explains the other 61 — "Oak Log is
+     * missing" — is computed in the very same tick. Carrying it on the accepted result is what keeps it from being
+     * thrown away, because {@link #rejected(RequestRejection, PlanRefusal, ItemKey)} only ever answers a click that got
+     * <i>nothing</i>.
+     */
+    public static RequestResult accepted(RetrievalRequest<ItemKey, BlockPos> request, int granted, boolean merged,
+            int producing, Optional<PlanRefusal> refusal, Optional<ItemKey> about) {
+        Objects.requireNonNull(refusal, "refusal");
+        Objects.requireNonNull(about, "about");
+        boolean both = refusal.isPresent() && about.isPresent();
+        return new RequestResult(Optional.of(Objects.requireNonNull(request, "request")), Optional.empty(), granted,
+                merged, producing, both ? refusal : Optional.empty(), both ? about : Optional.empty());
     }
 
     public static RequestResult rejected(RequestRejection rejection) {
         return new RequestResult(Optional.empty(), Optional.of(Objects.requireNonNull(rejection, "rejection")), 0,
-                false, 0);
+                false, 0, Optional.empty(), Optional.empty());
+    }
+
+    /**
+     * A refusal that also carries the <b>plan refusal</b> behind it and the item it is about (M20, ADR-032): the answer
+     * to a click on something the warehouse would have had to make, whose chain could not be planned.
+     */
+    public static RequestResult rejected(RequestRejection rejection, PlanRefusal refusal, ItemKey about) {
+        return new RequestResult(Optional.empty(), Optional.of(Objects.requireNonNull(rejection, "rejection")), 0,
+                false, 0, Optional.of(Objects.requireNonNull(refusal, "refusal")),
+                Optional.of(Objects.requireNonNull(about, "about")));
     }
 
     public boolean isAccepted() {

@@ -40,8 +40,10 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_input</td><td>warehouse/storing</td></tr>
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting,
  *       warehouse/port_collecting</td></tr>
- *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting</td></tr>
- *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting</td></tr>
+ *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting,
+ *       warehouse/production_chain</td></tr>
+ *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
+ *       warehouse/production_chain</td></tr>
  *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
  *       warehouse/port_accepting</td></tr>
  * </table>
@@ -112,6 +114,14 @@ public final class WareworksPonderScenes {
         // that block's story needs, and a player who read warehouse/production has to find this one.
         scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT, WareworksBlocks.WAREHOUSE_PRODUCTION)
                 .addStoryBoard("warehouse/port_collecting", PortScenes::collecting,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // Recursive production (M20, issue #4, ADR-032), and registered last for the same reason as the port scenes: it
+        // is the answer that follows warehouse/production and warehouse/requesting, not the first thing either block
+        // should show. It belongs to <b>both</b> — the chain is planned by a click at a terminal and run at the
+        // stations — so a player who met one half finds the other.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_PRODUCTION, WareworksBlocks.WAREHOUSE_TERMINAL)
+                .addStoryBoard("warehouse/production_chain", ProductionScenes::chain,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

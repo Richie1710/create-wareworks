@@ -1,18 +1,33 @@
 {
   "variants": {
-    "facing=east": {
+    "facing=east,stopped=false": {
       "model": "wareworks:block/warehouse_production/block",
       "y": 90
     },
-    "facing=north": {
+    "facing=east,stopped=true": {
+      "model": "wareworks:block/warehouse_production/block_stopped",
+      "y": 90
+    },
+    "facing=north,stopped=false": {
       "model": "wareworks:block/warehouse_production/block"
     },
-    "facing=south": {
+    "facing=north,stopped=true": {
+      "model": "wareworks:block/warehouse_production/block_stopped"
+    },
+    "facing=south,stopped=false": {
       "model": "wareworks:block/warehouse_production/block",
       "y": 180
     },
-    "facing=west": {
+    "facing=south,stopped=true": {
+      "model": "wareworks:block/warehouse_production/block_stopped",
+      "y": 180
+    },
+    "facing=west,stopped=false": {
       "model": "wareworks:block/warehouse_production/block",
+      "y": 270
+    },
+    "facing=west,stopped=true": {
+      "model": "wareworks:block/warehouse_production/block_stopped",
       "y": 270
     }
   }

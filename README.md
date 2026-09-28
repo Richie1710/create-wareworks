@@ -54,8 +54,9 @@ can watch it happen.
 * **Warehouse Terminal**: a searchable screen showing the aisle's whole stock; click an item and the crane delivers it
   into the terminal.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
-  machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Wareworks
-  never crafts anything itself.
+  machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
+  something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
+  at your own machines. Wareworks never crafts anything itself.
 * **Warehouse Stock Keeper**: holds the warehouse's stock rules — one item per row plus a **minimum**, a **maximum** and
   a **reserve**. It holds no items itself; a row's item is only a name, and nothing you click into it is used up.
 
@@ -128,7 +129,8 @@ filters, the terminal and the production station have their own scenes (placing 
 from the warehouse), the output has three more for its port directions — requesting, accepting and collecting, the last
 of which the production station shows as well, because it is how a machine's result comes home — and the stock keeper
 has three (what each of its three numbers governs, a warehouse that restocks itself, and the overflow a maximum makes
-necessary).
+necessary). A fourteenth scene, **Chains of Production Orders**, shows a whole chain being ordered and run, and belongs to
+the terminal and the production station alike, because a chain is planned by a click at one and run at the other.
 
 ## Requesting items
 
@@ -141,6 +143,8 @@ never onto the port. Right-click with an empty hand to open it.
   available. Holding **Alt** skips the confirmation a stock rule would ask for (see **Stock rules**), and combines with
   either of the other two.
 * Repeated clicks on the same item are merged into one request and one crane trip.
+* An item whose **ingredients have to be made first** is ordered as a whole chain; it appears as one line with the step
+  that is working, and a click on that line lists every step with the address of its machine (see **Production**).
 * Delivered items land in the terminal's own slots. Take them by hand, or let a funnel, chute or Mechanical Arm pull
   them onward.
 
@@ -234,6 +238,37 @@ machine does the work, and the product comes back through an ordinary warehouse 
 state ("waiting for ingredients", "at the machine", "waiting for the result", "complete") and lets you cancel it.
 Ingredients that already went into a machine are not recovered.
 
+**And if the ingredients themselves have to be made first, that works too.** Order a button when the warehouse holds
+nothing but logs: at the moment you click, the warehouse looks at the patterns your stations hold and works out the whole
+chain — planks from logs at your saw, the button from those planks at your crafter — and then either creates **every step
+at once** or refuses the click and tells you the item that is really missing ("Oak Log is missing"). Nothing moves until
+the whole chain is possible, so the crane never starts carrying logs for something it could not have finished.
+
+* **Every step is an ordinary order at one of your machines, and every intermediate travels through a real rack.** The
+  crane brings the logs to your saw, the planks come back through a warehouse input and are **stored**, and the crane then
+  fetches those very planks to the next machine. There is no machine-to-machine shortcut and nothing is held invisibly.
+  Wareworks still orders; your machines still make everything.
+* **A step that is waiting for an earlier step is handed nothing at all.** A machine cannot run on half a set, so a chain
+  that goes wrong does not leave part-sets of ingredients sitting in three machines.
+* **The terminal shows a chain as one line**, with the step that is actually working named on the right ("now: Oak
+  Planks"). Click the line and you get every step with its state and the **rack address of the machine it runs at**, so
+  you know which block to walk to — and one button gives the whole chain up, after telling you what that costs.
+* **How long a chain may be is up to you, not to a depth setting.** Two server settings bound it instead:
+  `maxProductionPlanSteps` (how many orders one click may create — **1 switches chains off entirely**) and
+  `maxPlanIngredientItems` (how many ingredient items one click may put into your machines, over every step). A click that
+  is too large is made **smaller** rather than refused. A chain that would come back to an item it has already made — two
+  patterns that are inverses of each other — is refused before anything is converted.
+* **A redstone request can start a chain too**, one at a time per output, so a clock cannot stack chains into the same
+  machines while the first one is still working.
+
+**If a machine eats a batch, the warehouse stops making that item — and says so where the machine is.** This now covers
+every kind of order: your own click, a redstone request, a step of a chain and the warehouse's own restocking. The station
+in front of the machine lights a red ring around its openings, its goggles and its screen name the item and what the loss
+cost, the controller and an aisle display count it, and ordering it again is refused with "the warehouse has stopped making
+it" instead of "not in stock". Check the machine, then **sneak-right-click the station** or click the red row in its
+screen, and it makes the item again — and you are told how many ingredients were delivered and never came back. It
+never retries by itself.
+
 | | |
 |---|---|
 | ![The sawmill loop](docs/screenshots/showcase-sawmill.png) | ![The mechanical crafter loop](docs/screenshots/showcase-crafters.png) |
@@ -251,6 +286,11 @@ Practical notes:
   recipe, so an unfiltered saw makes the wrong item most of the time.
 * **Wareworks does not check patterns against recipes.** A pattern whose machine cannot make the result never produces
   anything, and the order times out.
+* **A step is completed by items really arriving in the warehouse.** Putting the intermediate into a rack by hand does not
+  finish a step — that is what keeps the safety stop honest — so let the chain run, or cancel it and order the parts
+  separately.
+* **"Can be made now" only ever counts one level.** An item that only a chain can make is offered without a number; the
+  click then plans the chain exactly and names the item in the way if it cannot.
 
 ## Stock rules
 
@@ -278,11 +318,15 @@ The three numbers do three different things:
   going below the reserve.
 
 **If a machine eats a batch, the warehouse stops.** Ingredients that have gone into one of your machines cannot be
-recovered. So the first time an automatic order ends with the ingredients delivered and nothing coming back — a broken
-machine, an unpowered one, a pattern that machine cannot make — that rule **stops ordering** and waits for you: a
-differently coloured lamp on the keeper, a paused line in its goggles, on the controller and on an aisle display, and the
-row in its screen tells you what the loss cost. Check the machine, then click the row's mark (or simply edit the rule
-again) and it orders once more. It never retries by itself, because it cannot tell a fixed machine from a broken one.
+recovered. So the first time an order ends with the ingredients delivered and nothing coming back — a broken
+machine, an unpowered one, a pattern that machine cannot make — the warehouse **stops making that item** and waits for
+you: a differently coloured lamp on the keeper, a red ring on the production station in front of the machine, a stopped
+line in the goggles of both, on the controller and on an aisle display, and the row in either screen tells you what the
+loss cost. Check the machine, then click the keeper row's mark (or simply edit the rule again), or sneak-right-click the
+production station, and it makes the item once more. It never retries by itself, because it cannot tell a fixed machine
+from a broken one. The stop covers **every** kind of order — your own click and a redstone request as well as the
+warehouse's own restocking — and it blocks planning too, so the next click cannot quietly rebuild the same chain into the
+same broken machine.
 
 **The terminal asks before one of your own clicks crosses a line you drew.** A click that reaches into a reserve, spends
 a reserved item as the **ingredient** of something the warehouse has to make for you, or would leave more in the racks

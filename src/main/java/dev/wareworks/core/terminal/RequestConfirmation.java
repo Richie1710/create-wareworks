@@ -1,7 +1,9 @@
 package dev.wareworks.core.terminal;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.ToLongFunction;
@@ -98,8 +100,11 @@ public record RequestConfirmation<K>(K key, long amount, long fromReserve, long 
      * <p>
      * The caller measures, this method decides. {@code pattern} and {@code runs} are deliberately handed in rather
      * than chosen here: they must be the pattern and the run count the <b>order itself</b> would use, so that the
-     * question names the very ingredients that would be spent ({@code WarehouseControllerBlockEntity#startProductionOrder}
-     * picks them, and the same pair goes into both).
+     * question names the very ingredients that would be spent ({@code WarehouseControllerBlockEntity#startProductionPlan}
+     * creates them, and the same numbers go into both).
+     * <p>
+     * This is the single-level form and the whole answer before M20: one pattern, one run count. A chain is measured
+     * with {@link #ofPlan} instead, over every item the whole plan really takes out of the racks.
      *
      * @param rules                  the aisle's rules; only a governing rule is ever consulted
      * @param key                    the requested item
@@ -117,17 +122,45 @@ public record RequestConfirmation<K>(K key, long amount, long fromReserve, long 
     public static <K> RequestConfirmation<K> of(StockRules<K> rules, K key, long wanted, StockLevels levels,
             Optional<? extends ProductionPattern<K>> pattern, long runs,
             ToLongFunction<? super K> ingredientAvailability) {
+        Objects.requireNonNull(pattern, "pattern");
+        long made = madeBy(pattern, runs);
+        return ofPlan(rules, key, wanted, levels, made, demandOf(pattern, runs), ingredientAvailability);
+    }
+
+    /**
+     * The question a request raises when the part that is not in stock is made by a whole <b>production plan</b> (M20,
+     * issue #4, ADR-032) — the same two boundaries, measured over the chain instead of over one pattern.
+     * <p>
+     * Only two numbers of the plan matter here, and both come from the plan the request would really create, so what a
+     * player is asked about and what then happens cannot disagree:
+     * <ul>
+     * <li>{@code made} is what the plan's <b>root</b> step yields, because that is the item that ends up in the racks
+     * and the only one the requested key's own maximum is judged against. Every intermediate of the chain is checked
+     * against <i>its</i> own maximum at plan time and refuses the plan outright ({@code PlanRefusal#NO_ROOM}), which is
+     * a harder answer than a question;</li>
+     * <li>{@code ingredientDemand} is what the plan takes <b>out of the racks</b>, per item
+     * ({@code ProductionPlan#leafDemand()}) — the leaves of the chain, which may sit two steps away from what was
+     * clicked. This is what makes "this spends 6 of the 32 Oak Logs held in reserve" sayable about a click on a chest.
+     * An intermediate a step of the plan makes is deliberately <b>not</b> in there: the racks do not hold it, so no
+     * reserve of it can be spent.</li>
+     * </ul>
+     *
+     * @param made             result items the plan's root step would make in total, 0 when nothing would be produced
+     * @param ingredientDemand items the plan would take out of the racks, per key, in the order it spent them
+     */
+    public static <K> RequestConfirmation<K> ofPlan(StockRules<K> rules, K key, long wanted, StockLevels levels,
+            long made, Map<K, Long> ingredientDemand, ToLongFunction<? super K> ingredientAvailability) {
         Objects.requireNonNull(rules, "rules");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(levels, "levels");
-        Objects.requireNonNull(pattern, "pattern");
+        Objects.requireNonNull(ingredientDemand, "ingredientDemand");
         Objects.requireNonNull(ingredientAvailability, "ingredientAvailability");
+        made = Math.max(0L, made);
         long available = levels.available();
         // No request can take more than the racks hold plus what the order would yield, and a pattern makes whole runs,
         // so this bound is the caller's own number for a caller that measured properly and a real bound for one that
         // did not: a question must never name an amount nothing could have granted.
-        long serveable = pattern.isEmpty() || runs <= 0L ? available
-                : available + (long) pattern.get().resultFor((int) Math.min(Integer.MAX_VALUE, runs));
+        long serveable = available + made < 0L ? Long.MAX_VALUE : available + made;
         long asked = Math.min(Math.max(0L, wanted), serveable);
         // What comes out of the racks, and what would therefore have to be made. Both halves matter: the reserve of
         // the requested item bounds the first, the maximum and the ingredients' own reserves the second.
@@ -135,9 +168,6 @@ public record RequestConfirmation<K>(K key, long amount, long fromReserve, long 
         long produced = asked - fromStock;
         long maximum = rules.ruleFor(key).filter(StockRule::hasMaximum).map(StockRule::maximum)
                 .orElse(StockRule.UNSET);
-        // What the order would really make: whole runs, which is regularly more than this request asked for.
-        long made = pattern.isEmpty() || runs <= 0L ? 0L
-                : pattern.get().resultFor((int) Math.min(Integer.MAX_VALUE, runs));
         // Result items that would be left above the cap once the request has been served, which is the part a player
         // can act on. The produced items are promised to this very request and leave the warehouse again, so measuring
         // the level the racks pass through while the order runs asked about nothing (M15 review fix): what stays is the
@@ -147,23 +177,47 @@ public record RequestConfirmation<K>(K key, long amount, long fromReserve, long 
         long pastMaximum = made <= 0L || maximum == StockRule.UNSET ? 0L : Math.max(0L, settled - maximum);
         return new RequestConfirmation<>(key, asked, rules.fromReserve(key, available, fromStock),
                 rules.heldBack(key, available), pastMaximum, made, maximum,
-                reservedIngredients(rules, produced, pattern, runs, ingredientAvailability));
+                reservedIngredients(rules, produced, ingredientDemand, ingredientAvailability));
     }
 
-    /** The ingredients of {@code runs} runs that a reserve of their own holds back from automation. */
+    /** Result items {@code runs} runs of {@code pattern} yield; 0 when nothing would be produced. */
+    private static <K> long madeBy(Optional<? extends ProductionPattern<K>> pattern, long runs) {
+        return pattern.isEmpty() || runs <= 0L ? 0L
+                : pattern.get().resultFor((int) Math.min(Integer.MAX_VALUE, runs));
+    }
+
+    /** What {@code runs} runs of one pattern take out of the racks, per ingredient, in pattern order. */
+    private static <K> Map<K, Long> demandOf(Optional<? extends ProductionPattern<K>> pattern, long runs) {
+        if (pattern.isEmpty() || runs <= 0L)
+            return Map.of();
+        Map<K, Long> demand = new LinkedHashMap<>();
+        for (ProductionEntry<K> ingredient : pattern.get().ingredients())
+            demand.merge(ingredient.key(), (long) ingredient.count() * runs, Long::sum);
+        return demand;
+    }
+
+    /**
+     * The items of {@code demand} that a reserve of their own holds back from automation, in the order they were
+     * spent.
+     * <p>
+     * Bounded at {@value ProductionPattern#MAX_INGREDIENTS} entries by the canonical constructor, because that is what
+     * one confirmation payload carries. A chain whose leaves reach into <b>more</b> than that many different reserves
+     * therefore names the first of them and the total is measured over exactly the named ones, so what the player
+     * accepts and what the server re-checks stay the same number ({@code RequestAcknowledgement#covers}).
+     */
     private static <K> List<ReservedIngredient<K>> reservedIngredients(StockRules<K> rules, long produced,
-            Optional<? extends ProductionPattern<K>> pattern, long runs,
-            ToLongFunction<? super K> ingredientAvailability) {
-        if (produced <= 0L || runs <= 0L || pattern.isEmpty())
+            Map<K, Long> demand, ToLongFunction<? super K> ingredientAvailability) {
+        if (produced <= 0L || demand.isEmpty())
             return List.of();
-        List<ReservedIngredient<K>> reserved = new ArrayList<>(ProductionPattern.MAX_INGREDIENTS);
-        for (ProductionEntry<K> ingredient : pattern.get().ingredients()) {
-            long needed = (long) ingredient.count() * runs;
-            long available = Math.max(0L, ingredientAvailability.applyAsLong(ingredient.key()));
-            long fromReserve = rules.fromReserve(ingredient.key(), available, needed);
+        List<ReservedIngredient<K>> reserved = new ArrayList<>(Math.min(demand.size(),
+                ProductionPattern.MAX_INGREDIENTS));
+        for (Map.Entry<K, Long> ingredient : demand.entrySet()) {
+            long needed = Math.max(0L, ingredient.getValue());
+            long available = Math.max(0L, ingredientAvailability.applyAsLong(ingredient.getKey()));
+            long fromReserve = rules.fromReserve(ingredient.getKey(), available, needed);
             if (fromReserve > 0L)
-                reserved.add(new ReservedIngredient<>(ingredient.key(), fromReserve,
-                        rules.heldBack(ingredient.key(), available)));
+                reserved.add(new ReservedIngredient<>(ingredient.getKey(), fromReserve,
+                        rules.heldBack(ingredient.getKey(), available)));
         }
         return reserved;
     }

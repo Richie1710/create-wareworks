@@ -83,11 +83,17 @@ public class AisleSummaryDisplaySource extends DisplaySource {
                     WareworksLang.number(controller.stockRulesBelowMinimum()),
                     WareworksLang.number(controller.stockRulesAtMaximum())));
         // The safety stop gets a line of its own rather than a fourth number on the one above (M15 part 2, issue #3):
-        // it is the only rule state that asks a player to go and look at a machine, and a board that shows it at all
-        // has to show it where it cannot be read as one more statistic. Left out entirely while nothing is paused,
+        // it is the only state here that asks a player to go and look at a machine, and a board that shows it at all
+        // has to show it where it cannot be read as one more statistic. Left out entirely while nothing is stopped,
         // which is every warehouse that is working.
+        //
+        // It deliberately sits outside the stock-rule block above and no longer speaks of rules (M20, issue #4): since
+        // a lost batch of any order arms the stop, the item it holds is regularly an intermediate of a chain that no
+        // rule governs, and this line can stand on an aisle with no stock keeper at all. The count is the controller's
+        // own cached one, and the wording is the production station's ("Stopped products"), because that station is
+        // where a player lifts it.
         if (controller.pausedStockRuleCount() > 0)
-            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_RULES_PAUSED,
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_STOPPED,
                     WareworksLang.number(controller.pausedStockRuleCount())));
         // Only while the aisle really holds chunks (M19, issue #10), by the same rule the port and rule lines follow: a
         // display has few rows, and on a server with chunk loading switched off — the default — this line would always

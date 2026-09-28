@@ -3,6 +3,7 @@ package dev.wareworks.client.gui;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -21,8 +22,13 @@ import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalScreenStatus;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.CountFormat;
+import dev.wareworks.core.terminal.PlanCancelCost;
+import dev.wareworks.core.terminal.PlanLine;
+import dev.wareworks.core.terminal.PlanLines;
+import dev.wareworks.core.terminal.PlanMember;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.StockCount;
@@ -130,6 +136,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int COLOR_RULE_AT_RESERVE = 0xFF89C7F1;
     /** The cancel affordance at the end of an open order line: a plain glyph, so every font and language has it. */
     private static final String CANCEL_MARK = "x";
+    /**
+     * Smallest width the item half of an order line keeps. The state half wins the row (see {@link #renderOrderLine}),
+     * but a chain's line has a badge between them, and a name cut down to three letters names nothing at all — so below
+     * this the <b>state</b> is what gives way instead, and the tooltip still holds both in full.
+     */
+    private static final int MIN_ITEM_WIDTH = 54;
 
     // --- the confirmation panel (M15 part 2, issue #3) -------------------------------------------------------------
     /** Dim behind the panel, so the grid underneath is visibly out of reach while the question is up. */
@@ -143,6 +155,34 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int CONFIRM_BUTTON_PADDING = 8;
     private static final int CONFIRM_BUTTON_GAP = 6;
 
+    // --- the step panel of a production plan (M20, issue #4, ADR-032) ----------------------------------------------
+    /**
+     * The step panel is the confirmation's device — grid dimmed and out of reach, Escape drops it — and deliberately
+     * reuses its padding and buttons, so the two dialogs of this screen are one shape. Only the border differs: this
+     * panel <b>informs</b> about a chain rather than asking a question, so it takes the blue of a producible item
+     * instead of the question's orange.
+     */
+    private static final int COLOR_STEPS_BORDER = COLOR_PRODUCIBLE;
+    /**
+     * How far in front of the window both modal panels are drawn.
+     * <p>
+     * A stock cell draws its item, its amount and its rule badge in front of the window ({@link #COUNT_SHIFT_Z}), and a
+     * panel at depth 0 therefore had the grid's <b>items and numbers on top of its own text</b> — which the step panel
+     * made plain the moment a third cost line pushed it over a filled row. The value is deliberately far past every one
+     * of them rather than a little above: a cell's amount is drawn as text, and text is batched separately from a fill,
+     * so the margin has to hold for the batch as well as for the depth test. A panel is modal, so nothing that would
+     * belong above it is drawn at all while it is up ({@link #renderForeground}).
+     */
+    private static final int PANEL_Z = 1000;
+    /** Step rows the panel lists at most, however many orders a chain has; the rest are counted in one line. */
+    private static final int MAX_STEP_ROWS = 12;
+    /**
+     * Widest indent a step row is given, in spaces. A deeper step keeps the deepest indent instead of a wider one: past
+     * about a dozen levels the panel's own width is the limit, and this keeps a depth a payload claims from ever becoming
+     * a length ({@link ProductionScreenState#MAX_DEPTH} bounds the number, this bounds the string).
+     */
+    private static final int MAX_STEP_INDENT = 2 * MAX_STEP_ROWS;
+
     /** Search, order and filter survive closing the screen, like a storage mod's terminal. */
     private static String rememberedQuery = "";
     private static TerminalSort rememberedSort = TerminalSort.AMOUNT;
@@ -153,6 +193,19 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private TerminalScreenStatus status = TerminalScreenStatus.NONE;
     /** The aisle's production orders, newest last, as the server last pushed them (M11, ADR-024). */
     private List<ProductionScreenState.OrderView> orders = List.of();
+    /**
+     * The same orders folded into the lines the section draws: one line per production plan, one per ordinary order
+     * (M20, issue #4, ADR-032). Built whenever a payload arrives, never per frame.
+     */
+    private List<PlanLine> planLines = List.of();
+    /**
+     * The same orders as the models the grouping and the cancel price are computed from ({@link PlanMember}), built with
+     * {@link #planLines} and from the same payload, so a line and its price can never be read from different orders.
+     */
+    private List<PlanMember> planMembers = List.of();
+    /** The production plan whose step panel is up, or {@code null} while none is (M20). */
+    @Nullable
+    private UUID openPlan;
     private TerminalMenuLayout layout;
     private boolean stockReceived;
     private int scrollRow;
@@ -182,6 +235,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     @Nullable
     private ConfirmPanel panel;
+    /** The rows and geometry of {@link #openPlan}'s panel, built once per order payload like {@link #panel}. */
+    @Nullable
+    private StepPanel stepPanel;
 
     private EditBox searchBox;
     private IconButton sortButton;
@@ -202,7 +258,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         setWindowSize(TerminalMenuLayout.WIDTH, layout.height());
         super.init();
         clearWidgets();
-        panel = null; // the panel's rectangles are relative to the window, which has just been laid out again
+        // Both panels' rectangles are absolute and built from leftPos/topPos, which super.init() has just recomputed: a
+        // resize or a GUI-scale change would otherwise leave a modal dialog drawn and hit-tested where the window was.
+        panel = null;
+        stepPanel = null;
 
         int searchWidth = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN - AMOUNT_WIDTH - 2 * BUTTON_SIZE
                 - 3 * WIDGET_GAP;
@@ -286,22 +345,78 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // The answer to a confirmed request: whatever it says, the question is settled (M15 part 2).
         confirmed = null;
         costChanged = false;
+        // A click the racks served only part of carries the reason the rest could not be made (M20, issue #4): the
+        // chain behind it was refused, and that sentence is what a player can act on, while "Requested Chest x1" is
+        // already confirmed by the chest arriving. The row holds one line, so the surprising half wins it — in gold,
+        // because something *was* ordered, and with the sound of an accepted click.
+        Component planned = payload.isAccepted() ? planRefusalLine(payload) : null;
         if (payload.isAccepted()) {
-            feedback = acceptedLine(payload);
-            feedbackColor = COLOR_SUCCESS;
+            feedback = planned != null ? planned : acceptedLine(payload);
+            feedbackColor = planned != null ? COLOR_LOST : COLOR_SUCCESS;
             playUiSound(SoundEvents.NOTE_BLOCK_BELL.value(), 0.8F, 1.6F);
         } else {
-            feedback = WareworksLang.translateDirect(WareworksLang.TERMINAL_REFUSED,
-                    WareworksLang.translateDirect(payload.rejection().orElseThrow().langKey()));
+            feedback = refusedLine(payload);
             feedbackColor = COLOR_ERROR;
             playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
         }
         feedbackTicks = FEEDBACK_TICKS;
     }
 
-    /** The server sent the production orders of this terminal's aisle (M11, ADR-024). */
+    /**
+     * The server sent the production orders of this terminal's aisle (M11, ADR-024).
+     * <p>
+     * They are folded into lines here and not while drawing (M20, ADR-032): a chain is one line, and the section, the
+     * step panel and the tooltips all read that same grouping, so the badge, the panel and the cancel affordance can
+     * never disagree about which orders belong to which chain. An open panel whose chain is no longer in the payload —
+     * finished and pruned, or pushed out by newer orders — closes by itself rather than showing a chain that is gone.
+     */
     public void onOrders(TerminalOrdersPayload payload) {
         orders = payload.orders();
+        planMembers = ProductionScreenState.members(orders);
+        planLines = PlanLines.of(planMembers);
+        stepPanel = null;
+        if (openPlan != null && PlanLines.byPlan(planLines, openPlan).isEmpty())
+            openPlan = null;
+    }
+
+    /**
+     * Why a request was refused, in the one line a player gets.
+     * <p>
+     * A refusal that walked a <b>production chain</b> says what the chain really ran into and <b>names the item</b> it
+     * ran into it with (M20, issue #4, ADR-032) — which is regularly not the item that was clicked: ordering a chest
+     * is refused because oak logs are missing, and "not in stock" would send the player looking at the chest. Every
+     * other refusal keeps the sentence it has had since M6.
+     * <p>
+     * The chain's sentence replaces the {@code "Request refused: …"} frame instead of filling it, because it has to
+     * fit the status row with an item's name inside it ({@code docs/warehouse-system.md} §3.4.2): the row is red
+     * already, so the frame would spend a third of the row on saying what the colour says. If even the short sentence
+     * is too wide, the <b>name</b> gives way, exactly as it does in an accepted line — the reason is what a player
+     * acts on, and a name is still recognizable from its beginning.
+     */
+    private Component refusedLine(TerminalResultPayload payload) {
+        Component planned = planRefusalLine(payload);
+        return planned != null ? planned
+                : WareworksLang.translateDirect(WareworksLang.TERMINAL_REFUSED,
+                        WareworksLang.translateDirect(payload.rejection().orElseThrow().langKey()));
+    }
+
+    /**
+     * The chain's own sentence with the item it names, or {@code null} when this answer walked no plan. If the line is
+     * too wide for the status row the <b>name</b> gives way, exactly as it does in an accepted line.
+     */
+    private Component planRefusalLine(TerminalResultPayload payload) {
+        PlanRefusal refusal = payload.refusal().orElse(null);
+        ItemKey about = payload.about().orElse(null);
+        if (refusal == null || about == null)
+            return null;
+        Component name = about.toStack().getHoverName();
+        Component line = WareworksLang.translateDirect(refusal.langKey(), name);
+        int over = font.width(line) - ROW_WIDTH;
+        if (over <= 0)
+            return line;
+        int room = font.width(name) - over - font.width(CommonComponents.ELLIPSIS);
+        return room <= 0 ? line
+                : WareworksLang.translateDirect(refusal.langKey(), shorten(name.getString(), room));
     }
 
     /**
@@ -484,6 +599,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 cancelConfirmation();
             return true;
         }
+        // The step panel owns every click while it is up, for the same reason (M20): one of its two buttons ends a whole
+        // chain, and a click meant for the grid must not be able to land on it.
+        if (openPlan != null) {
+            if (button == 0 && isOverStepButton(mouseX, mouseY, true))
+                cancelOpenPlan();
+            else if (button == 0 && isOverStepButton(mouseX, mouseY, false))
+                closeStepPanel();
+            return true;
+        }
         if (button == 1 && searchBox.isMouseOver(mouseX, mouseY)) {
             searchBox.setValue("");
             searchBox.setFocused(true);
@@ -499,7 +623,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 return true;
         }
         int order = orderAt(mouseX, mouseY);
-        if (order >= 0 && button == 0 && cancelVisibleOrder(order))
+        if (order >= 0 && button == 0 && clickOrderLine(order, mouseX))
             return true;
         return super.mouseClicked(mouseX, mouseY, button);
     }
@@ -521,6 +645,13 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 confirmRequest();
             else if (keyCode == InputConstants.KEY_ESCAPE)
                 cancelConfirmation();
+            return true;
+        }
+        // Escape drops the step panel instead of closing the whole screen. Enter does deliberately nothing here: the
+        // panel's first button gives up on a chain, and that must be a click a player aimed at (M20).
+        if (openPlan != null) {
+            if (keyCode == InputConstants.KEY_ESCAPE)
+                closeStepPanel();
             return true;
         }
         if (hoveredSlot != null && minecraft != null && getFocused() == searchBox && isSlotHotkey(keyCode, scanCode)) {
@@ -779,31 +910,78 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return;
         graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.TERMINAL_PRODUCTION),
                 x + TerminalMenuLayout.MARGIN, y + layout.productionLabelY(), COLOR_DIM, false);
-        List<ProductionScreenState.OrderView> shown = visibleOrders();
+        List<PlanLine> shown = visibleOrderLines();
         if (shown.isEmpty()) {
             graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_NO_ORDERS),
                     x + TerminalMenuLayout.MARGIN, y + layout.orderLineY(0), COLOR_DIM, false);
             return;
         }
-        for (int line = 0; line < shown.size(); line++) {
-            ProductionScreenState.OrderView order = shown.get(line);
-            int top = y + layout.orderLineY(line);
-            int color = order.lostIngredients() ? COLOR_LOST : COLOR_TEXT;
-            // The line is drawn in two parts, and the state is the right-aligned one: it is what a player reads the
-            // section for and what actually changes, so an item with a long name must never be able to cut it off.
-            // The item and its amount are trimmed into whatever is left, and the tooltip holds both in full.
-            Component state = orderStateText(order);
-            // A finished order has no cancel mark, so its line gets that column back for its own text.
-            int reserved = order.state().isFinished() ? 0 : cancelColumnWidth();
-            int stateX = Math.max(TerminalMenuLayout.MARGIN,
-                    TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - reserved - font.width(state));
-            graphics.drawString(font, state, x + stateX, top, color, false);
-            graphics.drawString(font, fitTo(orderItemText(order), stateX - TerminalMenuLayout.MARGIN - TEXT_GAP),
-                    x + TerminalMenuLayout.MARGIN, top, color, false);
-            // Only an open order can be given up on; a finished line stays for a while so it can be read.
-            if (!order.state().isFinished())
-                graphics.drawString(font, CANCEL_MARK, x + cancelMarkX(), top, COLOR_ERROR, false);
-        }
+        for (int line = 0; line < shown.size(); line++)
+            renderOrderLine(graphics, x, y + layout.orderLineY(line), shown.get(line));
+    }
+
+    /**
+     * One line of the section: an ordinary order exactly as before M20, or a whole chain in one line.
+     * <p>
+     * The line is drawn in up to four parts, right to left, because the right-hand ones are what a player reads the
+     * section for and what actually changes: the cancel mark, the state, the step badge of a chain, and finally the item
+     * and its amount trimmed into whatever is left. An item with a long name can therefore never cut off the part that
+     * says how far the order has got — but only down to {@link #MIN_ITEM_WIDTH}, past which the state gives way
+     * instead, because a chain's line carries a badge as well and a name cut to three letters names nothing. The
+     * tooltip and the step panel hold everything in full either way.
+     * <p>
+     * For a chain the state column holds the <b>frontier</b> — the item the step where something is really happening is
+     * making — and not the ordered item's own state. "Waiting for ingredients" about a chest is the one thing a player
+     * clicking a chest already knows; "now: Oak Planks" is what changes.
+     */
+    private void renderOrderLine(GuiGraphics graphics, int x, int top, PlanLine line) {
+        ProductionScreenState.OrderView head = order(line.head()).orElse(null);
+        if (head == null)
+            return; // the payload no longer holds the order this line names: nothing honest to draw
+        // Once every step is done and only the ordered item's own order is left, its own state is the whole story again.
+        ProductionScreenState.OrderView frontier = line.isChain() && !line.frontierIsHead()
+                ? line.frontier().flatMap(this::order).orElse(null)
+                : null;
+        int color = head.lostIngredients() ? COLOR_LOST : COLOR_TEXT;
+        int stateColor = frontier == null ? color : frontier.lostIngredients() ? COLOR_LOST : COLOR_PRODUCIBLE;
+        // A finished order has no cancel mark, so its line gets that column back for its own text.
+        int reserved = head.state().isFinished() ? 0 : cancelColumnWidth();
+        Component badge = line.isChain() ? stepBadge(line) : null;
+        int badgeWidth = badge == null ? 0 : font.width(badge) + TEXT_GAP;
+        Component item = orderItemText(head);
+        // The state wins the row, but never past the item's floor: a chain's badge sits between the two, and a name cut
+        // to three letters names nothing.
+        int floor = Math.min(font.width(item), MIN_ITEM_WIDTH);
+        Component state = fitTo(frontier == null ? orderStateText(head) : frontierText(frontier),
+                Math.max(0, ROW_WIDTH - reserved - badgeWidth - floor - TEXT_GAP));
+        int stateX = Math.max(TerminalMenuLayout.MARGIN,
+                TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - reserved - font.width(state));
+        graphics.drawString(font, state, x + stateX, top, stateColor, false);
+        // The badge takes the window's own label colour and not the blue of the frontier beside it: the two sit next to
+        // each other on the row, and one colour for both would read as a single sentence.
+        if (badge != null)
+            graphics.drawString(font, badge, x + Math.max(TerminalMenuLayout.MARGIN, stateX - badgeWidth), top,
+                    COLOR_HEADER, false);
+        int room = stateX - badgeWidth - TerminalMenuLayout.MARGIN - TEXT_GAP;
+        graphics.drawString(font, fitTo(item, Math.max(0, room)), x + TerminalMenuLayout.MARGIN, top, color, false);
+        // Only an open order can be given up on; a finished line stays for a while so it can be read.
+        if (!head.state().isFinished())
+            graphics.drawString(font, CANCEL_MARK, x + cancelMarkX(), top, COLOR_ERROR, false);
+    }
+
+    /** {@code "steps: 3"}: the badge of a chain's line, which opens its step panel. */
+    private static Component stepBadge(PlanLine line) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_STEPS,
+                LangNumberFormat.format(line.members().size()));
+    }
+
+    /**
+     * {@code "now: Oak Planks"}: what the chain's frontier step is making, or — once the chain is down to the ordered
+     * item's own order — that order's own state, because then there is no earlier step left to name.
+     */
+    private static Component frontierText(ProductionScreenState.OrderView frontier) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_FRONTIER,
+                frontier.result().toStack().getHoverName());
     }
 
     /** "Oak Planks x128": what the order makes, the part that gives way when the row is too narrow. */
@@ -829,11 +1007,27 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 : WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER, name, amount, state);
     }
 
-    /** The orders the window has room for, newest first (the ones a player just placed). */
+    /** The lines the window has room for, newest first: one per chain, one per ordinary order (M20). */
+    public List<PlanLine> visibleOrderLines() {
+        List<PlanLine> shown = new ArrayList<>(Math.max(0, layout.orderLines()));
+        for (int line = 0; line < layout.orderLines() && line < planLines.size(); line++)
+            shown.add(planLines.get(planLines.size() - 1 - line));
+        return List.copyOf(shown);
+    }
+
+    /** Every line the server's orders were folded into, oldest first (dev harness and tests of the client side). */
+    public List<PlanLine> orderLines() {
+        return planLines;
+    }
+
+    /**
+     * The orders the window has room for, newest first (the ones a player just placed): for a chain the order a player
+     * actually asked for, since that is the one its line names and the one a cancellation is sent for.
+     */
     public List<ProductionScreenState.OrderView> visibleOrders() {
         List<ProductionScreenState.OrderView> shown = new ArrayList<>(Math.max(0, layout.orderLines()));
-        for (int line = 0; line < layout.orderLines() && line < orders.size(); line++)
-            shown.add(orders.get(orders.size() - 1 - line));
+        for (PlanLine line : visibleOrderLines())
+            order(line.head()).ifPresent(shown::add);
         return List.copyOf(shown);
     }
 
@@ -842,31 +1036,75 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return orders;
     }
 
+    /** The order row with this id, if the last payload holds it. */
+    private Optional<ProductionScreenState.OrderView> order(UUID id) {
+        if (id == null)
+            return Optional.empty();
+        for (ProductionScreenState.OrderView order : orders) {
+            if (order.id().equals(id))
+                return Optional.of(order);
+        }
+        return Optional.empty();
+    }
+
     /**
-     * Asks the server to give up on the order shown in line {@code index} (dev harness and click handling). The server
+     * Asks the server to give up on the line shown at {@code index} (dev harness and click handling). The server
      * decides: the payload carries only the order's id, and the terminal re-validates reach, aisle and order
      * ({@code WarehouseTerminalBlockEntity#cancelProductionOrder}).
+     * <p>
+     * For a chain this gives up on the <b>whole</b> plan, because that is what cancelling one of its orders does on the
+     * server (M20, ADR-032, {@code ProductionOrders#failPlan}): an order above the cancelled one waits for something
+     * that will never be made, and one below it makes something nobody will use. The line's own order is the one named,
+     * unless it has already finished — then the chain is ended from its frontier instead, so a plan whose root ended
+     * badly can still be stopped.
      *
      * @return whether a cancellation was sent
      */
     public boolean cancelVisibleOrder(int index) {
-        List<ProductionScreenState.OrderView> shown = visibleOrders();
+        List<PlanLine> shown = visibleOrderLines();
         if (index < 0 || index >= shown.size())
             return false;
-        ProductionScreenState.OrderView order = shown.get(index);
-        if (order.state().isFinished())
+        return cancelLine(shown.get(index));
+    }
+
+    /** Sends the cancellation for one line; see {@link #cancelVisibleOrder}. */
+    private boolean cancelLine(PlanLine line) {
+        UUID target = order(line.head()).filter(order -> !order.state().isFinished())
+                .map(ProductionScreenState.OrderView::id)
+                .or(() -> line.frontier().flatMap(this::order)
+                        .filter(order -> !order.state().isFinished())
+                        .map(ProductionScreenState.OrderView::id))
+                .orElse(null);
+        if (target == null)
             return false;
-        PacketDistributor.sendToServer(new ProductionCancelPayload(menu.containerId, order.id()));
+        PacketDistributor.sendToServer(new ProductionCancelPayload(menu.containerId, target));
         playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
         return true;
     }
 
-    /** The index within {@link #visibleOrders()} of the order line under the mouse, or -1. */
+    /**
+     * What a click on the line at {@code index} does: for a chain, the {@code x} column gives up on the whole plan and
+     * the rest of the line opens its step panel; for an ordinary order, the whole line cancels it, exactly as before M20.
+     * <p>
+     * The two are deliberately not the same click. Giving up on a chain costs more than giving up on one order, and the
+     * panel is where a player can read what it would cost before they do it.
+     */
+    private boolean clickOrderLine(int index, double mouseX) {
+        List<PlanLine> shown = visibleOrderLines();
+        if (index < 0 || index >= shown.size())
+            return false;
+        PlanLine line = shown.get(index);
+        if (line.isChain() && mouseX < leftPos + cancelMarkX() - TEXT_GAP)
+            return openStepPanel(line);
+        return cancelLine(line);
+    }
+
+    /** The index within {@link #visibleOrderLines()} of the order line under the mouse, or -1. */
     private int orderAt(double mouseX, double mouseY) {
         if (layout.orderLines() <= 0 || mouseX < leftPos + TerminalMenuLayout.MARGIN
                 || mouseX >= leftPos + TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN)
             return -1;
-        int shown = visibleOrders().size();
+        int shown = visibleOrderLines().size();
         for (int line = 0; line < shown; line++) {
             int top = topPos + layout.orderLineY(line);
             if (mouseY >= top && mouseY < top + TerminalMenuLayout.LABEL_HEIGHT)
@@ -942,6 +1180,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             renderConfirmation(graphics, mouseX, mouseY);
             return; // no tooltip from the grid underneath: it is not what the player is answering
         }
+        if (openPlan != null) {
+            renderStepPanel(graphics, mouseX, mouseY);
+            return; // likewise: while the chain is on screen, nothing behind it is being pointed at
+        }
         int cell = cellAt(mouseX, mouseY);
         List<StockLine<ItemKey>> visible = visibleEntries();
         if (cell >= 0 && cell < visible.size()) {
@@ -949,9 +1191,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return;
         }
         int order = orderAt(mouseX, mouseY);
-        List<ProductionScreenState.OrderView> shownOrders = visibleOrders();
-        if (order >= 0 && order < shownOrders.size())
-            graphics.renderComponentTooltip(font, orderTooltip(shownOrders.get(order)), mouseX, mouseY);
+        List<PlanLine> shownLines = visibleOrderLines();
+        if (order >= 0 && order < shownLines.size())
+            graphics.renderComponentTooltip(font, orderTooltip(shownLines.get(order)), mouseX, mouseY);
     }
 
     // --- the confirmation panel (M15 part 2, issue #3) -------------------------------------------------------------
@@ -969,6 +1211,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         confirmed = null;
         confirming = question;
         panel = null;
+        // Only one dialog at a time: a question the server is asking wins over a chain a player was reading (M20).
+        openPlan = null;
+        stepPanel = null;
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
     }
 
@@ -1133,6 +1378,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return;
         // The whole window is dimmed, not only the grid: while the question is up nothing else on this screen can be
         // clicked, and the shade is what says so.
+        // Flushed first and then drawn far in front (PANEL_Z): everything the grid drew is on the screen before the
+        // panel starts, so nothing of it can come through a modal dialog's text.
+        graphics.flush();
+        graphics.pose().pushPose();
+        graphics.pose().translate(0.0F, 0.0F, PANEL_Z);
         graphics.fill(0, 0, this.width, this.height, COLOR_CONFIRM_SHADE);
         graphics.fill(shown.x() - 1, shown.y() - 1, shown.x() + shown.width() + 1, shown.y() + shown.height() + 1,
                 COLOR_CONFIRM_BORDER);
@@ -1144,6 +1394,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         }
         renderConfirmButton(graphics, shown, mouseX, mouseY, true);
         renderConfirmButton(graphics, shown, mouseX, mouseY, false);
+        graphics.pose().popPose();
     }
 
     private void renderConfirmButton(GuiGraphics graphics, ConfirmPanel shown, int mouseX, int mouseY,
@@ -1254,22 +1505,346 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return tooltip;
     }
 
-    /** The full order line (the drawn one may be cut), what it still waits for, and how to give up on it. */
-    private List<Component> orderTooltip(ProductionScreenState.OrderView order) {
+    /**
+     * The full order line (the drawn one may be cut), what it still waits for, and how to give up on it.
+     * <p>
+     * For a chain the frontier's own row is added underneath, with the address of the machine it runs at (M20): that is
+     * the line a player needs before they walk anywhere, and it is the one the drawn line has no room for.
+     */
+    private List<Component> orderTooltip(PlanLine line) {
+        ProductionScreenState.OrderView order = order(line.head()).orElse(null);
+        if (order == null)
+            return List.of();
         List<Component> tooltip = new ArrayList<>();
         tooltip.add(orderText(order, order.result().toStack().getHoverName(),
-                Component.literal(LangNumberFormat.format(order.amount())),
-                WareworksLang.translateDirect(order.state().langKey())));
+                Component.literal(LangNumberFormat.format(order.amount())), stepStateText(order)));
+        if (line.isChain() && !line.frontierIsHead())
+            line.frontier().flatMap(this::order).ifPresent(frontier -> tooltip.add(stepRow(frontier).copy()
+                    .withStyle(ChatFormatting.AQUA)));
         if (order.missing() > 0)
             tooltip.add(WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_MISSING,
                     LangNumberFormat.format(order.missing())).copy().withStyle(ChatFormatting.GRAY));
         if (order.lostIngredients())
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_INGREDIENTS_LOST).copy()
                     .withStyle(ChatFormatting.GOLD));
+        if (line.isChain())
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_HINT).copy()
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        // Only while the mark is really drawn, which is exactly while the line's own order is still open.
         if (!order.state().isFinished())
-            tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_CANCEL_HINT).copy()
+            tooltip.add(WareworksLang.translateDirect(line.isChain() ? WareworksLang.TERMINAL_PLAN_CANCEL_HINT
+                    : WareworksLang.PRODUCTION_CANCEL_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return tooltip;
+    }
+
+    // --- the step panel of a production plan (M20, issue #4, ADR-032) -----------------------------------------------
+
+    /**
+     * Opens the step panel of {@code line}'s chain: every order of the plan with its item, its amount, its state and the
+     * <b>address of the station it runs at</b>, plus what giving up on the whole chain would cost.
+     * <p>
+     * Naming the address is the point of the panel. A chain that has stopped has stopped at exactly one machine, and
+     * until a screen says which one a player can only walk the aisle and guess.
+     *
+     * @return whether a panel was opened
+     */
+    public boolean openStepPanel(PlanLine line) {
+        if (line == null || !line.isChain())
+            return false; // an ordinary order has no steps to show, and no panel: it is the line it always was
+        openPlan = line.plan().get();
+        stepPanel = null;
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+        return true;
+    }
+
+    /** Opens the step panel of the visible line at {@code index} (dev harness); false when it is no chain. */
+    public boolean openStepPanel(int index) {
+        List<PlanLine> shown = visibleOrderLines();
+        return index >= 0 && index < shown.size() && openStepPanel(shown.get(index));
+    }
+
+    /** Drops the step panel; nothing about the chain changes. */
+    public void closeStepPanel() {
+        if (openPlan == null)
+            return;
+        openPlan = null;
+        stepPanel = null;
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
+    }
+
+    /** The chain whose step panel is up, or empty while none is (dev harness and tests of the client side). */
+    public Optional<UUID> openStepPanelPlan() {
+        return Optional.ofNullable(openPlan);
+    }
+
+    /**
+     * Gives up on the whole chain the panel is showing and closes it. The server decides: it re-checks the order this
+     * names against the aisle the player really has open and ends the plan from there
+     * ({@code WarehouseTerminalBlockEntity#cancelProductionOrder}, {@code ProductionOrders#failPlan}).
+     *
+     * @return whether a cancellation was sent
+     */
+    public boolean cancelOpenPlan() {
+        UUID plan = openPlan;
+        if (plan == null)
+            return false;
+        PlanLine line = PlanLines.byPlan(planLines, plan).orElse(null);
+        boolean sent = line != null && cancelLine(line);
+        openPlan = null;
+        stepPanel = null;
+        return sent;
+    }
+
+    /**
+     * The panel's text as the player reads it, title and cost lines included (dev harness and tests of the client side):
+     * empty while no panel is up. A harness reads this instead of photographing the dialog.
+     */
+    public List<Component> stepPanelLines() {
+        UUID plan = openPlan;
+        if (plan == null)
+            return List.of();
+        return PlanLines.byPlan(planLines, plan).map(line -> stepPanelLines(line, fittingSteps(line)))
+                .orElse(List.of());
+    }
+
+    /**
+     * The title, up to {@code maxSteps} orders of the chain in display order, the steps that did not fit, and what
+     * giving up on the chain would cost.
+     * <p>
+     * The title and the cost lines are never the ones that give way: what a chain is for and what stopping it costs are
+     * the two things a player has to be able to read, while one more machine in the middle of a long list is not.
+     */
+    private List<Component> stepPanelLines(PlanLine line, int maxSteps) {
+        List<UUID> members = line.members();
+        List<Component> lines = new ArrayList<>(Math.min(members.size(), maxSteps) + 4);
+        ProductionScreenState.OrderView head = order(line.head()).orElse(null);
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_TITLE,
+                head == null ? Component.empty() : head.result().toStack().getHoverName(),
+                Component.literal(LangNumberFormat.format(head == null ? 0 : head.amount()))).copy()
+                .withStyle(ChatFormatting.GOLD));
+        int shown = 0;
+        for (int i = 0; i < members.size(); i++) {
+            if (shown >= maxSteps) {
+                lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_NOT_SHOWN,
+                        LangNumberFormat.format(members.size() - i)).copy().withStyle(ChatFormatting.DARK_GRAY));
+                break;
+            }
+            ProductionScreenState.OrderView view = order(members.get(i)).orElse(null);
+            if (view == null)
+                continue; // the payload no longer holds this step: one row fewer, never a wrong one
+            shown++;
+            lines.add(stepRow(view).copy().withStyle(stepStyle(line, view)));
+        }
+        for (Component cost : cancelCosts(line))
+            lines.add(cost.copy().withStyle(ChatFormatting.GRAY));
+        return List.copyOf(lines);
+    }
+
+    /**
+     * The most step rows that still fit into the window next to the panel's title and cost lines. A long item name wraps
+     * to two rows, so this is measured on the <b>wrapped</b> text rather than counted; it runs once per order payload,
+     * with the panel itself.
+     */
+    private int fittingSteps(PlanLine line) {
+        int budget = Math.max(1, (layout.height() - 2 * TerminalMenuLayout.MARGIN - 3 * CONFIRM_PADDING
+                - CONFIRM_BUTTON_HEIGHT) / (font.lineHeight + 2));
+        int most = Math.min(MAX_STEP_ROWS, line.members().size());
+        for (int steps = most; steps > 1; steps--) {
+            if (wrap(stepPanelLines(line, steps)).size() <= budget)
+                return steps;
+        }
+        return 1;
+    }
+
+    /** The lines of a panel wrapped to its text width, which is what its height is really made of. */
+    private List<FormattedCharSequence> wrap(List<Component> lines) {
+        List<FormattedCharSequence> rows = new ArrayList<>(lines.size());
+        for (Component line : lines)
+            rows.addAll(font.split(line, confirmTextWidth()));
+        return rows;
+    }
+
+    /**
+     * One row of the panel: {@code "  A-05-01R: Oak Planks x8 - waiting for the machine"}. The address comes first
+     * because the rows then read as a list of machines, which is what a player walking the aisle needs, and the
+     * indentation is the order's depth in the chain, so a branch is visible at a glance.
+     */
+    private static Component stepRow(ProductionScreenState.OrderView view) {
+        Component line = orderText(view, view.result().toStack().getHoverName(),
+                Component.literal(LangNumberFormat.format(view.amount())), stepStateText(view));
+        Component address = view.address().<Component>map(Component::literal)
+                .orElseGet(() -> WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_NO_ADDRESS));
+        Component row = WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_STEP_AT, address, line);
+        // The depth is bounded on the wire (ProductionScreenState#MAX_DEPTH); the indent is bounded again because a row
+        // wider than the panel says nothing anyway, and this is the one place a number becomes a length.
+        int indent = Math.min(2 * view.depth(), MAX_STEP_INDENT);
+        return indent <= 0 ? row : Component.literal(" ".repeat(indent)).append(row);
+    }
+
+    /**
+     * Where one order of a chain stands. An order the server marked as waiting for an earlier step says <b>that</b>
+     * rather than its own state: it is nominally waiting for ingredients, but it is fetching nothing at all until the
+     * step below it is done, and a screen that showed "waiting for ingredients" would look like a stuck crane
+     * ({@code docs/warehouse-system.md} §3.5.6).
+     */
+    private static Component stepStateText(ProductionScreenState.OrderView view) {
+        return view.waitingForStep() ? WareworksLang.translateDirect(WareworksLang.PRODUCTION_WAITING_FOR_STEP)
+                : WareworksLang.translateDirect(view.state().langKey());
+    }
+
+    /** Gold for a row that lost ingredients, aqua for the step that is working, grey for one that has finished. */
+    private static ChatFormatting stepStyle(PlanLine line, ProductionScreenState.OrderView view) {
+        if (view.lostIngredients())
+            return ChatFormatting.GOLD;
+        if (line.frontier().filter(view.id()::equals).isPresent())
+            return ChatFormatting.AQUA;
+        return view.state().isFinished() ? ChatFormatting.DARK_GRAY : ChatFormatting.WHITE;
+    }
+
+    /**
+     * What giving up on this chain would cost, in the three things a player can act on: how many of its orders would end,
+     * how many ingredient items were already delivered to a machine and never come back, and that the click stops the
+     * warehouse from making the item until somebody resumes it at that machine ({@code docs/warehouse-system.md} §3.5.6).
+     * <p>
+     * <b>Every number is the one the server would really produce</b> ({@link PlanCancelCost}, which mirrors
+     * {@code ProductionOrders#failPlan}), not a sum over the open members: a step whose batch is already in a machine is
+     * <b>detached and left running</b>, so it neither ends nor loses anything. Counting it would overstate both numbers in
+     * exactly the state a player opens this panel in — a broken machine running down its timeout, with the root blocked
+     * and one step at a machine — and the panel's one job is to state the cost before an irreversible click.
+     * <p>
+     * The last two lines appear together and only when something was really delivered, which is also the condition the
+     * safety stop is armed under ({@code ProductionOrder#endedWithLostIngredients}). The first line is always there, with a
+     * <b>0</b> for a chain every order of which has finished: "giving up would end nothing" is the answer a player wants
+     * for a chain that failed, and an empty space where a number was is not.
+     */
+    private List<Component> cancelCosts(PlanLine line) {
+        PlanCancelCost cost = PlanCancelCost.of(line, planMembers).orElse(null);
+        List<Component> costs = new ArrayList<>(3);
+        costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_CANCEL_COST,
+                Component.literal(LangNumberFormat.format(cost == null ? 0 : cost.endedOrders()))));
+        if (cost == null || !cost.armsSafetyStop())
+            return List.copyOf(costs);
+        costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_CANCEL_LOST,
+                Component.literal(LangNumberFormat.format(cost.lostIngredients()))));
+        costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_CANCEL_STOP,
+                order(cost.target()).map(view -> view.result().toStack().getHoverName())
+                        .orElseGet(Component::empty)));
+        return List.copyOf(costs);
+    }
+
+    /**
+     * The panel as it is drawn, built <b>once per order payload</b> and not per frame, exactly like the confirmation's
+     * ({@link ConfirmPanel}): its rows are wrapped item names and resolved states, which is far too much work for sixty
+     * frames a second of a dialog that changes only when a payload arrives.
+     */
+    private record StepPanel(List<FormattedCharSequence> rows, int x, int y, int width, int height, int cancelX,
+                             int closeX, int buttonY, int cancelWidth, int closeWidth) {
+        int buttonX(boolean cancel) {
+            return cancel ? cancelX : closeX;
+        }
+
+        int buttonWidth(boolean cancel) {
+            return cancel ? cancelWidth : closeWidth;
+        }
+    }
+
+    /** The panel of {@link #openPlan}, built on demand and dropped whenever the orders change. */
+    @Nullable
+    private StepPanel stepPanel() {
+        UUID plan = openPlan;
+        if (plan == null)
+            return null;
+        if (stepPanel != null)
+            return stepPanel;
+        PlanLine line = PlanLines.byPlan(planLines, plan).orElse(null);
+        if (line == null)
+            return null;
+        // A chain of many steps must not grow the panel past the window: the steps in the middle give way, and the
+        // panel's own "+N not shown" line says how many did.
+        List<Component> lines = stepPanelLines(line, fittingSteps(line));
+        List<FormattedCharSequence> rows = wrap(lines);
+        int text = 0;
+        for (Component row : lines)
+            text = Math.max(text, Math.min(font.width(row), confirmTextWidth()));
+        int cancelWidth = stepButtonWidth(true);
+        int closeWidth = stepButtonWidth(false);
+        int buttons = cancelWidth + closeWidth + CONFIRM_BUTTON_GAP;
+        int width = Math.max(text, buttons) + 2 * CONFIRM_PADDING;
+        int height = confirmHeight(rows);
+        int x = leftPos + (TerminalMenuLayout.WIDTH - width) / 2;
+        int y = topPos + Math.max(TerminalMenuLayout.MARGIN, (layout.height() - height) / 2);
+        int buttonStart = x + (width - buttons) / 2;
+        stepPanel = new StepPanel(List.copyOf(rows), x, y, width, height, buttonStart,
+                buttonStart + cancelWidth + CONFIRM_BUTTON_GAP, y + height - CONFIRM_PADDING - CONFIRM_BUTTON_HEIGHT,
+                cancelWidth, closeWidth);
+        return stepPanel;
+    }
+
+    private void renderStepPanel(GuiGraphics graphics, int mouseX, int mouseY) {
+        StepPanel shown = stepPanel();
+        if (shown == null)
+            return;
+        // The same flush the confirmation does, and for the same reason: see PANEL_Z.
+        graphics.flush();
+        graphics.pose().pushPose();
+        graphics.pose().translate(0.0F, 0.0F, PANEL_Z);
+        graphics.fill(0, 0, this.width, this.height, COLOR_CONFIRM_SHADE);
+        graphics.fill(shown.x() - 1, shown.y() - 1, shown.x() + shown.width() + 1, shown.y() + shown.height() + 1,
+                COLOR_STEPS_BORDER);
+        graphics.fill(shown.x(), shown.y(), shown.x() + shown.width(), shown.y() + shown.height(), COLOR_CONFIRM_BG);
+        int textY = shown.y() + CONFIRM_PADDING;
+        for (FormattedCharSequence row : shown.rows()) {
+            graphics.drawString(font, row, shown.x() + CONFIRM_PADDING, textY, COLOR_TEXT, false);
+            textY += font.lineHeight + 2;
+        }
+        renderStepButton(graphics, shown, mouseX, mouseY, true);
+        renderStepButton(graphics, shown, mouseX, mouseY, false);
+        graphics.pose().popPose();
+    }
+
+    private void renderStepButton(GuiGraphics graphics, StepPanel shown, int mouseX, int mouseY, boolean cancel) {
+        Component label = stepButtonLabel(cancel);
+        int x = shown.buttonX(cancel);
+        int y = shown.buttonY();
+        int width = shown.buttonWidth(cancel);
+        boolean hovered = isOverStepButton(mouseX, mouseY, cancel);
+        graphics.fill(x, y, x + width, y + CONFIRM_BUTTON_HEIGHT,
+                hovered ? COLOR_CONFIRM_BUTTON_HOVER : COLOR_CONFIRM_BUTTON);
+        graphics.drawString(font, label, x + (width - font.width(label)) / 2,
+                y + (CONFIRM_BUTTON_HEIGHT - font.lineHeight) / 2 + 1, cancel ? COLOR_ERROR : COLOR_TEXT, false);
+    }
+
+    private static Component stepButtonLabel(boolean cancel) {
+        return WareworksLang.translateDirect(
+                cancel ? WareworksLang.TERMINAL_PLAN_CANCEL : WareworksLang.TERMINAL_PLAN_CLOSE);
+    }
+
+    private int stepButtonWidth(boolean cancel) {
+        return font.width(stepButtonLabel(cancel)) + 2 * CONFIRM_BUTTON_PADDING;
+    }
+
+    /** Whether the mouse is over one of the panel's two buttons; false while no panel is up. */
+    public boolean isOverStepButton(double mouseX, double mouseY, boolean cancel) {
+        StepPanel shown = stepPanel();
+        if (shown == null)
+            return false;
+        int x = shown.buttonX(cancel);
+        int y = shown.buttonY();
+        return mouseX >= x && mouseX < x + shown.buttonWidth(cancel) && mouseY >= y
+                && mouseY < y + CONFIRM_BUTTON_HEIGHT;
+    }
+
+    /** The centre of one of the panel's buttons for the dev harness's real mouse input; -1 while no panel is up. */
+    public int stepButtonCenterX(boolean cancel) {
+        StepPanel shown = stepPanel();
+        return shown == null ? -1 : shown.buttonX(cancel) + shown.buttonWidth(cancel) / 2;
+    }
+
+    /** The vertical centre of both of the panel's buttons; -1 while no panel is up. */
+    public int stepButtonCenterY() {
+        StepPanel shown = stepPanel();
+        return shown == null ? -1 : shown.buttonY() + CONFIRM_BUTTON_HEIGHT / 2;
     }
 
     // --- helpers ---------------------------------------------------------------------------------------------------

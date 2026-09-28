@@ -35,6 +35,8 @@ import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -101,6 +103,26 @@ public final class ProductionGameTests {
      * part: 5 in stock, 2 missing, and one run makes 4. Deliberately not a multiple of {@link #PLANKS_PER_RUN}.
      */
     private static final int MIXED_ORDER = 7;
+
+    /**
+     * NBT names of the controller's saved production orders ({@code ControllerPersistence}), for the tests that write a
+     * save by hand. They are repeated here on purpose: a test that reached into the writer's own constants could not
+     * notice a renamed key, which is exactly the kind of change that breaks an old save.
+     */
+    private static final String PRODUCTION_ORDERS_TAG = "ProductionOrders";
+    private static final String PARENT_TAG = "Parent";
+    private static final String LINES_TAG = "Lines";
+    private static final String ID_TAG = "Id";
+    private static final String ITEM_TAG = "Item";
+    private static final String RESULT_TAG = "Result";
+    private static final String RESULT_AMOUNT_TAG = "ResultAmount";
+    private static final String REQUIRED_TAG = "Required";
+    private static final String DELIVERED_TAG = "Delivered";
+    private static final String REQUEST_TAG = "Request";
+    private static final String PROMISED_TAG = "Promised";
+    /** The hand-written step of the plan tests: 4 nails make 2 logs. */
+    private static final int STEP_NAILS = 4;
+    private static final int STEP_LOGS = 2;
 
     private static final int TIMEOUT_TICKS = 600;
     private static final int LONG_TIMEOUT_TICKS = 1800;
@@ -816,6 +838,141 @@ public final class ProductionGameTests {
                 .thenSucceed();
     }
 
+    /**
+     * A production plan survives a save (M20, issue #4, ADR-032), and a save from <b>before</b> plans existed reads
+     * back as exactly what it was.
+     * <p>
+     * A plan is stored as one optional field per order — the ingredient line of the order a step makes its product for —
+     * so an ordinary order writes nothing new at all, which is what makes an old save load without a migration. Nothing
+     * creates a plan yet, so the step here is <b>written into the save by hand</b>, exactly as the accept path will
+     * write it later, and the aisle is parked: no crane moves, so the test reads the orders as the save described them.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void productionPlanPersistence(GameTestHelper helper) {
+        AisleFixture aisle = parkedAisle(helper, 0);
+        CompoundTag[] plain = new CompoundTag[1];
+        UUID[] parentLine = new UUID[1];
+        UUID[] stepId = new UUID[1];
+        helper.startSequence()
+                .thenWaitUntil(() -> assertStocked(helper, aisle))
+                .thenExecute(() -> order(helper, aisle))
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag saved = aisle.controller().saveWithFullMetadata(registries);
+                    ListTag orders = saved.getList(PRODUCTION_ORDERS_TAG, Tag.TAG_COMPOUND);
+                    helper.assertValueEqual(orders.size(), 1, "one saved production order");
+                    helper.assertFalse(orders.getCompound(0).contains(PARENT_TAG),
+                            "an ordinary order writes no parent link, so a pre-M20 save looks exactly like this one");
+                    plain[0] = saved;
+
+                    // The pre-M20 case: a save with no parent link anywhere is a plain single-level order again.
+                    WarehouseControllerBlockEntity copy = loadCopy(helper, aisle.controller(), saved.copy(),
+                            WarehouseControllerBlockEntity.class);
+                    List<ProductionOrder<ItemKey, RackPosition>> restored = copy.productionOrders();
+                    helper.assertValueEqual(restored.size(), 1, "the saved order is restored");
+                    helper.assertFalse(restored.getFirst().isStep(), "and it is nobody's step");
+                    helper.assertTrue(restored.getFirst().parentLine().isEmpty(), "with no link to anything");
+                    helper.assertTrue(restored.getFirst().isOpen(), "it simply runs on as it always did");
+                })
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag withPlan = plain[0].copy();
+                    parentLine[0] = firstLineOf(helper, withPlan);
+                    stepId[0] = addHandWrittenStep(helper, withPlan, registries, parentLine[0], false);
+                    installController(helper, aisle, withPlan);
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(controller.productionOrders().size(), 2, "both orders of the plan are back");
+                    ProductionOrder<ItemKey, RackPosition> step = orderOf(helper, aisle, stepId[0]);
+                    helper.assertTrue(step.isStep(), "the step kept its parent link through the save");
+                    helper.assertValueEqual(step.parentLine(), Optional.of(parentLine[0]),
+                            "and it still names the very line it makes its product for");
+                    helper.assertValueEqual(controller.openProductionOrders().size(), 2,
+                            "an intact plan is left running");
+                    helper.assertValueEqual(controller.availableStock(NAIL), (long) NAILS_IN_STOCK - STEP_NAILS,
+                            "the step promises its own ingredients like any other order");
+                    helper.assertValueEqual(controller.pausedStockRuleCount(), 0, "and nothing is paused");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A save that does not describe a whole plan any more never leaves a step waiting for a parent that does not exist
+     * (M20): the step is ended on the first tick after the load, and what that costs follows the documented boundary —
+     * a step that has handed nothing over is cancelled, one whose ingredients are already in a machine is detached and
+     * left running so its product still comes back (§3.5.4).
+     * <p>
+     * A save-integrity failure is <b>no evidence about anybody's machine</b>, so none of this arms the safety stop
+     * (ADR-027): that would wedge the aisle's production behind a pause only a player can lift.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void productionPlanBrokenBySaveDataIsEnded(GameTestHelper helper) {
+        AisleFixture aisle = parkedAisle(helper, 0);
+        CompoundTag[] plain = new CompoundTag[1];
+        UUID[] stepId = new UUID[1];
+        helper.startSequence()
+                .thenWaitUntil(() -> assertStocked(helper, aisle))
+                .thenExecute(() -> order(helper, aisle))
+                .thenExecute(() -> plain[0] = aisle.controller()
+                        .saveWithFullMetadata(helper.getLevel().registryAccess()))
+                // A truncated save: the step is there, the order it was making its product for is not.
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag truncated = plain[0].copy();
+                    stepId[0] = addHandWrittenStep(helper, truncated, registries, firstLineOf(helper, truncated),
+                            false);
+                    dropFirstOrder(helper, truncated);
+                    installController(helper, aisle, truncated);
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    ProductionOrder<ItemKey, RackPosition> step = orderOf(helper, aisle, stepId[0]);
+                    helper.assertValueEqual(step.state(), ProductionOrderState.CANCELLED,
+                            "a step whose parent was truncated away cost nothing and is cancelled");
+                    helper.assertValueEqual(controller.openProductionOrders().size(), 0, "so nothing is open");
+                    helper.assertValueEqual(controller.availableStock(NAIL), (long) NAILS_IN_STOCK,
+                            "and the crane fetches nothing for it any more");
+                    helper.assertTrue(step.isStep(),
+                            "the finished step keeps its link: nothing acts on it, and the check finds nothing twice");
+                    helper.assertValueEqual(controller.pausedStockRuleCount(), 0,
+                            "a broken save pauses nothing: it says nothing about a machine");
+                })
+                // A link that names no line at all, with the parent order itself perfectly fine.
+                .thenExecute(() -> {
+                    CompoundTag dangling = plain[0].copy();
+                    stepId[0] = addHandWrittenStep(helper, dangling, helper.getLevel().registryAccess(),
+                            UUID.randomUUID(), false);
+                    installController(helper, aisle, dangling);
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(orderOf(helper, aisle, stepId[0]).state(), ProductionOrderState.CANCELLED,
+                            "a parent line nobody owns is as broken as a missing parent");
+                    helper.assertValueEqual(controller.openProductionOrders().size(), 1,
+                            "but only the step ended: the order it claimed to feed runs on");
+                    helper.assertValueEqual(controller.availableStock(LOG), (long) LOGS_IN_STOCK - RUNS * LOG_PER_RUN,
+                            "and keeps promising its own ingredients");
+                    helper.assertValueEqual(controller.pausedStockRuleCount(), 0, "still nothing paused");
+                })
+                // The kinder half of the rule: ingredients already at the machine are not thrown away.
+                .thenExecute(() -> {
+                    CompoundTag paid = plain[0].copy();
+                    stepId[0] = addHandWrittenStep(helper, paid, helper.getLevel().registryAccess(),
+                            UUID.randomUUID(), true);
+                    installController(helper, aisle, paid);
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    ProductionOrder<ItemKey, RackPosition> step = orderOf(helper, aisle, stepId[0]);
+                    helper.assertTrue(step.isOpen(), "its items are in a machine, so it runs on and the product comes");
+                    helper.assertFalse(step.isStep(), "it is an ordinary order now, making items nobody promised");
+                    helper.assertValueEqual(step.deliveredIngredients(), STEP_NAILS,
+                            "and it still reports what was handed over");
+                    helper.assertValueEqual(aisle.controller().pausedStockRuleCount(), 0, "and nothing is paused");
+                })
+                .thenSucceed();
+    }
+
     // --- helpers -------------------------------------------------------------------------------------------------
 
     /** The aisle with stocked log and nail chests, an empty plank chest, stations and a patterned production block. */
@@ -970,6 +1127,83 @@ public final class ProductionGameTests {
                 total += stack.getCount();
         }
         return total;
+    }
+
+    /**
+     * Adds one production order to a controller's save <b>by hand</b>: a step that makes {@value #STEP_LOGS} logs out
+     * of {@value #STEP_NAILS} nails for the ingredient line {@code parentLine}. Nothing in the mod creates a plan yet,
+     * so this is how a save with one gets written — the entry is a copy of the order that is really there, with its own
+     * id, its own ingredient line, no backing request and the one field a plan is made of.
+     *
+     * @param parentLine the line the step's product is for; an id nobody owns describes a broken plan
+     * @param delivered  whether the step's nails are already at the machine, which is what decides between cancelling
+     *                   and detaching it
+     * @return the id of the added order
+     */
+    private static UUID addHandWrittenStep(GameTestHelper helper, CompoundTag saved,
+            HolderLookup.Provider registries, UUID parentLine, boolean delivered) {
+        ListTag orders = saved.getList(PRODUCTION_ORDERS_TAG, Tag.TAG_COMPOUND);
+        if (orders.isEmpty()) {
+            helper.fail("the save has no production order to hang a step on");
+            throw new IllegalStateException("unreachable");
+        }
+        CompoundTag step = orders.getCompound(0).copy();
+        UUID id = UUID.randomUUID();
+        step.putUUID(ID_TAG, id);
+        step.put(RESULT_TAG, LOG.save(registries));
+        step.putInt(RESULT_AMOUNT_TAG, STEP_LOGS);
+        step.remove(REQUEST_TAG); // nobody waits for a step directly
+        step.putLong(PROMISED_TAG, 0L);
+        step.putUUID(PARENT_TAG, parentLine);
+        CompoundTag line = new CompoundTag();
+        line.putUUID(ID_TAG, UUID.randomUUID());
+        line.put(ITEM_TAG, NAIL.save(registries));
+        line.putInt(REQUIRED_TAG, STEP_NAILS);
+        line.putInt(DELIVERED_TAG, delivered ? STEP_NAILS : 0);
+        ListTag lines = new ListTag();
+        lines.add(line);
+        step.put(LINES_TAG, lines);
+        orders.add(step);
+        saved.put(PRODUCTION_ORDERS_TAG, orders);
+        return id;
+    }
+
+    /** The id of the first ingredient line of the first saved production order. */
+    private static UUID firstLineOf(GameTestHelper helper, CompoundTag saved) {
+        ListTag orders = saved.getList(PRODUCTION_ORDERS_TAG, Tag.TAG_COMPOUND);
+        if (orders.isEmpty()) {
+            helper.fail("the save has no production order");
+            throw new IllegalStateException("unreachable");
+        }
+        return orders.getCompound(0).getList(LINES_TAG, Tag.TAG_COMPOUND).getCompound(0).getUUID(ID_TAG);
+    }
+
+    /** Drops the first saved production order, as a save truncated at its order limit would. */
+    private static void dropFirstOrder(GameTestHelper helper, CompoundTag saved) {
+        ListTag orders = saved.getList(PRODUCTION_ORDERS_TAG, Tag.TAG_COMPOUND);
+        if (orders.isEmpty()) {
+            helper.fail("the save has no production order to drop");
+            return;
+        }
+        orders.remove(0);
+        saved.put(PRODUCTION_ORDERS_TAG, orders);
+    }
+
+    /** Replaces the live controller with one loaded from {@code tag}, the way a reload builds it. */
+    private static void installController(GameTestHelper helper, AisleFixture aisle, CompoundTag tag) {
+        WarehouseControllerBlockEntity live = aisle.controller();
+        helper.getLevel().setBlockEntity(loadCopy(helper, live, tag, WarehouseControllerBlockEntity.class));
+        helper.assertTrue(live.isRemoved(), "the controller was really replaced");
+    }
+
+    /** The aisle's production order {@code id}; fails the test when it is gone. */
+    private static ProductionOrder<ItemKey, RackPosition> orderOf(GameTestHelper helper, AisleFixture aisle, UUID id) {
+        Optional<ProductionOrder<ItemKey, RackPosition>> order = aisle.controller().productionOrder(id);
+        if (order.isEmpty()) {
+            helper.fail("expected the production order " + id + " to be there");
+            throw new IllegalStateException("unreachable");
+        }
+        return order.get();
     }
 
     /** A fresh block entity from a save, the way a reload builds one ({@code CraneJobGameTests#loadCopy}). */

@@ -10,6 +10,7 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.StockRuleAdjustment;
@@ -144,10 +145,26 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_MISSING), "Ingredients still to fetch: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_AWAITED), "Waiting for results: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_STATIONS), "Production stations: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_RESUMED), "The warehouse makes %1$s again");
+        // "Delivered and never came back" rather than "stayed in the machine": the number is what the crane dropped into
+        // the *station*, and part of it may still be in the station's own buffer, which a player can empty by hand.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_RESUMED_LOST),
+                "The warehouse makes %1$s again; %2$s ingredient items were delivered and never came back");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_NOTHING_STOPPED),
+                "Nothing this station makes is stopped");
+        // The safety stop where the machine is (M20, issue #4, ADR-032): the goggle line, the screen's own row and the
+        // sentence that says how to lift it. "Stopped" rather than "paused", because a player stopped nothing here.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_STOPPED), "Stopped products: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_RESUME_HINT),
+                "Sneak-click the station to make them again");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_STOPPED_LINE),
+                "Stopped: %1$s. Click to make it again");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_STOPPED_LINE_MANY),
+                "Stopped: %1$s products. Click to make them again");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_STOPPED_ITEM), "%1$s: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STOCK_RULES), "Stock rules: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_BELOW_MINIMUM), "Below minimum: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_AT_MAXIMUM), "At maximum: %1$s");
-        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_PAUSED), "Paused after a lost batch: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_STOCK_KEEPER), "Warehouse Stock Keeper:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_RULES), "Rules: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_NO_RULES), "No rules set");
@@ -341,6 +358,10 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_CANCEL_HINT), "Click to give up on this order");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_INGREDIENTS_LOST),
                 "Ingredients your machine already took are not recovered");
+        // Not a ProductionOrderState (M20, issue #4): such an order is nominally waiting for ingredients, but it
+        // fetches nothing at all until the step below it is done. One sentence for the terminal's step panel, a
+        // station's own order rows and that station's goggle line, so the three can never disagree.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_WAITING_FOR_STEP), "waiting for an earlier step");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RULES), "Rules");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_EMPTY_ROW), "Empty row");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM), "Minimum");
@@ -402,12 +423,14 @@ public final class WareworksLangGen {
             lang.accept(WareworksLang.key(WareworksLang.keeperPausedKey(cause)), switch (cause) {
                 case TIMED_OUT -> "the last order timed out";
                 case CANCELLED -> "the last order was given up";
+                case ORDER_TIMED_OUT -> "an order at a machine timed out";
+                case ORDER_CANCELLED -> "an order at a machine was given up";
             });
         }
         // Label-and-number rather than "%1$s ingredient items", which reads "1 ingredient items" at the count that
         // fires the safety stop most often (M15 DoD). The same shape as the goggle lines "Below minimum: N".
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_PAUSED_LOST),
-                "Ingredient items not recovered: %1$s");
+                "Ingredient items delivered and never returned: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RESUME_HINT),
                 "Click the mark to order again, once the machine works");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_PAUSED_LINE),
@@ -427,6 +450,27 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PRODUCTION), "Production");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_ORDER_LOST), "%1$s, not recovered");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PRODUCING), "Requested %1$s x%2$s, producing %3$s");
+
+        // A production plan in the terminal (M20, issue #4, ADR-032). The section has two lines and a chain has up to
+        // maxProductionPlanSteps orders, so a chain takes one line: what it makes on the left, where the work really is
+        // on the right, and the steps themselves in a panel that names the machine to walk to.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_FRONTIER), "now: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_STEPS), "%1$s steps");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_TITLE), "Chain for %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_STEP_AT), "%1$s: %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_NO_ADDRESS), "no address");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_CANCEL_COST), "Steps that would end: %1$s");
+        // "Already delivered to your stations", not "at your machines": the number is what the crane handed over, and some
+        // of it may still be in a station's own buffer. The third line is the consequence a player cannot see coming.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_CANCEL_LOST),
+                "Ingredients already delivered: %1$s - the warehouse does not fetch them back");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_CANCEL_STOP),
+                "The warehouse then stops making %1$s until you resume it at the machine");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_CANCEL), "Give up on the chain");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_CLOSE), "Close");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_HINT), "Click to see every step of the chain");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PLAN_CANCEL_HINT),
+                "Click the x to give up on the whole chain");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_DELIVERED_ITEMS), "Delivered so far: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_INCOMING), "Incoming: %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_OUTGOING), "Reserved for pickup: %1$s x%2$s");
@@ -444,7 +488,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEMS), "Items: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_RULES),
                 "Rules: %1$s · below min %2$s · at max %3$s");
-        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_RULES_PAUSED), "Rules paused: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_STOPPED), "Stopped products: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS), "Ports: %1$s accepting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS_BOTH),
                 "Ports: %1$s accepting, %2$s collecting");
@@ -478,6 +522,28 @@ public final class WareworksLangGen {
                 case OUT_OF_REACH -> "you are too far away from the terminal";
                 case INVALID_AMOUNT -> "the requested amount must be at least 1";
                 case RESERVED -> "a stock rule keeps the rest of it in reserve";
+                case PRODUCTION_PAUSED -> "the warehouse has stopped making it; check the machine and resume it";
+            });
+        }
+
+        // Why a production chain could not be planned (M20, issue #4, ADR-032). Every one of them names the item it is
+        // about, which is what makes a refusal something a player can walk to: a click on a chest is refused because
+        // oak logs are missing, not because "the chest" is.
+        //
+        // These are written for the terminal's status row and are therefore short. That row is 216 px wide and holds
+        // one line ({@code docs/warehouse-system.md} §3.4.2), and a refusal is the one answer a player really has to
+        // read, so the sentence must fit with the item's name still in it. The wordier cure ("wait for an order",
+        // "raise the limit") lives in the item descriptions and the goggle lines, which have room for it.
+        for (PlanRefusal refusal : PlanRefusal.values()) {
+            lang.accept(WareworksLang.key(refusal.langKey()), switch (refusal) {
+                case NO_PATTERN -> "No pattern makes %1$s";
+                case MISSING_INGREDIENT -> "%1$s is missing";
+                case PAUSED -> "Making %1$s is stopped";
+                case NO_ROOM -> "No room for %1$s";
+                case LOOP -> "The chain loops at %1$s";
+                case TOO_MANY_STEPS -> "Too many steps to make %1$s";
+                case TOO_MANY_INGREDIENT_ITEMS -> "Too many items to make %1$s";
+                case ORDERS_BUSY -> "No free order for %1$s";
             });
         }
 
@@ -556,6 +622,11 @@ public final class WareworksLangGen {
                 "The screen lists everything the _aisle_ holds with the amount that is still _available_. Every request "
                         + "is a normal _retrieval job_: the crane brings the items here, just like a request from a "
                         + "_warehouse output_.",
+                "When ordering something made of something else",
+                "An item your _production stations_ can make is offered even when none is in stock, and one whose "
+                        + "_ingredients_ are missing is ordered as a whole _chain_. The terminal shows it as _one line_ "
+                        + "with the step that is working; a click on that line lists every _step_ with the _address_ of "
+                        + "the machine it runs at, and gives the whole chain up at once.",
                 "When looked at with Goggles",
                 "Shows its _address_, the _buffered items_, the _pending request_ with the items _delivered_ so far, "
                         + "and why the last request was _refused_.");
@@ -574,9 +645,22 @@ public final class WareworksLangGen {
                 "The _terminal_ marks a pattern's result as _producible_ even when none is in stock. Ordering it "
                         + "reserves the _ingredients_, the crane delivers them here, and the _product_ returns to the "
                         + "warehouse through a _warehouse input_ like any other item.",
+                "When an ingredient is missing",
+                "If another _pattern_ of the same aisle makes that ingredient, the whole _chain_ is planned the moment "
+                        + "you click: _one order per step_, each at the station holding its pattern, and every "
+                        + "_intermediate_ travels through a real _storage location_. A step that is waiting for an "
+                        + "earlier one is handed _nothing_ at all. If something is really missing, the click is "
+                        + "_refused_ and names the item.",
+                "When a batch is lost",
+                "If your machine takes the _ingredients_ and nothing comes back, the warehouse _stops making that "
+                        + "item_ and the _ring_ of this block turns into a red _lamp_: nothing takes items back out of "
+                        + "a machine, so it never quietly tries again. Look at the machine, then _Sneak-Right-Click_ "
+                        + "this block or click the red row in its _screen_ to make the item again — you are told how "
+                        + "many _ingredients_ were delivered and never came back.",
                 "When looked at with Goggles",
                 "Shows its _address_, its _patterns_, the running _production orders_ with their _state_ and the "
-                        + "_buffered items_.");
+                        + "_buffered items_. While the warehouse has _stopped_ making something this station makes, it "
+                        + "says how many products are held and what they cost.");
 
         tooltip(lang, "block.wareworks.warehouse_stock_keeper",
                 "Holds the _stock rules_ of a warehouse _aisle_: one _item_ per row plus a _minimum_, a _maximum_ and "
@@ -596,7 +680,8 @@ public final class WareworksLangGen {
                 "If a _warehouse production_ of the same aisle has a _pattern_ for the item, the warehouse _orders it "
                         + "by itself_ while it is below the minimum — never spending what a _reserve_ protects. If a "
                         + "machine _swallows_ a batch and nothing comes back, that rule _stops ordering_ and waits for "
-                        + "you: open it and click the rule's _mark_ to let it try again.",
+                        + "you: open it and click the rule's _mark_, or _Sneak-Right-Click_ the _warehouse production_ "
+                        + "that makes the item, to let it try again.",
                 "Maximum: what may be stored",
                 "The warehouse stores _no more_ than this. Above it the _stacker crane_ stops accepting the item and "
                         + "a _warehouse input_ holding it _backs up on purpose_ — that is the rule working, not a jam.",

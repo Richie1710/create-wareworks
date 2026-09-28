@@ -90,6 +90,11 @@ final class ControllerPersistence {
     private static final String REQUEST = "Request";
     /** Marks an order the warehouse started by itself to refill a stock rule (M15 part 2). */
     private static final String RESTOCK = "Restock";
+    /**
+     * The ingredient line of another order this one is a step for (M20): the only thing a production plan is stored as
+     * ({@code ProductionOrder#parentLine}).
+     */
+    private static final String PARENT = "Parent";
     /** Bound on the production orders one save may contain, whatever {@code maxProductionOrders} allows. */
     private static final int MAX_SAVED_ORDERS = 256;
     private static final String REQUESTED = "Requested";
@@ -285,12 +290,21 @@ final class ControllerPersistence {
      * <pre>
      * ProductionOrders: [ { Id: UUID, Station: {X, Y, Side}, Result: &lt;ItemKey&gt;, ResultAmount: int,
      *                       State: "WAITING_FOR_RESULT", Produced: long, StockSeen: long, Request?: UUID,
-     *                       Promised: long, Restock?: boolean,
+     *                       Promised: long, Restock?: boolean, Parent?: UUID,
      *                       Lines: [ { Id: UUID, Item: &lt;ItemKey&gt;, Required: int, Delivered: int } ] } ]
      * </pre>
      * <b>The deadline is deliberately not saved.</b> A world that was closed for an hour would otherwise time out
      * every order the moment it loads; a restored order starts its timeout over instead
      * ({@code ProductionOrders#restartDeadlines}). Writing never throws (an order that fails is skipped and logged).
+     * <p>
+     * <b>A production plan is saved as one optional field per order</b> (M20, ADR-032): {@code Parent} is the
+     * ingredient line of the order this one is a step for, and it is written only when there is one — so an order saved
+     * before M20 reads back as exactly what it was, a plain single-level order, with no migration and nothing that can
+     * throw. Everything else about a plan (its root, its depth, which step is working) is derived from those links
+     * when it is asked for, so no two saved numbers can disagree. A save whose links are broken — truncated at
+     * {@value #MAX_SAVED_ORDERS} entries, or edited — is repaired once after the restore by
+     * {@code ProductionOrders#validatePlans}, which is what guarantees that no step is ever left waiting for a parent
+     * that does not exist.
      */
     static void writeProductionOrders(CompoundTag tag, List<ProductionOrder<ItemKey, RackPosition>> orders,
                                       HolderLookup.Provider registries) {
@@ -331,6 +345,9 @@ final class ControllerPersistence {
                 // reads back as "a request asked for this", which is what it was.
                 if (order.isRestock())
                     entry.putBoolean(RESTOCK, true);
+                // Only for a step of a plan, for the same reason: every order that is not one saves exactly what it
+                // always saved (M20).
+                order.parentLine().ifPresent(parent -> entry.putUUID(PARENT, parent));
                 entry.put(LINES, lines);
                 list.add(entry);
             } catch (RuntimeException e) {
@@ -386,9 +403,13 @@ final class ControllerPersistence {
         // back, so reading the full result amount is what keeps an old save behaving exactly as it did; every order
         // written from now on carries the real promise (ProductionOrder#promisedToRequest).
         long promised = entry.contains(PROMISED, Tag.TAG_LONG) ? entry.getLong(PROMISED) : resultAmount;
+        // No Parent means "not a step", which is what every save before M20 says and what every plain order says now.
+        // A Parent that names no line of any restored order is not repaired here: reading stays a pure decode, and
+        // ProductionOrders#validatePlans ends such a step once, after the whole list is back.
+        Optional<UUID> parent = entry.hasUUID(PARENT) ? Optional.of(entry.getUUID(PARENT)) : Optional.empty();
         return Optional.of(new ProductionOrder<>(entry.getUUID(ID), station.get(), result.get(), resultAmount, lines,
                 state, 0L, Math.max(0L, entry.getLong(PRODUCED)), Math.max(0L, entry.getLong(STOCK_SEEN)), request,
-                promised, entry.getBoolean(RESTOCK)));
+                promised, entry.getBoolean(RESTOCK), parent));
     }
 
     /**

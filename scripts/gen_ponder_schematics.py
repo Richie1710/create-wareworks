@@ -54,6 +54,7 @@ TEMPLATES = {
     "warehouse/terminal": (7, 6, 7),
     "warehouse/requesting": (9, 7, 9),
     "warehouse/production": (9, 7, 9),
+    "warehouse/production_chain": (9, 7, 9),
     "warehouse/stock_rules": (9, 7, 9),
     "warehouse/restocking": (9, 7, 9),
     "warehouse/port_requesting": (9, 7, 9),

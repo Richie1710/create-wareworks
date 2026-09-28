@@ -127,7 +127,7 @@ public final class RestockPlanner {
         // a cap never leaves the warehouse again: the rule would report AT_MAXIMUM for ever, its lamp would stay lit and
         // a warehouse input holding the item would back up on purpose — the state §3.6 teaches a player to read as a
         // jam. An uncapped rule has room for Long.MAX_VALUE and is unaffected.
-        runs = Math.min(runs, wholeRunsWithin(input.rule().headroom(input.levels()), chosen.result().count()));
+        runs = Math.min(runs, chosen.runsWithin(input.rule().headroom(input.levels())));
         if (runs < 1)
             // "Keep exactly 64, made four at a time, and 62 in the racks": a pair of numbers only a player can resolve.
             return RestockDecision.of(key, RestockOutcome.NO_ROOM);
@@ -138,13 +138,6 @@ public final class RestockPlanner {
         if (runs < 1)
             return waitingFor(key, usable, availableToAutomation);
         return RestockDecision.order(key, runs, chosen);
-    }
-
-    /** How many whole runs of {@code resultCount} items fit into {@code room}; bounded to an {@code int}. */
-    private static int wholeRunsWithin(long room, int resultCount) {
-        if (room <= 0L || resultCount < 1)
-            return 0;
-        return (int) Math.min(Integer.MAX_VALUE, room / resultCount);
     }
 
     /**

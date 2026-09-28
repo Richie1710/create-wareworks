@@ -28,6 +28,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
@@ -52,11 +53,19 @@ import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.production.PlanBudget;
+import dev.wareworks.core.production.PlanNode;
+import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProduciblePlanner;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionOrders;
 import dev.wareworks.core.production.ProductionPattern;
+import dev.wareworks.core.production.ProductionPlan;
+import dev.wareworks.core.production.ProductionPlanInput;
+import dev.wareworks.core.production.ProductionPlanResult;
+import dev.wareworks.core.production.ProductionPlanner;
+import dev.wareworks.core.production.StationPattern;
 import dev.wareworks.core.production.SupplyLine;
 import dev.wareworks.core.stock.RestockDecision;
 import dev.wareworks.core.stock.RestockInput;
@@ -209,6 +218,31 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * ({@link StockRulePause}).
      */
     private final Map<ItemKey, StockRulePause> stockPauses = new LinkedHashMap<>();
+    /**
+     * The production stations of this aisle whose own block is currently showing the safety stop
+     * ({@code WarehouseProductionBlock#STOPPED}, M20), by world position. Derived and never saved.
+     * <p>
+     * It is a <b>set</b> rather than a flag for one reason: a lamp lives in a block state, which survives every save,
+     * so a station that leaves this warehouse — broken, turned away from the aisle, or its pattern deleted — would
+     * otherwise keep burning for a warehouse that is not watching it any more. The next pass walks what it lit last
+     * time and puts out whatever it did not light again, which is the counterpart M15 had to add for the stock
+     * keeper's comparator ({@link #clearKeeperRuleState}). It also keeps a warehouse without a pause from resolving a
+     * single station.
+     */
+    private final Set<BlockPos> stoppedStations = new LinkedHashSet<>();
+    /**
+     * Whether one pass has looked at <b>every</b> production station of this aisle since this controller was loaded, so
+     * {@link #stoppedStations} may be trusted to know about every lit lamp (M20 review fix).
+     * <p>
+     * A lamp lives in a block state and therefore survives every save, while the set above does not: after a load the set
+     * is empty and a station's lamp may well be burning. Without this flag the cheap guard of
+     * {@link #refreshProductionStops} ("no pause and nothing lit, so nothing to do") would read that empty set as proof
+     * and return for ever, leaving a red light nothing can put out — and the same would happen to a station that was
+     * unloaded during a pass while the last pause was lifted. One sweep per load costs one block entity lookup per
+     * production station, once; afterwards a warehouse that has never lost a batch pays nothing again. A pass that could
+     * not reach every station does not set it, so the next one tries again.
+     */
+    private boolean stopsSwept;
     /** Production orders of this aisle ({@code docs/warehouse-system.md} §3.5, ADR-024). Saved. */
     private final ProductionOrders<ItemKey, RackPosition> productionOrders =
             new ProductionOrders<>(configuredMaxProductionOrders());
@@ -237,8 +271,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * ({@link #onStockRulesChanged}).
      */
     private boolean stockRulesRefreshPending = true;
-    /** Restored orders have no deadline yet: the first tick that knows the game time gives them a fresh one. */
-    private boolean productionDeadlinesPending;
+    /**
+     * A restore is waiting to be finished on the first tick that knows the game time: restored orders have no deadline
+     * yet, and a saved production plan has not been checked yet ({@code ProductionOrders#validatePlans}).
+     */
+    private boolean productionRestorePending;
     /** Rate limit for the "could not read storage location" line: a second, different inventory stays reportable. */
     private final LogThrottle snapshotFailures = new LogThrottle();
     /**
@@ -1330,6 +1367,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * The ingredients the open production orders still owe their stations, for the planner
      * ({@code PlannerInput#supplies}). Only orders that are still collecting ingredients contribute, and only at
      * stations this aisle really records.
+     * <p>
+     * <b>An order that is waiting for a step of its own plan contributes nothing at all</b> (M20, ADR-032): not one of
+     * its lines, not even the ones the racks could pay for right now. This is the safety property of a chain. A machine
+     * cannot run on a partial set, but a funnel or a Mechanical Arm will happily push half a run into it, and a chain
+     * that then fails has left half-sets of ingredients in several machines with nothing to show for them — which is
+     * exactly what turns a deep chain into a deep loss ({@code docs/warehouse-system.md} §3.5.4). Waiting also makes the
+     * blocked state truthful, and it makes two steps of one plan at the same station strictly sequential.
+     * <p>
+     * It costs one {@link ProductionOrders#hasOpenChildren} per open order — a lookup per ingredient line, bounded by
+     * {@code maxProductionOrders} — and nothing at all in an aisle whose orders are all single level.
      */
     public List<PlannerInput.SupplyNeed<ItemKey, RackPosition>> supplyNeeds() {
         if (level == null || level.isClientSide || layout == null || productionOrders.isEmpty())
@@ -1338,6 +1385,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.open()) {
             if (order.state() != ProductionOrderState.WAITING_FOR_INGREDIENTS
                     || membership.kindAt(order.station()).orElse(null) != LocationKind.PRODUCTION)
+                continue;
+            if (productionOrders.hasOpenChildren(order.id()))
                 continue;
             for (SupplyLine<ItemKey> line : order.lines()) {
                 if (line.remaining() > 0)
@@ -1361,13 +1410,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * Server: cancels production order {@code id}. Its ingredients stop being promised; ingredients a machine already
      * took are <b>not</b> recovered ({@code docs/warehouse-system.md} §3.5), and the request that waited for the
      * result gets the unproduced amount back instead of waiting for ever.
+     * <p>
+     * <b>Cancelling one order of a production plan ends the whole plan</b> (M20, ADR-032): an order above it is waiting
+     * for something that will never be made, and an unfinished order below it is making something nobody will use. What
+     * that costs is bounded by the same rule everywhere — what a machine already swallowed is gone and is reported, what
+     * is still in the racks stays there, and an order whose ingredients are already at a machine is left running so its
+     * product still comes back ({@link #failProductionPlan}).
      */
     public Optional<ProductionOrder<ItemKey, RackPosition>> cancelProductionOrder(UUID id) {
         if (level == null || level.isClientSide)
             return Optional.empty();
         Optional<ProductionOrder<ItemKey, RackPosition>> cancelled = productionOrders.cancel(id, level.getGameTime());
         cancelled.ifPresent(order -> {
-            onProductionOrderFinished(order);
+            onProductionOrderEnded(order);
             setChanged();
         });
         return cancelled;
@@ -1384,44 +1439,226 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private void cancelProductionOrdersAt(RackPosition rack) {
         long now = level == null ? 0L : level.getGameTime();
         for (ProductionOrder<ItemKey, RackPosition> cancelled : productionOrders.cancelFor(rack, now))
-            onProductionOrderFinished(cancelled);
+            onProductionOrderEnded(cancelled);
     }
 
     /**
-     * Starts a production order for {@code amount} items of {@code key}, using the pattern of {@code patterns} that
-     * can make the most of it right now.
+     * Everything the planner needs to work out a chain, from <b>one</b> snapshot of this aisle (M20, issue #4,
+     * ADR-032): the patterns of its production stations, what an ingredient is worth to this caller, the configured
+     * bounds, the free order slots, the items the safety stop has stopped, and the room every item's own maximum leaves.
+     * <p>
+     * Built once per click and never per tick. Nothing in it is read again while the plan is worked out — the budget
+     * asks the availability at most once per item, however many times the planner has to try a smaller plan
+     * ({@link PlanBudget#fresh()}) — which is what makes a refusal and the plan that follows it talk about the same
+     * warehouse.
      *
-     * @param available what the ingredients of a pattern are worth to <b>this</b> caller — the plain
-     *                  {@link #availabilityLookup()} for the warehouse's own accounting, and the same lookup behind a
-     *                  rule's reserve for a taker that may not spend it ({@link StockAvailability#of}, M15). It bounds
-     *                  both the pattern choice and the number of runs, so an order can never be started against
-     *                  ingredients its starter is not allowed to have.
-     * @return how many result items the order <b>promises the backing request</b>, i.e. at most {@code amount} (0 when
-     * no order could be started). The order itself may yield more, because a pattern makes whole runs; that surplus
-     * simply lands in stock and was promised to nobody ({@code ProductionOrder#promisedToRequest}).
+     * @param ingredients what an ingredient is worth to <b>this</b> caller: the plain {@link #availabilityLookup()} for
+     *                    the warehouse's own accounting, and the same lookup behind a rule's reserve for a taker that
+     *                    may not spend it ({@link StockAvailability#of}, M15). It bounds both the pattern choice and the
+     *                    number of runs at every level, so no step of a chain can be planned against ingredients its
+     *                    starter is not allowed to have
      */
-    private int startProductionOrder(ItemKey key, int amount, UUID backingRequest, List<AislePattern> patterns,
-            ToLongFunction<ItemKey> available) {
-        if (level == null || layout == null || amount < 1)
+    private ProductionPlanInput<ItemKey, RackPosition> productionPlanInput(List<AislePattern> patterns,
+            ToLongFunction<ItemKey> ingredients) {
+        productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
+        List<StationPattern<ItemKey, RackPosition>> stationPatterns = new ArrayList<>(patterns.size());
+        for (AislePattern candidate : patterns)
+            stationPatterns.add(StationPattern.of(candidate.station(), candidate.pattern()));
+        int slots = configuredMaxProductionOrders();
+        int freeSlots = slots - productionOrders.openCount();
+        // productionRoomFor answers Long.MAX_VALUE for an item no rule caps, which is exactly ProductionPlanInput's
+        // "as much room as anyone could ask for", so an aisle without stock keepers pays nothing for the question.
+        return new ProductionPlanInput<>(stationPatterns, PlanBudget.of(ingredients), WareworksConfig.planLimits(),
+                freeSlots, slots, stockPauses::containsKey, this::productionRoomFor);
+    }
+
+    /**
+     * The chain that would make {@code amount} items of {@code key} for one click, or the refusal that <b>names the
+     * item</b> in the way; empty when nothing is to be produced at all.
+     */
+    private Optional<ProductionPlanResult<ItemKey, RackPosition>> planProduction(
+            ProductionPlanInput<ItemKey, RackPosition> input, ItemKey key, long amount) {
+        if (level == null || layout == null || amount < 1L || input.patterns().isEmpty())
+            return Optional.empty();
+        return Optional.of(ProductionPlanner.plan(input, key, amount));
+    }
+
+    /**
+     * Creates <b>every</b> order of {@code plan} in this tick, children first (M20, issue #4, ADR-032): a chain is
+     * accepted all at once or not at all.
+     * <p>
+     * That atomicity is the whole reservation. The moment the orders exist, every ingredient <i>and</i> every
+     * intermediate of the chain is promised by an ordinary supply line — {@link #availableStock} already subtracts what
+     * the open orders owe — so the plan itself never has to stay valid, and there is no window in which it is a hope
+     * rather than a promise. A half-created chain, on the other hand, would be a parent fetching ingredients for a run
+     * nothing is going to complete, which is why {@link ProductionOrders#addAll} is all-or-nothing.
+     * <p>
+     * Each step names the <b>ingredient line of its parent</b> that its product is for, and the orders are therefore
+     * built root first (a child needs its parent's line id) and added children first.
+     *
+     * @param backingRequest the retrieval request waiting for the ordered item, or {@code null}
+     * @return result items the plan's root <b>promises that request</b>, i.e. at most what was asked for (0 when nothing
+     * was created). A pattern makes whole runs, so the orders may yield more; that surplus simply lands in stock and was
+     * promised to nobody ({@code ProductionOrder#promisedToRequest})
+     */
+    private int startProductionPlan(ProductionPlan<ItemKey, RackPosition> plan, @Nullable UUID backingRequest) {
+        if (level == null || layout == null)
             return 0;
         productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
-        Optional<AislePattern> found = bestProductionPattern(key, patterns, available);
-        if (found.isEmpty())
-            return 0;
-        AislePattern chosen = found.get();
-        int runs = Math.min(chosen.pattern().runsFor(amount),
-                ProduciblePlanner.runsPossible(chosen.pattern(), available));
-        if (runs < 1)
-            return 0;
-        int promised = Math.min(chosen.pattern().resultFor(runs), amount);
-        ProductionOrder<ItemKey, RackPosition> order = ProductionOrder.start(UUID.randomUUID(), chosen.station(),
-                chosen.pattern(), runs, UUID::randomUUID, level.getGameTime(), productionTimeoutTicks(),
-                stock.count(key), backingRequest, promised);
-        if (!productionOrders.add(order))
+        long now = level.getGameTime();
+        long timeout = productionTimeoutTicks();
+        int promised = (int) Math.min(Integer.MAX_VALUE, plan.rootPromise());
+        Map<Integer, ProductionOrder<ItemKey, RackPosition>> byNode = new HashMap<>();
+        // Root first, because a step can only name a line of an order that already exists.
+        for (int index = plan.steps() - 1; index >= 0; index--) {
+            PlanNode<ItemKey, RackPosition> node = plan.node(index);
+            ProductionOrder<ItemKey, RackPosition> order;
+            if (node.isRoot()) {
+                order = ProductionOrder.start(UUID.randomUUID(), node.station(), node.pattern(), node.runs(),
+                        UUID::randomUUID, now, timeout, stock.count(plan.result()), backingRequest, promised);
+            } else {
+                ProductionOrder<ItemKey, RackPosition> parent = byNode.get(node.parent());
+                Optional<UUID> line = parent == null ? Optional.empty() : lineFor(parent, node.result());
+                if (line.isEmpty()) {
+                    // Unreachable: a node's result is an ingredient of its parent's pattern by construction. Creating
+                    // nothing is the only safe answer, because a step without a parent line is not a step at all.
+                    Wareworks.LOGGER.warn("Production plan for {} at {} dropped: step {} has no line to feed",
+                            plan.result(), worldPosition, index);
+                    return 0;
+                }
+                order = ProductionOrder.step(UUID.randomUUID(), node.station(), node.pattern(), node.runs(),
+                        UUID::randomUUID, now, timeout, line.get());
+            }
+            byNode.put(index, order);
+        }
+        List<ProductionOrder<ItemKey, RackPosition>> batch = new ArrayList<>(plan.steps());
+        for (int index = 0; index < plan.steps(); index++)
+            batch.add(byNode.get(index));
+        if (!productionOrders.addAll(batch))
             return 0;
         setChanged();
-        markChunkKeepDirty(); // M19: an open order is work, and an automatic restock order is one of these
+        markChunkKeepDirty(); // M19: an open order is work, and every step of a plan is one of these
         return promised;
+    }
+
+    /** The ingredient line of {@code parent} that asks for {@code key}; a pattern merges duplicates, so at most one. */
+    private static Optional<UUID> lineFor(ProductionOrder<ItemKey, RackPosition> parent, ItemKey key) {
+        for (SupplyLine<ItemKey> line : parent.lines()) {
+            if (line.key().equals(key))
+                return Optional.of(line.id());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Whether a <b>chain</b> started for the output station at {@code destination} is still running (M20, decision 3):
+     * the "at most one open request at a time" rule of a continuous requesting port (M17), extended to plans.
+     * <p>
+     * A redstone port may start a whole chain, and that is unattended: a clock pulsing a port that can spend ingredients
+     * into a tree of machines is exactly the overnight drain ADR-027 forbids. A plan is attributed to the port through
+     * its root's backing request, which is open for as long as the chain is: the request only closes once the produced
+     * items have been delivered there.
+     * <p>
+     * <b>A plan is open while any of its orders is</b>, and that is the whole point of asking it this way round (M20
+     * review fix). The steps of a chain are the <b>first</b> orders to finish; the root then still has to fetch the
+     * intermediate, wait for its own machine and have the product delivered, which is usually the longest part. Asking
+     * "is an open order a step" therefore answered "no plan here" for most of a chain's life, and a clock could stack a
+     * second, third and fourth chain into the same machines. The finished steps are still in the collection while their
+     * plan runs ({@link ProductionOrders#prune} ages a plan out as a whole), so counting the plan's members is exact.
+     * <p>
+     * <b>A chain nobody is waiting for holds every port back.</b> A plan whose root has lost its backing request — the
+     * request was cancelled, pruned with its output or reduced to nothing ({@link ProductionOrders#detachRequest}) —
+     * cannot be attributed to a destination any more, and answering "not this port's" for it would let the very pulse
+     * that this guard exists for start a second chain. It keeps running, so it is treated as one open plan for every
+     * port; it is bounded in time, and the answer a port is given is "the warehouse is busy", which is true.
+     * <p>
+     * Costs one walk of the open orders, each with a bounded walk of its own plan, and only for a
+     * {@link StockAccess#AUTOMATION} request that really would create a chain.
+     */
+    public boolean hasOpenProductionPlan(BlockPos destination) {
+        Objects.requireNonNull(destination, "destination");
+        Set<UUID> seen = new HashSet<>();
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.open()) {
+            ProductionOrder<ItemKey, RackPosition> root = productionOrders.rootOf(order.id()).orElse(order);
+            if (!seen.add(root.id()))
+                continue; // one answer per plan, however many of its orders are open
+            if (productionOrders.planOf(root.id()).size() <= 1)
+                continue; // a single order is nobody's plan
+            Optional<UUID> request = root.backingRequest();
+            if (request.isEmpty())
+                return true;
+            if (requests.get(request.get()).filter(waiting -> waiting.destination().equals(destination)).isPresent())
+                return true;
+        }
+        return false;
+    }
+
+    /** The whole plan production order {@code id} belongs to, in dependency order; an order in no plan is one of one. */
+    public List<ProductionOrder<ItemKey, RackPosition>> productionPlanOf(UUID id) {
+        return id == null ? List.of() : productionOrders.planOf(id);
+    }
+
+    /** Open production orders of this aisle that are a <b>step</b> of a chain, i.e. that another order waits for. */
+    public int openProductionStepCount() {
+        return productionOrders.openStepCount();
+    }
+
+    /**
+     * The screen rows for {@code orders} (M20, issue #4, ADR-032): every order with the plan it belongs to, how deep in
+     * that plan it sits, the <b>address</b> of the station it runs at and whether it is waiting for an earlier step.
+     * <p>
+     * It lives here, in the one place that owns the orders, because both screens show these rows — the terminal's
+     * production section and a production station's own list — and a plan that looked different in the two would be
+     * worse than no plan display at all. The terminal in particular has no aisle layout and no aisle letter, so only the
+     * server can name an address ({@code docs/warehouse-system.md} §3.4.2).
+     * <p>
+     * <b>A plan of one order is no plan.</b> An ordinary single-level order gets an empty plan id, depth 0 and
+     * {@code waitingForStep = false}, which is exactly the row it had before M20: a warehouse that runs no chains looks
+     * unchanged, on the wire and on the screen.
+     * <p>
+     * Cost: one {@link ProductionOrders#planOf} walk per plan, memoised over the rows of one push, plus one
+     * {@code hasOpenChildren} lookup per open order. Nothing here reads an inventory or the world.
+     */
+    public List<ProductionScreenState.OrderView> productionOrderViews(
+            List<ProductionOrder<ItemKey, RackPosition>> orders) {
+        Objects.requireNonNull(orders, "orders");
+        if (orders.isEmpty())
+            return List.of();
+        Map<UUID, Optional<UUID>> planOfOrder = new HashMap<>();
+        Map<UUID, Integer> planSizes = new HashMap<>();
+        List<ProductionScreenState.OrderView> views = new ArrayList<>(orders.size());
+        for (ProductionOrder<ItemKey, RackPosition> order : orders) {
+            Optional<UUID> plan = planOfOrder.computeIfAbsent(order.id(), id -> {
+                UUID root = productionOrders.rootOf(id).map(ProductionOrder::id).orElse(id);
+                int size = planSizes.computeIfAbsent(root, member -> productionOrders.planOf(member).size());
+                return size > 1 ? Optional.of(root) : Optional.empty();
+            });
+            int depth = plan.isPresent() ? productionOrders.depthOf(order.id()) : 0;
+            boolean waiting = waitsForStep(order);
+            views.add(new ProductionScreenState.OrderView(order.id(), order.state(), order.result(),
+                    order.resultAmount(), order.produced(), order.outstandingIngredients(),
+                    order.deliveredIngredients(), plan, depth, stationAddress(order.station()), waiting));
+        }
+        return List.copyOf(views);
+    }
+
+    /**
+     * Whether {@code order} is an open order of a plan that is <b>fetching nothing</b> because an earlier step of its
+     * own chain is still running (M20, issue #4, ADR-032).
+     * <p>
+     * The one definition of that state: {@link #productionOrderViews} sends it to both screens, a production station's
+     * goggle line asks it about its oldest order, and {@link #supplyNeeds} acts on the same question by handing such an
+     * order nothing. A surface that worked it out for itself could contradict what the aisle really does.
+     */
+    public boolean waitsForStep(ProductionOrder<ItemKey, RackPosition> order) {
+        return order != null && order.isOpen() && productionOrders.hasOpenChildren(order.id());
+    }
+
+    /** The canonical address of a rack position of this aisle, e.g. {@code "A-05-01R"}; empty without a layout. */
+    public Optional<String> stationAddress(RackPosition rack) {
+        if (rack == null || layout == null)
+            return Optional.empty();
+        return layout.address(rack).map(StorageAddress::format);
     }
 
     /** The pattern of {@code patterns} that can make the most of {@code key} right now. */
@@ -1457,8 +1694,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             if (order.state() == ProductionOrderState.DELIVERED && !stationStillHolds(order))
                 changed |= productionOrders.ingredientsTaken(order.id(), now, timeout).isPresent();
         }
-        for (ProductionOrder<ItemKey, RackPosition> timedOut : productionOrders.timeOut(now)) {
-            onProductionOrderFinished(timedOut);
+        // A step that times out ends its whole plan (M20): the order above it is waiting for something no machine is
+        // going to make now. An order that is itself waiting for a step is not timed out at all — its deadline starts
+        // over when that step ends (ProductionOrders#timeOut).
+        for (ProductionOrder<ItemKey, RackPosition> timedOut : productionOrders.timeOut(now, timeout)) {
+            onProductionOrderEnded(timedOut);
             changed = true;
         }
         changed |= productionOrders.prune(now, FINISHED_ORDER_RETENTION_TICKS) > 0;
@@ -1482,14 +1722,25 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private boolean observeProductionResults(long now) {
         long timeout = productionTimeoutTicks();
-        if (productionDeadlinesPending) {
-            productionDeadlinesPending = false;
+        boolean changed = false;
+        if (productionRestorePending) {
+            productionRestorePending = false;
             productionOrders.restartDeadlines(now, timeout);
+            // M20: a truncated or hand-edited save must not leave a step waiting for a parent that does not exist.
+            // validatePlans answers for the whole broken chain itself (a step under a step whose own parent is gone is
+            // broken too), so this is deliberately the per-order cleanup and not onProductionOrderEnded: a plan that the
+            // save data does not describe any more must not be "failed" as though a machine had let it down.
+            // It can arm no safety stop either — a step is never an automatic order, it has delivered nothing when it is
+            // cancelled here, and a save-integrity failure is no evidence about anybody's machine (ADR-027, ADR-032).
+            for (ProductionOrder<ItemKey, RackPosition> broken : productionOrders.validatePlans(now)) {
+                changed = true;
+                if (!broken.isOpen())
+                    onProductionOrderFinished(broken);
+            }
         }
         Set<ItemKey> results = new HashSet<>();
         for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.open())
             results.add(order.result());
-        boolean changed = false;
         for (ItemKey result : results) {
             // Items the warehouse really stored out of one of its inputs since the last observation are already
             // counted (onCraneDelivered) and are in this level too: crediting them a second time would complete an
@@ -1554,6 +1805,54 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * A production order <b>ended</b>, in the one place that answers for the whole of it: its own cleanup
+     * ({@link #onProductionOrderFinished}) and, when it did not complete, the rest of the production plan it belonged
+     * to ({@link #failProductionPlan}).
+     * <p>
+     * A <b>completed</b> order never touches its plan: completing is precisely what unblocks the order above it.
+     */
+    private void onProductionOrderEnded(ProductionOrder<ItemKey, RackPosition> order) {
+        onProductionOrderFinished(order);
+        if (order.state() != ProductionOrderState.COMPLETE)
+            failProductionPlan(order);
+    }
+
+    /**
+     * An order of a production plan ended badly, so the rest of that plan ends with it (M20, issue #4, ADR-032):
+     * <b>every open order above it is cancelled</b> — it is waiting for something no machine is going to make now — and
+     * every other open order of the plan is cancelled if it has handed nothing over, or detached and left running if its
+     * ingredients are already at a machine ({@link ProductionOrders#failPlan}).
+     * <p>
+     * Every order this ends goes through the ordinary {@link #onProductionOrderFinished}, so a crane that is fetching
+     * for it aborts before the pick or reroutes what it already holds back into storage, a request waiting for it is
+     * given its promise back, and an order that really did lose a batch arms the safety stop for its own item. The
+     * item-conservation invariant is untouched throughout: nothing is invented and nothing is taken back out of a
+     * machine.
+     * <p>
+     * The plan's whole unrecovered total is logged as one number, because that is what a player has to be told
+     * ({@code docs/warehouse-system.md} §3.5.4); the same number is on {@link ProductionOrders#unrecoveredOf} for the
+     * screens.
+     */
+    private void failProductionPlan(ProductionOrder<ItemKey, RackPosition> node) {
+        if (level == null)
+            return;
+        ProductionOrders.PlanFailure<ItemKey, RackPosition> failure =
+                productionOrders.failPlan(node.id(), level.getGameTime());
+        if (failure.isEmpty())
+            return;
+        // Not onProductionOrderEnded: failPlan has already answered for the whole plan in one pass, so every order it
+        // ended needs its own cleanup and nothing more.
+        for (ProductionOrder<ItemKey, RackPosition> cancelled : failure.cancelled())
+            onProductionOrderFinished(cancelled);
+        setChanged();
+        markChunkKeepDirty(); // M19: the aisle may have nothing left to do
+        Wareworks.LOGGER.info("Production plan at {} ended: the order for {} {}, so {} more were cancelled, {} were "
+                + "left running and {} ingredient items were not recovered", worldPosition, node.result(),
+                node.state().name().toLowerCase(java.util.Locale.ROOT), failure.cancelled().size(),
+                failure.detached().size(), failure.unrecovered());
+    }
+
+    /**
      * A production order ended. The crane stops fetching for it, and the request that waited for its result gets back
      * what this order <b>promised</b> it and will never deliver, so that request does not wait for items nobody will
      * ever make. <b>Items are never invented and never taken back</b>: ingredients already handed to a machine stay
@@ -1561,18 +1860,24 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * <p>
      * A completed order needs no special case: it produced its whole promise, so
      * {@code ProductionOrder#unfulfilledPromise} is 0 and nothing is given back.
+     * <p>
+     * This is the per-order half; {@link #onProductionOrderEnded} is the one that also ends the order's plan.
      */
     private void onProductionOrderFinished(ProductionOrder<ItemKey, RackPosition> order) {
         cancelSupplyJobsOf(order);
         markChunkKeepDirty(); // M19: one fewer order, so the aisle may be idle now
-        // The safety stop (M15 part 2): an order the warehouse started by itself ended with ingredients already in a
-        // machine and nothing coming back. Those items are unrecoverable, so the rule stops ordering and waits for the
+        // The safety stop (M15 part 2, widened by M20): an order ended with ingredients already in a machine and
+        // nothing coming back. Those items are unrecoverable, so the warehouse stops making that item and waits for the
         // player rather than feeding the same machine again. An order that gave up while the crane was still fetching
         // cost nothing and never pauses anything (ProductionOrder#endedWithLostIngredients).
-        if (order.isRestock() && order.endedWithLostIngredients())
-            pauseStockRule(order.result(),
-                    order.state() == ProductionOrderState.CANCELLED ? StockRulePause.Cause.CANCELLED
-                            : StockRulePause.Cause.TIMED_OUT,
+        //
+        // M15 armed this only for an order the warehouse had started by itself, because that was the only order it
+        // repeated. A plan repeats just as well — a click, a redstone pulse or a rule can all send the same chain into
+        // the same machine again — so the first loss of ANY order now stops that item for everyone, and the pause's
+        // cause is what says which kind of order it was (StockRulePause.Cause, ADR-032).
+        if (order.endedWithLostIngredients())
+            pauseProduction(order.result(),
+                    StockRulePause.Cause.of(order.isRestock(), order.state() == ProductionOrderState.CANCELLED),
                     order.deliveredIngredients());
         // Only what production promised this request, never the whole run: a pattern makes whole runs, so the surplus
         // of an order was promised to nobody, and taking it off the request would strip that request of items the
@@ -1661,43 +1966,40 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return RequestConfirmation.none(key, wantedByClick);
         StockLevels levels = stockLevelsOf(key);
         if (wantedByClick <= levels.available())
-            return confirmationFrom(key, wantedByClick, levels, List.of(), NOTHING_AVAILABLE);
+            return confirmationFrom(key, wantedByClick, levels, null, NOTHING_AVAILABLE);
         // What the ingredients of a production order are worth to this request: a player's availability, i.e. with no
         // reserve taken off — which is precisely why the reserved part of it has to be named rather than subtracted.
-        return confirmationFrom(key, wantedByClick, levels, aislePatterns(),
-                StockAvailability.of(rules, StockAccess.PLAYER, availabilityLookup()));
+        List<AislePattern> patterns = aislePatterns();
+        ToLongFunction<ItemKey> ingredients = StockAvailability.of(rules, StockAccess.PLAYER, availabilityLookup());
+        ProductionPlan<ItemKey, RackPosition> plan = planProduction(productionPlanInput(patterns, ingredients), key,
+                wantedByClick - levels.available()).flatMap(ProductionPlanResult::plan).orElse(null);
+        return confirmationFrom(key, wantedByClick, levels, plan, ingredients);
     }
 
     /**
-     * {@link #confirmationFor} measured against a snapshot the caller has already taken: the aisle's patterns and what
-     * an ingredient is worth to this request.
+     * {@link #confirmationFor} measured against a snapshot the caller has already taken: the <b>plan</b> the request
+     * would create and what an ingredient is worth to this request.
      * <p>
-     * {@code patterns} and {@code ingredientAvailability} are only consulted when the request reaches past the racks, so
-     * an in-stock request may be given an empty list and {@link #NOTHING_AVAILABLE}.
+     * Measuring it over the plan is what keeps the question honest once a chain can be ordered (M20, ADR-032): the
+     * reserve warning names every item the whole chain takes <b>out of the racks</b>
+     * ({@link ProductionPlan#leafDemand()}), which may be an item two steps away from the one that was clicked, and the
+     * maximum is judged against what the plan's root really makes. It is the very plan the click then creates, so the
+     * question and what happens cannot disagree.
+     * <p>
+     * {@code plan} and {@code ingredientAvailability} are only consulted when the request reaches past the racks, so an
+     * in-stock request may be given {@code null} and {@link #NOTHING_AVAILABLE}.
      */
     private RequestConfirmation<ItemKey> confirmationFrom(ItemKey key, long wantedByClick, StockLevels levels,
-            List<AislePattern> patterns, ToLongFunction<ItemKey> ingredientAvailability) {
+            @Nullable ProductionPlan<ItemKey, RackPosition> plan, ToLongFunction<ItemKey> ingredientAvailability) {
         StockRules<ItemKey> rules = stockRules();
         if (wantedByClick < 1 || rules.governingCount() == 0)
             return RequestConfirmation.none(key, Math.max(0L, wantedByClick));
-        long inStock = levels.available();
-        Optional<ProductionPattern<ItemKey>> pattern = Optional.empty();
-        long runs = 0L;
-        long wanted = Math.min(wantedByClick, inStock);
-        // Only a request that reaches past the racks can start an order, and only then is a pattern chosen.
-        if (wantedByClick > inStock) {
-            wanted = Math.min(wantedByClick, inStock + producibleAmount(key, patterns, ingredientAvailability));
-            long produced = Math.max(0L, wanted - inStock);
-            Optional<AislePattern> best = produced > 0L
-                    ? bestProductionPattern(key, patterns, ingredientAvailability) : Optional.empty();
-            if (best.isPresent()) {
-                ProductionPattern<ItemKey> chosen = best.get().pattern();
-                pattern = Optional.of(chosen);
-                runs = Math.min(chosen.runsFor(produced),
-                        ProduciblePlanner.runsPossible(chosen, ingredientAvailability));
-            }
-        }
-        return RequestConfirmation.of(rules, key, wanted, levels, pattern, runs, ingredientAvailability);
+        // Only a request that reaches past the racks can start a plan at all, and nothing is produced without one.
+        if (plan == null || wantedByClick <= levels.available())
+            return RequestConfirmation.ofPlan(rules, key, Math.min(wantedByClick, levels.available()), levels, 0L,
+                    Map.of(), NOTHING_AVAILABLE);
+        return RequestConfirmation.ofPlan(rules, key, wantedByClick, levels, plan.root().output(), plan.leafDemand(),
+                ingredientAvailability);
     }
 
     /**
@@ -1774,6 +2076,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * The question is measured from the <b>same snapshot</b> the order would be started against — one walk of the
      * aisle's patterns, one availability lookup, one set of levels — so what the player is told and what then happens
      * cannot differ, and a click costs that snapshot once rather than twice ({@code docs/warehouse-system.md} §3.6.6).
+     * <p>
+     * <b>The part that has to be made is a whole chain</b> (M20, issue #4, ADR-032). It is worked out here, from that
+     * same snapshot: either every step of it becomes an ordinary production order <b>in this tick</b>, children first,
+     * each naming the parent supply line it feeds ({@link #startProductionPlan}), or nothing is created at all and the
+     * click is refused with a reason that <b>names the item</b> in the way ({@link RequestResult#refusal()},
+     * {@link RequestResult#about()}). There is no window in between, which is why a chain that cannot be finished never
+     * gets as far as a crane trip. A chain of one step is an ordinary single-level order and behaves exactly as it did
+     * before M20.
      *
      * @param acknowledged what the player has already accepted; {@link RequestAcknowledgement#ANY} asks nothing and
      *                     {@link RequestAcknowledgement#NONE} is a plain click
@@ -1799,33 +2109,50 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // What this taker may have of that stock: everything for a player, everything above a rule's reserve for the
         // warehouse's own automation (M15). Without a rule for the key the two are the same number.
         long claimable = stockRules().availableTo(access, key, inStock);
-        // One pass over the aisle's patterns for every production question this request asks — how much could be
-        // made, which pattern would make it, and what its ingredients are still worth. Asking each of them separately
-        // resolved every production station's block entity again per click (§3.5.2).
+        // One pass over the aisle's patterns for every production question this request asks — what could be made, at
+        // which station, and what its ingredients are still worth. Asking each of them separately resolved every
+        // production station's block entity again per click (§3.5.2).
         List<AislePattern> patterns = aislePatterns();
         // The ingredients are governed by the same reserve as the stock (M15 review fix): a rule's reserve holds items
         // back from the warehouse's own automation, and spending them as the ingredients of an order this very request
         // starts would be exactly that — automation taking the reserved items, one step removed. Measured once and
         // used for both questions, so what is promised and what is then ordered agree.
         ToLongFunction<ItemKey> ingredients = StockAvailability.of(stockRules(), access, availabilityLookup());
-        // What this click would cross, from that very snapshot. Nothing is promised until it is covered.
+        // Everything beyond what this taker may claim out of the racks has to be made, and the WHOLE chain that would
+        // make it is worked out here, once, from this very snapshot (M20, issue #4, ADR-032). Either every step of it
+        // can be created or the click is refused with a reason that names the item in the way — nothing moves in
+        // between, so the crane never starts carrying logs for a chest the aisle could not have finished.
+        ProductionPlanInput<ItemKey, RackPosition> planInput = productionPlanInput(patterns, ingredients);
+        Optional<ProductionPlanResult<ItemKey, RackPosition>> planned = planProduction(planInput, key,
+                amount - claimable);
+        ProductionPlan<ItemKey, RackPosition> plan = planned.flatMap(ProductionPlanResult::plan).orElse(null);
+        // Decision 3: a redstone port may start a chain, but only one at a time. A lever is an unattended, repeating
+        // trigger, so the M17 "one open request at a time" rule is extended to plans — the stock part of the request is
+        // served as usual, the second chain is not started.
+        boolean planBusy = plan != null && !plan.isSingleLevel() && access == StockAccess.AUTOMATION
+                && hasOpenProductionPlan(outputPos);
+        if (planBusy)
+            plan = null;
+        // What this click would cross, measured over that very plan. Nothing is promised until it is covered.
         if (!acknowledged.any()) {
-            RequestConfirmation<ItemKey> question = confirmationFrom(key, amount, levels, patterns, ingredients);
+            RequestConfirmation<ItemKey> question = confirmationFrom(key, amount, levels, plan, ingredients);
             if (!acknowledged.covers(question))
                 return TerminalRequestOutcome.asking(question);
         }
-        long producible = producibleAmount(key, patterns, ingredients);
+        // What the queue may promise beyond the racks is what the plan really offers, not what a pattern could make in
+        // the abstract: the plan is the only thing that knows whether the chain behind it holds.
+        long producible = plan == null ? 0L : plan.rootPromise();
         RequestQueue.AddResult<ItemKey, BlockPos> added = requests.add(key, amount, outputPos.immutable(),
                 StockAvailability.forRequest(stockRules(), access,
                         candidate -> candidate.equals(key) ? inStock : availableStock(candidate), key, producible),
                 maxRemainingPerRequest);
         if (added.request().isEmpty()) {
-            return TerminalRequestOutcome.of(RequestResult.rejected(switch (added.rejection().orElseThrow()) {
-                case QUEUE_FULL -> RequestRejection.QUEUE_FULL;
-                case DESTINATION_FULL -> RequestRejection.OUTPUT_FULL;
-                case NOTHING_AVAILABLE -> nothingAvailableReason(key, patterns, access);
-                case REQUEST_FULL -> RequestRejection.REQUEST_FULL;
-            }));
+            return TerminalRequestOutcome.of(switch (added.rejection().orElseThrow()) {
+                case QUEUE_FULL -> RequestResult.rejected(RequestRejection.QUEUE_FULL);
+                case DESTINATION_FULL -> RequestResult.rejected(RequestRejection.OUTPUT_FULL);
+                case NOTHING_AVAILABLE -> nothingAvailable(key, patterns, access, planned.orElse(null), planBusy);
+                case REQUEST_FULL -> RequestResult.rejected(RequestRejection.REQUEST_FULL);
+            });
         }
         RetrievalRequest<ItemKey, BlockPos> accepted = added.request().get();
         int granted = added.accepted();
@@ -1836,8 +2163,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // A pattern makes whole runs, so an order may yield more than was asked for; that surplus simply lands in
         // stock. What this request waits for — and what it gets back if the order fails — is never more than what it
         // asked for, which the order records as its promise (§3.5.3).
-        int producing = fromProduction > 0
-                ? startProductionOrder(key, fromProduction, accepted.id(), patterns, ingredients) : 0;
+        ProductionPlan<ItemKey, RackPosition> creating = fromProduction > 0 && plan != null
+                ? planFor(planInput, key, fromProduction, plan) : null;
+        int producing = creating == null ? 0 : startProductionPlan(creating, accepted.id());
         if (producing < fromProduction) {
             // No order could be started after all, or a smaller one: give the request back what will never be made,
             // instead of leaving it waiting for items nobody produces.
@@ -1845,27 +2173,76 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             granted -= fromProduction - producing;
         }
         if (granted < 1)
-            return TerminalRequestOutcome.of(RequestResult.rejected(nothingAvailableReason(key, patterns, access)));
+            return TerminalRequestOutcome.of(nothingAvailable(key, patterns, access, planned.orElse(null), planBusy));
         setChanged();
         markChunkKeepDirty(); // M19: an open request is work
+        // A click the racks served only part of keeps the plan refusal that says why the rest could not be made (M20
+        // review fix): "Oak Log is missing" takes the status row from "Requested Chest x2" then, because that is the half
+        // a player can act on, and it would otherwise be computed and thrown away in the same tick.
+        ProductionPlanResult<ItemKey, RackPosition> shortfall = granted < amount ? planned.orElse(null) : null;
         return TerminalRequestOutcome.of(RequestResult.accepted(requests.get(accepted.id()).orElse(accepted), granted,
-                added.merged(), producing));
+                added.merged(), producing, shortfall == null ? Optional.empty() : shortfall.refusal(),
+                shortfall == null ? Optional.empty() : shortfall.about()));
     }
 
     /**
-     * Why nothing of {@code key} could be promised. A stock rule's reserve ({@link RequestRejection#RESERVED}) and a
-     * full production order queue ({@link RequestRejection#PRODUCTION_BUSY}) are told apart from a plain "not in
-     * stock", because the cure is a different one in both cases: the items may all be there, and what the player has
-     * to do is lower a reserve or wait for an order rather than go looking for an item the warehouse is not missing.
+     * The plan for exactly {@code needed} result items: {@code offered} itself when that is what it promises, and
+     * otherwise the same chain worked out again for the smaller amount.
+     * <p>
+     * The queue may grant less than the plan offered — a merge cap, or another station's share of the item — and a chain
+     * for more than anybody is waiting for would hand a machine ingredients for items nobody asked for. Re-walking is
+     * free of new observations: it uses the same input, whose budget answers out of the snapshot the click was decided
+     * from, and fewer runs of the ordered item can never need more ingredients or more steps than the plan that already
+     * fitted. A smaller plan that unexpectedly does not hold leaves the whole production part unstarted and refunded,
+     * never half of it.
+     */
+    private @Nullable ProductionPlan<ItemKey, RackPosition> planFor(ProductionPlanInput<ItemKey, RackPosition> input,
+            ItemKey key, long needed, ProductionPlan<ItemKey, RackPosition> offered) {
+        if (needed >= offered.rootPromise())
+            return offered;
+        return planProduction(input, key, needed).flatMap(ProductionPlanResult::plan).orElse(null);
+    }
+
+    /** An availability that answers 0 for every key: for a request that cannot spend an ingredient at all. */
+    private static final ToLongFunction<ItemKey> NOTHING_AVAILABLE = key -> 0L;
+
+    /**
+     * The refusal for a click nothing of {@code key} could be promised for: the coarse reason a station's goggles
+     * remember, plus the <b>plan refusal and the item it is about</b> when it was a chain that could not be planned
+     * (M20, ADR-032).
+     * <p>
+     * That precise part is the point of the feature: before M20 ordering a chest with no planks answered "not in stock"
+     * about the chest, and now the same click can answer {@code MISSING_INGREDIENT} about three oak logs.
+     *
+     * @param planned  what the planner answered, or {@code null} when nothing was to be produced at all
+     * @param planBusy whether a chain was possible but this port already has one open (decision 3)
+     */
+    private RequestResult nothingAvailable(ItemKey key, List<AislePattern> patterns, StockAccess access,
+            @Nullable ProductionPlanResult<ItemKey, RackPosition> planned, boolean planBusy) {
+        PlanRefusal refusal = planned == null ? null : planned.refusal().orElse(null);
+        RequestRejection reason = nothingAvailableReason(key, patterns, access, refusal, planBusy);
+        if (refusal == null)
+            return RequestResult.rejected(reason);
+        return RequestResult.rejected(reason, refusal, planned.about().orElse(key));
+    }
+
+    /**
+     * Why nothing of {@code key} could be promised. A stock rule's reserve ({@link RequestRejection#RESERVED}), a
+     * stopped item ({@link RequestRejection#PRODUCTION_PAUSED}) and a full production order queue
+     * ({@link RequestRejection#PRODUCTION_BUSY}) are told apart from a plain "not in stock", because the cure is a
+     * different one in each case: the items may all be there, and what the player has to do is lower a reserve, look at
+     * a machine or wait for an order rather than go looking for an item the warehouse is not missing.
      * <p>
      * The reserve answers for both ways it can refuse automation: the requested item is in the racks and held back, or
      * the item could be <b>made</b> and it is the ingredients that are held back.
      */
-    /** An availability that answers 0 for every key: for a request that cannot spend an ingredient at all. */
-    private static final ToLongFunction<ItemKey> NOTHING_AVAILABLE = key -> 0L;
-
-    private RequestRejection nothingAvailableReason(ItemKey key, List<AislePattern> patterns, StockAccess access) {
-        // A reserve is checked first and only for the warehouse's own automation: the items are there, they are just
+    private RequestRejection nothingAvailableReason(ItemKey key, List<AislePattern> patterns, StockAccess access,
+            @Nullable PlanRefusal refusal, boolean planBusy) {
+        // The safety stop comes first and for everyone: waiting does not help and no reserve is in the way — somebody
+        // has to look at a machine (ADR-027, extended by ADR-032).
+        if (refusal == PlanRefusal.PAUSED)
+            return RequestRejection.PRODUCTION_PAUSED;
+        // A reserve is checked next and only for the warehouse's own automation: the items are there, they are just
         // not for it (M15). A player is never held back, so they can never see this reason.
         if (access == StockAccess.AUTOMATION) {
             if (availableStock(key) > 0 && availableTo(access, key) == 0)
@@ -1875,6 +2252,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             if (producibleAmount(key, patterns, availabilityLookup()) > 0)
                 return RequestRejection.RESERVED;
         }
+        // A chain that could not be created because the orders it needs do not exist yet — no free slots, or a port
+        // that already has one plan open — is the same answer as a full order queue: wait, or give one up. A chain that
+        // is longer or costlier than the configuration allows is <b>not</b> this: waiting would not help, so it keeps
+        // the plain "not in stock" until the precise reason reaches the player's own screen.
+        if (planBusy || refusal == PlanRefusal.ORDERS_BUSY)
+            return RequestRejection.PRODUCTION_BUSY;
         if (!productionOrders.isFull())
             return RequestRejection.NOT_IN_STOCK;
         for (AislePattern candidate : patterns) {
@@ -2149,8 +2532,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     void onStockRulesChanged(RackPosition rack) {
         boolean changed = readStockRulesAt(rack);
         // A rule a player deleted takes its pause with it, which is one of the two ways to resume (M15 part 2).
-        changed |= pruneStockPauses();
-        if (changed)
+        boolean pruned = pruneStockPauses();
+        // ... and a pause that is gone must take its lamp with it in the same tick (M20 review fix). Waiting for the next
+        // rule pass left a station burning for a stop nothing backed up, and a save inside that window made it permanent.
+        if (pruned)
+            refreshProductionStops();
+        if (changed || pruned)
             setChanged();
     }
 
@@ -2274,6 +2661,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             if (level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper && !keeper.isRemoved())
                 keeper.refreshRuleState(this);
         }
+        refreshProductionStops();
     }
 
     /**
@@ -2496,38 +2884,45 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * Server: the <b>safety stop</b>. An automatic order ended with ingredients already handed to a machine and no
-     * result, so the rule for that item stops ordering and waits for the player ({@link StockRulePause}).
+     * Server: the <b>safety stop</b>. An order ended with ingredients already handed to a machine and no result, so the
+     * warehouse stops making that item and waits for the player ({@link StockRulePause}).
      * <p>
-     * Only the ordering stops: the maximum still caps, the reserve still holds back, and the keeper's comparator still
-     * calls for the item, so a player's own farm goes on running. A second loss for the same item — possible only with
-     * {@code maxRestockOrdersPerRule} above 1 — adds its unrecovered items to the first pause rather than replacing
-     * it, because what a player has to be told is the whole cost.
+     * <b>It covers every kind of order</b> (M20, ADR-032): a player's click, a redstone request, a step of a chain and a
+     * rule's own refill alike. M15 armed it only for an automatic order because that was the only order the warehouse
+     * repeated by itself; a chain repeats just as well, and rebuilding the same chain into the same broken machine is the
+     * drain ADR-027 exists to stop. The one way back is a player's own action ({@link #resumeStockRule}) — never a timer.
+     * <p>
+     * Only the making stops: a rule keeps its maximum, keeps its reserve, and the keeper's comparator still calls for the
+     * item, so a player's own farm goes on running. A second loss for the same item adds its unrecovered items to the
+     * first pause rather than replacing it, because what a player has to be told is the whole cost.
      */
-    private void pauseStockRule(ItemKey key, StockRulePause.Cause cause, long unrecovered) {
+    private void pauseProduction(ItemKey key, StockRulePause.Cause cause, long unrecovered) {
         StockRulePause before = stockPauses.get(key);
         StockRulePause next = before == null ? new StockRulePause(cause, unrecovered)
                 : new StockRulePause(before.cause(), before.unrecovered() + Math.max(0L, unrecovered));
         if (next.equals(before))
             return;
         stockPauses.put(key, next);
-        // "Stop ordering" has to mean the orders that are already out, too: with maxRestockOrdersPerRule above 1 a
-        // second batch may be on its way to the very machine that swallowed the first. Cancelling reroutes what the
-        // crane is still carrying back into storage (cancelSupplyJobsOf), so only what a machine already took is lost
-        // (M15 review fix).
-        cancelOpenRestockOrders(key);
+        // "Stop making it" has to mean the orders that are already out, too: a second batch may be on its way to the
+        // very machine that swallowed the first — one more automatic order (M15 review fix) or, since M20, another
+        // chain's step for the same item. Cancelling reroutes what the crane is still carrying back into storage
+        // (cancelSupplyJobsOf), so only what a machine already took is lost, and a cancelled step takes the rest of its
+        // own plan with it (onProductionOrderEnded).
+        cancelOpenOrdersFor(key);
         // The overlay is rebuilt by the next pass; invalidating it here makes the paused state visible in this tick,
         // which is the tick a player watching the keeper sees the order fail in.
         restockOutcomes = withOutcome(key, RestockOutcome.PAUSED);
+        refreshProductionStops();
         setChanged();
-        Wareworks.LOGGER.info("Stock rule for {} paused at {}: an automatic order {} with {} ingredient items not "
-                + "recovered", key, worldPosition, cause.name().toLowerCase(java.util.Locale.ROOT), next.unrecovered());
+        Wareworks.LOGGER.info("The warehouse at {} stopped making {} ({}): {} ingredient items were not recovered",
+                worldPosition, key, cause.name().toLowerCase(java.util.Locale.ROOT), next.unrecovered());
     }
 
     /**
-     * Server: lets the rule for {@code key} order again after a player has looked at their machine. This is the one
-     * way back, and it is deliberately a <b>player's</b> action: the warehouse cannot tell a fixed machine from a
-     * broken one, and retrying by itself would feed the same machine a second batch.
+     * Server: lets the warehouse make {@code key} again after a player has looked at their machine. This is the one way
+     * back from the safety stop, whatever armed it — a rule's own order, a player's click, a redstone request or a step
+     * of a chain (M20) — and it is deliberately a <b>player's</b> action: the warehouse cannot tell a fixed machine from
+     * a broken one, and retrying by itself would feed the same machine a second batch. Never a timer.
      *
      * @return whether a pause was really lifted
      */
@@ -2536,25 +2931,123 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (level == null || level.isClientSide || stockPauses.remove(key) == null)
             return false;
         restockOutcomes = withoutOutcome(key);
+        refreshProductionStops();
         setChanged();
         return true;
     }
 
     /**
-     * Cancels every open <b>automatic</b> order for {@code key}. Ordinary orders are untouched: somebody is waiting for
-     * those, and a rule's safety stop is not about them.
+     * Server: lets every loaded production station of this aisle show on its own block whether the safety stop is holding
+     * one of the things it makes ({@code WarehouseProductionBlock#STOPPED}, M20, ADR-032).
      * <p>
-     * Each cancellation goes through {@link #onProductionOrderFinished}, so a sibling that had already delivered
-     * ingredients adds its own loss to the pause — what a player has to be told is the whole cost. The recursion that
-     * follows from it ends after the last open order of the item.
+     * <b>A warehouse that has never lost a batch pays almost nothing for it</b>: after one sweep per load
+     * ({@link #stopsSwept}) it returns before resolving a single block entity while there is no pause and nothing lit.
+     * The sweep itself, and every pass with something to say, costs one block entity lookup per production station of the
+     * aisle — a handful, taken from the membership index rather than from any search — and each station writes a block
+     * state only when its own lamp really changed, exactly as a stock keeper's does.
+     * <p>
+     * It runs where the stop changes ({@link #pauseProduction}, {@link #resumeStockRule},
+     * {@link #onStockRulesChanged}) so a player sees the lamp in the tick they caused it, and once per rule pass, which is
+     * what picks up a pattern that was edited afterwards and a controller that has just come back from a save.
+     * <p>
+     * <b>A station whose chunk is not loaded is remembered, not forgotten.</b> Its lamp cannot be read or written, so
+     * dropping it from {@link #stoppedStations} would lose the only record that it may be burning; it stays in the set and
+     * the next pass that can reach it decides.
      */
-    private void cancelOpenRestockOrders(ItemKey key) {
+    private void refreshProductionStops() {
+        if (level == null || level.isClientSide)
+            return;
+        if (stopsSwept && stockPauses.isEmpty() && stoppedStations.isEmpty())
+            return;
+        Set<BlockPos> shown = new LinkedHashSet<>();
+        boolean complete = layout != null;
+        if (layout != null) {
+            for (LocationRecord record : productionStations()) {
+                BlockPos pos = layout.rackPos(record.position());
+                if (!level.isLoaded(pos)) {
+                    // Nothing can be read or written here: keep a lamp this controller lit, and try again next pass.
+                    complete = false;
+                    if (stoppedStations.contains(pos))
+                        shown.add(pos);
+                    continue;
+                }
+                if (level.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station && !station.isRemoved()
+                        && station.refreshStoppedState(this))
+                    shown.add(pos);
+            }
+        }
+        for (BlockPos lit : stoppedStations) {
+            if (!shown.contains(lit))
+                clearProductionStop(lit);
+        }
+        stoppedStations.clear();
+        stoppedStations.addAll(shown);
+        stopsSwept |= complete;
+    }
+
+    /**
+     * Every station this controller has lit stops showing the safety stop, because the aisle is gone or because this
+     * controller is — the counterpart of {@link #refreshProductionStops}, exactly as
+     * {@link #clearAllKeeperRuleStates} is the counterpart of the rule tick. Never called from a chunk unload, which
+     * leaves a member exactly as it was (ADR-013).
+     */
+    private void clearAllProductionStops() {
+        for (BlockPos lit : List.copyOf(stoppedStations))
+            clearProductionStop(lit);
+        stoppedStations.clear();
+        // Whatever aisle comes next is a different set of stations, so it earns its own sweep (M20 review fix).
+        stopsSwept = false;
+    }
+
+    /**
+     * Puts out the stopped lamp of the block at {@code pos}, if a loaded production station is still standing there.
+     * The position is a world position rather than a rack position on purpose: the caller may be the very code that is
+     * taking the layout away, and a station that is no longer a member has no rack position at all any more.
+     */
+    private void clearProductionStop(BlockPos pos) {
+        if (level == null || level.isClientSide || !level.isLoaded(pos))
+            return;
+        if (level.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station && !station.isRemoved())
+            station.clearStoppedState();
+    }
+
+    /**
+     * Decides the lamp of the one production station at {@code pos} from this controller's pauses, and remembers the
+     * answer in {@link #stoppedStations} — the single-station form of {@link #refreshProductionStops}, for a station that
+     * has just joined the aisle. An unloaded or replaced block is left alone, exactly as a pass leaves it.
+     */
+    private void lightOrClearProductionStop(BlockPos pos) {
+        if (level == null || level.isClientSide || !level.isLoaded(pos))
+            return;
+        if (!(level.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station) || station.isRemoved())
+            return;
+        if (station.refreshStoppedState(this))
+            stoppedStations.add(pos);
+        else
+            stoppedStations.remove(pos);
+    }
+
+    /**
+     * Cancels <b>every</b> open order that is making {@code key}, whoever asked for it (M20, ADR-032, widening the M15
+     * review fix that cancelled the automatic ones).
+     * <p>
+     * "The warehouse has stopped making this" cannot mean "except for the batches already on their way": the machine
+     * that swallowed the last batch is the very machine those orders are feeding, and one of them may be a step of
+     * another chain that would go on committing ingredients level by level. A request that was waiting for such an order
+     * is given its promise back, so nobody waits for items nobody will make.
+     * <p>
+     * Each cancellation goes through {@link #onProductionOrderEnded}, so a sibling that had already delivered
+     * ingredients adds its own loss to the pause — what a player has to be told is the whole cost — and a cancelled step
+     * takes the rest of its plan with it. The recursion that follows from it ends after the last open order, because an
+     * order is only ever cancelled once.
+     */
+    private void cancelOpenOrdersFor(ItemKey key) {
         if (level == null)
             return;
         long now = level.getGameTime();
         for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.open()) {
-            if (order.isRestock() && order.result().equals(key))
-                productionOrders.cancel(order.id(), now).ifPresent(this::onProductionOrderFinished);
+            if (order.result().equals(key))
+                productionOrders.cancel(order.id(), now).ifPresent(this::onProductionOrderEnded);
         }
     }
 
@@ -2569,8 +3062,15 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * Forgets the pauses of items no rule governs any more. A rule a player deleted takes its pause with it, which is
-     * also one of the two ways to resume: writing the rule again starts from a clean state.
+     * Forgets the pauses of items no rule governs any more — but only the ones a <b>rule</b> armed. A rule a player
+     * deleted takes its pause with it, which is also one of the two ways to resume: writing the rule again starts from a
+     * clean state.
+     * <p>
+     * <b>A pause armed by any other order is never forgotten by itself</b> (M20, ADR-032,
+     * {@link StockRulePause.Cause#isRuleBorn()}). It has no rule it could belong to — the item may well be governed by
+     * none at all, which is the normal case for an intermediate of a chain — so forgetting it here would let the very
+     * next click rebuild the same chain into the same broken machine, which is the one thing the safety stop exists to
+     * prevent. Such a pause is lifted only by a player ({@link #resumeStockRule}).
      *
      * @return whether anything was forgotten
      */
@@ -2579,9 +3079,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return false;
         StockRules<ItemKey> rules = stockRules.rules();
         List<ItemKey> gone = new ArrayList<>();
-        for (ItemKey key : stockPauses.keySet()) {
-            if (!rules.governsKey(key))
-                gone.add(key);
+        for (Map.Entry<ItemKey, StockRulePause> paused : stockPauses.entrySet()) {
+            if (paused.getValue().isRuleBorn() && !rules.governsKey(paused.getKey()))
+                gone.add(paused.getKey());
         }
         for (ItemKey key : gone) {
             stockPauses.remove(key);
@@ -2646,6 +3146,27 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * Room an <b>intermediate</b> of a production plan has under its own maximum ({@link ProductionPlanInput#headroom()},
+     * M20): the same numbers as {@link #storeHeadroom} <b>without</b> the "the warehouse always takes back what it sent
+     * out for" allowance.
+     * <p>
+     * The allowance is right where it is used — a store must never strand the surplus of a run — but it is wrong as the
+     * answer to "may this chain make four planks at a time", because it counts what <i>other</i> open orders are expected
+     * to bring back as room. A click would then be refused with an idle aisle and accepted a minute later while an
+     * unrelated order for the same intermediate happened to be in flight, which is not an answer a player can act on
+     * (M20 review fix). Measured against the click alone, the question is the player's own cap and nothing else.
+     * <p>
+     * {@link Long#MAX_VALUE} when no rule governs the key, at the cost of a single map lookup.
+     */
+    public long productionRoomFor(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        Optional<StockRule<ItemKey>> rule = stockRules().ruleFor(key);
+        if (rule.isEmpty())
+            return Long.MAX_VALUE;
+        return rule.get().headroom(stock.count(key), dispatch.reservations().reservedCapacityFor(key), 0L);
+    }
+
+    /**
      * What the open requests still owe, per item key, in <b>one</b> pass over the queue.
      * <p>
      * For callers that need {@link #availableStock} for many keys at once (a warehouse terminal's stock snapshot,
@@ -2655,6 +3176,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public Map<ItemKey, Long> remainingRequestedByKey() {
         return requests.remainingByKey();
+    }
+
+    /**
+     * What the open <b>production orders</b> still have to take out of the racks, per item key, in one pass over the
+     * orders ({@link ProductionOrders#outstandingIngredientsByKey()}).
+     * <p>
+     * The companion of {@link #remainingRequestedByKey()}, and needed by the same callers for the same reason: both
+     * numbers are what {@link #availableStock} subtracts, so a surface that computes an available amount for many keys at
+     * once has to subtract both or it advertises items that are already promised. A plan holds that promise open for the
+     * whole chain rather than for one crane trip, which is what made the difference visible (M20 review fix).
+     */
+    public Map<ItemKey, Long> outstandingIngredientsByKey() {
+        return productionOrders.outstandingIngredientsByKey();
     }
 
     /**
@@ -3256,6 +3790,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             // The keepers lose their warehouse, so they stop calling for items. Their world positions come from the
             // layout that is being taken away. A real loss of the aisle on a loaded controller, never an unload.
             clearAllKeeperRuleStates(previous);
+            clearAllProductionStops();
             clearAisleState(); // no aisle, no locations, no output stations to deliver to
         } else {
             WarehouseRegistry.register(level, worldPosition, next);
@@ -3347,6 +3882,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 ports.markUnread(added.position());
                 continue;
             }
+            if (added.kind() == LocationKind.PRODUCTION) {
+                // A station that joins gets its lamp decided at once (M20 review fix): a block state survives every save
+                // and a /setblock, so a station arriving with a lit lamp and nothing behind it would keep it until the
+                // next stop of one of its own products, and the sweep flag may already be set for the stations before it.
+                lightOrClearProductionStop(current.rackPos(added.position()));
+                continue;
+            }
             if (added.kind() != LocationKind.STORAGE)
                 continue;
             // A new storage location is indexed empty at once and read within the next ticks (this tick first, at most
@@ -3428,6 +3970,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (level instanceof ServerLevel) {
             unlinkDock();
             clearAllKeeperRuleStates(layout);
+            clearAllProductionStops();
             WarehouseRegistry.unregister(level, worldPosition);
             // The owner of the tickets is gone, so the tickets go with it, in this tick. A ticket that outlives its
             // owner is the one defect this whole feature must not have (M19, ADR-031).
@@ -3539,12 +4082,20 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             if (shown.rulesAtMaximum() > 0)
                 WareworksLang.countLine(WareworksLang.GOGGLES_RULES_AT_MAXIMUM, shown.rulesAtMaximum())
                         .style(ChatFormatting.GOLD).forGoggles(tooltip, 2);
-            // The safety stop is red, not gold: it is the one line that means a machine ate a batch and the warehouse
-            // stopped ordering until a player looks at it (M15 part 2, issue #3).
-            if (shown.rulesPaused() > 0)
-                WareworksLang.countLine(WareworksLang.GOGGLES_RULES_PAUSED, shown.rulesPaused())
-                        .style(ChatFormatting.RED).forGoggles(tooltip, 2);
         }
+        // The safety stop is red, not gold: it is the one line that means a machine ate a batch and the warehouse
+        // stopped making that item until a player looks at it (M15 part 2, issue #3).
+        //
+        // It is deliberately outside the stock-rule block (M20 review fix). Since M20 any order's lost batch arms the
+        // stop, and the item it holds is normally an intermediate of a chain that no rule governs at all - an aisle
+        // without a single stock keeper can be holding one. Nested under the rules while there are any, on its own line
+        // when there are none.
+        //
+        // It says "Stopped products", the very line the production station and the aisle's display board show for the
+        // same number (M20 part 2): a player meets this count on three surfaces and has to recognize it as one state.
+        if (shown.rulesPaused() > 0)
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_STOPPED, shown.rulesPaused())
+                    .style(ChatFormatting.RED).forGoggles(tooltip, shown.stockRules() > 0 ? 2 : 1);
         // What this aisle is doing with chunks (M19, issue #10). Left out entirely while there is nothing to report,
         // which is every aisle on a server that has chunk loading switched off - the default.
         if (shown.chunkKeepReason() != ChunkKeepReason.NONE)
@@ -3646,9 +4197,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             // Requests belong to the saved layout; without it (or for another facing) they are dropped like the records.
             requests.restore(ControllerPersistence.readRequests(tag, worldPosition, registries));
             // Production orders belong to the saved layout like the requests do. Their deadlines are not saved, so
-            // the first tick gives every restored order its full timeout again (§3.5).
+            // the first tick gives every restored order its full timeout again (§3.5) — and the same tick checks the
+            // saved production plans, because a truncated save must not leave a step waiting for a parent that is not
+            // there any more (M20, ProductionOrders#validatePlans).
             productionOrders.restore(ControllerPersistence.readProductionOrders(tag, registries));
-            productionDeadlinesPending = true;
+            productionRestorePending = true;
             // Restored before the first tick, so the very first plan after a load already knows every maximum and
             // every reserve, even while the keepers themselves are still in unloaded chunks.
             stockRules.restore(ControllerPersistence.readStockRules(tag, registries));

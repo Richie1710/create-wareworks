@@ -429,10 +429,108 @@ class ProductionOrderTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new ProductionOrder<>(UUID.randomUUID(), STATION, PLANK, 1, List.of(),
                         ProductionOrderState.WAITING_FOR_INGREDIENTS, START, 0L, 0L, Optional.empty(), 0L,
-                        false));
+                        false, Optional.empty()));
     }
 
     /** An automatic order the warehouse started for itself (M15 part 2). */
+    // --- steps of a plan (M20) -----------------------------------------------------------------------------------
+
+    /** A step is an ordinary order that names the parent line it makes its product for, and promises nobody anything. */
+    @Test
+    void aStepNamesTheParentLineItMakesItsProductFor() {
+        UUID parentLine = new UUID(7L, 7L);
+        ProductionOrder<String, String> step = step(planks(), 2, parentLine);
+        assertTrue(step.isStep());
+        assertEquals(Optional.of(parentLine), step.parentLine());
+        assertEquals(8, step.resultAmount(), "two runs of four planks, like any other order");
+        assertEquals(2, step.outstanding(LOG), "and it fetches its ingredients like any other order");
+        assertTrue(step.backingRequest().isEmpty(), "nobody waits for a step directly");
+        assertEquals(0L, step.promisedToRequest());
+        assertEquals(0L, step.resultStockSeen(), "a step keeps no stock baseline: it is counted by arrivals only");
+    }
+
+    /**
+     * The safety property of a chain: a step is completed only by items the warehouse really stored, never by a rise of
+     * the result's stock level. Its completion hands the <i>parent's</i> ingredients to the next machine, so a second
+     * plank farm must not be able to trigger that (ADR-026, ADR-032).
+     */
+    @Test
+    void aStepIsCompletedByArrivalsOnlyAndNeverByAStockLevel() {
+        ProductionOrder<String, String> step = step(planks(), 1, new UUID(1L, 1L));
+        assertFalse(step.countsStockLevels());
+        assertEquals(0L, step.observableGain(64L), "a level says nothing about who made those planks");
+        assertSame(step, step.withResultStock(64L, START + 1, TIMEOUT), "so it is not counted at all");
+        assertFalse(step.countsArrivals(), "and nothing counts before its own ingredients were delivered");
+
+        ProductionOrder<String, String> given = step.withDelivered(step.lines().getFirst().id(), 1, START, TIMEOUT);
+        assertTrue(given.countsArrivals(), "once the machine has them, arrivals count");
+        ProductionOrder<String, String> done = given.withStored(4L, START + 2, TIMEOUT);
+        assertEquals(ProductionOrderState.COMPLETE, done.state());
+        assertEquals(4L, done.produced());
+    }
+
+    /** A step is never an automatic order: save data cannot describe one that feeds a parent and pauses a rule. */
+    @Test
+    void aStepIsNeverAnAutomaticOrder() {
+        ProductionOrder<String, String> step = step(planks(), 1, new UUID(2L, 2L));
+        ProductionOrder<String, String> crafted = new ProductionOrder<>(step.id(), STATION, PLANK, 4, step.lines(),
+                step.state(), START, 0L, 0L, Optional.empty(), 0L, true, step.parentLine());
+        assertTrue(crafted.isStep(), "the parent link wins");
+        assertFalse(crafted.isRestock(), "so no save-integrity failure can arm a rule's safety stop");
+        assertFalse(step.isRestock());
+        assertFalse(restocking(planks(), 1).isStep());
+    }
+
+    /**
+     * Detaching a step lets it run on as an ordinary order — and does <b>not</b> hand it the whole stock of its result
+     * as progress: a step kept no baseline, so the level channel has to start measuring at the next observation.
+     */
+    @Test
+    void detachingAStepLetsItRunOnWithoutCountingTheWholeStock() {
+        ProductionOrder<String, String> step = step(planks(), 1, new UUID(3L, 3L));
+        step = step.withDelivered(step.lines().getFirst().id(), 1, START, TIMEOUT);
+        ProductionOrder<String, String> loose = step.withoutParentLine();
+        assertFalse(loose.isStep());
+        assertTrue(loose.parentLine().isEmpty());
+        assertTrue(loose.countsStockLevels(), "it is an ordinary order now");
+        assertEquals(ProductionOrder.BASELINE_PENDING, loose.resultStockSeen(), "but without a baseline yet");
+        assertEquals(0L, loose.observableGain(1000L), "so 1000 planks in the racks are not its own progress");
+
+        ProductionOrder<String, String> baselined = loose.withResultStock(1000L, START + 1, TIMEOUT);
+        assertEquals(1000L, baselined.resultStockSeen(), "the level that is really there becomes the baseline");
+        assertEquals(0L, baselined.produced());
+        assertTrue(baselined.isOpen());
+        assertEquals(step.deadlineTick(), baselined.deadlineTick(), "adopting a baseline is no progress");
+        ProductionOrder<String, String> done = baselined.withResultStock(1004L, START + 2, TIMEOUT);
+        assertEquals(ProductionOrderState.COMPLETE, done.state(), "from then on a real rise completes it");
+        assertEquals(4L, done.produced());
+        assertSame(loose, loose.withoutParentLine(), "detaching twice changes nothing");
+    }
+
+    /**
+     * A step that hands its ingredients over and gets nothing back reports the loss like any other order — which is what
+     * arms the safety stop for the item that step was making (M20's widening of ADR-027: the stop covers a player's
+     * order, a redstone one and an automatic one alike).
+     */
+    @Test
+    void aStepThatLosesItsBatchReportsItLikeAnyOtherOrder() {
+        ProductionOrder<String, String> step = step(planks(), 1, new UUID(4L, 4L));
+        assertFalse(step.timedOutAt(START + TIMEOUT).endedWithLostIngredients(),
+                "a step that gave up while the crane was still fetching cost nothing");
+
+        step = step.withDelivered(step.lines().getFirst().id(), 1, START, TIMEOUT);
+        ProductionOrder<String, String> lost = step.timedOutAt(step.deadlineTick());
+        assertEquals(ProductionOrderState.TIMED_OUT, lost.state());
+        assertTrue(lost.endedWithLostIngredients(), "its log is in a machine and nothing came back");
+        assertEquals(1, lost.deliveredIngredients(), "and that is the number a player has to be told");
+        assertTrue(lost.cancelled(START + 1).endedWithLostIngredients(), "cancelling it says the same");
+    }
+
+    /** A step of a plan, as {@code ProductionPlan} acceptance creates one. */
+    private ProductionOrder<String, String> step(ProductionPattern<String> pattern, int runs, UUID parentLine) {
+        return ProductionOrder.step(UUID.randomUUID(), STATION, pattern, runs, lineIds, START, TIMEOUT, parentLine);
+    }
+
     private ProductionOrder<String, String> restocking(ProductionPattern<String> pattern, int runs) {
         return ProductionOrder.restock(UUID.randomUUID(), STATION, pattern, runs, lineIds, START, TIMEOUT);
     }

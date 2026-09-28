@@ -176,8 +176,10 @@ public final class WareworksBlocks {
     /**
      * Warehouse production station ({@code docs/warehouse-system.md} §3.5, ADR-024). An output-style station the crane
      * delivers the ingredients of a production order into; the player's own machinery empties it and sends the product
-     * back through a warehouse input. Horizontal blockstate over the hand-made
-     * {@code models/block/warehouse_production/block.json} (authored with the aisle opening facing north). Does not
+     * back through a warehouse input. Its own blockstate ({@link WareworksBlockStateGen#productionBlockProvider()}) over
+     * the hand-made {@code models/block/warehouse_production/block.json} and its stopped twin (authored with the aisle
+     * opening facing north), because since M20 the block itself says whether the safety stop is holding one of its
+     * products ({@code WarehouseProductionBlock#STOPPED}); the item model uses the working block model. Does not
      * conduct redstone, like the other stations. Protected from contraptions; drops itself.
      */
     public static final BlockEntry<WarehouseProductionBlock> WAREHOUSE_PRODUCTION =
@@ -187,7 +189,7 @@ public final class WareworksBlocks {
                             .isRedstoneConductor((state, level, pos) -> false))
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
-                    .blockstate(BlockStateGen.horizontalBlockProvider(true))
+                    .blockstate(WareworksBlockStateGen.productionBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();

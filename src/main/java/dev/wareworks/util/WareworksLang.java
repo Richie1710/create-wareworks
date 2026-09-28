@@ -170,14 +170,60 @@ public final class WareworksLang {
     public static final String GOGGLES_PRODUCTION_AWAITED = "gui.goggles.production_awaited";
     /** {@code "Production stations: %1$s"}: production stations of an aisle (controller). */
     public static final String GOGGLES_PRODUCTION_STATIONS = "gui.goggles.production_stations";
+    /**
+     * Chat line after a sneak-click on a production station, or a click on its screen's stopped row, lifted the safety
+     * stop of one of its products (M20): {@code "The warehouse makes %1$s again"}. Used only for a stop that cost
+     * nothing measurable; the ordinary case names the cost as well ({@link #PRODUCTION_RESUMED_LOST}).
+     */
+    public static final String PRODUCTION_RESUMED = "production.resumed";
+    /**
+     * The same line with what the stop cost (M20): {@code "The warehouse makes %1$s again; %2$s ingredient items were
+     * delivered and never came back"}. A resume is the moment to say it — the pause is about to be gone, and with it the
+     * only record of how many items were handed over without a result ({@code docs/warehouse-system.md} §3.5.4).
+     * <p>
+     * It says <b>delivered</b> and not "in the machine" on purpose. The number is
+     * {@code ProductionOrder#deliveredIngredients()}, i.e. everything the crane dropped into the <i>station</i>, and part
+     * of it may still be sitting in that station's own buffer, which a player can empty by hand. "Stayed in the machine"
+     * sent a player looking inside a machine for items in the block they had just clicked, and made them write off items
+     * they could pick up.
+     */
+    public static final String PRODUCTION_RESUMED_LOST = "production.resumed_lost";
+    /** Chat line after the same click on a station none of whose products the safety stop was holding (M20). */
+    public static final String PRODUCTION_NOTHING_STOPPED = "production.nothing_stopped";
+    /**
+     * {@code "Stopped products: %1$s"}: items the safety stop is holding — on a production station the ones it makes
+     * itself, on a warehouse controller the aisle's whole count (M20, issue #4, ADR-032).
+     * <p>
+     * <b>One key for both</b>, and the same wording the aisle's display board uses
+     * ({@link #DISPLAY_AISLE_LINE_STOPPED}): it is one number about one state, and the three surfaces that show it
+     * have to be recognizable as the same thing. Until M20 the controller said "Paused after a lost batch", which was
+     * written when only a stock rule's own order could arm the stop; a player now meets the same count as "stopped"
+     * at the station, on the board and in the controller's tooltip. On both blocks the line outranks everything else,
+     * because it is the only one that asks a player to walk to a machine.
+     */
+    public static final String GOGGLES_PRODUCTION_STOPPED = "gui.goggles.production_stopped";
+    /**
+     * How a player lets a station's products be made again (M20): on the station's goggle lines, and in its screen on the
+     * tooltip of a pattern tab whose product is stopped — a tooltip that names a problem has to name the way out of it,
+     * and on a station with a large buffer the tab is where a player meets the stop.
+     */
+    public static final String PRODUCTION_RESUME_HINT = "production.resume_hint";
+    /**
+     * {@code "Stopped: %1$s. Click to make it again"}: the row a production station's screen shows instead of its first
+     * order line while the safety stop holds exactly one of its products (M20).
+     */
+    public static final String PRODUCTION_STOPPED_LINE = "gui.production.stopped_line";
+    /** The same row for a station with several stopped products: {@code "Stopped: %1$s products. ..."} (M20). */
+    public static final String PRODUCTION_STOPPED_LINE_MANY = "gui.production.stopped_line_many";
+    /** {@code "%1$s: %2$s"}: one stopped product of that row's tooltip, the item first and then why it stopped (M20). */
+    public static final String PRODUCTION_STOPPED_ITEM = "gui.production.stopped_item";
     /** {@code "Stock rules: %1$s"}: rules of the aisle's stock keepers that govern an item (controller, M15). */
     public static final String GOGGLES_STOCK_RULES = "gui.goggles.stock_rules";
     /** {@code "Below minimum: %1$s"}: governing rules of the aisle whose item the warehouse is short of. */
     public static final String GOGGLES_RULES_BELOW_MINIMUM = "gui.goggles.rules_below_minimum";
     /** {@code "At maximum: %1$s"}: governing rules of the aisle that stop their item from being stored. */
     public static final String GOGGLES_RULES_AT_MAXIMUM = "gui.goggles.rules_at_maximum";
-    /** {@code "Paused: %1$s"}: rules of the aisle the safety stop is holding (controller, M15 part 2). */
-    public static final String GOGGLES_RULES_PAUSED = "gui.goggles.rules_paused";
+
     /** {@code "Warehouse Stock Keeper:"}: goggle header of a warehouse stock keeper (M15). */
     public static final String GOGGLES_WAREHOUSE_STOCK_KEEPER = "gui.goggles.warehouse_stock_keeper";
     /** {@code "Rules: %1$s"}: rows of a keeper that hold a rule. */
@@ -250,7 +296,7 @@ public final class WareworksLang {
     public static final String KEEPER_ADJUSTMENT_PREFIX = "gui.keeper.adjustment.";
     /** Prefix of the restocking texts, {@code gui.keeper.restock.<outcome>} ({@code RestockOutcome#langKey}). */
     public static final String KEEPER_RESTOCK_PREFIX = "gui.keeper.restock.";
-    /** {@code "Ingredient items not recovered: %1$s"}: what a paused rule's lost batch cost (M15 part 2). */
+    /** {@code "Ingredient items delivered and never returned: %1$s"}: what a paused rule's lost batch cost (M15 part 2); the count is what the crane delivered to the station, not what the machine swallowed. */
     public static final String KEEPER_PAUSED_LOST = "gui.keeper.paused_lost";
     /** How a player lets a paused rule order again (row tooltip and status line, M15 part 2). */
     public static final String KEEPER_RESUME_HINT = "gui.keeper.resume_hint";
@@ -462,6 +508,17 @@ public final class WareworksLang {
     public static final String PRODUCTION_CANCEL_HINT = "gui.production.cancel_hint";
     /** The boundary a cancelled or timed-out order cannot undo ({@code docs/warehouse-system.md} §3.5). */
     public static final String PRODUCTION_INGREDIENTS_LOST = "gui.production.ingredients_lost";
+    /**
+     * {@code "waiting for an earlier step"}: where an order of a chain stands while another order of its own plan is
+     * still making one of its ingredients (M20, issue #4, ADR-032).
+     * <p>
+     * It stands beside the {@code ProductionOrderState} sentences without being one of them: such an order <i>is</i> in
+     * {@code WAITING_FOR_INGREDIENTS}, but it is fetching nothing at all until the step below it is done, and a surface
+     * that said "waiting for ingredients" would look like a stuck crane. One key for one sentence, because all three
+     * surfaces that can show it — the terminal's step panel, a production station's own order rows and that station's
+     * goggle line — have to say the same thing about the same order.
+     */
+    public static final String PRODUCTION_WAITING_FOR_STEP = "gui.production.waiting_for_step";
     /** {@code "Can be produced here"}: a terminal item that is not in stock but has a pattern. */
     public static final String TERMINAL_PRODUCIBLE = "gui.terminal.producible";
     /** {@code "Can be made now: %1$s"}: how many of a producible item the ingredients in stock allow right now. */
@@ -472,6 +529,53 @@ public final class WareworksLang {
     public static final String TERMINAL_ORDER_LOST = "gui.terminal.order_lost";
     /** {@code "Requested %1$s x%2$s, producing %3$s"}: an accepted request a production order was started for. */
     public static final String TERMINAL_PRODUCING = "gui.terminal.producing";
+
+    // --- a production plan in the terminal (M20, issue #4, ADR-032) -------------------------------------------------
+    /**
+     * {@code "now: %1$s"}: the right-hand half of a chain's line in the terminal's production section. What it holds is
+     * the state of the <b>frontier</b> — the step where something is really happening — because the ordered item's own
+     * state ("waiting for ingredients") is the one thing a player already knows.
+     */
+    public static final String TERMINAL_PLAN_FRONTIER = "gui.terminal.plan.frontier";
+    /**
+     * {@code "%1$s steps"}: the badge on a chain's line that opens the step panel, counting <b>every</b> order of the
+     * chain. A badge is only ever drawn for a chain of at least two orders, so the plural is always right.
+     */
+    public static final String TERMINAL_PLAN_STEPS = "gui.terminal.plan.steps";
+    /** {@code "Chain for %1$s x%2$s"}: the title of the step panel. */
+    public static final String TERMINAL_PLAN_TITLE = "gui.terminal.plan.title";
+    /** {@code "%1$s: %2$s"}: one step of the panel, the address of its station first so the rows read as a list. */
+    public static final String TERMINAL_PLAN_STEP_AT = "gui.terminal.plan.step_at";
+    /** What a step whose station the aisle cannot name is prefixed with instead of an address. */
+    public static final String TERMINAL_PLAN_NO_ADDRESS = "gui.terminal.plan.no_address";
+    /**
+     * {@code "Steps that would end: %1$s"}: the first of the three things giving up on a chain costs. The number is the
+     * one the server would really end ({@code core.terminal.PlanCancelCost}), not how many steps are open — a step whose
+     * batch is already in a machine is left running on purpose.
+     */
+    public static final String TERMINAL_PLAN_CANCEL_COST = "gui.terminal.plan.cancel_cost";
+    /**
+     * The second: ingredient items the warehouse already delivered to a station and will never fetch back ({@code
+     * §3.5.4}). It says <b>delivered</b> rather than "in the machine", because part of it may still be sitting in the
+     * station's own buffer where a player can take it out by hand — the number is what the crane handed over, and a
+     * message that sends a player looking inside their machine for items one block away is worse than no number.
+     */
+    public static final String TERMINAL_PLAN_CANCEL_LOST = "gui.terminal.plan.cancel_lost";
+    /**
+     * The third, and the one a player cannot see coming: giving up on a chain whose step already had ingredients
+     * <b>arms the safety stop</b> for that item, so the warehouse makes none of it until somebody resumes it at the
+     * machine (ADR-027 widened by ADR-032). Shown under exactly the same condition as
+     * {@link #TERMINAL_PLAN_CANCEL_LOST}, because that is the condition the server arms it under.
+     */
+    public static final String TERMINAL_PLAN_CANCEL_STOP = "gui.terminal.plan.cancel_stop";
+    /** {@code "Give up on the chain"}: the panel's own button, which cancels every step of it. */
+    public static final String TERMINAL_PLAN_CANCEL = "gui.terminal.plan.cancel";
+    /** {@code "Close"}: the panel's other button. */
+    public static final String TERMINAL_PLAN_CLOSE = "gui.terminal.plan.close";
+    /** What a click on a chain's line does, on its tooltip. */
+    public static final String TERMINAL_PLAN_HINT = "gui.terminal.plan.hint";
+    /** What the {@code x} at the end of a chain's line does, on its tooltip. */
+    public static final String TERMINAL_PLAN_CANCEL_HINT = "gui.terminal.plan.cancel_hint";
     /**
      * Name of the aisle summary display source in Create's Display Link screen. The four display source names must
      * carry exactly these keys: Create builds them as {@code <namespace>.display_source.<registry path>}
@@ -503,8 +607,17 @@ public final class WareworksLang {
      * ({@link #GOGGLES_RULES_BELOW_MINIMUM}, {@link #GOGGLES_RULES_AT_MAXIMUM}), shortened for a display row.
      */
     public static final String DISPLAY_AISLE_LINE_RULES = "display_source.aisle.line_rules";
-    /** {@code "Rules paused: %1$s"}: rules of the aisle the safety stop is holding (M15 part 2). */
-    public static final String DISPLAY_AISLE_LINE_RULES_PAUSED = "display_source.aisle.line_rules_paused";
+    /**
+     * {@code "Stopped products: %1$s"}: items of the aisle the safety stop is holding (M15 part 2, reworded in M20).
+     * <p>
+     * It counted <b>rules</b> and said so until M20: since a lost batch of <i>any</i> order arms the stop (issue #4,
+     * ADR-032), the item it holds is regularly an intermediate of a chain that no stock rule governs at all — an aisle
+     * without a single stock keeper can be showing this line. The wording follows the production station's own goggle
+     * line ({@link #GOGGLES_PRODUCTION_STOPPED}), because that station is where a player goes to lift it — and that has
+     * to hold in <b>every</b> language, so {@code LangConsistencyTest} makes the two texts identical in each of them.
+     * Shortening one of the two for a narrow display board means shortening both.
+     */
+    public static final String DISPLAY_AISLE_LINE_STOPPED = "display_source.aisle.line_stopped";
     /**
      * {@code "Ports: %1$s accepting"}: warehouse ports of the aisle that accept items instead of requesting them
      * (M17, issue #12). Left out entirely while none does, exactly like the two stock rule lines.
@@ -637,6 +750,15 @@ public final class WareworksLang {
     /** "Order: waiting for the result" for a production order's state. */
     public static LangBuilder productionState(dev.wareworks.core.production.ProductionOrderState state) {
         return translate(GOGGLES_PRODUCTION_STATE, translate(state.langKey()).style(ChatFormatting.WHITE))
+                .style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Order: waiting for an earlier step" — the same line for a chain step the aisle is deliberately handing nothing
+     * while an earlier step of its own plan is still running (M20, issue #4, ADR-032).
+     */
+    public static LangBuilder productionWaitingForStep() {
+        return translate(GOGGLES_PRODUCTION_STATE, translate(PRODUCTION_WAITING_FOR_STEP).style(ChatFormatting.WHITE))
                 .style(ChatFormatting.GRAY);
     }
 

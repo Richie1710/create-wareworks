@@ -46,8 +46,10 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * </ul>
  * <b>The pattern cells are not slots.</b> They are ghost items: a click sends {@code ProductionPatternPayload} and the
  * server writes the entry, so editing a pattern can never consume, duplicate or swallow an item. The client is only
- * allowed to <i>ask</i>; {@link #submitPattern} and {@link #submitCancel} resolve the request against the menu the
- * sending player really has open and the station validates the rest.
+ * allowed to <i>ask</i>; {@link #submitPattern}, {@link #submitCancel} and {@link #submitResume} resolve the request
+ * against the menu the sending player really has open and the station validates the rest. {@code submitResume} is the
+ * safety stop's way back from inside the screen (M20): it carries no item at all, because the station's own patterns
+ * decide what may be resumed.
  * <p>
  * Fields set while the super constructor runs must not have initializers, for the reason spelled out in
  * {@code WarehouseTerminalMenu}: a subclass initializer runs after {@code super(...)} and would overwrite them.
@@ -228,6 +230,25 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         return changed;
     }
 
+    /**
+     * Server: the resume of a {@code ProductionResumePayload}, resolved the same way (M20, issue #4, ADR-032): a player
+     * clicked the stopped row of a station's screen and says the machine behind it is worth another batch.
+     * <p>
+     * <b>The payload names nothing</b> but the menu it came from, and that is deliberate: what may be resumed is decided
+     * entirely by the patterns of the station this menu belongs to
+     * ({@link WarehouseProductionBlockEntity#resumeStoppedProducts()}), so no crafted payload can lift the stop of an item
+     * this machine does not make, and none can name an item at all. The player is told what was lifted and what it cost,
+     * exactly as a sneak-click on the block tells them.
+     *
+     * @return whether anything was resumed; empty when the player has no such menu open or the budget is spent
+     */
+    public static Optional<Boolean> submitResume(@Nullable Player player, int containerId) {
+        ProductionMenu menu = resolve(player, containerId);
+        if (menu == null)
+            return Optional.empty();
+        return Optional.of(menu.resume(player));
+    }
+
     /** Server: cancels a production order of this station. */
     private boolean cancel(Player player, UUID orderId) {
         if (!mayEdit(player))
@@ -245,6 +266,21 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         if (cancelled)
             markDirty();
         return cancelled;
+    }
+
+    /**
+     * Server: lifts the safety stop of everything this station's patterns make and tells {@code player} about it. The
+     * reach check is the one every edit of this menu goes through, so a player who has walked away resumes nothing.
+     */
+    private boolean resume(Player player) {
+        if (!mayEdit(player))
+            return false;
+        List<StoppedProduct> resumed = contentHolder.resumeStoppedProducts();
+        WarehouseProductionBlockEntity.tellResumed(player, resumed);
+        if (resumed.isEmpty())
+            return false;
+        markDirty();
+        return true;
     }
 
     private boolean mayEdit(Player player) {
@@ -292,15 +328,19 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             return;
         lastPushGameTime = now;
         pushPending = false;
-        ProductionScreenState state = currentState();
+        ProductionScreenState state = screenState();
         if (state.equals(lastState))
             return;
         lastState = state;
         PacketDistributor.sendToPlayer(serverPlayer, new ProductionScreenPayload(containerId, state));
     }
 
-    /** Server: the patterns of the station and the production orders running at it. */
-    private ProductionScreenState currentState() {
+    /**
+     * Server: the patterns of the station, the production orders running at it and what the safety stop is holding of its
+     * products — exactly what the next push would carry. Public so that a test can read what a player would see without
+     * a network round trip, the way the keeper's own screen state is reachable.
+     */
+    public ProductionScreenState screenState() {
         ProductionPatterns patterns = contentHolder.patterns();
         List<ProductionScreenState.PatternView> views = new ArrayList<>(patterns.size());
         for (int pattern = 0; pattern < patterns.size(); pattern++) {
@@ -313,20 +353,23 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             }
             views.add(new ProductionScreenState.PatternView(entries));
         }
-        List<ProductionScreenState.OrderView> orders = new ArrayList<>();
+        List<ProductionScreenState.OrderView> orders = List.of();
+        List<StoppedProduct> stopped = List.of();
         BlockPos pos = contentHolder.getBlockPos();
         Optional<WarehouseControllerBlockEntity> controller =
                 WarehouseRegistry.findController(contentHolder.getLevel(), pos);
         if (controller.isPresent()) {
-            for (ProductionOrder<ItemKey, RackPosition> order : controller.get().productionOrdersAt(pos)) {
-                if (orders.size() >= ProductionScreenState.MAX_ORDERS)
-                    break;
-                orders.add(new ProductionScreenState.OrderView(order.id(), order.state(), order.result(),
-                        order.resultAmount(), order.produced(), order.outstandingIngredients(),
-                        order.deliveredIngredients()));
-            }
+            // The rows are built by the controller, so this screen and the terminal's cannot disagree about a chain
+            // (M20, ADR-032): plan, depth, station address and the blocked state all come from the one place that owns
+            // the orders. The station keeps the oldest of its own orders, which is its backlog.
+            List<ProductionOrder<ItemKey, RackPosition>> at = controller.get().productionOrdersAt(pos);
+            orders = controller.get().productionOrderViews(
+                    at.subList(0, Math.min(at.size(), ProductionScreenState.MAX_ORDERS)));
+            // What the safety stop is holding of this station's own products (M20): the same answer its goggles and its
+            // block state are built from, so a player cannot be told one thing by the block and another by its screen.
+            stopped = contentHolder.stoppedProducts(controller.get());
         }
-        return new ProductionScreenState(views, orders);
+        return new ProductionScreenState(views, orders, stopped);
     }
 
     private long gameTime() {

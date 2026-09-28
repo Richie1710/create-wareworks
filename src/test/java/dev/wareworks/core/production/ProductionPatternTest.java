@@ -165,6 +165,21 @@ class ProductionPatternTest {
         assertEquals(3, pattern.resultFor(runs));
     }
 
+    /**
+     * How many whole runs fit into the room a maximum leaves: one answer for the automatic restock order that must not
+     * overshoot its rule's cap (M15) and for the plan step whose intermediate has to be storable (M20).
+     */
+    @Test
+    void wholeRunsFitIntoTheRoomThatIsLeft() {
+        ProductionPattern<String> pattern = ProductionPattern.of(LOG, 1, PLANK, 4);
+        assertEquals(0, pattern.runsWithin(0L), "no room, no run");
+        assertEquals(0, pattern.runsWithin(-8L));
+        assertEquals(0, pattern.runsWithin(3L), "a pattern cannot be cut in half");
+        assertEquals(1, pattern.runsWithin(4L));
+        assertEquals(2, pattern.runsWithin(9L));
+        assertEquals(Integer.MAX_VALUE, pattern.runsWithin(Long.MAX_VALUE), "an uncapped item fits anything");
+    }
+
     @Test
     void totalsSaturateInsteadOfOverflowing() {
         ProductionPattern<String> pattern = ProductionPattern.of(LOG, 64, PLANK, 64);

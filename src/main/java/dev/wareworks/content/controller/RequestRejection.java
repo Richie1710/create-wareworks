@@ -59,7 +59,17 @@ public enum RequestRejection {
      * masking defect M8 fixed for storage filters. A player at a terminal never sees it, because a reserve does not
      * hold anything back from them ({@code StockAccess}).
      */
-    RESERVED;
+    RESERVED,
+    /**
+     * The warehouse has <b>stopped making</b> the item, or one of the items its chain would have to make on the way
+     * (the safety stop, ADR-027 extended by ADR-032): an order ended with ingredients already in a machine and nothing
+     * coming back, so nothing orders that item again until a player has looked at the machine and resumed it.
+     * <p>
+     * It is told apart from {@link #PRODUCTION_BUSY} because waiting does not help: the cure is to go to the machine.
+     * Unlike every other reason here it is not about the requested item alone — a chest can be refused because the
+     * warehouse has stopped making the planks it would need ({@code PlanRefusal#PAUSED} names which one).
+     */
+    PRODUCTION_PAUSED;
 
     private static final String LANG_PREFIX = "gui.goggles.request_rejection.";
 

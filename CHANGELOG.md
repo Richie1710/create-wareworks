@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Order something whose ingredients have to be made first.** Ask a terminal for a chest when the warehouse holds nothing
+  but logs, and it works: at the moment you click, the warehouse looks at the patterns your production stations hold and
+  works out the **whole chain** — planks from logs at your saw, the chest from those planks at your crafter — and then
+  either creates **every step at once** or refuses the click and tells you the item that is really missing ("Oak Log is
+  missing"). Nothing moves until the whole chain is possible, so the crane never starts carrying logs for something it
+  could never have finished
+- **Every step is an ordinary production order at one of your own machines, and every intermediate travels through a real
+  storage location.** The crane brings the logs to your saw, the planks come back through a warehouse input and are
+  **stored in a rack**, and the crane then fetches those very planks to the next machine. No machine-to-machine shortcut,
+  nothing held invisibly: Wareworks still orders, and your machines still make everything
+- **A step that is waiting for an earlier step is handed nothing at all.** A machine cannot run on half a set, so a chain
+  that goes wrong does not leave part-sets of ingredients sitting in three of your machines. And an order waiting for its
+  own chain never times out — what takes time is the step below it
+- **The terminal shows a chain as one line**, with the step that is actually working named on the right ("now: Oak
+  Planks"). Click that line and you get **every step with its state and the rack address of the machine it runs at**, so
+  you know which block to walk to; one button gives the whole chain up, after saying exactly what that costs — how many
+  steps really end, how many ingredients were already delivered to your machines, and that the warehouse will then stop
+  making the item until you resume it at the machine. A step that already has its ingredients in a machine is **left
+  running**, so its product still comes back, and the panel does not count it. Giving up on any one step ends the chain,
+  because the steps above it are waiting for something nobody will make now
+- **A refusal finally names the item.** Ordering something the warehouse cannot make used to answer "not in stock" about
+  the thing you clicked. Now the answer is "Oak Log is missing", "Making Oak Planks is stopped", "No room for Oak Planks",
+  "The chain loops at Iron Ingot" — and a click the racks could only serve in part shows the same sentence beside what you
+  did get
+- **How long a chain may be is up to your machines, not to a depth setting.** Two server settings bound it instead:
+  `maxProductionPlanSteps` (how many orders one click may create, the ordered item's own included — **set it to 1 to switch
+  chains off completely**) and `maxPlanIngredientItems` (how many **ingredient** items one click may put into your
+  machines, over every step — the number that really bounds what one click can lose). A click that is too large is made
+  **smaller** rather than refused, and one run is always allowed. A chain that would come back to an item it has already
+  made — two patterns that are inverses of each other — is refused before anything is converted
+- **A redstone request can start a chain too**, one at a time per output, so a clock cannot stack chains into the same
+  machines while the first one is still working. A stock rule's minimum still orders one level deep, as before
+- **If a machine eats a batch, the warehouse now stops making that item whatever ordered it** — your own click, a redstone
+  request, a step of a chain or the warehouse's own restocking. It also stops *planning* it, so the next click cannot
+  quietly rebuild the same chain into the same broken machine, and a stop that no stock rule is behind is never forgotten
+  by itself
+- **And you can see that stop, and lift it, where the machine is.** The production station in front of it lights a **red
+  ring** around its openings, its goggles read "Stopped products: 1 / Ingredient items not recovered: 4", and its screen
+  shows a red row and tints the pattern that makes the item. **Sneak-right-click the station** (with anything at all in
+  your offhand), or click that red row, and the warehouse makes the item again — and it tells you how many ingredients
+  were delivered and never came back. The controller's goggles and an aisle display count the same thing, in the same
+  words, on an aisle with no stock keeper at all
+- A Ponder scene, **"Chains of Production Orders"**, on the warehouse production station and the warehouse terminal alike:
+  a warehouse holding only logs, one click that plans the whole chain, the step that is handed nothing while an earlier one
+  runs, the planks coming back and being stored in a rack, and only then the second machine making what you ordered
+- **Existing worlds are unchanged.** A production order saved before this version reads back as exactly what it was, and a
+  warehouse that runs no chains looks the same as it always did, down to the order lines in its screens
 - **Optional chunk loading for aisles that have work.** A warehouse does things on its own now — it refills its own
   minimums, hands surplus out through a port and fetches a machine's result back into storage — and all of that used to
   stop the moment you walked away. An aisle can now hold **its own chunks** loaded while it has something to do: a crane
@@ -40,6 +87,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing pending unloads and will not see a machine that starts producing later
 - **Existing worlds are unchanged.** The only thing Wareworks writes for this is a note on a controller that has let go of
   work it could not finish, so that it stays let go after a restart; the hold itself is not stored at all
+
+### Changed
+
+- The default of the server setting `maxProductionOrders` rose from **8 to 12**, because a chain holds one production order
+  per step and eight slots made a three-step chain plus one automatic restock the whole aisle. A chain that does not fit
+  into the **free** slots is refused with "too many production orders are running" instead of being started
+- "Paused after a lost batch: 1" on the warehouse controller's goggles and "Rules paused: 1" on an aisle display are both
+  **"Stopped products: 1"** now, the same line the production station shows. Since a lost batch of any order stops an item,
+  that count includes items no stock rule governs at all — on an aisle without a single stock keeper the old wording was
+  simply false, and one number a player meets on three surfaces has to be recognisable as one state
 
 ## [0.4.0-alpha] - 2026-09-27
 

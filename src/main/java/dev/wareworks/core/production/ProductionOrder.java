@@ -61,19 +61,39 @@ import org.jetbrains.annotations.Nullable;
  *                       request when that request is served or cancelled ({@link #withoutBackingRequest()}) and would
  *                       otherwise turn into an automatic one — which would let a player's own cancellation trip the
  *                       safety stop of a rule that never ordered anything
+ * @param parentLine     the {@link SupplyLine} of <b>another</b> order this one makes its product for: the single
+ *                       field that turns a flat list of orders into a production plan (M20, ADR-032). An order with a
+ *                       parent line is a <b>step</b> of a chain ({@link #isStep()}) — the planks a chest is waiting
+ *                       for — and empty for everything else, so an order saved before M20 reads back as exactly what
+ *                       it was ({@code ControllerPersistence}). It names a <i>line</i> and not an order, because a
+ *                       line id is what {@link ProductionOrders#byLine} already resolves, what a {@code SUPPLY} job
+ *                       already carries, and what names precisely <b>which</b> ingredient of the parent is being made;
+ *                       a (parent, key) pair could disagree with the parent's own lines, a line id cannot.
+ *                       A step is never automatic: {@link #restock()} and this are mutually exclusive, and the parent
+ *                       link wins, so no crafted save can describe an order that feeds a parent <i>and</i> trips a
+ *                       rule's safety stop
  * @param <K>            item key type
  * @param <L>            location type
  */
 public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmount, List<SupplyLine<K>> lines,
                                     ProductionOrderState state, long deadlineTick, long produced,
                                     long resultStockSeen, Optional<UUID> backingRequest, long promisedToRequest,
-                                    boolean restock) {
+                                    boolean restock, Optional<UUID> parentLine) {
+    /**
+     * A {@link #resultStockSeen()} that means "no baseline yet": {@link #observableGain} answers 0 for it and the next
+     * observation adopts the level that is really there instead of counting all of it as progress. It is what
+     * {@link #withoutParentLine()} leaves behind, because a step is counted by arrivals only and therefore never kept a
+     * baseline at all.
+     */
+    public static final long BASELINE_PENDING = Long.MAX_VALUE;
+
     public ProductionOrder {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(station, "station");
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(backingRequest, "backingRequest");
+        Objects.requireNonNull(parentLine, "parentLine");
         lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
         if (lines.isEmpty())
             throw new IllegalArgumentException("a production order needs at least one ingredient line");
@@ -88,6 +108,12 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         // An automatic order is one nobody asked for: the two can never both be true, so save data cannot describe an
         // order that would both refund a request and trip a rule's safety stop.
         if (restock && backingRequest.isPresent())
+            restock = false;
+        // Nor can an order be a step of a chain and an automatic one at the same time (M20). The parent link wins,
+        // because a save-integrity failure must not be able to arm the safety stop of a rule that ordered nothing:
+        // a step is cancelled on a broken save (ProductionOrders#validatePlans) and cancelling an automatic order is
+        // exactly what pauses an item.
+        if (restock && parentLine.isPresent())
             restock = false;
     }
 
@@ -119,7 +145,35 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
             Supplier<UUID> lineIds, long now, long timeoutTicks, long resultStockNow, @Nullable UUID backingRequest,
             long promisedToRequest) {
         return start(id, station, pattern, runs, lineIds, now, timeoutTicks, resultStockNow, backingRequest,
-                promisedToRequest, false);
+                promisedToRequest, false, null);
+    }
+
+    /**
+     * A <b>step of a production plan</b> (M20, issue #4, ADR-032): an ordinary production order whose product another
+     * order is waiting for, named by that order's ingredient line {@code parentLine}.
+     * <p>
+     * Nothing about the crane, the station or the timeout is special here — the crane brings the ingredients, the
+     * player's machine works, and the product comes back through a warehouse input into the racks, where the parent's
+     * own {@code SUPPLY} job then fetches it. Wareworks still crafts nothing and there is no machine-to-machine
+     * shortcut (ADR-024).
+     * <p>
+     * Two things do differ, and both are the safety property of a chain:
+     * <ul>
+     * <li>nobody is waiting for a step directly, so it has no backing request and promises nothing to one;</li>
+     * <li>a step is completed <b>only</b> by items the warehouse really stored out of one of its own inputs
+     * ({@link #withStored}) and never by a rise of the result's stock level ({@link #countsStockLevels()}), because its
+     * completion is what hands the <i>parent's</i> ingredients to the next machine. A second plank farm must not
+     * complete a step whose sawmill swallowed the batch — the same argument M15 made one level up (ADR-026,
+     * ADR-032).</li>
+     * </ul>
+     * It therefore keeps no stock baseline at all, exactly like {@link #restock}.
+     *
+     * @param parentLine the ingredient line of the parent order this step's product is for
+     */
+    public static <K, L> ProductionOrder<K, L> step(UUID id, L station, ProductionPattern<K> pattern, int runs,
+            Supplier<UUID> lineIds, long now, long timeoutTicks, UUID parentLine) {
+        return start(id, station, pattern, runs, lineIds, now, timeoutTicks, 0L, null, 0L, false,
+                Objects.requireNonNull(parentLine, "parentLine"));
     }
 
     /**
@@ -134,12 +188,12 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      */
     public static <K, L> ProductionOrder<K, L> restock(UUID id, L station, ProductionPattern<K> pattern, int runs,
             Supplier<UUID> lineIds, long now, long timeoutTicks) {
-        return start(id, station, pattern, runs, lineIds, now, timeoutTicks, 0L, null, 0L, true);
+        return start(id, station, pattern, runs, lineIds, now, timeoutTicks, 0L, null, 0L, true, null);
     }
 
     private static <K, L> ProductionOrder<K, L> start(UUID id, L station, ProductionPattern<K> pattern, int runs,
             Supplier<UUID> lineIds, long now, long timeoutTicks, long resultStockNow, @Nullable UUID backingRequest,
-            long promisedToRequest, boolean restock) {
+            long promisedToRequest, boolean restock, @Nullable UUID parentLine) {
         Objects.requireNonNull(pattern, "pattern");
         Objects.requireNonNull(lineIds, "lineIds");
         if (runs < 1)
@@ -150,7 +204,8 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
                     ingredient.totalFor(runs)));
         return new ProductionOrder<>(id, station, pattern.result().key(), pattern.resultFor(runs), lines,
                 ProductionOrderState.WAITING_FOR_INGREDIENTS, deadline(now, timeoutTicks), 0L,
-                Math.max(0L, resultStockNow), Optional.ofNullable(backingRequest), promisedToRequest, restock);
+                Math.max(0L, resultStockNow), Optional.ofNullable(backingRequest), promisedToRequest, restock,
+                Optional.ofNullable(parentLine));
     }
 
     /** Whether the order still promises ingredients and can still finish. */
@@ -167,6 +222,15 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     }
 
     /**
+     * Whether this order is a <b>step of a production plan</b>: another order's ingredient line is waiting for its
+     * product ({@link #parentLine()}, M20, ADR-032). A step that loses its parent simply stops being one
+     * ({@link #withoutParentLine()}) and runs on as an ordinary order.
+     */
+    public boolean isStep() {
+        return parentLine.isPresent();
+    }
+
+    /**
      * Whether a rise of the result's <b>stock level</b> may complete this order ({@link #withResultStock}).
      * <p>
      * It may for an order a player or a redstone request asked for: somebody is waiting, and an item that turns up
@@ -176,9 +240,15 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      * player taking the product out and putting it back would otherwise complete an order whose ingredients a machine
      * had swallowed — and the rule would go on feeding that machine for ever. An automatic order is therefore counted
      * only by {@link #withStored}.
+     * <p>
+     * It may not for a <b>step of a plan</b> either (M20, {@link #isStep()}), for the same reason one level down: the
+     * completion of a step is what hands the <i>parent's</i> ingredients to the next machine, so a level rise from an
+     * unrelated source would set a whole chain going on the strength of items no machine of this plan made. A
+     * <b>root</b> keeps the channel: somebody is waiting for the root, and an item that turns up from anywhere
+     * satisfies them just as well (§3.5.3).
      */
     public boolean countsStockLevels() {
-        return !restock;
+        return !restock && !isStep();
     }
 
     /**
@@ -189,9 +259,14 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      * the crane dropped an ingredient at it, so an automatic order with nothing delivered can only be completed by
      * somebody else's items — and it is exactly the order that has delivered nothing which must be allowed to time out
      * without pausing anything.
+     * <p>
+     * The gate is phrased over {@link #countsStockLevels()} rather than over {@link #restock()} so that it covers a
+     * <b>step</b> too (M20): a step is the other kind of order that has no second channel, and one that has been given
+     * nothing yet could otherwise be completed by somebody else's batch — which would hand its parent's ingredients to
+     * the next machine on no evidence at all.
      */
     public boolean countsArrivals() {
-        return isOpen() && (!restock || deliveredIngredients() > 0);
+        return isOpen() && (countsStockLevels() || deliveredIngredients() > 0);
     }
 
     /**
@@ -293,7 +368,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     /** This order with another deadline (a world reload gives every restored order its full timeout again). */
     public ProductionOrder<K, L> withDeadline(long newDeadline) {
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, newDeadline, produced,
-                resultStockSeen, backingRequest, promisedToRequest, restock);
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
     }
 
     /** Whether every ingredient line has been served completely. */
@@ -331,13 +406,13 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
             return this;
         if (!isOpen())
             return new ProductionOrder<>(id, station, result, resultAmount, updated, state, deadlineTick, produced,
-                    resultStockSeen, backingRequest, promisedToRequest, restock);
+                    resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
         boolean complete = true;
         for (SupplyLine<K> line : updated)
             complete &= line.isComplete();
         return new ProductionOrder<>(id, station, result, resultAmount, updated,
                 complete ? ProductionOrderState.DELIVERED : state, deadline(now, timeoutTicks), produced,
-                resultStockSeen, backingRequest, promisedToRequest, restock);
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
     }
 
     /**
@@ -349,7 +424,8 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (state != ProductionOrderState.DELIVERED)
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, ProductionOrderState.WAITING_FOR_RESULT,
-                deadline(now, timeoutTicks), produced, resultStockSeen, backingRequest, promisedToRequest, restock);
+                deadline(now, timeoutTicks), produced, resultStockSeen, backingRequest, promisedToRequest, restock,
+                parentLine);
     }
 
     /**
@@ -387,12 +463,15 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         boolean complete = total >= resultAmount;
         return new ProductionOrder<>(id, station, result, resultAmount, lines,
                 complete ? ProductionOrderState.COMPLETE : state, complete ? now : deadline(now, timeoutTicks), total,
-                resultStockSeen, backingRequest, promisedToRequest, restock);
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
     }
 
     /**
      * Result items this order could count from a stock level of {@code stockNow}: the increase over the level it last
      * saw. 0 for a finished order and for a level that did not rise.
+     * <p>
+     * 0 as well while the baseline is {@link #BASELINE_PENDING}: the next observation adopts the level that is there
+     * and counting starts from it.
      * <p>
      * It is separate from {@link #withResultStock(long, long, long, long)} because one arrival must be credited
      * <b>once</b>: with two open orders for the same result, each would otherwise count the same items in full and
@@ -423,7 +502,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         long nextDeadline = complete ? now : counted > 0L ? deadline(now, timeoutTicks) : deadlineTick;
         return new ProductionOrder<>(id, station, result, resultAmount, lines,
                 complete ? ProductionOrderState.COMPLETE : state, nextDeadline, total, current, backingRequest,
-                promisedToRequest, restock);
+                promisedToRequest, restock, parentLine);
     }
 
     /**
@@ -450,7 +529,33 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (backingRequest.isEmpty())
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
-                resultStockSeen, Optional.empty(), 0L, restock);
+                resultStockSeen, Optional.empty(), 0L, restock, parentLine);
+    }
+
+    /**
+     * This order without its parent line: it stops being a step of a plan and runs on as an ordinary order, so its
+     * product simply lands in stock as items nobody promised (M20, ADR-032). The exact analogue of
+     * {@link #withoutBackingRequest()}, and the only way a parent link is ever cleared.
+     * <p>
+     * It is what happens to a step whose parent is gone or can no longer use what it makes — a plan broken by a
+     * truncated save ({@link ProductionOrders#validatePlans}), a parent that ended, or a player who put the
+     * intermediate into a rack by hand so the parent's line no longer needs anything. <b>Detaching is deliberately
+     * kinder than cancelling</b> whenever the crane has already dropped ingredients at the machine: those items are in
+     * the machine and nothing takes them back out, so letting the step finish turns them into a product the player
+     * keeps instead of a loss ({@code docs/warehouse-system.md} §3.5.4). A detached step keeps the arrival channel, so
+     * a machine that swallowed <i>its</i> batch is still caught.
+     * <p>
+     * <b>The stock baseline is reset to {@link #BASELINE_PENDING}</b>, because a step never kept one
+     * ({@link #countsStockLevels()} was false for it, so {@link #resultStockSeen()} stayed 0). Without that, the order
+     * would gain the stock-level channel with a baseline of zero and the <i>whole</i> stock of its result would count
+     * as its own progress on the very next observation — an order completed by items nobody made. The next observation
+     * adopts the level that is really there and the channel counts from then on.
+     */
+    public ProductionOrder<K, L> withoutParentLine() {
+        if (parentLine.isEmpty())
+            return this;
+        return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
+                BASELINE_PENDING, backingRequest, promisedToRequest, restock, Optional.empty());
     }
 
     /**
@@ -459,7 +564,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      */
     private ProductionOrder<K, L> endedAt(ProductionOrderState next, long now) {
         return new ProductionOrder<>(id, station, result, resultAmount, lines, next, now, produced, resultStockSeen,
-                backingRequest, promisedToRequest, restock);
+                backingRequest, promisedToRequest, restock, parentLine);
     }
 
     /** The deadline {@code timeoutTicks} after {@code now}, saturating instead of overflowing. */

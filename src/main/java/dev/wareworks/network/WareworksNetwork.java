@@ -59,8 +59,26 @@ public final class WareworksNetwork {
      * {@link TerminalRequestPayload} — encoded as a tag, so an unknown one reads as "nothing accepted" and the server
      * asks instead of acting — and the new {@link TerminalConfirmPayload}. None of it needs a further bump:
      * {@code "5"} has never been released, so the whole of M15 ships behind one version string.
+     * <p>
+     * <b>{@code "6"} is M20</b> (recursive production, issue #4, ADR-032): {@code RequestRejection} gained
+     * {@code PRODUCTION_PAUSED}, and that enum travels by <b>ordinal</b> in {@link TerminalResultPayload}. Appending a
+     * constant shifts nothing, but an older client would read a reason it does not have at all, so the version string
+     * makes it fail the connection instead of showing the wrong sentence. The same version covers the four fields an
+     * order line gained ({@code ProductionScreenState.OrderView}: the plan it belongs to, its depth in it, its station's
+     * address and whether it is waiting for an earlier step), which {@link TerminalOrdersPayload} and
+     * {@code ProductionScreenPayload} both carry: they are appended at the end of a line, so a reader of the old shape
+     * would stop one line in and desynchronise the rest of the packet. It also covers the stopped products a
+     * {@code ProductionScreenPayload} carries after its orders and the new {@link ProductionResumePayload}, which an
+     * older client would neither send nor understand. Part 2 appends two more fields to
+     * {@link TerminalResultPayload} — the {@code PlanRefusal} behind a refusal and the <b>item it names</b>,
+     * which is regularly not the item that was clicked. That enum travels by <b>name</b>, like a
+     * {@code StoppedProduct}'s cause, so its declaration order stays free and a client on another build reads an
+     * unknown refusal as none rather than as a shifted one. They are written after everything M15 sent, and the item
+     * only behind a refusal, so an answer with no plan behind it costs one empty string; a reader of the old shape
+     * would still stop at the end of the known fields and leave the rest in the buffer, which is exactly what this
+     * version string prevents.
      */
-    public static final String VERSION = "5";
+    public static final String VERSION = "6";
 
     private WareworksNetwork() {
     }
@@ -86,6 +104,8 @@ public final class WareworksNetwork {
                 WareworksNetwork::onProductionPattern);
         registrar.playToServer(ProductionCancelPayload.TYPE, ProductionCancelPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionCancel);
+        registrar.playToServer(ProductionResumePayload.TYPE, ProductionResumePayload.STREAM_CODEC,
+                WareworksNetwork::onProductionResume);
         registrar.playToClient(StockKeeperScreenPayload.TYPE, StockKeeperScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onStockKeeperScreen);
         registrar.playToServer(StockKeeperRulePayload.TYPE, StockKeeperRulePayload.STREAM_CODEC,
@@ -141,6 +161,18 @@ public final class WareworksNetwork {
         Player player = context.player();
         if (ProductionMenu.submitCancel(player, payload.containerId(), payload.orderId()).isEmpty())
             WarehouseTerminalMenu.submitCancel(player, payload.containerId(), payload.orderId());
+    }
+
+    /**
+     * A player lifted the <b>safety stop</b> from inside a production station's screen (M20, issue #4, ADR-032): the
+     * stopped row says which of this station's products the warehouse has stopped making, and a click on it says that the
+     * machine behind the station is worth another batch.
+     * <p>
+     * The payload carries no item ({@link ProductionResumePayload}): the station's own patterns decide what may be
+     * resumed, so nothing here is trusted. It moves no item and answers the player with what was lifted and what it cost.
+     */
+    private static void onProductionResume(ProductionResumePayload payload, IPayloadContext context) {
+        ProductionMenu.submitResume(context.player(), payload.containerId());
     }
 
     /**

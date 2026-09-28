@@ -66,13 +66,23 @@ dev.wareworks
 │   │                          StockListModel (list, search, sort, paging), TerminalSearch, TerminalSort,
 │   │                          TerminalAmounts (click → amount), CountFormat (compact cell amounts),
 │   │                          StockDiff (what a terminal still has to send); RequestConfirmation (what a click would
-│   │                          cross: the item's reserve, a reserved ingredient, the maximum) and
+│   │                          cross: the item's reserve, a reserved ingredient, the maximum; since M20 also #ofPlan,
+│   │                          measured over a whole chain's leaf demand) and
 │   │                          RequestAcknowledgement (what the player accepted, and whether it covers a question)
-│   │                          (M15 part 2, ADR-027)
+│   │                          (M15 part 2, ADR-027); PlanMember / PlanLine / PlanLines (M20: the order rows a payload
+│   │                          carries folded into one line per chain, head plus frontier — pure, so every degenerate
+│   │                          payload has a test) and PlanCancelCost (what giving up on such a line really costs:
+│   │                          the orders failPlan would end and the batch it would abandon, in one tested place so
+│   │                          the panel and the server cannot disagree)
 │   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
-│   │                          ProductionOrders (a controller's orders), ProduciblePlanner (what an aisle could make)
+│   │                          ProductionOrders (a controller's orders), ProduciblePlanner (what an aisle could make);
+│   │                          the chain planner (M20, issue #4, ADR-032): ProductionPlanner (the whole chain worked
+│   │                          out at the click, or a refusal that names the item), ProductionPlan / PlanNode (the
+│   │                          steps in dependency order, root last), PlanBudget (the one availability snapshot),
+│   │                          ProductionPlanInput / ProductionPlanResult, PlanLimits (steps, ingredient items — no
+│   │                          depth key), PlanRefusal (eight reasons, each naming an item), StationPattern
 │   ├── port                   the policy of one warehouse port (M17, issue #12, ADR-029): PortDirection (request /
 │   │                          accept, derived from the sign of the rank; since M18 also collect, from one sentinel
 │   │                          rank), PortRedstone (on a pulse / while powered /
@@ -108,7 +118,9 @@ dev.wareworks
 │   │                          cached for planning, both read in one lookup per location, M8 + M16, ADR-028; the name
 │   │                          was kept on purpose);
 │   │                          AisleStockRules (the controller's own, saved copy of its keepers' stock rules, M15,
-│   │                          ADR-027; the pauses of the safety stop live in the controller beside it);
+│   │                          ADR-027; the pauses of the safety stop live in the controller beside it, and since M20
+│   │                          they are armed by every kind of order and are keyed by item alone, ADR-032, next to the
+│   │                          derived stoppedStations set that keeps a station's stopped lamp from outliving its aisle);
 │   │                          AislePorts (the port policies and filter items of the aisle's warehouse ports, cached for
 │   │                          planning and for the continuous pass, not saved, unread until read, M17, ADR-029);
 │   │                          AisleCollections (what the inventories behind the aisle's collecting ports held at their
@@ -148,7 +160,11 @@ dev.wareworks
 │                              WarehouseProductionBlock / BlockEntity (the station the crane delivers a production
 │                              order's ingredients into), ProductionPatterns (its editable 3x3 pattern slots and their
 │                              NBT), ProductionGoggleSummary, ProductionMenu, ProductionMenuLayout,
-│                              ProductionScreenState (M11, ADR-024);
+│                              ProductionScreenState (M11, ADR-024); StoppedProduct (one product of this station the
+│                              safety stop holds, with its cause and what it cost — the one server answer behind the
+│                              station's screen row, its goggle numbers, its STOPPED block state and its resume
+│                              message, M20, ADR-032), ProductionStationHooks (the interaction event that makes the
+│                              station's sneak-click resume reach the block with an occupied offhand, M20);
 │                              StationArmPointType (the arm interaction point type of exactly one station block),
 │                              WarehouseInputArmPoint (deposit only), DeliveryStationArmPoint (take only: output,
 │                              terminal, production station) (M12, ADR-025);
@@ -167,7 +183,10 @@ dev.wareworks
 │                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019),
 │                              TerminalOrdersPayload (server → client: the aisle's production orders, M11),
 │                              and the three production station payloads: ProductionScreenPayload (server → client),
-│                              ProductionPatternPayload, ProductionCancelPayload (client → server) (M11, ADR-024);
+│                              ProductionPatternPayload, ProductionCancelPayload (client → server) (M11, ADR-024),
+│                              plus ProductionResumePayload (client → server: lifts the safety stop at this station and
+│                              carries nothing but the container id, so the station's own patterns decide what may be
+│                              resumed, M20, ADR-032);
 │                              the two stock keeper payloads: StockKeeperScreenPayload (server → client),
 │                              StockKeeperRulePayload (client → server, moves no item) (M15, ADR-027);
 │                              TerminalConfirmPayload (server → client: what a click would cross, and nothing was
@@ -193,7 +212,8 @@ dev.wareworks
 │       └── scenes             PonderAisle (shared stage layout), CraneScript (crane animation through the client pose
 │                              API), CraneScenes (stacker_crane/overview), WarehouseScenes (interface, storing,
 │                              retrieving, M5; filters, M13), TerminalScenes (terminal, requesting),
-│                              ProductionScenes (production) (M13), StockRuleScenes (stock_rules: the three
+│                              ProductionScenes (production, M13; production_chain: a whole chain ordered and run,
+│                              registered for the production station and the terminal, M20), StockRuleScenes (stock_rules: the three
 │                              numbers; restocking: the minimum ordering by itself and the safety stop) (M15) and
 │                              PortScenes (port_requesting: feeding a machine without a clock; port_accepting: an
 │                              overflow, also registered for the stock keeper) (M17; port_collecting: the crane
@@ -276,6 +296,12 @@ dev.wareworks
 │                              feeding a Mechanical Crafter out of a production station, a collecting port fetching
 │                              the planks back, and the maximum, the overflow and the full warehouse in four asserted
 │                              acts, M18),
+│                              ChainVisualScenario (recursive production end to end in five chapters: the whole chain
+│                              planned by one click, a step handed nothing while an earlier one runs, the intermediate
+│                              through a real rack, the chain's line and step panel in the terminal, a machine that
+│                              swallows the batch, the four surfaces of the safety stop and the click that lifts it,
+│                              and the chain run again — with a display board pulled on demand so a board shot cannot
+│                              race the crane, M20),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -492,6 +518,7 @@ iron sheets already require a press and its brass casing already requires brass.
   * *Extended in M15 to ten scenes* (`warehouse/stock_rules`, `warehouse/restocking`), the stock keeper's two. See the M15 block below.
   * *Extended in M17 to twelve scenes* (`warehouse/port_requesting`, `warehouse/port_accepting`), the warehouse port's two directions; the accepting one is registered for the **stock keeper** as well, because a maximum is what makes an overflow useful (ADR-029).
   * *Extended in M18 to thirteen scenes* (`warehouse/port_collecting`), the port's third direction; it is registered for the **production station** as well, because closing the loop — the crane brings the ingredients and takes the product back — is exactly what that block's story needs, and a player who read `warehouse/production` has to find it (ADR-030).
+  * *Extended in M20 to fourteen scenes* (`warehouse/production_chain`, "Chains of Production Orders"), recursive production; it is registered for the **production station and the terminal**, because a chain is planned by a click at one and run at the other, and **last** in both cases so each block still opens on the scene it always did (ADR-032). It is a storyboard of its own rather than beats added to `warehouse/production`: inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files, and the chain needs a second station, a second machine and four crane trips — more than that scene's stage and pacing hold. Its stage is a new 9x7x9 empty aisle in `scripts/gen_ponder_schematics.py`.
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
@@ -512,7 +539,7 @@ iron sheets already require a press and its brass casing already requires brass.
 * **Two scenes rather than one, for pacing.** Told as one story the keeper came to about a minute in which the three numbers — the part a player needs first — were over after the first third, and a player who only wanted to look up "what does the reserve do" had to sit through a production loop. The two now run **968** and **1051** ticks (about 48 s and 53 s) and each is watchable on its own, exactly as the terminal's placing/requesting pair is (`StockRuleScenes` carries the reason). The `text_n` renumbering rule above is why the split was made *before* release rather than later.
 * **The redstone in a scene is real block states.** A `PonderLevel` (`SchematicLevel`) runs no block ticks and no neighbour updates, so a comparator, a redstone lamp and a lever keep whatever state a scene sets, and `toggleRedstonePower` flips exactly their `POWERED`/`POWER`/`LIT`. The keeper is never in such a selection: its own `LIT` is a rule lamp and is written on its own, together with `PAUSED` for the safety stop — the same two block states the controller's rule tick writes in a real world.
 
-*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye. *M15:* keeper 2. *M17:* output 3. *M18:* output 4 and production 2, which is what pins that the collecting scene really reaches both of its subjects.
+*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye. *M15:* keeper 2. *M17:* output 3. *M18:* output 4 and production 2, which is what pins that the collecting scene really reaches both of its subjects. *M20:* terminal 3 and production 3, which pins the same thing for the chain scene. It is also the only automated check that a storyboard compiles at all, which is why the chain scene was iterated three times against it: the first machine became a Mechanical Saw (two Mechanical Crafters made the rack row six identical brown boxes, because a crafter has to face away from the aisle to be fed from it), the two closing beats were lengthened so the 90 % shot always carries one of them, and the opening was merged into one beat.
 
 *Reason:* Scenes built entirely from instructions keep the binary assets trivial and stable, and reusing the crane's own motion means the Ponder crane can never drift from how the machine really behaves.
 
@@ -928,7 +955,9 @@ turns items into other items is a crafting mod, not a warehouse.
   stock; `ProduciblePlanner` never consults a second pattern to satisfy the first. A missing ingredient is refused with
   a plain `NOT_IN_STOCK` and named to the player. Together with the construction rule "a pattern must not produce one
   of its own ingredients", an order that waits for another order is **unrepresentable**, not merely unreachable.
-  Recursive production is stage 2.
+  Recursive production is stage 2. *(Shipped in M20, issue #4: **ADR-032**. `ProduciblePlanner` is still exactly this and
+  every number it reports is still one level deep; what plans a chain is the click. An order that waits for another order
+  is now representable by exactly one field, and a chain is nothing but ordinary orders at the player's own machines.)*
 * **An order observes the world; it never asserts it.** Completion counts only *increases* of the result's stock
   level, from any source. Counting only what one input delivered would tie an order to which station the machine
   happens to feed; counting the level itself would mistake a retrieval for production.
@@ -1191,7 +1220,10 @@ teleportation, storage only through `Capabilities.ItemHandler.BLOCK`.
   surface the rule has (a third lamp colour, its own goggle line on keeper and controller, its own line on an aisle
   display, the rule's row in the keeper's screen and the terminal row's tooltip), is **saved with the controller**, and
   is lifted only by a player — by clicking the paused row's status mark, or by re-editing or clearing the rule **from the
-  row that really governs the item**, never from a shadowed duplicate.
+  row that really governs the item**, never from a shadowed duplicate. *(Widened in M20 by ADR-032: the first loss of
+  **any** order stops that item — a click, a redstone request and a step of a chain included — the pause blocks planning as
+  well as ordering, it is forgotten with a deleted rule only when a rule armed it, and it can also be lifted at the
+  production station in front of the machine, which is the only place that exists for an item no rule governs.)*
 * **An automatic order is completed only by items the warehouse stored out of one of its own inputs**, and never by a
   rise of the stock index. The guard above is worth nothing otherwise: the index rises for any reason at all — a second
   farm, a barrel emptied into a rack, a player putting the product back — and an order completed that way never times
@@ -1765,6 +1797,155 @@ aisle indefinitely.
 limitation". The limitation stands for the default configuration and the bullet is now qualified rather than removed:
 the crane still only simulates in a ticking chunk, and M19 changes who may keep that chunk ticking, not where the
 simulation lives.
+
+### ADR-032 — A recursive order is one **plan of ordinary production orders**, created atomically and bounded by cost rather than by depth; the safety stop grows to cover every kind of order (M20, issue #4)
+
+*Context:* M11 shipped production as a single level, by construction rather than by a guard (ADR-024): an ingredient
+counts only as real, unpromised stock, `ProduciblePlanner` never consults a second pattern to satisfy the first, and an
+order that waits for another order is therefore *unrepresentable*. GitHub issue #4, from the user, asks for the missing
+half — order a chest when the aisle has logs and a pattern for planks.
+
+The obvious readings are all wrong for this addon. A crafting tree executed by the controller would be AE2 with a crane
+painted on it. A "virtual" intermediate held by the controller would be item teleportation with a detour (hard rule §1.3).
+And the framing the feature request itself suggested — *a recursive order is a set of temporary stock rules* — is the right
+intuition about the engine and the wrong object, for six reasons that are all checkable in the code: `StockRules` is
+first-wins, so a temporary row beside a player's own row is `SHADOWED` and applies nothing; `StockRule`'s canonical
+constructor resolves a minimum above a maximum by **raising the player's maximum**, and a surplus stored above a cap never
+leaves the warehouse again; `maxStockRules` is a shared budget, so temporary rows would push real rules to `INERT` and
+silently stop their maxima capping and their reserves reserving; `pruneStockPauses` forgets a pause whose item no rule
+governs, so a temporary rule would take ADR-027's safety stop with it when it was removed; `NO_ROOM` would report the
+player's own cap for a click on a chest; and two orders needing 8 planks each would need the temporary minimum to carry a
+refcount, which is a claim ledger wearing a rule's clothes.
+
+The design study `run/m20-design-synthesis.md` compared three framings and recommended plan-first. **Three decisions were
+then taken by the project owner and are binding**; where they differ from the study, they win.
+
+*Decision:*
+* **A recursive order is a plan, and a plan is nothing but ordinary production orders that name each other.** Ordering a
+  producible item walks the aisle's patterns **once**, at the click, from the snapshot `request(...)` already builds. If
+  the plan holds, every node becomes an ordinary production order in the **same tick**, children first; if it does not,
+  the click is refused with a reason that **names the item**. There is no plan object with a lifetime, no re-planning, no
+  scheduler and no crafting tree to keep consistent with the world.
+* **The claim on an intermediate is the parent order's own supply line.** `availableStock` already subtracts
+  `ProductionOrders#outstandingIngredient`, so the moment a parent exists its 8 planks are promised — to nobody else, not
+  another order, not a rule, not a player at a terminal. It persists, it shows on two screens, and it is released on
+  failure. **The parent order is the temporary minimum**, which is why the temporary rule was not needed.
+* **Acceptance is the reservation.** Because the plan becomes ordinary ledger entries in the tick it is made, it never has
+  to stay valid; there is no window in which it is a hope rather than a promise. `addAll` is therefore all-or-nothing.
+* **A plan executes itself bottom-up, with no new mechanism at all.** A `SUPPLY` job for an item that is not in the racks
+  finds no candidate and is not planned, so the leaf runs first and the parent waits. The parent can then fetch the very
+  intermediate its own line made unavailable to everybody else, because `SUPPLY` is planned by
+  `JobPlanner#planOutOfStorage` out of `stock().locationsOf(key)` minus reservations and **never** out of `availableStock`.
+  `CraneDispatch`, `JobPlanner`, `JobType`, `LocationKind`, the reservation kinds and the crane state machine are
+  untouched, no new `ProductionOrderState` is added, and no crane test had to change.
+* **One field, and the plan is derived.** `ProductionOrder` gains `Optional<UUID> parentLine` — the parent's `SupplyLine`
+  id, which `ProductionOrders#byLine` already resolves and which names exactly *which* ingredient of the parent is being
+  made; a (parent, key) pair could disagree with the parent's own lines, a line id cannot. The plan id is the root's own
+  order id and the depth is a bounded walk, so no two stored numbers can disagree. Saved as `Parent?`, written only when
+  present, so an order saved before M20 reads back as a plain single-level order and there is no migration.
+* **A parent with an open child fetches nothing at all**, and its deadline does not run. Not one line, not even the
+  payable ones: a machine cannot run on a partial set, a funnel or an arm will push half a run into it, and that is the one
+  thing that turns a deep chain into a deep loss. It also makes the blocked state truthful, makes two steps of one plan at
+  one station strictly sequential (which removes the M11 showcase crafter hazard rather than documenting it), and leaves
+  the invariant that makes a plan collapse instead of hanging: *the deepest open order of a plan always has a running
+  deadline*.
+* **A step is counted by arrivals only.** `countsStockLevels()` becomes `!restock && !isStep()`, and `countsArrivals()` is
+  phrased over it so the ADR-027 gate covers a step too. That argument holds one level down and is now load-bearing: a
+  second plank farm must not complete a step whose sawmill swallowed the batch, because the parent then *acts* on that
+  completion by handing its own ingredients to the next machine.
+* **Every intermediate goes through a real rack.** Machine → warehouse input or an M18 collecting port → `STORE`/`COLLECT`
+  → rack → the parent's `SUPPLY`. Two extra crane trips per level, and that is the feature: it is the stock index where an
+  arrival is observed, where a maximum applies, and what every surface reads. An input→station shortcut is an explicit
+  non-goal.
+* **Owner's decision 1 — no depth limit.** `PlanLimits` has two numbers and not three: `maxProductionPlanSteps` (production
+  orders one plan may create, the ordered item's own included — it bounds the depth too, because every level costs at least
+  one step, and it is what bounds the recursion, hard-capped at 1024) and `maxPlanIngredientItems` (ingredient items one
+  plan may hand to machines over all its steps). `TOO_DEEP` does not exist. **Termination comes from the cycle check
+  instead**, which holds whatever those numbers are: the result keys of the current path are carried down, and a pattern
+  whose result *or any of whose ingredients* is already a result on the path is `LOOP`, refused before anything is
+  converted. Iron ingot ↔ iron block therefore terminates by construction, and the pair stays perfectly legal to author.
+  * **A bound clamps before it refuses.** A plan that does not fit is tried again with fewer runs of the ordered item and
+    only refused when not even one run fits. That is M11 parity rather than gold-plating: `startProductionOrder` already
+    bounded its runs by the ingredients that were there and told the request what it was granted. Cost is monotone in the
+    root's runs, so the largest plan that fits is found by a binary search of at most 31 walks over the same snapshot, and
+    the refusal a player sees is always the **one-run** walk's — the one no smaller order can escape.
+  * **Every refusal names an item.** Eight reasons (`NO_PATTERN`, `MISSING_INGREDIENT`, `PAUSED`, `NO_ROOM`, `LOOP`,
+    `TOO_MANY_STEPS`, `TOO_MANY_INGREDIENT_ITEMS`, `ORDERS_BUSY`), derived and never serialized, travelling as a lang key
+    plus the `ItemKey` — the `RestockOutcome` rule. A reason without an item is the status line M11 already had.
+* **Owner's decision 2 — the safety stop covers every order kind, and is lifted only by a deliberate click.** Every order
+  that ends with ingredients handed over and no result arms the pause for its own result item: a player's click, a redstone
+  request, a step of a chain and a rule's own refill alike. Three extensions of ADR-027 and nothing else: a pause blocks
+  **planning** as well as ordering (`RequestRejection.PRODUCTION_PAUSED`), so the next click cannot rebuild the same chain
+  into the same broken machine; `Cause` gains `ORDER_TIMED_OUT` / `ORDER_CANCELLED` (appended, travelling by name) and
+  `pruneStockPauses` may forget only a **rule-born** pause, because the item is regularly an intermediate no rule governs;
+  and the stop gets a way back **where the machine is** — a sneak-click on the warehouse production station, or the red
+  stopped row in its screen. Pausing an item also cancels every open order making it, for the same reason
+  `cancelOpenRestockOrders` existed.
+* **Owner's decision 3 — redstone may start a chain, with one open plan per port.** The study would have kept a port
+  single level. A port may build a plan, and the M17 "one open request at a time" rule is extended to plans instead: a plan
+  counts as open while **any** of its orders is open, and a plan whose root has lost its backing request counts as one open
+  plan for every port. The stock part of such a request is served as usual and the second chain is simply not started,
+  which the port reads as `PRODUCTION_BUSY`. That keeps a clock from stacking chains into the same machines — committing
+  `maxPlanIngredientItems` per *chain* instead of per port — without denying automation the feature.
+* **Failure fails upward and cancels downward only what has cost nothing.** A node that ends badly cancels every open
+  ancestor in the same tick; a descendant that has delivered nothing is cancelled (the crane aborts before the pick and
+  reroutes), and one that has delivered is **detached** and left running, so its product lands in stock as unpromised items
+  the player keeps. The root refunds its backing request its `unfulfilledPromise()` once. Cancelling **any** node ends its
+  whole plan, and the terminal says what that would cost before the click — counting only the orders the cancellation would
+  end.
+* **M15 restocking is not touched.** `RestockPlanner`, `RestockDecision`, `RestockOutcome` and the `calledFor` interlock
+  are unchanged, and `StockRestockGameTests`' inverse-pair answer stays as it is. Relaxing `calledFor` is only safe when
+  the called-for item's own pattern closes the loop; with an unrelated pattern a plan would make what another rule is
+  asking for.
+
+*Reason:* Plan-first is the only frame in which a refusal can be **actionable**. Deciding at the click, from one snapshot,
+means the answer is "Oak Log is missing" instead of an accepted order whose crane starts, whose logs go into a
+sawmill, and whose status line four minutes later says the same thing after the batch is gone. Lazy, one-step-ahead growth
+is cheaper and has a cleaner termination argument, but it commits items before it knows the chain can finish — and today's
+`startProductionOrder` cannot even create the root order it would grow from (`bestProductionPattern` →
+`producibleAmount` → `runsPossible` returns 0 the moment an ingredient is absent). Building the plan out of the orders
+that already exist, rather than out of a new object, is what keeps the whole feature inside mechanisms that are already
+tested: promises, reservations, the arrival channel, the timeout, the retention, the screens and the persistence.
+
+*The boundary this feature cannot cross (documented, not hidden):* a plan **widens** `warehouse-system.md` §3.5.4. One
+click can now hand ingredients to several machines, and what each of them swallowed is gone. Three things bound it and
+none removes it: `maxPlanIngredientItems` caps what one click may spend over the whole plan; a parent with an open child
+fetches nothing, so in practice only the node that failed has lost anything; and the pause keeps the next click from
+rebuilding the same plan. The plan reports its whole unrecovered total as one number and each node's own on its own line.
+That paragraph is in §3.5.4 itself, not only in §3.5.6, and in the README's limitations.
+
+*Consequences:* `ProductionOrder` gains one field and two derived predicates; `ProductionOrders` gains a parent-line index
+and the tree queries, and its pruning keeps a finished node while any node of its plan is open, so no state is ever read
+off a pruned node. `ControllerPersistence`'s order record gains `Parent?` and a restore-time `validatePlans` that ends an
+orphan **without** arming a pause — a save-integrity failure is not evidence about a machine and must not wedge an aisle's
+production. `StockRulePause.Cause` gains two values by name and `pruneStockPauses` learns to keep a pause that is not
+rule-born. `RequestRejection` gains `PRODUCTION_PAUSED`; `RequestResult` and `TerminalResultPayload` carry a `PlanRefusal`
+and the item it names, on an **accepted** result too, because a click the racks served only in part is the commonest way a
+player meets a refusal at all. `ProductionScreenState.OrderView` gains four append-only fields (`plan` — the root order id
+— `depth`, `address`, `waitingForStep`), `MAX_ORDERS` rises 8 → 16, and the screen state also carries up to
+`MAX_STOPPED` stopped products plus the new `ProductionResumePayload`; enum constants and payload fields are a wire format
+here, so **`WareworksNetwork.VERSION` is `"6"`** for the whole milestone. Two config keys are added in the `controller`
+section and `maxProductionOrders`' default rises 8 → 12, because a plan holds one order per step. The production station
+gains a block state (`STOPPED`) and therefore a hand-made model and a blockstate provider, and the controller gains a
+derived `stoppedStations` set so a lit lamp can never outlive the warehouse that lit it — the counterpart M15 had to add
+for the keeper's comparator, and it matters more here because a block state survives every save. One Ponder scene
+(`warehouse/production_chain`) is registered for **two** blocks. Three surfaces were renamed on purpose:
+`gui.terminal.plan.waiting_for_step` → `gui.production.waiting_for_step` (one sentence, three surfaces) and the released
+`gui.goggles.rules_paused` → `gui.goggles.production_stopped`, which the aisle display now shares — since M20 the count
+includes items no rule governs, so "Paused rules: 1" was false on an aisle with no stock keeper.
+`WarehouseControllerBlockEntity#pausedStockRuleCount()` is now a misnomer (it counts stopped items); nothing
+player-facing says "rules" any more, and the rename of the method and its call sites is left as a separate, purely
+mechanical change. Two things are deliberately **not** built: a graph-wide cycle detector or authoring-time cycle
+detection across stations, and any bound counted in ticks — every bound here is counted in patterns, steps and items,
+which is what a player can see.
+
+*Correction to ADR-024:* that decision's bullet "Recursive production is stage 2" is now satisfied rather than pending.
+Nothing else in ADR-024 changes: Wareworks still crafts nothing, a production station is still not a retrieval
+destination, and a chain is still made of ordinary orders at the player's own machines.
+
+*Correction to ADR-027:* the safety stop is no longer a property of *automatic* orders. The rule is now "the first loss of
+**any** order stops that item", and the cause records which kind of order it was, because that is what decides whether a
+pause may ever be forgotten without a player.
 
 ## Persistence & sync
 

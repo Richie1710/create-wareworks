@@ -205,7 +205,16 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         WarehouseControllerBlockEntity controller = found.get();
         StockView<ItemKey, RackPosition> stock = controller.stockIndex();
         ReservationView<ItemKey, RackPosition> reservations = controller.reservations();
+        // Both halves of what is already spoken for, each collected in one pass: the open requests and the ingredients
+        // the open production orders still have to fetch. A row that leaves the second out advertises items a click can
+        // never be granted — and since M20 a blocked parent holds its ingredients promised for the whole chain rather
+        // than for one crane trip, so the row was wrong for minutes instead of for a trip (M20 review fix).
         Map<ItemKey, Long> promised = controller.remainingRequestedByKey();
+        Map<ItemKey, Long> ordered = controller.outstandingIngredientsByKey();
+        // What a click may still be granted is measured against both; the levels below are given the requests alone,
+        // because stockLevelsOf adds the orders' own promise itself.
+        Map<ItemKey, Long> spoken = new HashMap<>(promised);
+        ordered.forEach((key, items) -> spoken.merge(key, items, Long::sum));
         // One pass over the aisle's patterns for both questions the screen asks: which keys are producible at all, and
         // how many of each could be made right now (M11, ADR-024). The second number is the server's own, because a
         // client knows neither the patterns nor what their ingredients are already promised to.
@@ -224,7 +233,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             long total = stock.count(key);
             if (total > 0)
                 entries.add(entry(controller, rules, levels, key, total,
-                        reservations.availableStock(key, total, promised.getOrDefault(key, 0L)),
+                        reservations.availableStock(key, total, spoken.getOrDefault(key, 0L)),
                         producible.containsKey(key), producible.getOrDefault(key, 0L)));
         }
         // Rows that exist although the aisle holds none of the item, and that would each become unreachable without
@@ -333,19 +342,22 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * there is no per-player ownership to scope it by. The <b>newest</b> are kept when there are more than fit, since
      * those are the ones a player just placed; the production station's own screen keeps the oldest, which is the
      * right choice there (the station's backlog).
+     * <p>
+     * Every row carries the production plan it belongs to, its depth in it, its station's address and whether it is
+     * waiting for an earlier step (M20, issue #4, ADR-032). The controller fills those in
+     * ({@code WarehouseControllerBlockEntity#productionOrderViews}), because only it knows the chain and only it can
+     * turn a rack position into an address. A cut that falls inside a chain keeps the newer end of it, so the screen
+     * shows a plan with fewer steps than it has rather than a plan it cannot name — {@code core.terminal.PlanLines}
+     * groups whatever really arrived.
      */
     public List<ProductionScreenState.OrderView> productionOrderViews() {
         Optional<WarehouseControllerBlockEntity> found = controller();
         if (found.isEmpty())
             return List.of();
-        List<ProductionOrder<ItemKey, RackPosition>> orders = found.get().productionOrders();
+        WarehouseControllerBlockEntity controller = found.get();
+        List<ProductionOrder<ItemKey, RackPosition>> orders = controller.productionOrders();
         int from = Math.max(0, orders.size() - ProductionScreenState.MAX_ORDERS);
-        List<ProductionScreenState.OrderView> views = new ArrayList<>(orders.size() - from);
-        for (ProductionOrder<ItemKey, RackPosition> order : orders.subList(from, orders.size()))
-            views.add(new ProductionScreenState.OrderView(order.id(), order.state(), order.result(),
-                    order.resultAmount(), order.produced(), order.outstandingIngredients(),
-                    order.deliveredIngredients()));
-        return List.copyOf(views);
+        return controller.productionOrderViews(orders.subList(from, orders.size()));
     }
 
     /**

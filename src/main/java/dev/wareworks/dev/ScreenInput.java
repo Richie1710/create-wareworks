@@ -54,11 +54,18 @@ final class ScreenInput {
     private static final Field TERMINAL_AMOUNT = field(WarehouseTerminalScreen.class, "amountInput");
     private static final Method TERMINAL_CELL_AT = method(WarehouseTerminalScreen.class, "cellAt", double.class,
             double.class);
+    private static final Method TERMINAL_ORDER_AT = method(WarehouseTerminalScreen.class, "orderAt", double.class,
+            double.class);
+    private static final Method TERMINAL_CANCEL_MARK_X = method(WarehouseTerminalScreen.class, "cancelMarkX");
     private static final Method TERMINAL_CONFIRM_LINES = method(WarehouseTerminalScreen.class, "confirmationLines",
             RequestConfirmation.class);
     private static final Field PRODUCTION_LAYOUT = field(WarehouseProductionScreen.class, "layout");
     private static final Method PRODUCTION_CELL_AT = method(WarehouseProductionScreen.class, "cellAt", double.class,
             double.class);
+    private static final Method PRODUCTION_OVER_STOPPED = method(WarehouseProductionScreen.class, "isOverStoppedRow",
+            double.class, double.class);
+    private static final Method PRODUCTION_TOOLTIP_AT = method(WarehouseProductionScreen.class, "tooltipAt", int.class,
+            int.class);
     private static final Method KEEPER_ROW_AT = method(WarehouseStockKeeperScreen.class, "rowAt", double.class,
             double.class);
     private static final Method KEEPER_FIELD_AT = method(WarehouseStockKeeperScreen.class, "numberFieldAt",
@@ -204,6 +211,79 @@ final class ScreenInput {
             throw new VisualTestException("the terminal's hit test does not put " + point + " on the "
                     + (confirm ? "confirm" : "cancel") + " button");
         return point;
+    }
+
+    /**
+     * The centre of the <b>item half</b> of the visible production line {@code index} of the terminal, i.e. the part of a
+     * chain's line that a click opens its step panel with (M20, issue #4), checked with the screen's own hit test.
+     * <p>
+     * A chain's line splits the click: the {@code x} column at its end gives up on the whole plan, everything left of it
+     * asks for the steps ({@code WarehouseTerminalScreen#clickOrderLine}). This point is therefore also checked to lie a
+     * whole margin left of the cancel mark, so a run can never take the one click for the other.
+     */
+    static Point terminalOrderLine(WarehouseTerminalScreen screen, int index) {
+        TerminalMenuLayout layout = (TerminalMenuLayout) get(TERMINAL_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + TerminalMenuLayout.MARGIN + 1.0,
+                screen.getGuiTop() + layout.orderLineY(index) + TerminalMenuLayout.LABEL_HEIGHT / 2.0);
+        int hit = (Integer) invoke(TERMINAL_ORDER_AT, screen, point.x(), point.y());
+        if (hit != index)
+            throw new VisualTestException("the terminal's hit test puts " + point + " on order line " + hit + ", not "
+                    + index);
+        int cancelMarkX = (Integer) invoke(TERMINAL_CANCEL_MARK_X, screen);
+        if (point.x() >= screen.getGuiLeft() + cancelMarkX - TerminalMenuLayout.MARGIN)
+            throw new VisualTestException("the terminal draws its cancel mark at " + cancelMarkX + ", so " + point
+                    + " would be read as giving up on the order instead of opening its steps");
+        return point;
+    }
+
+    /**
+     * The centre of one of the two buttons of the terminal's step panel (M20): "Give up on the chain" or "Close",
+     * checked with the screen's own hit test.
+     *
+     * @param cancel {@code true} for the button that ends the whole plan, {@code false} for the one that only closes
+     */
+    static Point terminalStepButton(WarehouseTerminalScreen screen, boolean cancel) {
+        if (screen.openStepPanelPlan().isEmpty())
+            throw new VisualTestException("the terminal shows no step panel, so it draws no "
+                    + (cancel ? "\"give up\"" : "\"close\"") + " button");
+        // The screen hands out the centre itself, for the reason the confirmation panel's buttons do: its panel is laid
+        // out once per order payload and kept, so reflecting the geometry back together would read a stale one.
+        Point point = new Point(screen.stepButtonCenterX(cancel), screen.stepButtonCenterY());
+        if (!screen.isOverStepButton(point.x(), point.y(), cancel))
+            throw new VisualTestException("the terminal's hit test does not put " + point + " on the "
+                    + (cancel ? "\"give up\"" : "\"close\"") + " button of the step panel");
+        return point;
+    }
+
+    /**
+     * The centre of the <b>stopped row</b> of a production station's screen — the safety stop's way back at the machine
+     * that lost the batch (M20, issue #4) — checked with the screen's own hit test.
+     * <p>
+     * The row takes the first order line, and a station whose window has no order line at all draws it nowhere: the hit
+     * test therefore answers whether a player could click it, and a point it rejects is a failure rather than a click
+     * into the void.
+     */
+    static Point productionStoppedRow(WarehouseProductionScreen screen) {
+        ProductionMenuLayout layout = (ProductionMenuLayout) get(PRODUCTION_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + ProductionMenuLayout.MARGIN + 1.0,
+                screen.getGuiTop() + layout.orderLineY(0) + ProductionMenuLayout.LABEL_HEIGHT / 2.0);
+        if (!(Boolean) invoke(PRODUCTION_OVER_STOPPED, screen, point.x(), point.y()))
+            throw new VisualTestException("the production screen's hit test does not put " + point
+                    + " on its stopped row (order lines: " + layout.orderLines() + ", stopped: "
+                    + screen.state().stopped() + ")");
+        return point;
+    }
+
+    /**
+     * The tooltip a production station's screen draws for a mouse at {@code point} — the words of the stopped row or of
+     * a pattern tab, which only exist while a cursor rests on them. The scenario hovers the point first, so the shot
+     * shows what this reads.
+     */
+    static List<Component> productionTooltip(WarehouseProductionScreen screen, Point point) {
+        @SuppressWarnings("unchecked")
+        List<Component> tooltip = (List<Component>) invoke(PRODUCTION_TOOLTIP_AT, screen, (int) point.x(),
+                (int) point.y());
+        return tooltip;
     }
 
     /**

@@ -32,6 +32,7 @@ class RequestConfirmationTest {
     private static final String PLANK = "plank";
     private static final String LOG = "log";
     private static final String NAILS = "nails";
+    private static final String CHEST = "chest";
 
     /** One log and two nails make four planks: a pattern whose runs overshoot what is asked for. */
     private static final ProductionPattern<String> PATTERN = new ProductionPattern<>(
@@ -348,6 +349,73 @@ class RequestConfirmationTest {
                 new RequestConfirmation.ReservedIngredient<>(LOG, 99L, 4L);
         assertEquals(4L, ingredient.fromReserve());
         assertThrows(NullPointerException.class, () -> new RequestConfirmation.ReservedIngredient<>(null, 1L, 1L));
+    }
+
+    // --- a whole chain (M20, ADR-032) -------------------------------------------------------------------------------
+
+    @Test
+    void aReservedLeafTwoStepsDownIsNamedWithItsOwnItem() {
+        StockRules<String> rules = rules(reserve(LOG, 16L));
+        // A chest out of planks out of logs: the planks are made by a step of the plan, so the racks hold none of them
+        // and no reserve of theirs can be spent. What the chain really takes out of storage is the log.
+        RequestConfirmation<String> question = RequestConfirmation.ofPlan(rules, CHEST, 1L, StockLevels.stored(0L), 1L,
+                Map.of(LOG, 2L), available(Map.of(LOG, 16L)));
+        assertTrue(question.required(), "the chain reaches into a reserve two steps down");
+        assertEquals(1, question.ingredients().size());
+        assertEquals(LOG, question.ingredients().getFirst().key(), "named by the item, not by what was clicked");
+        assertEquals(2L, question.ingredients().getFirst().fromReserve());
+        assertEquals(16L, question.ingredients().getFirst().reserved());
+        assertEquals(0L, question.fromReserve(), "the chest itself has no reserve to cross");
+        assertEquals(1L, question.made(), "and one chest is what the plan's root makes");
+    }
+
+    @Test
+    void anIntermediateThePlanMakesItselfIsNeverAskedAbout() {
+        StockRules<String> rules = rules(reserve(PLANK, 64L), reserve(LOG, 16L));
+        // leafDemand holds what the budget really spent: the planks are a step's product, so they are simply not in it.
+        RequestConfirmation<String> question = RequestConfirmation.ofPlan(rules, CHEST, 1L, StockLevels.stored(0L), 1L,
+                Map.of(LOG, 2L), available(Map.of(LOG, 16L, PLANK, 64L)));
+        assertEquals(List.of(LOG), question.ingredients().stream()
+                .map(RequestConfirmation.ReservedIngredient::key).toList());
+    }
+
+    @Test
+    void aChainStillMeasuresTheMaximumOnWhatStays() {
+        StockRules<String> rules = rules(new StockRule<>(CHEST, StockRule.UNSET, 2L, StockRule.UNSET));
+        // A run of the root makes four chests, one was asked for, so three stay above a cap of two.
+        RequestConfirmation<String> question = RequestConfirmation.ofPlan(rules, CHEST, 1L, StockLevels.stored(0L), 4L,
+                Map.of(LOG, 2L), available(Map.of(LOG, 16L)));
+        assertEquals(1L, question.amount(), "only what was asked for leaves the warehouse");
+        assertEquals(4L, question.made());
+        assertEquals(1L, question.pastMaximum(), "three stay, two of them fit under the cap");
+    }
+
+    @Test
+    void aChainThatProducesNothingAsksAboutNoIngredient() {
+        StockRules<String> rules = rules(reserve(LOG, 16L));
+        // Everything asked for is in the racks: there is no plan, so nothing of the chain is spent.
+        RequestConfirmation<String> question = RequestConfirmation.ofPlan(rules, CHEST, 1L, StockLevels.stored(8L), 0L,
+                Map.of(), available(Map.of(LOG, 16L)));
+        assertTrue(question.ingredients().isEmpty());
+        assertEquals(1L, question.amount());
+        assertEquals(0L, question.made());
+    }
+
+    @Test
+    void aChainNamesAtMostWhatOneConfirmationCanCarry() {
+        Map<String, Long> demand = new java.util.LinkedHashMap<>();
+        List<StockRule<String>> reserves = new java.util.ArrayList<>();
+        for (int i = 0; i < ProductionPattern.MAX_INGREDIENTS + 3; i++) {
+            demand.put("leaf" + i, 1L);
+            reserves.add(reserve("leaf" + i, 1L));
+        }
+        RequestConfirmation<String> question = RequestConfirmation.ofPlan(StockRules.of(reserves), CHEST, 1L,
+                StockLevels.stored(0L), 1L, demand, key -> 1L);
+        assertEquals(ProductionPattern.MAX_INGREDIENTS, question.ingredients().size(),
+                "bounded by what one confirmation payload carries");
+        assertEquals(ProductionPattern.MAX_INGREDIENTS, question.fromIngredientReserve(),
+                "and the total is measured over exactly the named ones, so an answer can never fail to cover it");
+        assertTrue(question.acknowledgement().covers(question), "which is what keeps a confirmation from looping");
     }
 
     @Test

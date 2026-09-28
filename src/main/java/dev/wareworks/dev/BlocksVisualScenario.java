@@ -49,7 +49,8 @@ import net.minecraft.world.level.levelgen.Heightmap;
  * A row of exhibits along +X, {@value #SPACING} blocks apart, each turned so that the side a player stands at faces the
  * front camera (+Z): the dock with its parked crane (aisle side), two rails in a line (joint), the controller (display),
  * the interface (framed aisle plate; brass port at the back), input and output (aisle openings; intake on top, pull port at
- * the back) and, since M11, the copper-bodied production station (aisle opening). The warehouse terminal is the one
+ * the back), since M11 the copper-bodied production station (aisle opening) and, since M20, the same station with its
+ * <b>stopped</b> lamp burning. The warehouse terminal is the one
  * exhibit whose front is <b>not</b> its aisle side: since ADR-022 a player stands at its screen and the crane loads it
  * through the opposite face, so the front camera sees the screen and the back camera sees the arm port.
  * <p>
@@ -88,13 +89,15 @@ public final class BlocksVisualScenario implements VisualScenario {
      * (M6) the row spanned {@code 6 · }{@value #SPACING}{@code  + 1} blocks, and from 8 blocks away the dock's mast ran
      * out of the frame at the left edge — which is what the committed {@code docs/screenshots/blocks.png} showed until
      * M8. Since M17 the accepting warehouse port is the <b>tenth</b> exhibit and the row spans
-     * {@code 9 · }{@value #SPACING}{@code  + 1} blocks, so these two distances are the widest the row has ever needed;
-     * the {@code blocks-row} and {@code blocks-far} shots are what to check after adding an eleventh. The row distance
-     * grew with the tenth exhibit, because at 10 blocks the dock's mast ran out of the frame again, exactly as it did
-     * before M8.
+     * {@code 9 · }{@value #SPACING}{@code  + 1} blocks, and the row distance grew with it, because at 10 blocks the
+     * dock's mast ran out of the frame again, exactly as it did before M8. Since M20 the stopped production station is
+     * the twelfth exhibit and the row spans {@code 11 · }{@value #SPACING}{@code  + 1} blocks, which is what these
+     * distances are sized for now — the row distance grew again, because at 11.5 the dock ran out of the frame on the
+     * left and the keeper on the right; the {@code blocks-row} and {@code blocks-far} shots are what to check after
+     * adding a thirteenth.
      */
     private static final double ROW_HEIGHT = 5.5;
-    private static final double ROW_DISTANCE = 11.5;
+    private static final double ROW_DISTANCE = 15.0;
     private static final double FAR_HEIGHT = 10.0;
     private static final double FAR_DISTANCE = 26.0;
 
@@ -161,6 +164,13 @@ public final class BlocksVisualScenario implements VisualScenario {
             // The production station faces the aisle like input and output, so its opening looks at the front camera.
             new Exhibit("production", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_PRODUCTION
                     .getDefaultState().setValue(WarehouseProductionBlock.FACING, Direction.SOUTH))),
+            // The same station with the safety stop holding one of its products (M20): the brass ring around both
+            // openings becomes a lit rose quartz lamp, the colour the stock keeper's pause lamp burns in. It is the only
+            // state of this block that differs from its item model, which is why it gets an exhibit of its own.
+            new Exhibit("production_stopped", (level, pos) -> level.setBlockAndUpdate(pos,
+                    WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
+                            .setValue(WarehouseProductionBlock.FACING, Direction.SOUTH)
+                            .setValue(WarehouseProductionBlock.STOPPED, true))),
             // The stock keeper faces the aisle like the stations, so its panel looks at the front camera. Its lamp is
             // shown lit, which is the only state that differs from the item model (M15).
             new Exhibit("stock_keeper", (level, pos) -> level.setBlockAndUpdate(pos,

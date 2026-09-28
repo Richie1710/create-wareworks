@@ -13,9 +13,11 @@ import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.StoppedProduct;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.network.ProductionCancelPayload;
 import dev.wareworks.network.ProductionPatternPayload;
+import dev.wareworks.network.ProductionResumePayload;
 import dev.wareworks.network.ProductionScreenPayload;
 import dev.wareworks.util.WareworksLang;
 import net.createmod.catnip.gui.UIRenderHelper;
@@ -48,6 +50,13 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * <p>
  * The station's own buffer is shown as real slots below the pattern: a player can take delivered ingredients back out
  * by hand, and nothing can be put in — the same rule a funnel sees. Clicking a production order line cancels it.
+ * <p>
+ * <b>The safety stop is shown here, and lifted here</b> (M20, issue #4, ADR-032). While the warehouse has stopped making
+ * something this station's patterns make, the first order line becomes the <b>stopped row</b> — red, naming the item and
+ * what it cost in its tooltip — and the tab of every stopped product is marked in the same colour. A click on that row
+ * says the machine is worth another batch ({@link ProductionResumePayload}); it is the way back that is reachable
+ * whether or not a stock keeper's rule happens to govern the item, and it is the same action a sneak-click on the block
+ * performs. A station whose machines work has no such row and reads exactly as it did before.
  */
 public class WarehouseProductionScreen extends AbstractSimiContainerScreen<ProductionMenu> {
     private static final int TITLE_Y = 2;
@@ -62,6 +71,10 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private static final int COLOR_DIM = 0xFFA0A0A0;
     private static final int COLOR_ARROW = 0xFF9A7B4F;
     private static final int COLOR_LOST = 0xFFFFAA33;
+    /** The safety stop, in the colour the stock keeper's paused row and lamp already use. */
+    private static final int COLOR_STOPPED = 0xFFFF4040;
+    /** The same colour over a pattern tab or the result cell of a stopped product. */
+    private static final int COLOR_STOPPED_TINT = 0x60FF4040;
     private static final int COLOR_CELL_HOVER = 0x60FFFFFF;
     private static final int COLOR_TAB_SELECTED = 0x80FBDC7D;
 
@@ -116,6 +129,13 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         int cell = cellAt(mouseX, mouseY);
         if (cell != NONE) {
             setEntry(selectedPattern, cell, menu.getCarried());
+            return true;
+        }
+        // The stopped row is the way back from the safety stop, and it sits where the first order line would be, so it
+        // is tested before them (M20).
+        if (button == 0 && isOverStoppedRow(mouseX, mouseY)) {
+            PacketDistributor.sendToServer(new ProductionResumePayload(menu.containerId));
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.0F);
             return true;
         }
         // Only a left click on an order that is still running is a cancellation, exactly as on the terminal's own
@@ -234,8 +254,12 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             if (hovered == cell)
                 graphics.fill(cellX, cellY, cellX + ProductionMenuLayout.SLOT, cellY + ProductionMenuLayout.SLOT,
                         COLOR_CELL_HOVER);
-            state.entry(selectedPattern, cell)
-                    .ifPresent(view -> renderEntry(graphics, view, cellX + ITEM_INSET, cellY + ITEM_INSET));
+            Optional<ProductionScreenState.EntryView> entry = state.entry(selectedPattern, cell);
+            if (cell == ProductionMenuLayout.RESULT_CELL && entry.isPresent()
+                    && state.stoppedOf(entry.get().key()).isPresent())
+                graphics.fill(cellX, cellY, cellX + ProductionMenuLayout.SLOT, cellY + ProductionMenuLayout.SLOT,
+                        COLOR_STOPPED_TINT);
+            entry.ifPresent(view -> renderEntry(graphics, view, cellX + ITEM_INSET, cellY + ITEM_INSET));
         }
         // The arrow between the grid and the result: this is a pattern, not a crafting grid.
         int arrowX = leftPos + layout.arrowX() + ProductionMenuLayout.ARROW_WIDTH / 2 - font.width(">") / 2;
@@ -257,6 +281,11 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             else if (hovered == pattern)
                 graphics.fill(tabX, tabY, tabX + ProductionMenuLayout.SLOT, tabY + ProductionMenuLayout.SLOT,
                         COLOR_CELL_HOVER);
+            // A stopped product is marked on its own tab, whichever pattern is selected: the stopped row names one item,
+            // and this is what says which of several patterns it belongs to (M20).
+            if (stoppedAt(pattern).isPresent())
+                graphics.fill(tabX, tabY, tabX + ProductionMenuLayout.SLOT, tabY + ProductionMenuLayout.SLOT,
+                        COLOR_STOPPED_TINT);
             state.result(pattern).ifPresent(view -> renderEntry(graphics, view, tabX + ITEM_INSET, tabY + ITEM_INSET));
         }
     }
@@ -290,28 +319,79 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         graphics.drawString(font, title, x + ProductionMenuLayout.MARGIN, y + TITLE_Y, COLOR_HEADER, false);
         graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.PRODUCTION_PATTERNS),
                 x + ProductionMenuLayout.MARGIN, y + layout.patternLabelY(), COLOR_DIM, false);
-        graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.PRODUCTION_BUFFER),
-                x + ProductionMenuLayout.MARGIN, y + layout.bufferLabelY(), COLOR_DIM, false);
+        // The stopped row takes the buffer's label row in the one configuration that has no order line at all (see
+        // renderOrders): the slots below it say what they are, while the stop is the only thing here that asks for an act.
+        if (!(showsStoppedRow() && layout.orderLines() == 0))
+            graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.PRODUCTION_BUFFER),
+                    x + ProductionMenuLayout.MARGIN, y + layout.bufferLabelY(), COLOR_DIM, false);
         renderOrders(graphics, x, y);
         graphics.drawString(font, playerInventoryTitle, x + layout.playerSlotsX() - 1, y + layout.playerLabelY(),
                 COLOR_DIM, false);
     }
 
-    /** The production orders running at this station, newest first, cut to the rows the window has. */
+    /**
+     * The stopped row and the production orders running at this station, newest first, cut to the rows the window has.
+     * <p>
+     * The <b>safety stop takes the first line</b> when it is holding something (M20): it is the only thing here that asks
+     * a player to act, while an order line only reports. The window's height budget is fixed
+     * ({@link ProductionMenuLayout}), so the row costs the oldest visible order its line rather than making every station's
+     * window taller for a state almost no station is ever in.
+     * <p>
+     * With a buffer of 25 slots or more the window has <b>no</b> order line ({@link ProductionMenuLayout#orderLines()}),
+     * and the stopped row then takes the <b>buffer's label row</b> instead (M20 review fix). Dropping it there was the
+     * worse trade by far: the screen would name the stop in a tab's tooltip, offer no way out of it, and contradict the
+     * block's own description, which teaches the red row. A buffer label is a word for slots that are self-evident.
+     */
     private void renderOrders(GuiGraphics graphics, int x, int y) {
+        if (showsStoppedRow())
+            graphics.drawString(font, stoppedRow(), x + ProductionMenuLayout.MARGIN, y + layout.stoppedRowY(),
+                    COLOR_STOPPED, false);
         if (layout.orderLines() == 0)
             return;
+        int first = firstOrderLine();
         List<ProductionScreenState.OrderView> orders = shownOrders();
         if (orders.isEmpty()) {
-            graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_NO_ORDERS),
-                    x + ProductionMenuLayout.MARGIN, y + layout.orderLineY(0), COLOR_DIM, false);
+            if (first < layout.orderLines())
+                graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_NO_ORDERS),
+                        x + ProductionMenuLayout.MARGIN, y + layout.orderLineY(first), COLOR_DIM, false);
             return;
         }
         for (int line = 0; line < orders.size(); line++) {
             ProductionScreenState.OrderView order = orders.get(line);
-            graphics.drawString(font, orderLine(order), x + ProductionMenuLayout.MARGIN, y + layout.orderLineY(line),
-                    order.lostIngredients() ? COLOR_LOST : COLOR_TEXT, false);
+            graphics.drawString(font, orderLine(order), x + ProductionMenuLayout.MARGIN,
+                    y + layout.orderLineY(first + line), order.lostIngredients() ? COLOR_LOST : COLOR_TEXT, false);
         }
+    }
+
+    /**
+     * Whether the window is showing the stopped row. It shows it whenever something is stopped: a station always has a row
+     * for it, because it is the screen's own way back from the safety stop ({@link #renderOrders}).
+     */
+    private boolean showsStoppedRow() {
+        return state.anyStopped();
+    }
+
+    /** The line the first order is drawn in: the second one while the stopped row has the first. */
+    private int firstOrderLine() {
+        return showsStoppedRow() && layout.orderLines() > 0 ? 1 : 0;
+    }
+
+    /**
+     * The stopped row: the item itself while one product is held, their number while several are, and in both cases what
+     * a click does. What it cost is one hover away, because the row is 216 px and the item's name has to fit.
+     */
+    private Component stoppedRow() {
+        List<StoppedProduct> stopped = state.stopped();
+        if (stopped.size() == 1)
+            return fitToRow(WareworksLang.translateDirect(WareworksLang.PRODUCTION_STOPPED_LINE,
+                    stopped.getFirst().key().toStack().getHoverName()));
+        return fitToRow(WareworksLang.translateDirect(WareworksLang.PRODUCTION_STOPPED_LINE_MANY,
+                Component.literal(LangNumberFormat.format(stopped.size()))));
+    }
+
+    /** What the safety stop is holding of the product of pattern slot {@code pattern}, if anything (M20). */
+    private Optional<StoppedProduct> stoppedAt(int pattern) {
+        return state.result(pattern).flatMap(view -> state.stoppedOf(view.key()));
     }
 
     /**
@@ -322,17 +402,23 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private Component orderLine(ProductionScreenState.OrderView order) {
         Component name = order.result().toStack().getHoverName();
         Component amount = Component.literal(LangNumberFormat.format(order.amount()));
-        Component status = WareworksLang.translateDirect(order.state().langKey());
+        // An order that is waiting for an earlier step of its own chain says that rather than its own state (M20,
+        // issue #4): it is nominally waiting for ingredients, but the controller hands it nothing at all until the
+        // step below it is done, so "waiting for ingredients" would read as a crane that has forgotten it. It is the
+        // sentence the terminal's step panel and this station's goggle line use, from the one shared key.
+        Component status = WareworksLang.translateDirect(order.waitingForStep()
+                ? WareworksLang.PRODUCTION_WAITING_FOR_STEP : order.state().langKey());
         return fitToRow(order.lostIngredients()
                 ? WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER_LOST, name, amount, status)
                 : WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER, name, amount, status));
     }
 
-    /** The orders the window has room for, newest first. */
+    /** The orders the window has room for, newest first — one fewer while the stopped row has a line. */
     private List<ProductionScreenState.OrderView> shownOrders() {
         List<ProductionScreenState.OrderView> orders = state.orders();
-        List<ProductionScreenState.OrderView> shown = new ArrayList<>(layout.orderLines());
-        for (int line = 0; line < layout.orderLines() && line < orders.size(); line++)
+        int room = Math.max(0, layout.orderLines() - firstOrderLine());
+        List<ProductionScreenState.OrderView> shown = new ArrayList<>(room);
+        for (int line = 0; line < room && line < orders.size(); line++)
             shown.add(orders.get(orders.size() - 1 - line));
         return shown;
     }
@@ -360,8 +446,21 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         if (tab != NONE) {
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_TAB,
                     Component.literal(Integer.toString(tab + 1))));
+            // A tab that names a stopped product also names the way back (M20 review fix): the tooltip that states a
+            // problem must not end with "Click to edit, Right-click to clear" and nothing about lifting it.
+            stoppedAt(tab).ifPresent(stopped -> {
+                addStoppedLines(tooltip, stopped);
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_RESUME_HINT).copy()
+                        .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            });
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_TAB_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            return tooltip;
+        }
+        if (isOverStoppedRow(mouseX, mouseY)) {
+            tooltip.add(stoppedRow().copy().withStyle(ChatFormatting.RED));
+            for (StoppedProduct stopped : state.stopped())
+                addStoppedLines(tooltip, stopped);
             return tooltip;
         }
         int cell = cellAt(mouseX, mouseY);
@@ -393,6 +492,21 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         return tooltip;
     }
 
+    /**
+     * Why the warehouse stopped making {@code stopped} and what it cost, for the stopped row's tooltip and for the tab of
+     * that product. The cause sentence is the stock keeper's own ({@code gui.keeper.paused.*}), because it is the same
+     * safety stop — a player who has read one of the two screens has read both.
+     */
+    private void addStoppedLines(List<Component> tooltip, StoppedProduct stopped) {
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_STOPPED_ITEM,
+                stopped.key().toStack().getHoverName(),
+                WareworksLang.translateDirect(stopped.causeKey())).copy().withStyle(ChatFormatting.RED));
+        if (stopped.unrecovered() > 0)
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_PAUSED_LOST,
+                    Component.literal(LangNumberFormat.format(stopped.unrecovered()))).copy()
+                    .withStyle(ChatFormatting.GOLD));
+    }
+
     // --- hit testing ---------------------------------------------------------------------------------------------
 
     private void clampSelection() {
@@ -419,16 +533,30 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
 
     /** The index within {@link #shownOrders()} of the order line under the mouse. */
     private int orderAt(double mouseX, double mouseY) {
-        if (mouseX < leftPos + ProductionMenuLayout.MARGIN
-                || mouseX >= leftPos + ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN)
+        if (!isOverTextRows(mouseX))
             return NONE;
+        int first = firstOrderLine();
         int shown = shownOrders().size();
         for (int line = 0; line < shown; line++) {
-            int top = topPos + layout.orderLineY(line);
+            int top = topPos + layout.orderLineY(first + line);
             if (mouseY >= top && mouseY < top + ProductionMenuLayout.LABEL_HEIGHT)
                 return line;
         }
         return NONE;
+    }
+
+    /** Whether the mouse is over the stopped row — the resume affordance of a station that has lost a batch (M20). */
+    private boolean isOverStoppedRow(double mouseX, double mouseY) {
+        if (!showsStoppedRow() || !isOverTextRows(mouseX))
+            return false;
+        int top = topPos + layout.stoppedRowY();
+        return mouseY >= top && mouseY < top + ProductionMenuLayout.LABEL_HEIGHT;
+    }
+
+    /** Whether {@code mouseX} is inside the text column the stopped row and the order lines are drawn in. */
+    private boolean isOverTextRows(double mouseX) {
+        return mouseX >= leftPos + ProductionMenuLayout.MARGIN
+                && mouseX < leftPos + ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN;
     }
 
     private static boolean isOver(double mouseX, double mouseY, int x, int y) {

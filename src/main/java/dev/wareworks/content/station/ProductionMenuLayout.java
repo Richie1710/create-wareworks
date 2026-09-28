@@ -200,6 +200,20 @@ public final class ProductionMenuLayout {
         return ordersY() + Math.max(0, line) * LABEL_HEIGHT;
     }
 
+    /**
+     * Top of the <b>stopped row</b>, the screen's own way back from the safety stop (M20): the first order line, or the
+     * <b>buffer's label row</b> when the window has no order line at all.
+     * <p>
+     * A station always has a row for it. With a buffer of 25 slots or more {@link #orderLines()} is 0 — the height budget
+     * spent every line on buffer rows — and dropping the row there left the screen naming a problem, offering no way out of
+     * it and contradicting the block's own description, which teaches the red row (review fix). Taking the buffer's label
+     * is the cheaper trade by far: it is a word for slots that are self-evident, and only while something is really
+     * stopped.
+     */
+    public int stoppedRowY() {
+        return orderLines > 0 ? orderLineY(0) : bufferLabelY();
+    }
+
     /** Top of the player inventory's label. */
     public int playerLabelY() {
         return ordersY() + Math.max(orderLines, 0) * LABEL_HEIGHT;

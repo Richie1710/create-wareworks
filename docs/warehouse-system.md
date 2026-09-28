@@ -1200,6 +1200,12 @@ Networking decision and reasons: **ADR-019**.
   * An item whose pattern exists but whose ingredients are missing is still *offered* (the `+` and the first tooltip
     line) and reports 0 as the amount — "can be produced here" and "can be made now" are different statements, and the
     refusal a player then gets names the missing item (§3.5.2).
+  * **The number stays exactly single level after M20** (§3.5.6). An item that only a *chain* can make therefore shows
+    the `+` and "Can be produced here" with **no** "Can be made now" line at all, and 0 as its amount — which is the
+    case the last rule above was written for: nothing is orderable by the screen's reckoning, so the **raw** clicked
+    amount is sent and the server plans the chain exactly, granting what it can and naming the item in the way when it
+    cannot. Making the number chain-aware would mean running the planner per key on every stock push; under-reporting and
+    letting the click be exact is the safe direction.
 * **Search** (`core.terminal.TerminalSearch`): the box is focused when the screen opens, so a player can type
   immediately. A blank query keeps everything; the query is split at whitespace and every token must match (AND); a
   token matches the display name case-insensitively; a token starting with `@` matches the **mod id** instead
@@ -1286,6 +1292,33 @@ Networking decision and reasons: **ADR-019**.
     production station's screen uses. Only an open order can be cancelled; a finished line stays for a while so a
     player can read that their order timed out. An order that ended after ingredients had already been handed over
     reads "… cancelled, not recovered" in gold — on the line itself, not only in a tooltip (§3.5.4).
+  * **A whole chain is one line** (M20, §3.5.6): `Oak Button x4 · 2 steps · now: Oak Planks · x`. The badge sits in the
+    window's label gold, the **frontier** — the deepest open step, i.e. the one where something is actually happening — in
+    production blue. The frontier column shows the frontier's **item** rather than a state phrase, because the row is 216
+    px and must also hold the ordered item, the badge and the cancel mark; the full state is one hover away in the tooltip
+    and one click away in the panel. The badge is "2 steps" (every order of the chain) and is only drawn for a chain of at
+    least two members, so the plural is always right in both languages. The item text gained a `MIN_ITEM_WIDTH` floor, so
+    the state gives way instead of the ordered item being cut to three letters.
+  * **A chain's line splits the click.** The `x` column gives up on the **whole plan**; the rest of the line opens a
+    **modal step panel**. A single order's line still cancels on a click anywhere, unchanged. Giving up on a chain costs
+    more than giving up on one order, and the panel is where that cost is written down.
+  * **The step panel** reuses the M15 confirmation's device (the grid behind out of reach, Escape drops the panel without
+    closing the screen, a server question always wins over it) with a blue border, because it informs rather than asks: a
+    title, one row per order indented two spaces per depth — `A-01-08R: Oak Button x4 - waiting for an earlier step` — the
+    frontier in aqua and a row that lost ingredients in gold, then "Steps that would end: N" and, only when something
+    was really delivered, what those items cost and that the click **stops the warehouse making the item** until it is
+    resumed at the machine. Naming the **rack address** is what makes a stalled chain actionable in the world, and only
+    the server can name one (the terminal has no layout). Two buttons: "Give up on the chain" and "Close". The rows come
+    from the payload the section already sends, folded by the pure `core.terminal.PlanLines`, and the three cost lines from
+    the equally pure `core.terminal.PlanCancelCost` (§3.5.6) — there is no new payload. The indent is bounded on the
+    wire and again in the row, so a depth a payload claims can never become a length.
+  * **A refusal replaces the frame instead of filling it.** `TerminalResultPayload` carries the `PlanRefusal` and the
+    **item it names**, and the status line then reads "Making Oak Button is stopped" or "Oak Log is missing" rather
+    than the generic "Request refused: the warehouse has stopped making it; check the machine and resume it", which is
+    wider than the row and was cut off *before* the item. The sentences are deliberately short for that reason; the
+    wordier cure stays in the item descriptions and the goggle lines, which have room. A click the racks served only in
+    **part** shows that same sentence in gold instead of the green "Requested …", because the granted part is confirmed by
+    the items arriving and the reason the rest could not be made is the half a player can act on.
 * **Nothing from the client is trusted.** A request payload only names the menu id; the server resolves it against the
   menu the sending player *really* has open (`WarehouseTerminalMenu#submitRequest`), and that terminal then applies the
   §3.4.1 validation (reach, positive amount, aligned member of a loaded aisle, and the item matched against the
@@ -1297,6 +1330,10 @@ Networking decision and reasons: **ADR-019**.
     cannot reach another warehouse's orders. Cancellations share the request budget (`MAX_REQUESTS_PER_TICK`), because
     they are the same kind of click. One payload type serves both screens (`ProductionCancelPayload`): which orders it
     may reach is decided by the menu the player has open, not by the payload.
+    * **Since M20 one id may end a whole chain.** The payload still carries nothing but a container id and an order id,
+      and the server still re-checks both on arrival; what changed is the *consequence* — cancelling any member of a plan
+      ends every order of it (§3.5.6). The plan is named from the head, or from the frontier if the head has already
+      ended, so a click on the step panel's own button reaches the same plan the line was about.
 * **Closing safely.** The menu is a Create `MenuBase`, so `stillValid` asks the terminal's `canPlayerUse`
   (`IInteractionChecker`): a block that was broken, replaced or unloaded, or a player who walked out of range, closes
   the screen on the next tick without any extra bookkeeping. The client closes the screen itself when its block entity
@@ -1411,7 +1448,8 @@ property, placement and wrench), `WarehouseTerminalBlockEntity` (`displaySide()`
 ### 3.5 Warehouse Production Station (`content.station`, M11)
 
 > Status: **binding design** for M11 (stage 1 of "production patterns"). Decision, alternatives and the boundaries:
-> **ADR-024**.
+> **ADR-024**. **Stage 2 — a chain of orders, planned at the click — shipped in M20 (issue #4) and is §3.5.6, ADR-032.**
+> Everything in §3.5.1–§3.5.5 still holds: a chain is nothing but ordinary production orders that name each other.
 
 The station a player's machines are fed from. **Wareworks does not craft.** It *delivers* the ingredients a pattern
 names and *collects* the result that comes back; the crafting itself is done by the player's Create machinery
@@ -1448,6 +1486,14 @@ terminal order ─▶ production order ─▶ SUPPLY jobs ─▶ production stat
   `wareworks:warehouse` and Create's "Item Transportation" in the same pass; until M13 it had no scene and was in no
   Ponder tag. As for the terminal, the pattern screen is never opened in a scene (a `PonderLevel` is client-side), so
   it is represented with control icons and text (ADR-016).
+  * **M20 adds a second scene**, `warehouse/production_chain` ("Chains of Production Orders",
+    `ProductionScenes#chain`), registered for the production station **and** the terminal because a chain is planned by a
+    click at one and run at the other. It tells the same loop one level deeper — a warehouse holding nothing but logs, one
+    click that plans the whole chain, the step that is handed *nothing at all* while an earlier one runs, the planks coming
+    back through an ordinary input and **being stored in a rack**, and only then the second step being given them. Its two
+    machines are a Mechanical Saw and a Mechanical Crafter rather than two crafters: a crafter has to be turned away from
+    the aisle for an arm to feed it, and its back reads exactly like a warehouse station from Ponder's camera. Its closing
+    lines repeat ADR-024 in the new context and name the refusal (§3.5.6).
 
 #### 3.5.1 Patterns
 
@@ -1469,7 +1515,7 @@ that is how a player already reads one. A station holds `maxProductionPatterns` 
 * **A slot is a draft.** A half-written slot (cells but no result) is simply not a pattern yet: `patterns()` returns
   only the complete ones, so the strict, pure `ProductionPattern` never has to represent a draft.
 
-#### 3.5.2 Producible items (stage 1 is single level)
+#### 3.5.2 Producible items (`ProduciblePlanner` is single level; the chain is §3.5.6)
 
 The controller knows from **all patterns of all its production stations** which item keys its aisle can make
 (`producibleKeys()`, one block entity lookup per production station, asked when a request arrives or a terminal screen
@@ -1479,11 +1525,21 @@ refreshes — never per tick and never per planner candidate).
   count and the tooltip says "Can be produced here". `StockCount#isGone` therefore treats a producible item at zero
   stock as *present* — that is what separates "there is none and never will be" from "there is none yet".
 * **An ingredient counts only as real, unpromised stock.** `ProduciblePlanner` never looks at a second pattern to
-  satisfy the first, so an order can never be created that waits for another order. **That is the whole stage-1 rule.**
-  If an ingredient is itself only producible, the order is refused with `NOT_IN_STOCK` and the player supplies that
-  item themselves. Recursive production is stage 2 and is deliberately not started here.
+  satisfy the first, so an order can never be created that waits for another order. **That was the whole stage-1 rule**,
+  and `ProduciblePlanner` still obeys it: it is untouched by M20 and every number it reports is exactly one level deep.
+  * **Since M20 (issue #4) the *click* is not.** An ingredient that is itself only producible no longer refuses the
+    order: `ProductionPlanner` plans the whole **chain** at the moment of the click and creates one production order per
+    step, or refuses the click with a reason that names the item that is really missing (§3.5.6, ADR-032). What stayed is
+    the sentence one level down — a *leaf* of a chain counts only as real, unpromised stock, and an item nothing makes
+    and nobody has is `MISSING_INGREDIENT`, which is the pre-M20 `NOT_IN_STOCK` with the item's name on it.
+  * **`ProduciblePlanner` is still what every number is measured with.** `producibleKeys()` (what the terminal offers),
+    `producibleAmount` ("Can be made now") and the automatic restocking of §3.6.3 are all unchanged and all single
+    level. Only `request(...)` builds a chain.
 * **Two patterns for one item do not add up.** `producibleAmount` takes the **best single pattern**, because two
-  patterns usually compete for the same ingredients and adding them would promise items twice.
+  patterns usually compete for the same ingredients and adding them would promise items twice. The **planner** ranks an
+  item's patterns the same way and starts with the same one, but it may fall back to the next when the subtree under the
+  preferred pattern cannot be made (§3.5.6) — a chain the aisle really can make must not be refused because one pattern
+  out of two is a dead end.
 
 #### 3.5.3 Production orders
 
@@ -1500,10 +1556,20 @@ Ordering a producible item that is not (fully) in stock creates a **production o
     64 would silently strip the request of 14 planks the aisle really holds, or delete it outright once the shortfall
     reached its remaining amount.
 * **One arrival is credited once.** Several open orders may wait for the same result; each sees the increase of the
-  same stock level, so the observation hands it out to them **in creation order** — the oldest takes what it still
+  same stock level, so the observation hands it out to them one after the other — the first takes what it still
   waits for, the next only what is left (`ProductionOrders#observeResult`). Crediting every order with the full
   increase would complete an order nothing was made for, and such a phantom-completed order never gives its backing
   request the amount back and can never time out either, so that request would wait for ever.
+  * **The order they are served in is "who has no second channel"**, not plain creation order (M20 review fix,
+    `ProductionOrders#arrivalOrder`). An order with `countsStockLevels()` — an ordinary one — is completed by a rising
+    stock level just as well, and it counts arrivals from the moment it is created, i.e. while its own crane is still
+    fetching. An automatic order and a **step** have only the arrival channel, so an older ordinary order for the same
+    intermediate used to take the batch a step's machine had just made and give nothing back: the step counted nothing,
+    its deadline was not pushed out, and it timed out with its ingredients gone — which then armed the safety stop for a
+    working factory's intermediate. The orders with no second channel therefore come first, and among those the ones
+    whose machine has really taken the ingredients (`WAITING_FOR_RESULT`) before the ones it has not; creation order
+    decides the rest. An order with a second channel loses nothing by being served second: the items are in the stock
+    index either way.
 * **Batching, not one order per craft.** The order runs `pattern.runsFor(amount)` runs, and each ingredient becomes
   **one `SupplyLine` of `count × runs` items** — ten planks from "1 log → 4 planks" are 3 runs, i.e. one line of 3
   logs and therefore **one crane trip**, not three.
@@ -1521,6 +1587,13 @@ Ordering a producible item that is not (fully) in stock creates a **production o
   M15 reads back as "a request asked for this". Everything else about such an order — the runs, the supply lines, the
   reservations, the states, the timeout, the retention — is bit-for-bit the M11 order, and only its **ending** is read by
   one more reader: a restock order that ends with ingredients delivered and no result is the safety stop (§3.6.4).
+* **Since M20 an order may be waiting for another order** (§3.5.6). A **step** of a production plan carries the
+  ingredient line of its parent (`ProductionOrder#parentLine`, `isStep()`), has no backing request, is never automatic
+  (the two are mutually exclusive in the canonical constructor) and is counted by **arrivals only**
+  (`countsStockLevels()` is `!restock && !isStep()`). Everything else about it — the runs, the supply lines, the
+  reservations, the states, the timeout, the retention — is bit-for-bit the M11 order. Two rules are added on top of it
+  and nothing else: an order with an **open child fetches nothing and cannot time out**, and an order that ends badly
+  ends the rest of its plan.
 
 **States** (`ProductionOrderState`, a pure and unit-tested state machine):
 
@@ -1584,11 +1657,31 @@ state or its deadline. A drop that was already in the crane's grabber when the o
 station, and `deliveredIngredients` is the number the screen prints: leaving such a drop uncounted would understate
 the loss by exactly the amount that was in flight and report "nothing handed over" while the items lie in the buffer.
 
+**A production plan widens this boundary, and that is written down rather than hidden** (M20, issue #4, ADR-032). One
+click can now hand ingredients to **several** of the player's machines, and what each of them swallowed is gone in
+exactly the same way. Three things bound it and none of them removes it:
+
+* **`maxPlanIngredientItems` (256) caps what one click may spend over the whole chain**, not per step. It is the
+  plan-wide form of `maxRestockIngredientItems` and exists for the same reason: the step count bounds how many machines
+  are involved, not how much goes into them.
+* **A parent with an open child fetches nothing at all** (§3.5.6), so in practice only the step that failed has lost
+  anything: every order above it has been handed nothing, and cancelling it costs zero.
+* **The safety stop keeps the next click from rebuilding the same chain** into the same machine, for every kind of order
+  (§3.6.4).
+
+What a chain lost is reported as **one number**: `ProductionOrders#unrecoveredOf` sums the whole plan, the log line names
+it when a plan ends, the terminal's step panel says what giving the chain up would still cost, and each step's own loss
+stays on its own line at its own station's screen. Nothing else about §3.5.4 changes: no item is invented, none is taken
+back out of a machine, and the conservation invariant of §8 holds through `failPlan` — the most dangerous function in the
+change, and the one every failure GameTest watches with a per-tick `ItemCensus`.
+
 #### 3.5.5 Implementation
 
 Classes:
 * `core.production` (pure, JUnit-tested): `ProductionEntry`, `ProductionPattern` (+ `fromGrid`), `SupplyLine`,
-  `ProductionOrder`, `ProductionOrderState`, `ProductionOrders`, `ProduciblePlanner`.
+  `ProductionOrder`, `ProductionOrderState`, `ProductionOrders`, `ProduciblePlanner`. Since M20 also the chain planner
+  and the plan model — `ProductionPlanner`, `ProductionPlan`, `PlanNode`, `PlanBudget`, `ProductionPlanInput`,
+  `ProductionPlanResult`, `PlanLimits`, `PlanRefusal`, `StationPattern` (§3.5.6).
 * `content.station`: `WarehouseProductionBlock` / `WarehouseProductionBlockEntity`, `ProductionPatterns` (the editable
   grid slots and their NBT), `ProductionGoggleSummary`, `ProductionMenu`, `ProductionMenuLayout`,
   `ProductionScreenState`.
@@ -1630,10 +1723,14 @@ Classes:
 * **Persistence.** Patterns are saved with the station (`Patterns: [{Slot, Entries: [{Entry, Item: ItemKey, Count}]}]`,
   bounded loading, never throws); orders are saved with the controller
   (`ProductionOrders: [{Id, Station, Result, ResultAmount, State, Produced, StockSeen, Request?, Lines: [...]}]`,
-  at most `MAX_SAVED_ORDERS` (256), invalid entries skipped, deadlines recomputed on load).
+  at most `MAX_SAVED_ORDERS` (256), invalid entries skipped, deadlines recomputed on load). Since M20 an order may
+  additionally carry `Parent?`, the ingredient line of the order it is a step for, written only when there is one
+  (§3.5.6).
 * **Goggles.** The station shows its patterns, the orders running there, the oldest order's state, ingredients still
   to fetch and results still awaited; the controller adds "Production stations: N" and "Production orders: N" (both
-  left out of the synced tag while they are 0, so the aisles without a production station pay nothing).
+  left out of the synced tag while they are 0, so the aisles without a production station pay nothing). Since M20 the
+  station also says while the safety stop is holding one of its products, and its oldest order's line reads "waiting for
+  an earlier step" while that order is blocked by its own chain (§3.5.6).
 * **Two worked examples in the showcase world** (`dev.ShowcaseVisualScenario`, M11 visual refresh). Both are the same
   shape with a different machine of the player's in the middle. The scenario is *built* to prove them before the world
   is saved — it orders the product of each loop at the terminal and waits until the production order reads `COMPLETE`
@@ -1694,7 +1791,8 @@ Classes:
   counts a drop that was already in the grabber), `ProductionOrdersTest` (promises, line ids, retention, restore,
   that two orders for one result **share** one arrival, that only the named order advances when a machine empties a
   shared station buffer, and the one-pass ingredient map), `ProduciblePlannerTest` (producible keys, the best
-  pattern, and that an only-producible ingredient counts as missing). `CraneStateMachineTest` pins that a full
+  pattern, and that an only-producible ingredient counts as missing — the number stays single level after M20, and it is
+  the *click* that plans a chain, §3.5.6). `CraneStateMachineTest` pins that a full
   production station is waited for exactly like an output.
 * GameTests (`gametest.ProductionGameTests`): `productionregistration`, `productionextractonly`,
   `productionpatternediting`, `productionpatternpersistence` (a **full nine-cell** pattern through a save and load),
@@ -1715,9 +1813,446 @@ Classes:
   inside their `thenWaitUntil` conditions, where a failing check is only retried on the next tick, so it counted only
   once the items had arrived.)
 
+#### 3.5.6 Production plans: a chain of orders (stage 2, M20, issue #4)
+
+> Status: **binding design** for M20. Decision, alternatives and the three decisions the project owner took:
+> **ADR-032**. Design study: `run/m20-design-synthesis.md` (local only; the code and ADR-032 win where they differ).
+
+Order a chest when the aisle holds **logs** but no planks, and it works. At the moment of the click the warehouse walks
+the patterns of its own production stations **once**, works out the whole chain — planks from logs at the saw, the chest
+from those planks at the crafter — and then does exactly one of two things:
+
+* **accepts it and creates every step in the same tick**, children first, as ordinary production orders at the player's
+  own machines; or
+* **refuses the click with a reason that names the item that is really missing** ("Oak Log is missing", "Making Oak
+  Planks is stopped", "No room for Oak Planks").
+
+Nothing moves in between. That is the whole point of deciding at the click: the crane never starts carrying logs for a
+chest the aisle could not have finished, and the answer a player reads is actionable instead of a status line four
+minutes later with the batch already gone.
+
+**Wareworks still crafts nothing** (ADR-024). Every step is an ordinary production order: the crane delivers the
+ingredients, the player's funnel, chute, belt or Mechanical Arm carries them into the machine, the machine works, and the
+product comes back through an ordinary **warehouse input** — or through an M18 **collecting port** — and is **stored in a
+rack**. The crane then fetches those very items out of that rack for the next step. There is deliberately no
+machine-to-machine shortcut and no intermediate the controller holds: two extra crane trips per level, both real, both
+visible, and that is the feature. It is the stock index where an arrival is observed, where a maximum applies, and what
+every surface reads.
+
+```text
+click at a terminal ─▶ ProductionPlanner ─▶ plan (or a refusal that names an item)
+                                             │  accepted in ONE tick, children first
+                       ┌─────────────────────┴─────────────────────┐
+                 step: 1 log → 4 planks                  root: 4 planks → 1 chest
+                       │                                          │  fetches NOTHING
+                 SUPPLY (logs) ─▶ saw station ─▶ saw ─▶ input      │  while the step is open
+                       └──────── STORE ──▶ rack ────────▶ SUPPLY (planks) ─▶ crafter station
+                                                                   └──▶ crafter ─▶ input ─▶ rack ─▶ RETRIEVE ─▶ terminal
+```
+
+**The plan is a value, not an object with a lifetime.** `ProductionPlanner.plan(input, key, amount)` is pure Java and
+returns either a `ProductionPlan` (nodes in dependency order, the **root last**) or a `PlanRefusal` plus the `ItemKey` it
+is about. It is computed from the **one snapshot** `request(...)` already builds — the aisle's patterns, one availability
+lookup, the stock levels, the rule set — and is either turned into orders immediately or thrown away. Nothing re-plans,
+nothing schedules, and there is no crafting tree to keep consistent with the world.
+
+##### The claim on an intermediate is the parent order's own supply line
+
+This is the linchpin of the design and the reason no new mechanism was needed.
+
+* `availableStock` already subtracts what the open production orders still owe
+  (`ProductionOrders#outstandingIngredient`), so the moment the parent order exists its **8 planks are promised** — to
+  nobody else, not another order, not a rule, not a player at a terminal. It persists, it shows on two screens, and it is
+  released when the order ends. **The parent order is the temporary minimum** (ADR-032 says why a set of temporary stock
+  rules was the wrong object).
+* **Acceptance is the reservation.** Because the plan becomes ordinary ledger entries in the tick it is made, it never
+  has to stay valid; there is no window in which it is a hope rather than a promise. `ProductionOrders#addAll` is
+  therefore all-or-nothing: a half-created chain would be a parent fetching ingredients for a run nothing can complete.
+* **A plan executes itself bottom-up with no scheduler at all.** A `SUPPLY` job for an item that is not in the racks
+  finds no candidate and is simply not planned, so the leaf step runs first.
+* **And the parent can fetch the very intermediate its own line made unavailable to everybody else**, because `SUPPLY` is
+  planned by `JobPlanner#planOutOfStorage` out of `stock().locationsOf(key)` and the live extractables minus the
+  reservations — **never** out of `availableStock`. So `availableStock(planks) == 0` (the parent's own line is why) and
+  the parent still plans its trip. That asymmetry existed before M20 and is what makes plan-first work with **no new job
+  kind, no new reservation kind and no new `ProductionOrderState`**.
+
+##### How the walk decides
+
+Depth first, in pattern order, post-order (children before parents):
+
+1. **An item's patterns are ranked once per plan** — "the one that could make the most of it right now first, ties by
+   aisle order" — so the head of the list is exactly what `ProduciblePlanner#bestPatternFor` picks and a rule, a player
+   and a step all start from the same pattern. For an item the chain has yet to make (nothing can make any of it right
+   now) that ranking is plain aisle order.
+2. **A pattern that leads nowhere is not the answer.** When the subtree under the preferred pattern cannot be made, the
+   next pattern for the same item is tried and everything the abandoned attempt spent is undone (`PlanBudget#resetTo`,
+   plus the step list, the item budget and the room ledger). Only when *every* pattern of an item fails is the refusal
+   reported, and a `LOOP` gives way to any other answer because "an ingredient is missing" is the more actionable
+   sentence. Bounded two ways: the **first** pattern of every item is always tried, so a chain that works costs exactly
+   what it cost before the fallback existed, and one walk may spend at most `min(64, max(8, stepLimit))` attempts on
+   alternatives. *(M20 review fix: with `1 nail → 1 plank` beside `1 board → 4 planks`, ordering a chest was refused with
+   "8 Nails are missing" although `log → board → plank → chest` was three steps inside the default bounds.)*
+3. **An ingredient is paid for out of the racks as far as the budget reaches, and only the rest becomes a step.** Three
+   planks in stock of the eight a chest needs are used, and one step makes the other five. The parent's supply line asks
+   for all eight either way, so nothing downstream has to know — and strictly less is handed to machines than expanding
+   the whole line would hand them.
+4. **`PlanBudget` is the one snapshot.** It wraps the availability function the caller passes — for a player
+   `StockAvailability.of(rules, PLAYER, availabilityLookup())`, for a port the same with `AUTOMATION`, which is what
+   makes "who may spend a reserve" a caller's choice and not a planner concept — asks every key **once**, and answers
+   `snapshot − spent`. A diamond (a table wanting planks, and sticks that want planks too) therefore cannot pay twice:
+   the second branch sees what the first left and either gets a step of its own or is refused by name.
+   * **The pattern ranking is measured against the *starting* snapshot**, not against what the walk has already spent.
+     That makes the choice independent of the order the branches are walked in, which is what makes a plan reproducible
+     **and** its cost monotone in the root's runs — the property the clamp below stands on.
+* **A plan is a tree, not a graph, and that costs something.** Two branches that need the same intermediate get a step
+  each, one per parent ingredient line, and each makes whole runs, so one plan commits more raw material than the chain
+  strictly needs. Pooling one step's surplus into the other branch was considered and **rejected**: such an order's
+  ingredients would be made by nobody as far as the bookkeeping can tell — it would have no open child, so neither "a
+  blocked parent fetches nothing" nor "a blocked parent's deadline does not run" would cover it, and it could time out
+  while the step it was silently waiting for was still working. Nothing is lost to the surplus either way: it lands in a
+  rack as items nobody promised.
+
+##### The bounds, and the refusal each one gives
+
+**There is deliberately no depth limit** (the owner's decision 1). A chain may be as deep as a player's machines make it.
+What has to be bounded is not how *long* a chain is but how much one click can **cost**, and termination is the cycle
+check's job rather than a counter's.
+
+| Bound | Key / mechanism | Refusal | Names |
+|---|---|---|---|
+| Orders one click may create | `maxProductionPlanSteps` (32), hard-capped at `PlanLimits.MAX_STEPS` = 1024 | `TOO_MANY_STEPS` | the item a further step was wanted for |
+| Free order slots right now | `maxProductionOrders` (12) minus the open orders | `ORDERS_BUSY` → `RequestRejection.PRODUCTION_BUSY` | the same item; the cure is to wait |
+| Ingredient items over the whole chain | `maxPlanIngredientItems` (256) | `TOO_MANY_INGREDIENT_ITEMS` | the step whose runs went past the budget |
+| A chain that comes back to itself | the **path set**, on results *and* ingredients | `LOOP` | the item the chain returns to |
+| An intermediate must fit under its own maximum | `productionRoomFor` + a per-plan room ledger | `NO_ROOM` | the intermediate |
+| The warehouse has stopped making something | the safety stop (§3.6.4) | `PAUSED` → `RequestRejection.PRODUCTION_PAUSED` | the stopped item |
+| Nothing makes the ordered item at all | no pattern for the **ordered** key | `NO_PATTERN` | the ordered item |
+| A leaf nobody has and nothing makes | the budget cannot pay one run | `MISSING_INGREDIENT` | that ingredient |
+
+* **Every refusal names an item** (`ProductionPlanResult#about`), because that is what makes it something a player can
+  act on. A reason without an item is the status line M11 already had. A refusal is **derived, never serialized**: it
+  travels to a screen as its `langKey()` (`gui.production.plan.refusal.<name>`) plus the item, exactly as `RestockOutcome`
+  does.
+* **A bound clamps before it refuses.** A plan that does not fit is tried again with **fewer runs of the ordered item**
+  and only refused when not even **one** run fits; one run is always allowed, because a pattern cannot be cut in half.
+  Cost, step count and room use are monotone in the root's runs, so the largest plan that fits is found by a binary
+  search of at most 31 walks over the same remembered numbers (`PlanBudget#fresh()`, no further availability lookups).
+  The refusal a player is shown is always the **one-run** walk's answer, i.e. the one no smaller order can escape. This
+  is M11 parity, not new behaviour: `startProductionOrder` already bounded its runs by the ingredients that were really
+  there rather than refusing, and told the request the amount it was granted.
+* **`TOO_MANY_STEPS` and `ORDERS_BUSY` are the same bound said differently.** `stepLimit = min(maxSteps,
+  freeOrderSlots)`, and `slotsBind()` decides which of the two is reported: `freeOrderSlots < min(maxSteps, orderSlots)`
+  means orders really are open, otherwise the configuration is what has to change. *(M20 review fix: measured against
+  `maxSteps` alone, a 13-step chain in a completely **idle** aisle was told "too many production orders are running;
+  wait for one or give one up".)*
+* **Cycles are checked on results *and* on ingredients.** The result keys of the current path are carried down; a pattern
+  whose result **or any of whose ingredients** is already a result on the path is `LOOP`. The ingredient half is what
+  refuses iron ingot ↔ iron block *even with blocks in the racks* — converting an item into itself is never what a click
+  meant — and it is why the planner needs no depth limit to terminate. Refused **before anything is converted**, and the
+  pair of patterns stays perfectly legal to author: with the ingredients there it is still ordered as a single step. The
+  M11 construction rule (a pattern must not produce one of its own ingredients, §3.5.1) stays as the cheap first line.
+* **`NO_ROOM` is the player's own maximum and nothing else.** It uses `productionRoomFor` — `maximum − stocked −
+  reservedCapacity`, **without** `StockRule#headroom`'s `+ expected` allowance — so the question is this click against
+  the cap, and not against whatever unrelated orders happen to be in flight. *(M20 review fix: wired to `storeHeadroom`,
+  the identical click was refused with an idle aisle and accepted a minute later.)* Beyond the study, the room a plan has
+  already promised itself is subtracted, so two steps for the same intermediate cannot both fill the last free slot. The
+  **ordered** item's own maximum is deliberately not checked here: a player may order past it, and the confirmation panel
+  of §3.6.6 is where they are asked.
+* **`maxProductionPlanSteps = 1` is the off switch** and reproduces the pre-M20 answer for answer: one order, its runs
+  clamped by the racks, and `MISSING_INGREDIENT` naming the first ingredient one run cannot be paid for — which is
+  exactly what `ProduciblePlanner#firstMissingIngredient` names today.
+
+##### Accepting a plan, and where one may be built
+
+`WarehouseControllerBlockEntity#request(...)` plans from the snapshot it already had, asks the confirmation question over
+that very plan, and then creates it:
+
+* **Root first, added children first.** A step names an ingredient **line** of its parent, so the orders are *built* from
+  the root down (a child needs its parent's line id) and *added* children first through `addAll`.
+* **What the request is promised is `ProductionPlan#rootPromise`** — at most what was asked for. A pattern makes whole
+  runs, so the orders may yield more; that surplus lands in stock and was promised to nobody.
+* **A smaller grant re-walks.** The queue may grant less than the plan offered (a merge cap, another station's share), so
+  `planFor` works the same chain out again for the smaller amount rather than handing a machine ingredients for items
+  nobody asked for. Fewer root runs can never need more ingredients or more steps than the plan that already fitted, and
+  a smaller plan that unexpectedly does not hold leaves the whole production part unstarted and refunded — never half of
+  it.
+* **A chain of one step is an ordinary single-level order** and behaves exactly as it did before M20, byte for byte.
+
+**Who may start a chain** (the owner's decision 3):
+
+* **A player at a terminal** (`StockAccess.PLAYER`): always.
+* **A warehouse port's redstone request** (`StockAccess.AUTOMATION`): **yes, but one open plan per port at a time.** A
+  lever or a clock is an unattended, repeating trigger, and a pulse that can spend 256 ingredient items into a tree of
+  machines is ADR-027's overnight drain with more steps. `hasOpenProductionPlan(destination)` extends M17's "one open
+  request at a time" rule to plans: the stock part of the request is served as usual and the second chain is simply not
+  started, which the port reads as `PRODUCTION_BUSY`. A plan counts as open while **any** of its orders is open (the
+  steps are the *first* orders of a chain to finish, and `prune` keeps a finished step while its plan runs), and a plan
+  whose root has lost its backing request counts as one open plan for **every** port, because it can be attributed to no
+  destination and answering "not this port's" would let the very pulse the guard exists for start a second chain.
+  *(Both halves are M20 review fixes.)*
+* **A stock rule's minimum stays single level** (§3.6.3). `RestockPlanner`, `RestockDecision`, `calledFor` and
+  `RestockOutcome` are untouched: a rule never triggers production of an ingredient, and a player expresses depth with a
+  second rule, visibly. What M20 adds on that side is only the guard in the other direction — a paused item is never
+  expanded, at any level.
+
+##### A step waiting for an earlier step fetches nothing
+
+Two rules, and they are the safety property of the whole feature:
+
+* **A parent with an open child contributes nothing to `supplyNeeds()`** — not one of its lines, not even the payable
+  ones. A machine cannot run on a partial set, a funnel or an arm will happily push half a run into it, and that is the
+  one thing that turns a deep chain into a deep loss. It also makes two steps of one plan at the same station strictly
+  sequential, which removes the M11 showcase crafter hazard rather than documenting it. Cost: one `hasOpenChildren`
+  lookup per open order, bounded by `maxProductionOrders`.
+* **A blocked order's deadline does not run** (`ProductionOrders#timeOut` skips it). There is nothing it could be making
+  progress on; what takes time is the step below it, and that step has a running deadline of its own. **An order that
+  stops being blocked starts its timeout over** in the first pass that sees it unblocked, because its own deadline was
+  set when the plan was created and is long past by then — without the restart the chain would die in the very tick it
+  became ready to run. Which orders are blocked is decided **once** per call, before anything is timed out, so an order
+  unblocked by a child timing out in the same call is ended by `failPlan(child)` as a cancellation rather than timing out
+  itself.
+* The invariant this leaves is what makes a plan collapse instead of hanging: **the deepest open order of a plan always
+  has a running deadline.** The worst-case lifetime of a chain is its step count times `productionOrderTimeoutTicks`.
+
+##### Failure, and what cancelling costs
+
+`ProductionOrders#failPlan(nodeId, now)` runs whenever an order of a plan ends as anything but `COMPLETE` — a timeout, a
+cancellation, a station broken or turned away, a pattern deleted. A **completed** order never touches its plan:
+completing is precisely what unblocks the order above it.
+
+* **Fail upward, in the same tick.** Every open **ancestor** is cancelled: it is waiting for an ingredient nothing is
+  going to make now, and leaving it open would mean an order fetching the rest of its ingredients for a run that can
+  never happen. Because a blocked parent fetches nothing, an ancestor has handed **nothing** to a machine, so cancelling
+  it costs exactly zero — the guard pays off twice.
+* **Cancel downward only what has cost nothing.** Every other open order of the plan is judged on its own:
+  * nothing delivered → **cancelled**. The crane aborts before the pick or reroutes what it already holds back into
+    storage, and what it still promised is free again;
+  * ingredients already handed over → **detached** (`ProductionOrder#withoutParentLine()`) and left **running**. Those
+    items are at the machine and nothing takes them back out, so letting the order finish turns them into a product the
+    player keeps instead of a loss. A detached step keeps the arrival channel, so a machine that swallowed *its* batch is
+    still caught — and its stock baseline is reset to `BASELINE_PENDING`, because a step never kept one and a baseline of
+    zero would credit it with the whole existing stock of its result on the next observation.
+* **The root refunds its backing request once**, `unfulfilledPromise()` through `RequestQueue#reduce` (never `deliver`),
+  exactly as in §3.5.4.
+* **Cancelling *any* node ends the whole plan**, by the same rules: an order above it waits for something that will never
+  be made, and an unfinished order below it is making something nobody will use.
+* **The terminal says what that costs before the click**, in the three numbers that click really produces
+  (`core.terminal.PlanCancelCost`, which mirrors the rules above — one JUnit-tested place, so the panel and the server
+  cannot drift): "Steps that would end: N", and, only when something was really delivered, "Ingredients already
+  delivered: N — the warehouse does not fetch them back" and "The warehouse then stops making X until you resume it at
+  the machine".
+  * **The count is the set `failPlan` ends**, not the open members: the named order plus every other open member with
+    **nothing** delivered. A member that already has a batch in front of it is *detached and left running*, so it neither
+    ends nor loses anything, and an open **ancestor** needs no separate term — a blocked parent has been handed nothing,
+    so it is already in the delivered-0 set. **The whole loss is therefore the named order's own delivered count.**
+  * **Why that matters:** the state a player opens the panel in is the mid-chain one — root blocked, one step at a
+    machine running down its timeout. Summing the open members there reports one order too many and a loss that does not
+    happen, while the server's own number for the same click (`PlanFailure#unrecovered`) says zero. *(Review fix. The first
+    version summed `openDeliveredIngredients` over every unfinished member; the `chain` run only ever photographed the
+    panel with a delivered-0 frontier, so it never saw it.)*
+  * **The third line is the consequence a player cannot see coming:** since M20 a *player's own* cancellation arms the
+    safety stop when the order it ends had ingredients at a machine, so the next click for that item is refused until
+    somebody resumes it at the station. It is shown under exactly the condition the server arms it under
+    (`ProductionOrder#endedWithLostIngredients`), which is why it appears with the second line and never alone.
+  * "Delivered", not "at your machines": the number is what the crane handed to the **station**, part of which may still
+    be in that station's own player-accessible buffer (§3.5.4).
+* **A cancelled or served backing request keeps the plan running**, as a detached order does today (`detachRequest`
+  clears the promise). The items are already being made, and the maximum protects the racks.
+
+##### The safety stop covers every kind of order
+
+The owner's decision 2, and the one place ADR-027 really grows (§3.6.4 carries the detail):
+
+* **Every order that ends with ingredients handed over and no result arms the stop for its own result item** — a
+  player's click, a redstone request, a step of a chain and a rule's own refill alike. M15 armed it only for an automatic
+  order because that was the only order the warehouse repeated by itself; a chain repeats just as well.
+* **A pause blocks *planning* as well as ordering.** No plan may contain a node for a paused item, at any level, and a
+  click that would need one is refused with `PAUSED` naming it (`RequestRejection.PRODUCTION_PAUSED` for a port's
+  goggles). Without this the next click rebuilds the same chain into the same broken machine, which is precisely the
+  drain ADR-027 forbids.
+* **A pause survives without a rule.** `StockRulePause.Cause` gained `ORDER_TIMED_OUT` and `ORDER_CANCELLED` (appended;
+  `Cause` travels by **name**, so it costs nothing), and `pruneStockPauses` may only forget a **rule-born** pause
+  (`Cause#isRuleBorn()`). The item a chain loses a batch of is normally an intermediate no rule governs at all, so
+  forgetting it would silently re-arm the chain.
+* **Pausing an item cancels every open order making it**, whoever asked for it (`cancelOpenOrdersFor`, widening the M15
+  review fix): the machine that swallowed the last batch is the very machine those orders feed, and one of them may be a
+  step of another chain that would go on committing ingredients level by level. Each cancelled sibling adds its own loss
+  to the pause, because what a player has to be told is the whole cost, and a cancelled step takes the rest of its own
+  plan with it.
+* **It is lifted only by a deliberate click**, never by a timer — and since M20 the **production station in front of the
+  machine** is a second place to do it, which matters because the first place (a stock keeper's row) does not exist for
+  an item no rule governs (§3.6.4, "the ways back").
+
+##### What a player sees
+
+| Surface | What it says about a chain |
+|---|---|
+| Terminal, order section | **one line per plan**: `Oak Button x4 · 2 steps · now: Oak Planks · x`. The badge is gold, the frontier (the deepest open step) production blue. A click on the line opens the step panel; a click on the `x` gives the whole chain up |
+| Terminal, step panel | modal (the M15 confirmation's device, blue border because it informs rather than asks): one row per order indented two spaces per depth — `A-01-08R: Oak Button x4 - waiting for an earlier step` — the frontier in aqua, a row that lost ingredients in gold, then what giving up would cost: the orders it would really end, and — only when something was delivered — those items and the safety stop it arms. Two buttons, "Give up on the chain" and "Close"; Escape drops the panel without closing the screen, a server question always wins over it, and a window resize rebuilds it instead of leaving it drawn where the window was |
+| Terminal, status line | the refusal, and it **replaces** the generic "Request refused: …" frame instead of filling it: `Making Oak Button is stopped`, `Oak Log is missing`. Each sentence spends one placeholder on the item and none on an amount, because the row has to hold the name too. A click the racks served only in part shows that sentence in gold **instead of** "Requested … x2", because the shortfall is the half a player can act on |
+| Production station, screen | the same rows, from the same server builder; a blocked parent reads "waiting for an earlier step" |
+| Production station, goggles | the oldest order's state, with "waiting for an earlier step" when it is blocked; "Stopped products: N" and "Ingredient items not recovered: N" while the stop holds something this station makes |
+| Production station, block | `STOPPED` — the brass ring around both openings becomes a lit rose quartz lamp (`create:block/rose_quartz_lamp_powered`, the keeper's own pause texture) |
+| Controller, goggles | "Stopped products: N" (the same key the station uses) |
+| Aisle summary display | `Stopped products: 1`, on a line of its own and only while something is stopped |
+| Item descriptions | the station gained "When an ingredient is missing" and "When a batch is lost"; the terminal "When ordering something made of something else" |
+| Ponder | `warehouse/production_chain`, "Chains of Production Orders", on **both** the production station and the terminal |
+
+Both screens are fed from **one** server method, `WarehouseControllerBlockEntity#productionOrderViews(...)`, so the
+terminal and a station cannot drift apart about a chain. `ProductionScreenState.OrderView` gained four append-only
+fields — `Optional<UUID> plan` (the **root order id** of its plan, empty for an ordinary order), `int depth`,
+`Optional<String> address` (the station's rack address, formatted server-side: a terminal has no layout and no aisle
+letter) and `boolean waitingForStep` (the controller's exact `hasOpenChildren`, so a client never guesses a safety
+property) — and `MAX_ORDERS` rose 8 → 16 so a whole plan fits one payload. **A single-level order's row is byte-for-byte
+and pixel-for-pixel what it was before M20**, which is asserted rather than assumed
+(`terminalsinglelevelrowsareunchanged`).
+
+The client folds those rows into lines with the pure `core.terminal.PlanLines` / `PlanLine` / `PlanMember`: head = the
+ordered item, frontier = the deepest open member, members in display order. Every degenerate case answers instead of
+throwing — a payload cut off before the root is named by its shallowest step, a duplicate id keeps one row, a
+self-referencing plan is its own head. The terminal keeps the **newest 16** orders, so a cut inside an old chain hides
+its deepest steps and the line then honestly shows fewer steps than the chain has.
+
+##### What one click may cost is not zero, and other things a player has to know
+
+* **A step is completed by an arrival, which is correct and surprising.** Putting the intermediate into a rack by hand
+  does **not** complete a step: a step has only the arrival channel (items the warehouse really stored out of one of its
+  own inputs) and a hand-placed item is no arrival. The parent stays blocked while the step is open, so the step runs to
+  its timeout and takes the plan with it. That is the price of keeping the safety stop honest — the alternative is a
+  second plank farm completing a step whose sawmill swallowed the batch, and the parent then *acting* on that completion
+  by handing its own ingredients to the next machine.
+* **A plan makes `availableStock` fall for an item nobody has yet.** The moment a chain exists its steps promise planks
+  that do not exist, so a terminal watcher sees the planks total drop for no visible reason. The row's tooltip reports
+  promises and the step panel names who holds them, but the first-time reading is confusing. *(Since the part 1 review the
+  terminal row's `available` includes `outstandingIngredientsByKey`, so the row and the number a click is granted against
+  finally agree.)*
+* **A storage-location filter that refuses the intermediate is a stall nothing catches.** Filters are advisory on a
+  reroute but **decisive** on a store (M8), so an intermediate no location accepts is never stored, the parent starves
+  and the plan times out with the step's batch gone. It is not pre-flighted (that would need a per-key walk of the
+  locations at plan time); this paragraph is the support answer.
+* **`NO_ROOM` is pre-flighted against the *maximum*, not against a full warehouse.** A warehouse with no free capacity
+  stores nothing, so a step's product cannot come back — the pre-existing single-level behaviour, one level deeper.
+* **A pattern edited mid-plan is not re-planned.** The step delivers the old ingredients and waits for a result the
+  machine will not make until it times out (M11's "a wrong pattern simply times out", made likelier by depth). The only
+  cheap guard shipped is the deleted-pattern check, which ends the plan before the next pick.
+* **`maxProductionOrders` is the real ceiling and not the key a player reaches for.** Raising the step count without
+  raising it produces `PRODUCTION_BUSY`, which reads as "the warehouse is busy" when the cause is the plan's own size —
+  which is why `slotsBind()` exists and why the default rose 8 → 12.
+* **"Can be made now" is still the single-level number.** A chain-only item is offered (the blue `+` and "Can be produced
+  here") with **no** "Can be made now" line, because `producibleAmount` never consults a second pattern; the terminal
+  therefore sends the raw clicked amount and the plan decides exactly (§3.4.2). Making that number chain-aware would mean
+  running the planner per key on every stock push.
+
+##### Persistence
+
+The order record of `ControllerPersistence` gained **one optional field**:
+
+```text
+ProductionOrders: [ { Id, Station, Result, ResultAmount, State, Produced, StockSeen, Request?, Promised,
+                      Restock?, Parent?,          <- new: the parent's SupplyLine UUID
+                      Lines: [ { Id, Item, Required, Delivered } ] } ]
+```
+
+* `Parent` is written **only when there is one**, so an order saved before M20 reads back as exactly what it was — a
+  plain single-level order, no migration, nothing that can throw. Everything else about a plan (its root, its depth, its
+  frontier, its shape) is **derived** from those links on demand, so no two saved numbers can disagree.
+* Reading stays a pure decode. A link that names nothing is repaired **once** afterwards by
+  `ProductionOrders#validatePlans`, on the first tick that knows the game time (beside the deadline restart the M11 rule
+  already needed). A step whose chain of parents does not lead to a root through orders that are still here **and still
+  open** is cancelled if it delivered nothing and detached if it did — `MAX_SAVED_ORDERS` (256) truncation, a hand-edited
+  save and a cycle are all covered, because the walk carries a visited set. **No safety stop can be armed by it**: a
+  step is never an automatic order, and a save-integrity failure is no evidence about anybody's machine.
+* **A whole plan ages out together.** `prune` keeps a finished step while *any* order of its plan is open and then forgets
+  the plan as a whole, counted from the last ending. That is what makes a running chain readable as a chain rather than a
+  torn-off piece of one, keeps the step count on a line stable, and guarantees no state is ever read off a node pruned
+  mid-plan. An order in no plan is a plan of one, i.e. the rule exactly as it was — and when no order is a step at all,
+  `prune` takes the old path at the old cost.
+* Deadlines are still **not** saved: a world closed for an hour is no evidence about any machine.
+* **M19 needs nothing new.** Every step is an open production order, so `markChunkKeepDirty()` already fires on every
+  start and end and a plan holds its aisle for as long as it runs (§11.2).
+
+##### Cost
+
+Planning is **one bounded pass at a click** and touches no inventory and no world.
+
+* `aislePatterns()` and `availabilityLookup()` are asked once per request, exactly as before M20. **The marginal cost of
+  recursion over a single-level request is the walk only** — no extra inventory read, no world search, no extra block
+  entity lookup.
+* One walk visits at most `stepLimit` nodes plus the one that refused, each scanning the aisle's patterns once for one
+  item (ranked candidates are cached per item for the whole plan) and looking at up to `MAX_INGREDIENTS` ingredients. The
+  fallback adds at most `min(64, max(8, stepLimit))` attempts, and the clamp at most 31 walks — all against the same
+  remembered availability numbers.
+* **Nothing new per tick.** `supplyNeeds()` and `timeOut` each gained one `hasOpenChildren` lookup per open order;
+  `observeProductionResults` is unchanged in kind. `productionOrderViews` costs one memoised `planOf` per plan plus one
+  `hasOpenChildren` per open order, per screen push.
+* Network: four appended fields on `OrderView` and two on `TerminalResultPayload`, in payloads that already existed.
+  `WareworksNetwork.VERSION` is `"6"` for the whole milestone.
+
+##### Classes and tests
+
+Classes:
+* `core.production` (pure, JUnit): `PlanBudget`, `PlanNode`, `ProductionPlan`, `ProductionPlanInput`,
+  `ProductionPlanResult`, `ProductionPlanner`, `PlanLimits`, `PlanRefusal`, `StationPattern`; plus
+  `ProductionOrder.parentLine` / `isStep()` / `withoutParentLine()` / `BASELINE_PENDING` and `ProductionOrders`'
+  parent-line index with `addAll`, `childrenOf`, `hasOpenChildren`, `parentOf`, `rootOf`, `depthOf`, `planOf`,
+  `descendantsOf`, `frontierOf`, `openStepCount`, `failPlan` / `PlanFailure`, `unrecoveredOf`, `detach`, `validatePlans`.
+  `ProductionPattern#runsWithin(room)` is the shared form of the whole-run rule `RestockPlanner` had privately.
+* `core.terminal`: `PlanMember`, `PlanLine`, `PlanLines` (the client-side grouping), `RequestConfirmation#ofPlan`.
+* `content.controller`: `productionPlanInput`, `planProduction`, `startProductionPlan`, `planFor`,
+  `hasOpenProductionPlan`, `productionPlanOf`, `openProductionStepCount`, `productionOrderViews`, `waitsForStep`,
+  `stationAddress`, `productionRoomFor`, `failProductionPlan`, `cancelOpenOrdersFor`, `refreshProductionStops` /
+  `stoppedStations`; `RequestRejection.PRODUCTION_PAUSED`; `RequestResult.refusal()` / `about()`; the `Parent?` field and
+  the restore-time validation in `ControllerPersistence`.
+* `content.station`: `StoppedProduct`, `WarehouseProductionBlockEntity#stoppedProducts()` /
+  `resumeStoppedProducts()` / `refreshStoppedState(...)`, `WarehouseProductionBlock.STOPPED`,
+  `ProductionScreenState.OrderView`'s four fields + `stopped` rows + `ProductionScreenState.members`,
+  `ProductionMenu#submitResume`, `ProductionStationHooks` (the sneak-click vanilla would otherwise swallow),
+  `ProductionGoggleSummary.stoppedProducts` / `unrecovered` / `oldestWaitingForStep`.
+* `client.gui`: the chain line, the step panel and the refusal sentence in `WarehouseTerminalScreen`; the stopped row and
+  the tinted pattern tab in `WarehouseProductionScreen`. `network`: `ProductionResumePayload`, the two new
+  `TerminalResultPayload` fields.
+* `core.terminal`: `PlanLine` / `PlanLines` / `PlanMember`, and `PlanCancelCost` for what giving up really costs.
+* `client.ponder.scenes.ProductionScenes#chain` + `assets/wareworks/ponder/warehouse/production_chain.nbt`
+  (`scripts/gen_ponder_schematics.py`).
+* `dev`: `ChainVisualScenario` (`-Pwareworks.visualTest=chain`), four helpers in `ScreenInput`.
+
+Tests:
+* **JUnit** — `ProductionPlannerTest` (every `PlanRefusal` reachable *and* naming the right item, a two-step chain in
+  dependency order, a five-level chain, the diamond against one budget, both loop shapes, the pattern fallback in three
+  shapes, both caps, the clamp's binary search, the room ledger, reproducibility, and a **randomised cross-check against
+  a straightforward recomputation** over 400 generated aisles, which also pins the monotonicity the binary search relies
+  on); `PlanBudgetTest`, `ProductionPlanTest`, `PlanLinesTest` (14 tests over the grouping, including every degenerate
+  payload); `ProductionOrderTest` / `ProductionOrdersTest` additions (the parent link, arrival-only counting, the
+  baseline on detach, `addAll`'s atomicity, the derived tree, plan-wide pruning, `failPlan`, `validatePlans`, the arrival
+  order with an older ordinary order beside a step); `RequestConfirmationTest#ofPlan` over a plan's `leafDemand`;
+  `StockRulePauseTest`; `PlanCancelCostTest` (the mid-chain state, the detached step, a finished head, a cut-short
+  payload); `LangConsistencyTest.everyPlanRefusalNamesItsItemInBothLanguages` and
+  `LangConsistencyTest.theStoppedCountReadsTheSameOnEverySurface`.
+* **GameTests** — `gametest.ProductionPlanGameTests` (12): `productionplantwolevels`,
+  `productionplancreatedatomically`, `productionplanshrinkstowhatwasgranted`, `productionplanrefusalsnametheitem`,
+  `productionplansteplimitofoneistheoffswitch`, `productionplanboundsrefusewiththeirownreason`,
+  `productionplanintermediatemaximumrefuses`, `productionplanpauseditemisnotplanned`,
+  `productionplanpartlyservedclickkeepsthereason`, `productionplanfromaredstoneport`,
+  `productionplanfromaportstaysoneafteritsstepisdone`, `productionplanmeasuredagainsttheconfirmation`.
+  `gametest.ProductionPlanFailureGameTests` (8): `productionplanparentfetchesnothingwhileblocked`,
+  `productionplanparentdoesnottimeoutwhileastepruns`, `productionplansteptimeoutendstheplan`,
+  `productionplancanceltakesitsstepswithit`, `productionplancancelleavesadeliveredsteprunning`,
+  `productionplanlostbatchstopstheitemforeveryone`, `productionplanstepkeepsthebatchitsmachinemade`,
+  `productionplansurvivesasavemidflight`. `gametest.ProductionStopGameTests` (4) covers the stop's surface and both ways
+  back for a player's order, a redstone request and an automatic order, plus the wire. `gametest.TerminalChainGameTests`
+  (6) covers the rows, the wire, the cancel, the unchanged single-level row, the cancel cost and the refusal that names
+  the item. `ProductionGameTests` gained `productionplanpersistence` and `productionplanbrokenbysavedataisended`. Every
+  test in which the crane moves items asserts the conservation invariant on **every tick** with `gametest.ItemCensus`.
+* **Visual** — `runVisualTest -Pwareworks.visualTest=chain` (48 shots, five chapters: the chain ordered and run, its
+  line and step panel while it works, a machine that swallows the batch — with the panel photographed in the state a
+  player really gives up in, the one moment all three cost lines can be read — the four surfaces of the stop and the
+  click that lifts it, and the chain run again); `-Pwareworks.visualTest=ponder` compiles the new scene against a real
+  `PonderLevel`; `blocks` gained a `production_stopped` exhibit and `restock` asserts the station's lamp and its stopped
+  row inside the real M15 story.
+
 ### 3.6 Warehouse Stock Keeper (`content.station`, M15)
 
-> Decision and reasons: **ADR-027**.
+> Decision and reasons: **ADR-027**, extended by **ADR-032** (the safety stop covers every kind of order).
 
 The keeper is the block a player writes the warehouse's **stock rules** into. A rule is one item and three numbers, and
 **the three numbers govern three different directions** — that is the one sentence the whole feature is built to keep
@@ -1846,9 +2381,13 @@ last case is the normal, healthy state of a line that has run out of feedstock: 
 created, the lamp and the comparator keep calling for the item, and `ProduciblePlanner.firstMissingIngredient` names the
 item the player has to supply.
 
-**Stage 1 stays stage 1.** `ProduciblePlanner` is used unchanged, so an ingredient that is itself only producible counts
-for nothing and an order that waits for another order stays unrepresentable. A rule never triggers production of an
-ingredient; a player expresses that with a second rule, visibly.
+**A rule's minimum stays single level, also after M20.** `ProduciblePlanner` is used unchanged, so for an *automatic*
+order an ingredient that is itself only producible counts for nothing. A rule never triggers production of an
+ingredient; a player expresses that with a second rule, visibly. `RestockPlanner`, `RestockDecision`, `RestockOutcome` and
+the `calledFor` interlock are untouched by M20 — relaxing `calledFor` is only safe when the called-for item's own pattern
+closes the loop, and with an unrelated pattern a plan would make what another rule is asking for. What M20 adds on this
+side is the guard in the other direction: a **paused** item is never planned or ordered at any level, and the safety stop
+is now armed by every kind of order rather than only by an automatic one (§3.6.4, §3.5.6).
 
 **A minimum holds items back from other rules, too** (review fix). An automatic order never spends an ingredient that a
 **governing rule of the same aisle is itself below its minimum on**: it reports `WAITING_FOR_INGREDIENTS` and names that
@@ -1878,16 +2417,41 @@ derived a second time: two roundings of one number are two different orders.
 
 #### 3.6.4 The safety stop (not negotiable)
 
-Ingredients a player's machine has swallowed are **unrecoverable** (§3.5.4). An automatic order that ends with items
+Ingredients a player's machine has swallowed are **unrecoverable** (§3.5.4). An order that ends with items
 delivered and no result therefore means one of two things, and the warehouse cannot tell them apart: the machine is
 broken, or the pattern is wrong. Both get worse the more often they are repeated.
 
-> **The first time an automatic order ends with ingredients delivered and nothing coming back — a timeout or a cancel
-> with `deliveredIngredients() > 0` — that rule stops ordering.**
+> **The first time an order ends with ingredients delivered and nothing coming back — a timeout or a cancel
+> with `deliveredIngredients() > 0` — the warehouse stops making that item.**
 
 An order that gave up while the crane was still fetching is **not** a pause: nothing left the warehouse, and the usual
 cause is a stopped crane or an unpowered kinetic network, which must not pause every rule in a base whose network was
 off overnight. A cancel *with* delivered items pauses whatever the state, because cancelling has to mean *stop*.
+
+**M15 armed this for an automatic order only; since M20 it covers every kind of order** (the project owner's decision 2,
+ADR-032). M15's reasoning was that an automatic order was the only order the warehouse repeated by itself — but a
+production plan repeats just as well, and a click, a redstone pulse or a rule can all send the same chain into the same
+machine again. So a player's click, a port's request, a step of a chain and a rule's own refill all arm it now, and
+`StockRulePause.Cause` is what says which kind of order it was:
+
+| Cause | Armed by | Rule-born |
+|---|---|---|
+| `TIMED_OUT` | an **automatic** order timed out | yes |
+| `CANCELLED` | an **automatic** order was cancelled or lost its station | yes |
+| `ORDER_TIMED_OUT` | an order somebody asked for timed out — a click, a redstone request, a step | no |
+| `ORDER_CANCELLED` | such an order was cancelled, or its plan was ended by another step failing | no |
+
+The two new values are **appended** and `Cause` travels by **name**, so this costs no migration. What "rule-born" decides
+is the one thing that may ever forget a pause without a player: deleting the rule that ordered
+(`pruneStockPauses`, `Cause#isRuleBorn()`). A pause armed by anything else has no rule it could belong to — the item is
+regularly an intermediate no rule governs at all — so forgetting it there would silently let the next click rebuild the
+same chain into the same broken machine.
+
+**A pause blocks *planning* as well as ordering** (M20). No production plan may contain a node for a paused item at any
+level, and a click that would need one is refused with `PlanRefusal.PAUSED` naming it, which reaches a port's goggles as
+the new `RequestRejection.PRODUCTION_PAUSED` ("the warehouse has stopped making it; check the machine and resume it"). It
+also blocks a plain single-level order of that item, which is the coherent reading of "the warehouse stops making this".
+It is told apart from `PRODUCTION_BUSY` because waiting does not help: the cure is to go to the machine.
 
 **What "nothing coming back" means, exactly** (review fix). The rule above is only worth anything if *completing* an
 automatic order is evidence that the machine gave something back — and a rise of the aisle's stock index is not. The
@@ -1914,10 +2478,15 @@ warehouse's own door.
 batch may be on its way to the very machine that swallowed the first, so pausing a rule cancels its other open automatic
 orders. Cancelling reroutes what the crane is still carrying back into storage (`cancelSupplyJobsOf`), so only what a
 machine already took is lost, and each cancelled sibling adds its own unrecovered items to the pause: what a player has
-to be told is the whole cost.
+to be told is the whole cost. **Since M20 that covers every open order for the item**
+(`WarehouseControllerBlockEntity#cancelOpenOrdersFor`), not only the automatic ones: the machine that swallowed the last
+batch is the very machine those orders feed, and one of them may be a **step of another chain** that would otherwise go on
+committing ingredients level by level. A cancelled step takes the rest of its own plan with it (§3.5.6), and a request
+that was waiting for such an order is given its promise back.
 
-A pause stops **ordering and nothing else**: the maximum still caps, the reserve still holds back, the comparator still
-calls for the item and the player's own farm goes on running. It is shown everywhere the rule is:
+A pause stops **making that item and nothing else**: the maximum still caps, the reserve still holds back, the comparator
+still calls for the item and the player's own farm goes on running. It is shown everywhere the rule is — and, since M20,
+at the machine as well:
 
 * the keeper's lamp has a **third** state: `create:block/rose_quartz_lamp_dim` while no rule bites, `rose_quartz_lamp`
   for `LIT`, and `rose_quartz_lamp_powered` for `PAUSED` — three models over the two boolean properties, with `paused`
@@ -1928,19 +2497,79 @@ calls for the item and the player's own farm goes on running. It is shown everyw
   unambiguous;
 * the keeper's goggles get a red line with the count, and its screen shows the row as paused, names what the loss cost
   in ingredient items and shows the way back;
-* the controller's goggles and the aisle summary display count the paused rules — the display on a **line of its own**,
-  because it is the only rule state that asks a player to go and look at a machine;
+* **the production station in front of the machine says so on three surfaces of its own** (M20): the brass **ring** around
+  both openings becomes a lit rose quartz lamp (`WarehouseProductionBlock.STOPPED`, the keeper's own
+  `create:block/rose_quartz_lamp_powered`, so the stop looks the same wherever a player meets it); its **goggles** read
+  "Stopped products: N" / "Ingredient items not recovered: N" / "Sneak-click the station to make them again", outranking
+  everything else that station says; and its **screen** turns the first order line into a red "Stopped: Diamond. Click to
+  make it again" and tints every stopped product's **pattern tab** in the keeper's pause red, with a tooltip naming the
+  item, the cause (the keeper's own `gui.keeper.paused.*` sentence), what was delivered and never came back, and how to
+  lift it. With a buffer of **25 slots or more** the window has no order line at all (`ProductionMenuLayout#orderLines()`
+  trades them for the height budget), and the stopped row then takes the **buffer's label row** instead — a label for
+  slots that are self-evident, against the screen's only way back from the stop. *(Review fix: the row was simply dropped
+  there, so the screen named a problem, offered no way out of it, and contradicted the block's own description.)*
+* the controller's goggles and the aisle summary display count the stopped **products** — "Stopped products: N", the same
+  key the station uses, the display on a **line of its own**, because it is the only state here that asks a player to go
+  and look at a machine. *(M20 renamed both: the count includes items no rule governs at all, so "Paused rules: N" was
+  wrong on an aisle with no stock keeper, and one number on three surfaces has to be recognisable as one state.)*
 * the terminal row reports `PAUSED`, which outranks every status the three numbers would give, because it is the one a
   player has to act on. It is the row's **tooltip** that says it, in gold ("Rule: Paused: an order lost its
   ingredients"); the badge square itself keeps its neutral colour, so a paused rule is legible in the terminal but does
   not shout across the grid — deliberately, because the keeper is the block a player has to walk to anyway, and a fourth
   badge colour for a state the three numbers do not describe would make the other three harder to read (§3.4.2).
 
-**The way back is a click, and there are two of them.** Clicking a paused row's **status mark** in the keeper's screen
+**The way back is a click, and there are four of them.** Clicking a paused row's **status mark** in the keeper's screen
 resumes it (`StockKeeperRules.FIELD_RESUME`), and **re-editing or clearing the rule** resumes it as well — a player who
 rewrites a rule has looked at it. It is deliberately not a timer: the warehouse cannot tell a fixed machine from a
 broken one, and retrying by itself would feed the same machine a second batch. The status mark is the row's own
 affordance and the only control on that line that means nothing otherwise, which is why it carries the action.
+
+**M20 added the two that are where the machine is**, because the first two do not exist for an item no rule governs — and
+that is exactly the item a chain loses a batch of. Both act on the **station's own patterns**:
+
+* a **sneak-click with an empty hand** on the warehouse production station (`resumeStoppedProducts()`);
+* a **left click on the red stopped row** in that station's screen (`ProductionResumePayload` → `ProductionMenu#submitResume`).
+
+Neither can be forged and neither can reach past the block: the payload carries **nothing but the container id**, so what
+may be resumed is decided entirely by the patterns that station holds, after the ordinary reach check and out of the
+menu's per-tick edit budget. One resume lifts *every* stopped product of that station rather than one named item — the
+same action the sneak-click performs — and which pattern a stopped item belongs to is shown by the tinted tab. Both
+answers go through one shared `WarehouseProductionBlockEntity.tellResumed(...)`, so the gesture and the click say exactly
+the same thing, and the message **names the cost**: "The warehouse makes Diamond again; 4 ingredient items were
+delivered and never came back". The cost is read *before* the pause is lifted, because a pause that is gone can no longer
+say what it cost. A station that makes nothing stopped answers "Nothing this station makes is stopped".
+
+**"Delivered", never "stayed in the machine"** (review fix). The number is `ProductionOrder#deliveredIngredients()`, i.e.
+everything the crane dropped into the **station** — and part of it may still be sitting in that station's own buffer,
+which a player can empty by hand (`ProductionMenu.BufferSlot` forbids placing, not taking). The first wording sent a
+player looking inside a machine for items in the block they had just clicked, and made them write off items they could
+pick up. The station's goggles show both numbers one under the other, so the contradiction was one line apart. The same
+rule applies to the terminal's cancel line (§3.5.6) and to the block's item description.
+
+**A lamp can never outlive its warehouse.** The controller keeps the positions it has lit in a derived
+`Set<BlockPos> stoppedStations` and puts out whatever it did not light again (`refreshProductionStops`), plus on a lost
+aisle and on `remove()`. The state is written by the existing rule pass and immediately on a pause, a resume or a rule
+edit that prunes a pause, only on a real change and with `UPDATE_CLIENTS` alone, exactly like the keeper's own lamp —
+stations have no ticker by design. Without the counterpart set, a red light would survive every save of a warehouse that
+no longer exists, which is the defect M15 had to fix for the keeper's comparator.
+
+That set is derived and **not saved**, while a lamp lives in a block state and survives every save, so the cheap guard
+("no pause and nothing lit, so nothing to do") needs one honest pass behind it (review fix):
+
+* **one sweep per load.** `stopsSwept` suppresses the guard until a pass has looked at *every* production station of the
+  aisle, so a lamp that came back from a save with nothing behind it — a station unloaded during the pass that lifted
+  the last pause, a `/setblock`, a pattern deleted while the controller was away — is put out. It costs one block entity
+  lookup per production station, once; afterwards a warehouse that has never lost a batch resolves no station at all
+  again.
+* **an unloaded station is remembered, not forgotten.** Its lamp can neither be read nor written, so it stays in the set
+  and the next pass that can reach it decides. Dropping it was what could empty both the set and the pause map and make
+  the guard return for ever.
+* **a station that joins the aisle has its lamp decided at once** (`lightOrClearProductionStop` from the membership
+  probe), because the sweep flag may already be set for the stations that were there before it.
+
+**A pause for an item whose last pattern was deleted can be lifted by no station and by no keeper.** It blocks nothing —
+an item nothing makes cannot be planned anyway — but writing the pattern again is then the only way to reach it. Recorded
+here rather than guarded in code.
 
 **Only from the row that really governs the item** (review fix). A pause is held per item, and a keeper may hold a
 second, **shadowed** row for the same item — a row that applies nothing at all. Without the check, scrolling the reserve
@@ -1954,7 +2583,8 @@ The pause is kept **in the controller**, keyed by item (at most one rule governs
 same reason the rule copy is: it has to be known before the first evaluation after a world load, or a restart would
 quietly resume ordering into a machine that already swallowed a batch. It is not kept in the keeper, whose chunk may be
 unloaded exactly when an order fails. Deleting the rule takes the pause with it (`pruneStockPauses`), because a rule
-that is gone governs nothing to resume.
+that is gone governs nothing to resume — **but only a rule-born one** (M20): a pause armed by a click, a redstone request
+or a step has no rule to be forgotten with and is lifted by a player alone.
 
 #### 3.6.5 What a player is shown
 
@@ -2050,6 +2680,15 @@ The middle row is the reason the whole decision is **server-side**: a click for 
 protects, and the screen has never been told either the pattern or what its ingredients are promised to. It is also
 where part 1's reserve boundary bites in the player's direction — automation is *refused* those ingredients (§3.6.1),
 a player is *asked* about them.
+
+**Since M20 the middle row spans the whole chain** (§3.5.6). The panel is measured with `RequestConfirmation#ofPlan` over
+the plan's **`leafDemand`** — what the chain really takes **out of the racks**, per key — instead of over one pattern's
+ingredients, so a single click on a chest can honestly say "this spends 6 of the 32 Oak Logs held in reserve" about logs
+two steps away. An intermediate a step of the plan *makes* is deliberately not in that map: the racks do not hold it, so no
+reserve of it can be spent. The last row is unchanged and still measures what **stays** of the **ordered** item, because
+that is the only key the clicked item's own maximum judges; every intermediate is checked against *its* own maximum at plan
+time and refuses the whole plan outright (`PlanRefusal.NO_ROOM`), which is a harder answer than a question. Both numbers
+come from the plan the request would really create, so what a player is asked about and what then happens cannot disagree.
 
 **The server decides, and it decides again.** The flow is one payload in each direction:
 
@@ -2506,8 +3145,10 @@ The table above is covered by automated tests. What only a running game can reac
 | `collectPollIntervalTicks` | 20 | how often a controller re-reads the inventory behind a gated-open **collecting** warehouse port without being told to (M18, issue #13). It covers the machines that change their inventory without notifying their neighbours — a furnace's result slot, several Create blocks; a change hint always overtakes it, and a port whose gate is shut is not read at all. Range 1–1200: the cost of a lower value is at most one bounded read per collecting port per interval, out of `maxSnapshotsPerTick` (§3.2.4) |
 | `productionBufferSlots` | 9 | buffer of a warehouse production station (M11, world restart) |
 | `maxProductionPatterns` | 4 | pattern slots of one production station; a pattern is a 3x3 grid plus one result (M11) |
-| `maxProductionOrders` | 8 | production orders one controller runs at the same time; each promises its ingredients (M11) |
-| `productionOrderTimeoutTicks` | 6000 | ticks an order may make no progress before it gives up (5 minutes). Every delivery, state change and arriving result pushes the deadline out, so only a genuinely stuck order times out (§3.5.3) |
+| `maxProductionOrders` | 12 | production orders one controller runs at the same time; each promises its ingredients (M11). **8 → 12 in M20**, because a chain holds one order per step and 8 slots made a three-step plan plus one restock order the whole aisle. It is also the real ceiling on a chain's length: a plan that does not fit the **free** slots is refused with `PRODUCTION_BUSY` (§3.5.6) |
+| `productionOrderTimeoutTicks` | 6000 | ticks an order may make no progress before it gives up (5 minutes). Every delivery, state change and arriving result pushes the deadline out, so only a genuinely stuck order times out (§3.5.3). An order **waiting for a step of its own chain** has no running deadline at all and starts its timeout over when its last step ends, so the worst-case lifetime of a chain is its step count times this number (§3.5.6) |
+| `maxProductionPlanSteps` | 32 | production orders **one order** may create, the ordered item's own included (M20, issue #4) — the bound on how long a chain may be, since every level costs at least one step. **1 switches recursion off completely** and the warehouse orders exactly as it did before M20. There is deliberately **no** depth key: termination comes from the planner's cycle check, not from a counter (§3.5.6). Hard-capped at 1024 |
+| `maxPlanIngredientItems` | 256 | the largest number of **ingredient items** one order may put into your machines, counted over **every** step of its chain (M20) — the number that really bounds what one click can lose, the plan-wide form of `maxRestockIngredientItems`. A larger order is made **smaller** until it fits, and one run of the ordered item is always allowed (§3.5.4, §3.5.6) |
 | `stockKeeperRows` | 6 | rule rows a newly placed warehouse stock keeper offers (M15, world restart). A keeper saved with more rows keeps them all: lowering the value governs the keepers placed from now on, and `maxStockRules` is the knob that bounds what an existing build applies (§3.6) |
 | `maxStockRules` | 32 | stock rules one aisle applies, over all its keepers; the rules beyond it are inert and say so. Lowering it is reversible, because nothing is written back into a keeper (§3.6.2) |
 | `stockRuleIntervalTicks` | 20 | how often a controller judges its stock rules and runs its restocking pass. It drives the keepers' lamps, their comparator output and the automatic orders only; the maximum and the reserve are applied where a job is planned or a request is made (§3.6.2) |
@@ -2528,7 +3169,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks` | 1–128, 1–64, 1–1200 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 1–200, 1–27, 1–1728 |
 | `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–8 |
-| `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–256, 5–1200, 0–64, 0–16, 1–65536 |
+| `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
@@ -2574,18 +3215,22 @@ Ports: 2 accepting      only while a warehouse port of the aisle really accepts 
                         line carries the collecting ports as well ("Ports: 2 accepting, 1 collecting", or
                         "Ports: 1 collecting"), each half only while it is above 0
 Rules: 4 · below min 1 · at max 1    only while the aisle really applies stock rules (M15)
-Rules paused: 1                      only while the safety stop holds a rule (M15 part 2)
+Stopped products: 1                  only while the safety stop holds something (M15 part 2; since M20 it counts
+                                     items no rule governs too, which is why it no longer says "Rules paused")
 Chunks: 4 held          only while the aisle really holds its own chunks loaded (M19, §11.7)
 ```
 
-The port line, the two rule lines and the chunk line are **left out entirely** unless they say something: a display has few rows, and
+The port line, the rule line, the stopped line and the chunk line are **left out entirely** unless they say something: a display has few rows, and
 "Rules: 0 · below min 0 · at max 0" or "Ports: 0 accepting" would push a number a player asked for off a four-tube
 board. The port count is the other explanation — next to the at-maximum count — for a warehouse input that is backing up,
 and it is the same number the controller's goggles show, so board and goggles agree (§3.2.3). The at-maximum count is
 what explains a warehouse input backing up (§3.6.2), so a board watching the aisle can show it rather than only the
-goggles. The **paused** count gets a line of its own rather than a fourth number on the first one, because it is the only
-rule state that asks a player to go and look at a machine (§3.6.4). All four counts are the controller's own cached
-numbers, so a pull stays a handful of field reads.
+goggles. The **stopped** count gets a line of its own rather than a fourth number on the first one, because it is the only
+state here that asks a player to go and look at a machine (§3.6.4) — and since M20 it deliberately sits outside the
+stock-rule block and no longer speaks of rules: a lost batch of any order arms the stop, so the item it holds is regularly
+an intermediate of a chain that no rule governs, and the line can stand on an aisle with no stock keeper at all. Its
+wording is the production station's, because that station is where a player lifts it. All four counts are the controller's
+own cached numbers, so a pull stays a handful of field reads.
 
 Both numbers of the "used / total" line are drawn from the same population, the **counted** inventories: locations that
 read an inventory another location already counts (§3.1.1 — a double chest behind two interfaces, an item vault behind
@@ -2790,12 +3435,18 @@ What it still cannot do, stated plainly because a player will otherwise read the
 |---|---|
 | the linked crane has a job (`HOLDING` and `WAITING_FOR_TARGET` included) | `CRANE_JOB` |
 | a retrieval request is open (§7.2) | `OPEN_REQUESTS` |
-| a production order is open — an **automatic restock order is one of these** (§3.6.3) | `PRODUCTION_ORDERS` |
+| a production order is open — an **automatic restock order is one of these** (§3.6.3), and since M20 so is **every step of a production plan** (§3.5.6) | `PRODUCTION_ORDERS` |
 | a gated-open collecting port has something pending — **only** with the separate opt-in (§3.2.4) | `COLLECTING` |
 
 The precedence is exactly that order, so the goggle line names the most specific cause. An aisle whose *only* work is a
 pending collect and which is over the opt-in's own cap reports `AT_COLLECT_LIMIT` rather than nothing: a setting that
 changes what an aisle does has to be visible to the operator who set it (M19 review).
+
+**A production plan needed nothing new here** (M20): every step is an open production order, so `markChunkKeepDirty()`
+already fires on every start and end and an aisle holds for as long as the chain runs. The worst case a chain can ask for
+is its step count times `productionOrderTimeoutTicks` — comfortably inside the default `maxHoldTicks` of one hour — and an
+order that is waiting for a step of its own chain is still an open order, which is what keeps the hold alive across the
+gap while a player's machine works.
 
 **Buffered items in a warehouse input are deliberately not work.** A buffer cannot change while its own chunk does not
 tick, so it can never *appear* while the aisle is unloaded, and the moment it is planned it becomes a crane job. As a

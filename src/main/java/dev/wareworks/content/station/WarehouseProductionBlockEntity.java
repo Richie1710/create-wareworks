@@ -1,9 +1,12 @@
 package dev.wareworks.content.station;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+
+import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.utility.IInteractionChecker;
@@ -31,6 +34,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.capabilities.Capabilities;
@@ -136,6 +140,149 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         return false;
     }
 
+    // --- the safety stop ---------------------------------------------------------------------------------------------
+
+    /**
+     * Server: which of the products this station's own patterns make the <b>safety stop</b> is holding, with the cost of
+     * each (M20, issue #4, ADR-032). Empty for a station whose machines work, which is every station of a warehouse
+     * that has never lost a batch.
+     * <p>
+     * <b>This is the one answer four surfaces are built from</b> — the screen's stopped row, the goggle lines, the block
+     * state and the chat line a resume writes — so a player cannot be told one thing by the block and another by its
+     * screen. The pause itself stays in the controller, keyed by item: this only turns it around into the question a
+     * player standing in front of a machine actually asks.
+     * <p>
+     * Cost: one map lookup per pattern of this station, no world search and no inventory read. Two patterns that make the
+     * same item report it once, in pattern order.
+     */
+    public List<StoppedProduct> stoppedProducts() {
+        if (level == null || level.isClientSide || isRemoved())
+            return List.of();
+        return stoppedProducts(controller().orElse(null));
+    }
+
+    /**
+     * {@link #stoppedProducts()} against a controller the caller has already resolved, so the controller's own pass over
+     * its production stations does not look each one up again.
+     *
+     * @param controller the aisle's controller, or {@code null} when this station belongs to no loaded warehouse — which
+     *                   has no pauses to report
+     */
+    List<StoppedProduct> stoppedProducts(@Nullable WarehouseControllerBlockEntity controller) {
+        if (controller == null)
+            return List.of();
+        List<StoppedProduct> stopped = new ArrayList<>(1);
+        for (ProductionPattern<ItemKey> pattern : patterns.patterns()) {
+            ItemKey result = pattern.result().key();
+            if (stopped.stream().anyMatch(entry -> entry.key().equals(result)))
+                continue; // two patterns may make the same item; it is stopped once
+            controller.stockRulePause(result).ifPresent(pause -> stopped.add(StoppedProduct.of(result, pause)));
+        }
+        return List.copyOf(stopped);
+    }
+
+    /**
+     * Server: a player has looked at the machine behind this station and says it is worth another batch — the way back
+     * from the <b>safety stop</b> for the items this station's own patterns make (ADR-027, widened by ADR-032, M20).
+     * <p>
+     * <b>Why here.</b> An order that ended with ingredients already in a machine and nothing coming back stops the
+     * warehouse from making that item until a player resumes it, and since M20 that covers every kind of order — a click,
+     * a redstone pulse and a rule's own refill alike. The stock keeper's own resume only reaches an item one of its rules
+     * <i>governs</i>, and the item a chain loses a batch of is normally an intermediate that no rule governs at all, so
+     * without this the stop had no way back on an aisle without the right keeper row. The station is the right block for
+     * it: it is the one standing in front of the machine that swallowed the batch.
+     * <p>
+     * It stays a <b>deliberate</b> action and never a timer: the warehouse cannot tell a fixed machine from a broken one,
+     * so only a player may say that another batch is worth trying. It resumes only what <i>this station's</i> patterns
+     * make, so a click here says nothing about anybody else's machine.
+     * <p>
+     * The <b>cost</b> of each stop is read before it is lifted and handed back with it, because a pause that is gone can
+     * no longer say what it cost — and what it cost is the one thing a player has to be told
+     * ({@link #tellResumed(Player, List)}).
+     *
+     * @return what the warehouse makes again and what each of those stops cost, in pattern order; empty when none of
+     *         this station's products was stopped
+     */
+    public List<StoppedProduct> resumeStoppedProducts() {
+        if (level == null || level.isClientSide || isRemoved())
+            return List.of();
+        WarehouseControllerBlockEntity controller = controller().orElse(null);
+        if (controller == null)
+            return List.of();
+        List<StoppedProduct> resumed = new ArrayList<>(1);
+        for (StoppedProduct stopped : stoppedProducts(controller)) {
+            if (controller.resumeStockRule(stopped.key()))
+                resumed.add(stopped);
+        }
+        return List.copyOf(resumed);
+    }
+
+    /**
+     * Tells {@code player} what a resume did: one line per item, naming the item and the ingredient items that stayed in
+     * the machine — or, for a station nothing of whose products was stopped, that there was nothing here to lift.
+     * <p>
+     * It lives here because <b>two</b> ways in lead to it, a sneak-click on the block and the stopped row of the screen
+     * ({@code ProductionMenu#submitResume}), and a player who used one of them must be told exactly what the other one
+     * would have told them. A click that does nothing silently is a click nobody finds.
+     */
+    public static void tellResumed(Player player, List<StoppedProduct> resumed) {
+        Objects.requireNonNull(player, "player");
+        if (resumed == null || resumed.isEmpty()) {
+            player.displayClientMessage(WareworksLang.translateDirect(WareworksLang.PRODUCTION_NOTHING_STOPPED), false);
+            return;
+        }
+        for (StoppedProduct stopped : resumed) {
+            Component name = stopped.key().toStack().getHoverName();
+            player.displayClientMessage(stopped.unrecovered() > 0L
+                    ? WareworksLang.translateDirect(WareworksLang.PRODUCTION_RESUMED_LOST, name,
+                            Component.literal(Long.toString(stopped.unrecovered())))
+                    : WareworksLang.translateDirect(WareworksLang.PRODUCTION_RESUMED, name), false);
+        }
+    }
+
+    /**
+     * Server: lets this station's block show whether the safety stop is holding anything it makes
+     * ({@link WarehouseProductionBlock#STOPPED}), so a player walking past an aisle sees <b>which</b> machine stopped
+     * without opening anything.
+     * <p>
+     * Written by the controller's rule pass, which is the same beat and the same rule the stock keeper's lamp follows
+     * (M15): only on a real change, and with {@code UPDATE_CLIENTS} alone, because this is something a player reads and
+     * not something a neighbour reacts to. A station whose block was replaced or whose chunk is gone writes nothing.
+     *
+     * @return whether this station now shows the stop, so the controller knows whether any station still has to be
+     *         cleared once the last pause is lifted
+     */
+    public boolean refreshStoppedState(WarehouseControllerBlockEntity controller) {
+        if (level == null || level.isClientSide || isRemoved())
+            return false;
+        return writeStoppedState(!stoppedProducts(controller).isEmpty());
+    }
+
+    /**
+     * Server: this station is not part of a warehouse any more — its controller was broken, its aisle was lost, or it
+     * was turned away from the aisle — so it stops claiming that anything it makes is held: a lamp lives in a block
+     * state and survives every save, and one that outlives the warehouse that lit it is a red light nothing can ever
+     * put out (the counterpart M15 had to add for the stock keeper's comparator). Called by the controller only on a
+     * <b>real</b> loss; a chunk unload leaves everything as it is (ADR-013).
+     */
+    public void clearStoppedState() {
+        if (level == null || level.isClientSide || isRemoved())
+            return;
+        writeStoppedState(false);
+    }
+
+    /** Writes {@link WarehouseProductionBlock#STOPPED}, only on a real change; returns what it now says. */
+    private boolean writeStoppedState(boolean stopped) {
+        BlockState state = getBlockState();
+        if (!state.hasProperty(WarehouseProductionBlock.STOPPED))
+            return false;
+        if (state.getValue(WarehouseProductionBlock.STOPPED) != stopped)
+            // UPDATE_CLIENTS and nothing else: the lamp is what a player sees, not something neighbours react to.
+            level.setBlock(worldPosition, state.setValue(WarehouseProductionBlock.STOPPED, stopped),
+                    Block.UPDATE_CLIENTS);
+        return stopped;
+    }
+
     // --- screen ------------------------------------------------------------------------------------------------------
 
     /**
@@ -202,21 +349,32 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         Optional<WarehouseControllerBlockEntity> found = controller();
         if (found.isEmpty())
             return new ProductionGoggleSummary(patterns.patternCount(), 0, Optional.empty(), 0L, 0L);
+        List<StoppedProduct> stopped = stoppedProducts(found.get());
+        long unrecovered = 0L;
+        for (StoppedProduct entry : stopped)
+            unrecovered += entry.unrecovered();
         List<ProductionOrder<ItemKey, RackPosition>> orders = found.get().productionOrdersAt(worldPosition);
         int open = 0;
         long missing = 0L;
         long awaited = 0L;
         Optional<ProductionOrderState> oldest = Optional.empty();
+        // Whether the order the line reports is a chain step that is fetching nothing because an earlier step of its
+        // own plan is still running (M20, issue #4). The controller answers it, because it owns the plan, and the same
+        // answer goes into the rows of both screens ({@code WarehouseControllerBlockEntity#waitsForStep}).
+        boolean oldestWaitingForStep = false;
         for (ProductionOrder<ItemKey, RackPosition> order : orders) {
-            if (oldest.isEmpty())
+            if (oldest.isEmpty()) {
                 oldest = Optional.of(order.state());
+                oldestWaitingForStep = found.get().waitsForStep(order);
+            }
             if (!order.isOpen())
                 continue;
             open++;
             missing += order.outstandingIngredients();
             awaited += order.outstandingResult();
         }
-        return new ProductionGoggleSummary(patterns.patternCount(), open, oldest, missing, awaited);
+        return new ProductionGoggleSummary(patterns.patternCount(), open, oldest, missing, awaited, stopped.size(),
+                unrecovered, oldestWaitingForStep);
     }
 
     /**
@@ -233,6 +391,18 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         else
             WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_NO_PATTERNS).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
+        // The safety stop outranks everything else the station could say, exactly as it does on the keeper's lamp and in
+        // its screen: it is the one state a player has to act on, and the pause has already cancelled the orders that
+        // would otherwise be reported below (M20, ADR-032).
+        if (production.anyStopped()) {
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_STOPPED, production.stoppedProducts())
+                    .style(ChatFormatting.RED).forGoggles(tooltip, 1);
+            if (production.unrecovered() > 0)
+                WareworksLang.countLine(WareworksLang.KEEPER_PAUSED_LOST, production.unrecovered())
+                        .forGoggles(tooltip, 2);
+            WareworksLang.translate(WareworksLang.PRODUCTION_RESUME_HINT).style(ChatFormatting.DARK_GRAY)
+                    .forGoggles(tooltip, 2);
+        }
         if (production.openOrders() == 0) {
             WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_NO_ORDERS).style(ChatFormatting.DARK_GRAY)
                     .forGoggles(tooltip, 1);
@@ -240,7 +410,12 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         }
         WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_ORDERS, production.openOrders())
                 .forGoggles(tooltip, 1);
-        production.oldestState().ifPresent(state -> WareworksLang.productionState(state).forGoggles(tooltip, 2));
+        // The state of the oldest order — or, for a chain step the aisle is deliberately handing nothing, what it is
+        // really doing: the same sentence the terminal's step panel and this station's own rows show (M20, issue #4).
+        if (production.oldestWaitingForStep())
+            WareworksLang.productionWaitingForStep().forGoggles(tooltip, 2);
+        else
+            production.oldestState().ifPresent(state -> WareworksLang.productionState(state).forGoggles(tooltip, 2));
         if (production.missingIngredients() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_MISSING, production.missingIngredients())
                     .forGoggles(tooltip, 2);

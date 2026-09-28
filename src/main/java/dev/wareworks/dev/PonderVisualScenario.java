@@ -80,8 +80,10 @@ public final class PonderVisualScenario implements VisualScenario {
             // M17: retrieving, plus the two port scenes (the second of which the keeper shows as well). M18 adds the
             // third direction, which the production station shows as well.
             new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 4),
-            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 2),
-            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 2),
+            // M20 (issue #4) adds the chain, which both of these blocks show: the plan is made by a click at a
+            // terminal and run at the stations.
+            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 3),
+            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 3),
             new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3));
 
     @Override

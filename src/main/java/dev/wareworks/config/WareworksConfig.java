@@ -4,6 +4,7 @@ import org.apache.commons.lang3.tuple.Pair;
 
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
+import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.stock.RestockLimits;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
@@ -201,6 +202,29 @@ public final class WareworksConfig {
         return get(SERVER.productionOrderTimeoutTicks);
     }
 
+    /**
+     * Production orders one click may create at once, the ordered item's own included (M20, issue #4): the bound on how
+     * long a chain may be. <b>1 switches recursion off completely</b> and the warehouse orders exactly as it did before
+     * M20.
+     */
+    public static int maxProductionPlanSteps() {
+        return get(SERVER.maxProductionPlanSteps);
+    }
+
+    /**
+     * The largest number of ingredient items one production plan may hand to machines, over every one of its steps
+     * (M20, issue #4) — the number that really bounds what one click can lose, the way
+     * {@link #maxRestockIngredientItems()} bounds an automatic order.
+     */
+    public static int maxPlanIngredientItems() {
+        return get(SERVER.maxPlanIngredientItems);
+    }
+
+    /** The bounds one production plan obeys, as one value for the planner (M20, issue #4). */
+    public static PlanLimits planLimits() {
+        return new PlanLimits(maxProductionPlanSteps(), maxPlanIngredientItems());
+    }
+
     /** How many stock rules one aisle applies at most; the rules beyond it are inert (M15). */
     public static int maxStockRules() {
         return get(SERVER.maxStockRules);
@@ -316,6 +340,8 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue collectPollIntervalTicks;
         public final ModConfigSpec.IntValue maxProductionOrders;
         public final ModConfigSpec.IntValue productionOrderTimeoutTicks;
+        public final ModConfigSpec.IntValue maxProductionPlanSteps;
+        public final ModConfigSpec.IntValue maxPlanIngredientItems;
         public final ModConfigSpec.IntValue maxStockRules;
         public final ModConfigSpec.IntValue stockRuleIntervalTicks;
         public final ModConfigSpec.IntValue maxRestockOrders;
@@ -470,8 +496,11 @@ public final class WareworksConfig {
             maxProductionOrders = builder
                     .comment("Maximum number of production orders one controller runs at the same time.",
                             "Each order promises its ingredients, so they are no longer available to other requests "
-                                    + "until it finishes, times out or is cancelled.")
-                    .defineInRange("maxProductionOrders", 8, 1, 64);
+                                    + "until it finishes, times out or is cancelled.",
+                            "A recursive order holds ONE order per step, so raise this together with "
+                                    + "maxProductionPlanSteps: a chain that does not fit into the free slots is "
+                                    + "refused instead of started.")
+                    .defineInRange("maxProductionOrders", 12, 1, 64);
             productionOrderTimeoutTicks = builder
                     .comment("[in Ticks] How long a production order may make no progress before it gives up.",
                             "Default 6000 ticks = 5 minutes. Every delivery, every state change and every result item "
@@ -479,6 +508,26 @@ public final class WareworksConfig {
                                     + "times out. A timed-out order releases what it still promised; ingredients your "
                                     + "machine has already taken are not recovered.")
                     .defineInRange("productionOrderTimeoutTicks", 6000, 200, 72000);
+            maxProductionPlanSteps = builder
+                    .comment("Maximum number of production orders ONE order may create, the ordered item's own "
+                            + "included.",
+                            "This is what lets you order an item whose ingredients have to be made first: the "
+                                    + "warehouse works out the whole chain at the moment you click and either creates "
+                                    + "every step at once or refuses the order and names the item that is really "
+                                    + "missing.",
+                            "Set it to 1 to switch recursion off completely: the warehouse then orders exactly as it "
+                                    + "did before, one level deep. There is no separate depth limit - a chain may be "
+                                    + "as deep as it likes as long as it fits into this many steps, into "
+                                    + "maxPlanIngredientItems and into the free slots of maxProductionOrders.")
+                    .defineInRange("maxProductionPlanSteps", 32, PlanLimits.MIN_STEPS, PlanLimits.MAX_STEPS);
+            maxPlanIngredientItems = builder
+                    .comment("The largest number of INGREDIENT items one order may put into your machines, counted "
+                            + "over every step of its chain.",
+                            "This is what really bounds what one click can lose: the step count bounds how many "
+                                    + "machines are involved, not how much goes into them. A larger order is made "
+                                    + "smaller until it fits, and one run of the ordered item is always allowed.")
+                    .defineInRange("maxPlanIngredientItems", 256, (int) PlanLimits.MIN_INGREDIENT_ITEMS,
+                            (int) PlanLimits.MAX_INGREDIENT_ITEMS);
             maxStockRules = builder
                     .comment("Maximum number of stock rules one aisle applies, over all its warehouse stock keepers.",
                             "Rules beyond it are inert and say so; lowering the value is reversible, because nothing "

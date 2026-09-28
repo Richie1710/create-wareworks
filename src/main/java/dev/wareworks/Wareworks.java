@@ -12,6 +12,7 @@ import dev.wareworks.command.WareworksCommands;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.crane.CraneServerHooks;
+import dev.wareworks.content.station.ProductionStationHooks;
 import dev.wareworks.data.WareworksDatagen;
 import dev.wareworks.network.WareworksNetwork;
 import dev.wareworks.registry.WareworksArmInteractionPoints;
@@ -82,6 +83,9 @@ public final class Wareworks {
         //    crane's per-server-run diagnostics, which must be reset when a new server starts in the same JVM.
         NeoForge.EVENT_BUS.addListener(GoggleObservers::onPlayerTick);
         CraneServerHooks.register(NeoForge.EVENT_BUS);
+        // M20: the production station's sneak-click resume, which vanilla would otherwise swallow whenever the player
+        // carries anything in the offhand (ProductionStationHooks).
+        ProductionStationHooks.register(NeoForge.EVENT_BUS);
         // 5. Optional chunk loading for aisles that have work (M19, issue #10, ADR-031). The ticket controller must be
         //    registered on the MOD bus and unconditionally: an unregistered controller has its saved tickets stripped
         //    from the level. Its lifecycle hooks and the operator command live on the game bus.

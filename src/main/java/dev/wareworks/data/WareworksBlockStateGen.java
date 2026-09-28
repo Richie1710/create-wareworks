@@ -6,6 +6,7 @@ import com.tterrag.registrate.util.nullness.NonNullBiConsumer;
 
 import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseOutputBlock;
+import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import net.minecraft.core.Direction;
@@ -90,6 +91,33 @@ public final class WareworksBlockStateGen {
                     .modelFile(state.getValue(WarehouseStockKeeperBlock.PAUSED) ? paused
                             : state.getValue(WarehouseStockKeeperBlock.LIT) ? lit : dark)
                     .rotationY(rotationOnto(state.getValue(WarehouseStockKeeperBlock.FACING)))
+                    .build());
+        };
+    }
+
+    /**
+     * The warehouse production station's blockstate (M20, issue #4, ADR-032): the hand-made {@code block} model turned
+     * onto {@code FACING}, with {@code block_stopped} in its place while the <b>safety stop</b> holds something this
+     * station makes ({@link WarehouseProductionBlock#STOPPED}).
+     * <p>
+     * The two models are the same geometry and differ in one texture: the ring around the aisle opening and the one
+     * around the machine opening are a lit <b>rose quartz lamp</b> instead of brass — the very texture the stock
+     * keeper's own pause lamp uses, so the safety stop looks the same wherever a player meets it. The cue therefore reads
+     * from inside the aisle, where no value box and no drawn digit may go, and from the machine side, which is where a
+     * player stands when they come to fix the machine.
+     * <p>
+     * Create's {@code BlockStateGen.horizontalBlockProvider} would give both {@code STOPPED} values the same model, which
+     * is right for a stored edge nobody can see and wrong for a lamp.
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            productionBlockProvider() {
+        return (context, provider) -> {
+            String folder = "block/" + context.getName() + "/";
+            ModelFile working = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+            ModelFile stopped = provider.models().getExistingFile(provider.modLoc(folder + "block_stopped"));
+            provider.getVariantBuilder(context.getEntry()).forAllStates(state -> ConfiguredModel.builder()
+                    .modelFile(state.getValue(WarehouseProductionBlock.STOPPED) ? stopped : working)
+                    .rotationY(rotationOnto(state.getValue(WarehouseProductionBlock.FACING)))
                     .build());
         };
     }

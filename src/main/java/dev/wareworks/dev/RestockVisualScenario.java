@@ -26,6 +26,7 @@ import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
+import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.client.gui.WarehouseStockKeeperScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
 import dev.wareworks.config.WareworksConfig;
@@ -41,6 +42,7 @@ import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.StockKeeperGoggleSummary;
 import dev.wareworks.content.station.StockKeeperRules;
 import dev.wareworks.content.station.StockKeeperScreenState;
+import dev.wareworks.content.station.StoppedProduct;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
@@ -253,6 +255,13 @@ public final class RestockVisualScenario implements VisualScenario {
     private static final CameraView AT_BASIN = CameraView.of("basin", 4.4, 3.5, 5.4, 5.5, 0.85, 3.5);
     /** Close on the production station and the arm beside it, for the delivered ingredients. */
     private static final CameraView AT_STATION = CameraView.of("station", 9.8, 3.0, 5.6, 6.2, 1.0, 1.8);
+    /**
+     * In the aisle in front of the production station, for its <b>screen</b> (M20). {@link #AT_STATION} stands outside
+     * the rack wall with the machine, which is more than {@code blockInteractionRange + 4} blocks from the station: a
+     * container opened from there is closed again by the server on the very next tick, whatever the screen shows. The
+     * same reason {@link #AT_KEEPER} stands two blocks from its keeper.
+     */
+    private static final CameraView AT_STATION_FACE = CameraView.of("station-face", 8.3, 2.0, 0.35, 6.5, 0.5, 1.05);
     /** In the aisle, two blocks from the keeper: close enough for its goggles and for its screen to stay open. */
     private static final CameraView AT_KEEPER = CameraView.of("keeper", 3.8, 2.0, 0.35, 1.5, 0.5, 1.05);
     /**
@@ -589,7 +598,29 @@ public final class RestockVisualScenario implements VisualScenario {
                         PAUSE_TIMEOUT_TICKS)
                 .server("restock: check the safety stop", this::assertSafetyStop)
                 .camera(AT_KEEPER_FACE)
-                .shot("paused-keeper-block");
+                .shot("paused-keeper-block")
+
+                // M20: the station in front of the machine that swallowed the batch says so itself, on its own block
+                // and in its own screen — the surface a player meets without knowing which keeper row to look at.
+                .server("restock: check what the production station says about the stop",
+                        RestockVisualScenario::assertStationStopped)
+                .camera(AT_STATION)
+                .shot("paused-station-block")
+                .camera(AT_STATION_FACE)
+                .server("restock: open the production station's screen",
+                        RestockVisualScenario::openStationScreen)
+                .until("restock: wait for the station screen",
+                        context -> context.minecraft().screen instanceof WarehouseProductionScreen,
+                        SCREEN_TIMEOUT_TICKS)
+                .until("restock: wait until the station screen knows about the stop",
+                        RestockVisualScenario::stationScreenReady, SCREEN_TIMEOUT_TICKS)
+                .waitTicks(SETTLE_TICKS)
+                .client("restock: check what the station's stopped row says",
+                        RestockVisualScenario::checkStoppedRow)
+                .shot("paused-station-screen")
+                .client("restock: close the station screen", RestockVisualScenario::closeScreen)
+                .until("restock: wait until the station screen is closed",
+                        context -> context.minecraft().screen == null, SCREEN_TIMEOUT_TICKS);
         reach(script, GoggleShots.vanillaReach());
         GoggleShots.shot(script, "restock", AT_KEEPER, "goggles-paused", RestockVisualScenario::keeperPos,
                 RestockVisualScenario::keeperPausedSynced, RestockVisualScenario::checkPausedGoggles);
@@ -1005,7 +1036,7 @@ public final class RestockVisualScenario implements VisualScenario {
         List<String> lines = GoggleShots.lines(context, controllerPos(context.origin()));
         GoggleShots.requireLine(lines, GoggleShots.count(WareworksLang.GOGGLES_STOCK_RULES, RULES));
         GoggleShots.requireLine(lines, GoggleShots.count(WareworksLang.GOGGLES_RULES_BELOW_MINIMUM, 1));
-        GoggleShots.requireNoLine(lines, GoggleShots.count(WareworksLang.GOGGLES_RULES_PAUSED, 1));
+        GoggleShots.requireNoLine(lines, GoggleShots.count(WareworksLang.GOGGLES_PRODUCTION_STOPPED, 1));
         LOGGER.info(PREFIX + "restock: CHECK the controller's goggles say {}", lines);
     }
 
@@ -1019,7 +1050,7 @@ public final class RestockVisualScenario implements VisualScenario {
 
     private static void checkPausedControllerGoggles(VisualContext context) {
         List<String> lines = GoggleShots.lines(context, controllerPos(context.origin()));
-        GoggleShots.requireLine(lines, GoggleShots.count(WareworksLang.GOGGLES_RULES_PAUSED, 1));
+        GoggleShots.requireLine(lines, GoggleShots.count(WareworksLang.GOGGLES_PRODUCTION_STOPPED, 1));
         LOGGER.info(PREFIX + "restock: CHECK the paused controller's goggles say {}", lines);
     }
 
@@ -1598,6 +1629,52 @@ public final class RestockVisualScenario implements VisualScenario {
     }
 
     // --- screens -----------------------------------------------------------------------------------------------------
+
+    /**
+     * The safety stop as the <b>production station</b> reports it (M20, issue #4, ADR-032): the item it makes, why it
+     * stopped and what it cost, plus its own block lamp. The keeper's row is the rule's view of the same stop; this is
+     * the machine's, and it is the one a player finds by walking to the machine.
+     */
+    private static void assertStationStopped(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        List<StoppedProduct> stopped = station(level, dock).stoppedProducts();
+        if (stopped.size() != 1)
+            throw new VisualTestException("the station reports " + stopped.size() + " stopped products, expected one");
+        StoppedProduct only = stopped.getFirst();
+        if (!only.key().equals(DIAMOND) || only.cause() != StockRulePause.Cause.TIMED_OUT
+                || only.unrecovered() != SWALLOWED_IRON)
+            throw new VisualTestException("the station reports " + only + ", expected " + DIAMOND + " timed out with "
+                    + SWALLOWED_IRON + " items lost");
+        if (!level.getBlockState(stationPos(dock)).getValue(WarehouseProductionBlock.STOPPED))
+            throw new VisualTestException("the production station's own stopped lamp is not burning");
+    }
+
+    private static void openStationScreen(MinecraftServer server, VisualContext context) {
+        if (!station(server.overworld(), context.origin()).openScreen(context.serverPlayer(server)))
+            throw new VisualTestException("the production station screen could not be opened for the camera player");
+    }
+
+    private static boolean stationScreenReady(VisualContext context) {
+        return context.minecraft().screen instanceof WarehouseProductionScreen screen
+                && screen.state().anyStopped();
+    }
+
+    /** What the station's screen was sent: one stopped row, for the item this machine makes, with its cost. */
+    private static void checkStoppedRow(VisualContext context) {
+        if (!(context.minecraft().screen instanceof WarehouseProductionScreen screen))
+            throw new VisualTestException("the production station screen is not open (screen: "
+                    + context.minecraft().screen + ")");
+        List<StoppedProduct> stopped = screen.state().stopped();
+        if (stopped.size() != 1 || !stopped.getFirst().key().equals(DIAMOND))
+            throw new VisualTestException("the station's screen shows " + stopped + ", expected one row for "
+                    + DIAMOND);
+        if (screen.state().unrecoveredTotal() != SWALLOWED_IRON)
+            throw new VisualTestException("the station's screen names " + screen.state().unrecoveredTotal()
+                    + " lost items, expected " + SWALLOWED_IRON);
+        LOGGER.info(PREFIX + "restock: the station's stopped row names {} ({}), {} items lost",
+                stopped.getFirst().key(), stopped.getFirst().cause(), stopped.getFirst().unrecovered());
+    }
 
     private static void openKeeperScreen(MinecraftServer server, VisualContext context) {
         if (!keeper(server.overworld(), context.origin()).openScreen(context.serverPlayer(server)))

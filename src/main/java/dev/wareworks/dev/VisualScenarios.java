@@ -24,6 +24,7 @@ final class VisualScenarios {
             Map.entry(StockKeeperVisualScenario.NAME, StockKeeperVisualScenario::new),
             Map.entry(StockRulesVisualScenario.NAME, StockRulesVisualScenario::new),
             Map.entry(RestockVisualScenario.NAME, RestockVisualScenario::new),
+            Map.entry(ChainVisualScenario.NAME, ChainVisualScenario::new),
             Map.entry(DisplayVisualScenario.NAME, DisplayVisualScenario::new),
             Map.entry(ShowcaseVisualScenario.NAME, ShowcaseVisualScenario::new),
             Map.entry(ArmVisualScenario.NAME, ArmVisualScenario::new),
