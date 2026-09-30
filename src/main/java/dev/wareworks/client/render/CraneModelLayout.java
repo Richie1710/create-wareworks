@@ -27,18 +27,59 @@ public final class CraneModelLayout {
     public static final float WHEEL_RADIUS_PX = 2.0F;
     /** Height of the wheel axles: the wheels stand on the rail head. */
     public static final float WHEEL_AXLE_Y_PX = RAIL_TOP_PX + WHEEL_RADIUS_PX;
-    /** Axle position of the front wheel (towards the aisle direction). */
-    public static final float FRONT_WHEEL_Z_PX = 3.5F;
-    /** Axle position of the rear wheel (towards the dock end). */
-    public static final float REAR_WHEEL_Z_PX = 12.5F;
+    /**
+     * Axle position of the front wheel (towards the aisle direction). Moved in from 3.5 px in M21: the chassis had to
+     * come back from the block edge so that the machine can swing a quarter turn without sweeping into the rack blocks
+     * beside a corner ({@link #TURN_SWEEP_RADIUS_PX}), and a wheel must stay inside the chassis at every angle.
+     */
+    public static final float FRONT_WHEEL_Z_PX = 4.5F;
+    /** Axle position of the rear wheel (towards the dock end); moved in with {@link #FRONT_WHEEL_Z_PX}. */
+    public static final float REAR_WHEEL_Z_PX = 11.5F;
     /** Top of the chassis: the mast stands on it and the carriage rests on it at level 0. */
     public static final float CHASSIS_TOP_PX = 8.0F;
+
+    /**
+     * Largest distance from the block centre, in model pixels, any part of the machine may reach in the horizontal
+     * plane (M21, ADR-033).
+     * <p>
+     * Since the crane turns corners, the whole tower rotates about the centre of the block it stands on, so every
+     * corner of every part sweeps a circle of its own distance from that centre. Half a block is
+     * {@value #BLOCK_CENTER_PX} px, and the blocks beside a corner are rack positions holding a player's chests — so
+     * anything reaching further than this visibly cuts through them while it swings.
+     * <p>
+     * {@value #TURN_SWEEP_RADIUS_PX} px leaves an accepted graze of at most 1 px, in the family of the block-item
+     * lintel accepted in M4; pulling every part inside {@value #BLOCK_CENTER_PX} px would undo M5's visual-weight pass
+     * and leave an 11 px machine. It is not a lazy limit but the closest round one to the geometry: a square body 12 px
+     * across — the chassis, and the mast that stands on it — already has its corners 8.49 px from the centre, so
+     * <b>only a pole could stay inside half a block</b>, and what is left to choose is how much of a corner may reach
+     * out. What it reaches into is a corner of a body, never a face: for the ~3 ticks of a swing, at the one angle
+     * where a corner points straight at a neighbour.
+     * <p>
+     * Below the rail head this budget does not apply at all, because down there the neighbouring block is not air but
+     * the solid bed of the next rail; nothing but the wheels reaches that low, and they stay inside the block at every
+     * angle. {@code CraneModelLayoutTest#theMachineSweepStaysInsideItsBlockWhileItTurns} and
+     * {@code #nothingBelowTheRailHeadLeavesItsOwnBlockWhileItTurns} pin both at every yaw, for every part, the carried
+     * items included, so a later model edit cannot widen them silently.
+     */
+    public static final float TURN_SWEEP_RADIUS_PX = 9.0F;
 
     /** Scale of Create's shaftless cogwheel (18 px across) used as the drive cog on the chassis front. */
     public static final float DRIVE_COG_SCALE = 0.35F;
     /** Centre of the drive cog; it turns about the aisle axis in front of the chassis. */
     public static final float DRIVE_COG_Y_PX = 6.5F;
-    public static final float DRIVE_COG_Z_PX = 0.0F;
+    /**
+     * Centre of the drive cog along the aisle. Moved in from the block face (0 px) in M21 so that the cog, too, stays
+     * within {@link #TURN_SWEEP_RADIUS_PX} while the machine swings a quarter turn; it still stands proud of the
+     * chassis front, and its back face is not coplanar with it.
+     */
+    public static final float DRIVE_COG_Z_PX = 1.0F;
+    /**
+     * Radius of Create's {@code cogwheel_shaftless} model in its own frame, in model pixels: its teeth reach from
+     * {@code -1} to {@code 17}, so 9 px from the block centre (verified against the Create 6.0.10 assets).
+     */
+    public static final float DRIVE_COG_MODEL_RADIUS_PX = 9.0F;
+    /** Half the thickness of that model, in model pixels: the gear plate spans {@code 6..10}. */
+    public static final float DRIVE_COG_MODEL_HALF_DEPTH_PX = 2.0F;
 
     // --- mast -----------------------------------------------------------------------------------------------------
 
@@ -97,6 +138,25 @@ public final class CraneModelLayout {
      */
     public static double wheelAngle(double travelBlocks) {
         return -travelBlocks * PIXELS_PER_BLOCK / WHEEL_RADIUS_PX;
+    }
+
+    /**
+     * How far a model corner at {@code (xPx, zPx)} is from the block centre — its sweep radius when the machine turns
+     * about that centre. Compared against {@link #TURN_SWEEP_RADIUS_PX}.
+     */
+    public static double sweepRadiusPx(double xPx, double zPx) {
+        return Math.hypot(xPx - BLOCK_CENTER_PX, zPx - BLOCK_CENTER_PX);
+    }
+
+    /**
+     * Sweep radius of the drive cog, which is not one of this mod's models: Create's cogwheel stood up to face the
+     * aisle, scaled by {@link #DRIVE_COG_SCALE} about its own centre and moved to {@link #DRIVE_COG_Z_PX}. Its widest
+     * corner is half its scaled diameter to the side and half its scaled thickness in front.
+     */
+    public static double driveCogSweepRadiusPx() {
+        double half = DRIVE_COG_MODEL_RADIUS_PX * DRIVE_COG_SCALE;
+        double halfDepth = DRIVE_COG_MODEL_HALF_DEPTH_PX * DRIVE_COG_SCALE;
+        return sweepRadiusPx(BLOCK_CENTER_PX + half, DRIVE_COG_Z_PX - halfDepth);
     }
 
     /** Bottom of the mast cap above the crane's floor, in blocks, for a mast of {@code mastHeight} segments. */

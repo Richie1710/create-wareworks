@@ -15,6 +15,7 @@ import dev.wareworks.content.controller.AisleChunkSpan;
 import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.controller.ChunkKeepReason;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
@@ -22,8 +23,10 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.util.WareworksLang;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -31,7 +34,9 @@ import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
@@ -88,6 +93,10 @@ public final class AisleChunkLoadingGameTests {
     static final String GIVE_UP_RELOAD_BATCH = "wareworkschunkgiveupreload";
     static final String RELEASE_ALL_BATCH = "wareworkschunkreleaseall";
     static final String COLLECT_CAP_BATCH = "wareworkschunkcollectcap";
+    static final String BEND_HOLD_BATCH = "wareworkschunkbendhold";
+    static final String BEND_CAP_BATCH = "wareworkschunkbendcap";
+    static final String BEND_CAP_LOWERED_BATCH = "wareworkschunkbendcaplowered";
+    static final String DEFAULT_CAP_BATCH = "wareworkschunkdefaultcap";
 
     private static final int AISLE_Z = 3;
     private static final int SECOND_AISLE_Z = 9;
@@ -100,6 +109,23 @@ public final class AisleChunkLoadingGameTests {
     private static final int LONG_RAILS = 14;
     /** Rails left after the long aisle is shortened. */
     private static final int SHRUNK_RAILS = 2;
+    /**
+     * Rails of the first aisle of the bent warehouse: {@code x = 2..15} at {@link #AISLE_Z}, so the corner block — the
+     * last rail, which is position 0 of the second aisle as well — sits at {@code x = 15}.
+     * <p>
+     * As long as {@link #LONG_RAILS}, and for the same reason: the inflated box is {@code CORNER_RAILS + 3 = 17} blocks
+     * along the first aisle, and 17 blocks cannot fit into one 16-block chunk column. So this warehouse needs at least
+     * two chunks whatever its alignment, which is what lets a test lower the cap <b>below</b> its footprint at all.
+     */
+    private static final int CORNER_RAILS = 14;
+    /** Rails of the second aisle, running south from the corner block: {@code z = 4..11} at {@code x = 15}. */
+    private static final int BEND_RAILS = 8;
+    /**
+     * The per-warehouse chunk cap this version ships ({@code chunkLoading.maxChunksPerAisle}), raised from M19's 8
+     * because a warehouse is no longer always one straight aisle (M21, ADR-033). A server that had set 8 keeps 8, so
+     * this is read from the spec's default and never from the run directory's config file.
+     */
+    private static final int SHIPPED_CHUNK_CAP = 10;
     private static final int TEST_RPM = 128;
     /**
      * A level cap that is not in the way. It has to be generous rather than exact, because the aisles of tests that
@@ -526,6 +552,221 @@ public final class AisleChunkLoadingGameTests {
     /** Restores the config even when {@link #chunkticketrefusedwhentheaisleneedstoomanychunks} fails. */
     @AfterBatch(batch = CHUNK_CAP_BATCH)
     public static void restoreChunkCapConfig(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    // --- the cap on a warehouse that bends (M21, issue #1, ADR-033) --------------------------------------------------
+
+    /**
+     * A warehouse that <b>bends</b> holds the chunks of <b>every</b> aisle it has, not only the one at the dock — the
+     * union {@link AisleChunkSpan#networkChunks} computes, counted once where two aisles share a column.
+     * <p>
+     * The cap is set to exactly what this warehouse needs, so the boundary is pinned as inclusive too: {@code needs ==
+     * limit} holds, and only {@code needs > limit} refuses.
+     */
+    @GameTest(template = AISLE_PAIR_16X10X13, batch = BEND_HOLD_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void chunkticketheldbyawarehousethatbends(GameTestHelper helper) {
+        AisleFixture aisle = bentWarehouse(helper);
+        BlockPos trigger = aisle.rackPos(OUTPUT).above();
+        helper.onEachTick(() -> assertNoLeak(helper));
+        if (!cornersEnabled()) {
+            assertCornersAreOff(helper, aisle);
+            return;
+        }
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(1, 0, 1);
+                    assertBends(helper, aisle);
+                })
+                .thenExecute(() -> {
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxTicketedAislesPerLevel, MANY_AISLES);
+                    // Exactly enough, measured from the warehouse itself: where a GameTest structure sits inside its
+                    // chunks is not knowable in advance, so every number here is relative to the real footprint.
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxChunksPerAisle,
+                            aisle.controller().chunkFootprintSize());
+                    aisle.requestAt(OUTPUT, IRON.toStack(), REQUESTED, trigger);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(held(helper, aisle),
+                        aisle.controller().chunkFootprintSize(),
+                        "the warehouse holds its whole footprint, both aisles, at needs == limit"))
+                .thenExecute(() -> {
+                    LongSet heldNow = heldChunks(helper, aisle);
+                    helper.assertTrue(heldNow.containsAll(footprintOf(helper, aisle, CORNER_RAILS)),
+                            "every chunk of the aisle at the dock is in it");
+                    helper.assertTrue(heldNow.contains(farEndChunk(helper, aisle)),
+                            "and so is the chunk of the far end of the second aisle");
+                    helper.assertValueEqual(aisle.controller().chunkKeepReason(), ChunkKeepReason.OPEN_REQUESTS,
+                            "held for the open request");
+                    assertNotOverCap(helper, aisle);
+                })
+                .thenSucceed();
+    }
+
+    /** Restores the config even when {@link #chunkticketheldbyawarehousethatbends} fails. */
+    @AfterBatch(batch = BEND_HOLD_BATCH)
+    public static void restoreBendHoldConfig(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /**
+     * The M19 rule survives the corner unchanged: a warehouse over the cap holds <b>nothing at all</b>, never a partial
+     * hold. What M21 adds is that the shortfall is <b>loud</b> — the number this warehouse would need is on the
+     * controller's goggle line <b>and</b> in {@code /wareworks chunks}, next to the limit that stopped it.
+     * <p>
+     * The listing is what this test is really about. Before M21 the only surface was the goggle line, and a warehouse
+     * that bends is exactly the one an operator meets over the cap without having changed a setting: it grew a second
+     * aisle, and a second aisle at right angles covers chunk columns the first one never did.
+     */
+    @GameTest(template = AISLE_PAIR_16X10X13, batch = BEND_CAP_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void chunkticketrefusedwhenthewarehousethatbendsneedstoomanychunks(GameTestHelper helper) {
+        // Two item types, so the second request below really is a second request: one for the same item and the same
+        // output would be merged into the open one and would never mark the warehouse for a fresh chunk decision.
+        AisleFixture aisle = bentWarehouse(helper, IRON.toStack(STORED_IRON), DIAMOND.toStack(STORED_IRON));
+        BlockPos trigger = aisle.rackPos(OUTPUT).above();
+        helper.onEachTick(() -> assertNoLeak(helper));
+        int[] needed = new int[1];
+        if (!cornersEnabled()) {
+            assertCornersAreOff(helper, aisle);
+            return;
+        }
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(1, 0, 1);
+                    assertBends(helper, aisle);
+                })
+                .thenExecute(() -> {
+                    needed[0] = aisle.controller().chunkFootprintSize();
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxTicketedAislesPerLevel, MANY_AISLES);
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxChunksPerAisle, needed[0] - 1);
+                    aisle.requestAt(OUTPUT, IRON.toStack(), REQUESTED, trigger);
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.controller().chunkKeepReason(), ChunkKeepReason.TOO_MANY_CHUNKS,
+                            "refused by the per-warehouse cap");
+                    helper.assertValueEqual(aisle.controller().chunkKeepChunks(), needed[0],
+                            "and the goggle line names what the whole warehouse would need");
+                })
+                .thenIdle(SETTLE_TICKS)
+                .thenExecute(() -> {
+                    helper.assertValueEqual(held(helper, aisle), 0,
+                            "nothing at all is held, not even the aisle at the dock");
+                    helper.assertTrue(aisle.controller().openRequestCount() > 0, "and the work is still there");
+                    assertOverCapRow(helper, aisle, needed[0]);
+                })
+                // Raised to exactly what it needs and the hold appears: the refusal is about the number, nothing else.
+                .thenExecute(() -> {
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxChunksPerAisle, needed[0]);
+                    aisle.requestAt(OUTPUT, DIAMOND.toStack(), REQUESTED, trigger);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(held(helper, aisle), needed[0],
+                        "the whole warehouse holds once the limit allows it"))
+                .thenExecute(() -> assertNotOverCap(helper, aisle))
+                .thenSucceed();
+    }
+
+    /** Restores the config even when {@link #chunkticketrefusedwhenthewarehousethatbendsneedstoomanychunks} fails. */
+    @AfterBatch(batch = BEND_CAP_BATCH)
+    public static void restoreBendCapConfig(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /**
+     * The cap lowered <b>under a bending warehouse that already holds</b>: it lets go of everything at once, says which
+     * cap did it with the number it would need, and appears in the operator's listing. The straight-aisle half of this
+     * is {@link #chunkticketreleasedwhenacapislowered}; this is the one an operator really runs into, because the way
+     * to exceed the cap without touching the config is to lay one more aisle.
+     */
+    @GameTest(template = AISLE_PAIR_16X10X13, batch = BEND_CAP_LOWERED_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void chunkticketreleasedwhenacapisloweredunderabendingwarehouse(GameTestHelper helper) {
+        AisleFixture aisle = bentWarehouse(helper, IRON.toStack(STORED_IRON), DIAMOND.toStack(STORED_IRON));
+        BlockPos trigger = aisle.rackPos(OUTPUT).above();
+        helper.onEachTick(() -> assertNoLeak(helper));
+        int[] needed = new int[1];
+        if (!cornersEnabled()) {
+            assertCornersAreOff(helper, aisle);
+            return;
+        }
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(1, 0, 1);
+                    assertBends(helper, aisle);
+                })
+                .thenExecute(() -> {
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxTicketedAislesPerLevel, MANY_AISLES);
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxChunksPerAisle, 64);
+                    aisle.requestAt(OUTPUT, IRON.toStack(), REQUESTED, trigger);
+                })
+                .thenWaitUntil(() -> {
+                    needed[0] = aisle.controller().chunkFootprintSize();
+                    helper.assertValueEqual(held(helper, aisle), needed[0], "the whole warehouse holds first");
+                })
+                .thenExecute(() -> ConfigOverrides.set(helper, WareworksConfig.SERVER.maxChunksPerAisle, needed[0] - 1))
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(held(helper, aisle), 0,
+                            "the lowered cap made the whole warehouse let go, not keep the aisle at the dock");
+                    helper.assertValueEqual(aisle.controller().chunkKeepReason(), ChunkKeepReason.TOO_MANY_CHUNKS,
+                            "and the goggles name the cap that did it");
+                    helper.assertValueEqual(aisle.controller().chunkKeepChunks(), needed[0],
+                            "with what the warehouse would need");
+                })
+                .thenIdle(SETTLE_TICKS)
+                .thenExecute(() -> {
+                    helper.assertValueEqual(held(helper, aisle), 0, "and nothing comes back while the cap stays");
+                    assertOverCapRow(helper, aisle, needed[0]);
+                })
+                .thenSucceed();
+    }
+
+    /** Restores the config even when {@link #chunkticketreleasedwhenacapisloweredunderabendingwarehouse} fails. */
+    @AfterBatch(batch = BEND_CAP_LOWERED_BATCH)
+    public static void restoreBendCapLoweredConfig(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /**
+     * <b>The straight aisle is untouched.</b> M21 raised the shipped {@code maxChunksPerAisle} from 8 to
+     * {@value #SHIPPED_CHUNK_CAP} because a warehouse is no longer always one aisle; the case that worked before has to
+     * keep working byte for byte, so this holds a straight aisle at the <b>shipped default</b> and asserts its footprint
+     * is exactly the one {@link AisleChunkSpan#chunks} gives that aisle — no union, no extra column, nothing over the
+     * cap to report.
+     * <p>
+     * The default is read from the spec rather than from the config file on purpose: a server that had set 8 keeps 8,
+     * which is what a config is for, and the dev run directory is such a server.
+     */
+    @GameTest(template = AISLE_16X10X7, batch = DEFAULT_CAP_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void chunkticketofastraightaisleatthedefaultcap(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, LONG_RAILS);
+        aisle.build(false);
+        aisle.storage(NEAR, IRON.toStack(STORED_IRON));
+        aisle.output(OUTPUT);
+        BlockPos trigger = aisle.rackPos(OUTPUT).above();
+        helper.onEachTick(() -> assertNoLeak(helper));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(WareworksConfig.SERVER.maxChunksPerAisle.getDefault(), SHIPPED_CHUNK_CAP,
+                            "the shipped per-warehouse chunk cap");
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxTicketedAislesPerLevel, MANY_AISLES);
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxChunksPerAisle, SHIPPED_CHUNK_CAP);
+                    helper.assertValueEqual(
+                            aisle.controller().warehouse().map(warehouse -> warehouse.branchCount()).orElse(0), 1,
+                            "one straight aisle is a warehouse of one aisle");
+                    aisle.requestAt(OUTPUT, IRON.toStack(), REQUESTED, trigger);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(heldChunks(helper, aisle),
+                        footprintOf(helper, aisle, LONG_RAILS),
+                        "a straight aisle holds exactly the chunks it always did, under the raised default"))
+                .thenExecute(() -> assertNotOverCap(helper, aisle))
+                .thenSucceed();
+    }
+
+    /** Restores the config even when {@link #chunkticketofastraightaisleatthedefaultcap} fails. */
+    @AfterBatch(batch = DEFAULT_CAP_BATCH)
+    public static void restoreDefaultCapConfig(ServerLevel level) {
         ConfigOverrides.restoreAll();
     }
 
@@ -1143,6 +1384,134 @@ public final class AisleChunkLoadingGameTests {
     private static void assertNoLeak(GameTestHelper helper) {
         helper.assertValueEqual(raw(helper), AisleChunkTickets.allHeldChunks(helper.getLevel()).size(),
                 "NeoForge must track exactly the chunks Wareworks says it holds");
+    }
+
+    /**
+     * A warehouse that bends: the ordinary {@link AisleFixture} aisle plus {@value #BEND_RAILS} rails laid <b>south</b>
+     * from its last rail, which is exactly how a player turns a straight aisle into an L — rails that touch connect
+     * (M21, ADR-033). No motor: the request has to stay open for the whole test, so the warehouse keeps wanting to hold.
+     *
+     * @param stored what the single storage location starts with
+     */
+    private static AisleFixture bentWarehouse(GameTestHelper helper, ItemStack... stored) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, CORNER_RAILS);
+        aisle.build(false);
+        aisle.storage(NEAR, stored.length > 0 ? stored : new ItemStack[] { IRON.toStack(STORED_IRON) });
+        aisle.output(OUTPUT);
+        BlockPos corner = aisle.dockPos().relative(AisleFixture.AISLE, CORNER_RAILS);
+        for (int z = 1; z <= BEND_RAILS; z++)
+            helper.setBlock(corner.south(z), WarehouseRailBlock.along(Direction.Axis.Z));
+        return aisle;
+    }
+
+    /**
+     * Whether a warehouse may bend at all: {@code aisle.maxBranches = 1} keeps every warehouse the single straight
+     * aisle it was before 0.6 (M21, ADR-033), and the whole suite has to pass with it unedited.
+     */
+    private static boolean cornersEnabled() {
+        return WareworksConfig.maxBranches() > 1;
+    }
+
+    /**
+     * What the three tests of a bending warehouse assert instead while corners are switched off: the rails laid at
+     * right angles are no part of the warehouse at all, so its chunk footprint is the straight aisle's — which is
+     * M19's own rule, unchanged. There is then nothing about a corner left to measure, and nothing that could leak.
+     */
+    private static void assertCornersAreOff(GameTestHelper helper, AisleFixture aisle) {
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(1, 0, 1);
+                    helper.assertValueEqual(
+                            aisle.controller().warehouse().map(warehouse -> warehouse.branchCount()).orElse(0), 1,
+                            "one aisle, exactly as before 0.6");
+                    helper.assertValueEqual(aisle.controller().chunkFootprintSize(),
+                            footprintOf(helper, aisle, CORNER_RAILS).size(),
+                            "and its footprint is the aisle at the dock, nothing more");
+                })
+                .thenSucceed();
+    }
+
+    /** That the warehouse really found the second aisle, so every assertion below is about a network and not an aisle. */
+    private static void assertBends(GameTestHelper helper, AisleFixture aisle) {
+        // map/orElse rather than orElseThrow: this runs inside a waitUntil, where only a GameTest assertion is retried.
+        helper.assertValueEqual(aisle.controller().warehouse().map(warehouse -> warehouse.branchCount()).orElse(0), 2,
+                "the warehouse found both aisles");
+        helper.assertTrue(aisle.controller().chunkFootprintSize() >= footprintOf(helper, aisle, CORNER_RAILS).size(),
+                "and its footprint is the union of both, so never smaller than the aisle at the dock alone");
+    }
+
+    /** The chunk of the far end of the second aisle — a block no straight aisle at the dock covers. */
+    private static long farEndChunk(GameTestHelper helper, AisleFixture aisle) {
+        BlockPos farEnd = aisle.dockPos().relative(AisleFixture.AISLE, CORNER_RAILS).south(BEND_RAILS);
+        return new ChunkPos(helper.absolutePos(farEnd)).toLong();
+    }
+
+    /**
+     * That {@code /wareworks chunks} really prints this warehouse as over the cap, with the number it would need and the
+     * limit that stopped it — <b>through the real command dispatcher</b>, reading the lines it sends (M21, ADR-033).
+     * <p>
+     * The bookkeeping is checked first, then the rendered line, because a listing that silently dropped the row and one
+     * that printed the wrong number are two different regressions.
+     */
+    private static void assertOverCapRow(GameTestHelper helper, AisleFixture aisle, int needed) {
+        BlockPos owner = helper.absolutePos(aisle.controllerPos());
+        AisleChunkTickets.OverCapEntry row = AisleChunkTickets.overCapEntries(helper.getLevel()).stream()
+                .filter(entry -> entry.owner().equals(owner)).findFirst().orElse(null);
+        if (row == null) {
+            helper.fail("the warehouse is not listed as over the chunk cap", aisle.controllerPos());
+            return;
+        }
+        helper.assertValueEqual(row.needed(), needed, "the listed row names what the whole warehouse would need");
+
+        List<String> lines = chunksCommandLines(helper);
+        String expected = WareworksLang.translateDirect(WareworksLang.COMMAND_CHUNKS_ROW_OVER_CAP,
+                owner.getX() + " " + owner.getY() + " " + owner.getZ(), String.valueOf(aisle.controller().aisleLetter()),
+                WareworksLang.number(needed), WareworksLang.number(WareworksConfig.maxChunksPerAisle())).getString();
+        helper.assertTrue(lines.contains(expected),
+                "/wareworks chunks names the shortfall. Expected the line \"" + expected + "\", got " + lines);
+    }
+
+    /**
+     * That this warehouse is <b>not</b> listed as over the cap. Asked about this one owner, never about the level: the
+     * structures of tests that already finished go on standing in the same level with their own open work, and a
+     * global cap this test lowered puts them over it too — which is correct behaviour and pure noise here, exactly as
+     * for the raw ticket count (see the class comment).
+     */
+    private static void assertNotOverCap(GameTestHelper helper, AisleFixture aisle) {
+        BlockPos owner = helper.absolutePos(aisle.controllerPos());
+        helper.assertTrue(AisleChunkTickets.overCapEntries(helper.getLevel()).stream()
+                .noneMatch(entry -> entry.owner().equals(owner)),
+                "this warehouse is not listed as over the chunk cap");
+    }
+
+    /** Every line {@code /wareworks chunks} sends, read from a command source that records them. */
+    private static List<String> chunksCommandLines(GameTestHelper helper) {
+        List<String> lines = new ArrayList<>();
+        CommandSource recorder = new CommandSource() {
+            @Override
+            public void sendSystemMessage(net.minecraft.network.chat.Component message) {
+                lines.add(message.getString());
+            }
+
+            @Override
+            public boolean acceptsSuccess() {
+                return true;
+            }
+
+            @Override
+            public boolean acceptsFailure() {
+                return true;
+            }
+
+            @Override
+            public boolean shouldInformAdmins() {
+                return false;
+            }
+        };
+        MinecraftServer server = helper.getLevel().getServer();
+        server.getCommands().performPrefixedCommand(server.createCommandSourceStack().withSource(recorder),
+                "wareworks chunks");
+        return lines;
     }
 
     /** The footprint {@link AisleChunkSpan} computes for this aisle, as chunk keys. */

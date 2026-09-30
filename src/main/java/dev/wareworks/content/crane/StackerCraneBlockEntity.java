@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.UnaryOperator;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -13,15 +14,22 @@ import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollValueBehaviour;
 
+import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.head.HandlingHead;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.AisleGeometry;
+import dev.wareworks.core.address.BranchGeometry;
+import dev.wareworks.core.address.Heading;
+import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.crane.CraneNetwork;
+import dev.wareworks.core.crane.HomeReturn;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneResync;
@@ -31,12 +39,20 @@ import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.crane.CraneMotion;
 import dev.wareworks.core.inventory.KeyCount;
+import dev.wareworks.core.warehouse.CraneRoute;
+import dev.wareworks.core.warehouse.NetworkStop;
+import dev.wareworks.core.warehouse.RailGraph;
+import dev.wareworks.core.warehouse.RailNetwork;
+import dev.wareworks.util.Headings;
+import dev.wareworks.util.LogThrottle;
 import dev.wareworks.util.WareworksLang;
+import net.createmod.catnip.lang.LangBuilder;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -46,6 +62,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Block entity of the stacker crane dock ({@code docs/stacker-crane.md} §2-6).
@@ -54,12 +71,15 @@ import net.minecraft.world.phys.AABB;
  * {@code WareworksStress} from the server config. {@link #getSpeed()} (0 without rotation and while overstressed) drives
  * the crane axes through {@link CraneKinematics} and the {@code crane.*} speed factors.
  * <p>
- * <b>Geometry.</b> Length = consecutive warehouse rails in front of the dock ({@link RailScan}), capped at
+ * <b>Geometry.</b> The dock discovers the connected set of warehouse rails in front of it
+ * ({@link RailNetworkScan}, ADR-033) and its own aisle length is the first branch of that network, capped at
  * {@code maxAisleLength}; height = the "Mast Height" scroll value ({@value #MIN_MAST_HEIGHT}..{@code maxMastHeight},
- * default {@value #DEFAULT_MAST_HEIGHT}). The server re-counts the rails at most once per {@code geometryRefreshTicks},
- * and immediately on load, on a mast height change and after a facing change (next tick). A refresh costs at most
- * {@code maxAisleLength} block state reads and never loads chunks; rails behind an unloaded chunk keep the last known
- * length ({@link dev.wareworks.core.address.AisleGeometry#scannedLength}). The length is saved and synced.
+ * default {@value #DEFAULT_MAST_HEIGHT}). The server re-scans at most once per {@code geometryRefreshTicks},
+ * and immediately on load, on a mast height change and after a facing change (next tick). A refresh is bounded by
+ * {@code maxNetworkRails} aisle blocks, reads every position at most once and never loads chunks; rails behind an
+ * unloaded chunk keep the last known length ({@link dev.wareworks.core.address.AisleGeometry#scannedLength}). The
+ * length is saved and synced; the rest of the discovered network is server-side only until the controller takes it
+ * over.
  * <p>
  * <b>Controller.</b> The warehouse controller directly behind the dock links it ({@link #linkController}) and becomes its
  * owner; only the owner can unlink it ({@link #unlinkController}). The dock re-validates its owner at its geometry
@@ -94,6 +114,12 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
 
     /** NBT key of the aisle length (saved and synced). */
     public static final String AISLE_LENGTH_TAG = "AisleLength";
+    /**
+     * NBT key of the warehouse's rail network, packed as an {@code int[]} ({@link NetworkGeometry#pack}) and saved and
+     * synced <b>only while the warehouse really bends</b> (M21, ADR-033). A warehouse of one straight aisle is fully
+     * described by {@link #AISLE_LENGTH_TAG} and the dock's facing, so it writes exactly the bytes it always wrote.
+     */
+    public static final String NETWORK_TAG = "Network";
     /** NBT key of the controller link flag (client packets only). */
     public static final String CONTROLLER_LINKED_TAG = "ControllerLinked";
     /** NBT key of the crane goggle data (client packets only). */
@@ -119,16 +145,61 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     /** Geometry at the last refresh; {@code null} until the first refresh. */
     @Nullable
     private AisleGeometry publishedGeometry;
+    /**
+     * The whole rail network the last refresh found, not only this dock's own aisle; {@code null} until the first
+     * refresh. Never saved and never synced — it is rediscovered from the world on every refresh, so it can never
+     * contradict the blocks that are there ({@code docs/warehouse-system.md} §4).
+     */
+    @Nullable
+    private RailNetwork discoveredNetwork;
+    /** The last stop reason that was reported, so a standing fault is logged once and not on every refresh. */
+    private NetworkStop reportedStop = NetworkStop.END;
+    private final LogThrottle networkStops = new LogThrottle();
+    /**
+     * The rack position of the warehouse's home point, i.e. where a crane with nothing to do waits (M21, ADR-034,
+     * {@code docs/stacker-crane.md} §4.7); {@code null} while the dock is home, which is every warehouse that has no
+     * home point.
+     * <p>
+     * The <b>controller</b> owns it ({@code WarehouseControllerBlockEntity#refreshHomePoints} → {@link #setHomePoint}),
+     * because only it knows the whole warehouse and therefore which of several home points is the one. Neither saved
+     * nor synced: it says nothing about where the crane <i>is</i>, only where it would go next, and the controller
+     * hands it over again on its first re-link after every load — until then the crane simply waits where it stands,
+     * which is what it did before this version.
+     */
+    @Nullable
+    private RackPosition homePoint;
 
     // --- both sides ---
+    /**
+     * The warehouse's rail network as the controller names it — the branch order, headings, origins and lengths every
+     * rack position of a job is measured in. Saved and synced (packed, {@link #NETWORK_TAG}), {@code null} while the
+     * warehouse is the one straight aisle it was before M21, which is then exactly what the dock's own facing and
+     * {@link #aisleLength} describe.
+     * <p>
+     * The <b>controller</b> owns it ({@code WarehouseControllerBlockEntity#applyLayout} → {@link #setWarehouseNetwork}),
+     * not the scan: the controller pins aisle letters and origin ends, so only its numbering agrees with the rack
+     * positions in a crane job. A dock nobody serves keeps what it last saved, and a crane without a job never asks.
+     */
+    @Nullable
+    private NetworkGeometry warehouseNetwork;
     @Nullable
     private AisleGeometry cachedGeometry;
+    @Nullable
+    private WarehouseLayout cachedWarehouse;
+    @Nullable
+    private CraneNetwork cachedCraneNetwork;
     /** Server: the authoritative crane state (saved). Client: the synced pose, target and phase (no job). */
     private CraneState<ItemKey, RackPosition> craneState = CraneState.idle(HOME_POSE);
     /** Server: goggle data as of the last publication. Client: as synced. */
     private CraneGoggleInfo goggleInfo = CraneGoggleInfo.NONE;
     /** Client: whether a crane packet arrived (the first one always snaps). */
     private boolean clientSynced;
+    /**
+     * Client: how far the machine has really travelled through the world since it was loaded, in blocks. Purely
+     * visual — never saved, never synced — and the only thing that can turn the wheels correctly now that
+     * {@link CranePose#x()} restarts at 0 on every aisle the crane hands over to (ADR-033).
+     */
+    private double wheelOdometer;
 
     // --- server only (M3) ---
     private final InventoryGrabber head = new InventoryGrabber(this::onHeadChanged);
@@ -186,9 +257,175 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         return cached;
     }
 
+    /**
+     * Server: the whole rail network the last refresh found, with the branch at this dock first, and where and why the
+     * discovery stopped. Empty before the first refresh and on the client.
+     */
+    public Optional<RailNetwork> discoveredNetwork() {
+        return Optional.ofNullable(discoveredNetwork);
+    }
+
     /** World mapping of the aisle: dock position, facing and geometry (no aisle letter; the controller adds it). */
-    public AisleLayout layout() {
-        return AisleLayout.of(worldPosition, facing(), geometry());
+    public BranchLayout layout() {
+        return BranchLayout.of(worldPosition, facing(), geometry());
+    }
+
+    /**
+     * World mapping of the <b>whole warehouse</b> the crane drives on: every aisle of the network, with the one at the
+     * dock first ({@code docs/warehouse-system.md} §1, ADR-033). Without a network it is literally {@link #layout()}
+     * as a one-aisle warehouse, which is what every build that does not bend is.
+     * <p>
+     * Aisle letters are not in it — the controller owns those — so this answers positions and blocks, never addresses.
+     */
+    public WarehouseLayout warehouse() {
+        NetworkGeometry network = networkGeometry();
+        WarehouseLayout cached = cachedWarehouse;
+        if (cached != null && cached.dock().equals(worldPosition) && cached.facing() == facing()
+                && cached.network().equals(network))
+            return cached;
+        cached = WarehouseLayout.of(worldPosition, facing(), network, Optional.empty());
+        cachedWarehouse = cached;
+        return cached;
+    }
+
+    /**
+     * The network the crane plans its motion in: the warehouse's aisles at the configured mast height, or the single
+     * straight aisle of {@link #geometry()} while no controller has given this dock one.
+     */
+    public NetworkGeometry networkGeometry() {
+        NetworkGeometry network = warehouseNetwork;
+        int height = mastHeight();
+        if (network == null || network.branchCount() < 2)
+            return NetworkGeometry.of(geometry(), Headings.of(facing()));
+        return network.height() == height ? network : network.withHeight(height);
+    }
+
+    /**
+     * The rails the crane drives on and what a turn on them costs ({@code crane.turnPenaltyBlocks}). Recomputed from
+     * the live geometry, never stored in a job — so a crane follows rails a player has just changed, and a crane whose
+     * route disappeared simply has none (ADR-033).
+     * <p>
+     * Kept until the shape or the penalty really changes: the client asks for it on <b>every</b> tick of a moving
+     * crane, and the corner blocks it derives depend on the shape alone (M21 review fix).
+     */
+    public CraneNetwork craneNetwork() {
+        NetworkGeometry network = networkGeometry();
+        double penalty = WareworksConfig.turnPenaltyBlocks();
+        CraneNetwork cached = cachedCraneNetwork;
+        if (cached instanceof CraneNetwork.Discovered discovered && discovered.turnPenaltyBlocks() == penalty
+                && discovered.geometry().equals(network))
+            return cached;
+        cached = CraneNetwork.of(network, penalty);
+        cachedCraneNetwork = cached;
+        return cached;
+    }
+
+    /**
+     * Server: the warehouse's aisles as its controller names them, which is the numbering every rack position of a
+     * crane job is measured in. Saved and synced, because a dock that loads before its controller must already put the
+     * crane back where it stood — on a further aisle, facing the way that aisle runs.
+     *
+     * @param network the controller's network, or {@code null} for a warehouse of one aisle
+     * @return whether it changed
+     */
+    public boolean setWarehouseNetwork(@Nullable NetworkGeometry network) {
+        NetworkGeometry next = network == null || network.branchCount() < 2 ? null : network;
+        if (Objects.equals(warehouseNetwork, next))
+            return false;
+        warehouseNetwork = next;
+        cachedWarehouse = null;
+        execution.onGeometryChanged();
+        // The client invalidates its own render bounds when the packet arrives (see read); here only the packet.
+        if (level != null && !level.isClientSide)
+            notifyUpdate();
+        return true;
+    }
+
+    /**
+     * Server: the warehouse's home point, as its controller decided it — the rack position a crane with nothing to do
+     * waits at, or {@code null} for the dock (M21, ADR-034).
+     *
+     * @return whether it changed
+     */
+    public boolean setHomePoint(@Nullable RackPosition rack) {
+        if (Objects.equals(homePoint, rack))
+            return false;
+        homePoint = rack;
+        return true;
+    }
+
+    /** Server: the warehouse's home point, or empty while the dock is home. */
+    public Optional<RackPosition> homePoint() {
+        return Optional.ofNullable(homePoint);
+    }
+
+    /**
+     * How many aisles the crane can drive on, without building anything: {@code 1} for every warehouse that does not
+     * bend, which is what {@link #networkGeometry()} would have to allocate a geometry to say. Read on every tick of
+     * every idle dock ({@code CraneExecution#returnHomeIfIdle}), which is why it exists.
+     */
+    public int aisleCount() {
+        NetworkGeometry network = warehouseNetwork;
+        return network == null ? 1 : Math.max(1, network.branchCount());
+    }
+
+    /**
+     * The rule that decides where this crane waits ({@link HomeReturn}, M21, ADR-034): the configured idle delay, the
+     * number of aisles the crane can drive on and the home point — but only while the network still has the aisle that
+     * home point stands on, because a label whose aisle a player broke away names no block.
+     */
+    public HomeReturn homeReturn() {
+        NetworkGeometry network = networkGeometry();
+        Optional<RackPosition> home = Optional.ofNullable(homePoint).filter(network::contains);
+        return HomeReturn.of(WareworksConfig.returnHomeIdleTicks(), network.branchCount(), home);
+    }
+
+    /**
+     * Client: how far the machine has driven since it loaded, <b>signed</b> — forward down the aisle it faces counts
+     * up, rolling back counts down — so the wheels turn the way the machine really moves. For the wheel animation
+     * only.
+     */
+    public double wheelOdometer() {
+        return wheelOdometer;
+    }
+
+    /**
+     * Server: the warehouse was rebuilt under the working machine, and everything the controller knows has been moved
+     * from the old labels to the new ones through the world blocks they stood for. The crane's own labels are moved
+     * with them (M21 review fix, ADR-033).
+     * <p>
+     * Without this the machine keeps the branch index it had while that index came to mean another line of blocks:
+     * it would be drawn on the wrong aisle from one tick to the next, plan its route from a point it is not at, and
+     * deliver a job's items into whatever chest inherited its target's number. Nothing is moved here — a remap only
+     * renames — and a label whose place really disappeared is deliberately left alone by the caller, so it reaches the
+     * existing source- or target-missing ladder.
+     *
+     * @param poses the pose and the motion target under the new numbering
+     * @param racks the new label of a rack position, or the same one when it did not move
+     * @return whether anything changed
+     */
+    public boolean remapOnto(UnaryOperator<CranePose> poses, UnaryOperator<RackPosition> racks) {
+        Objects.requireNonNull(poses, "poses");
+        Objects.requireNonNull(racks, "racks");
+        if (level == null || level.isClientSide || isRemoved())
+            return false;
+        CraneState<ItemKey, RackPosition> state = craneState;
+        CranePose pose = poses.apply(state.pose());
+        CranePose target = poses.apply(state.target());
+        // The previous pose goes with it: it names the tick before the rebuild on a numbering that no longer exists,
+        // and interpolating the two would drag the machine across the warehouse for one frame.
+        CraneState<ItemKey, RackPosition> next = state.withPoses(pose, pose).withTarget(target);
+        Optional<TransportJob<ItemKey, RackPosition>> job = state.job();
+        if (job.isPresent())
+            next = next.withJob(job.get().relabelled(racks.apply(job.get().source()), racks.apply(job.get().target())));
+        if (next.equals(state))
+            return false;
+        craneState = next;
+        cachedWarehouse = null;
+        execution.onGeometryChanged();
+        setChanged();
+        notifyUpdate();
+        return true;
     }
 
     /** Server: re-count the rails on the next tick instead of waiting for the periodic refresh. */
@@ -211,13 +448,18 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
             return false;
         geometryRefreshRequested = false;
         nextGeometryRefreshTick = level.getGameTime() + WareworksConfig.geometryRefreshTicks();
+        alignRestingCrane();
         AisleGeometry before = publishedGeometry != null ? publishedGeometry : geometry();
 
         // Only the range of the value box follows the config; the stored value stays as the player set it.
         mastHeight.between(MIN_MAST_HEIGHT, maxMastHeight());
 
         int maxLength = Math.min(WareworksConfig.maxAisleLength(), AisleGeometry.MAX_LENGTH);
-        aisleLength = RailScan.scan(level, worldPosition, facing(), maxLength).resolveLength(aisleLength, maxLength);
+        RailNetwork network = RailNetworkScan.scan(level, worldPosition, facing(), new RailGraph.Limits(
+                WareworksConfig.maxNetworkRails(), WareworksConfig.maxBranches(), maxLength, mastHeight()));
+        discoveredNetwork = network;
+        reportNetworkStop(network);
+        aisleLength = network.resolveFirstBranchLength(aisleLength, maxLength);
 
         AisleGeometry after = geometry();
         publishedGeometry = after;
@@ -226,6 +468,58 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         onGeometryChanged(before, after);
         notifyUpdate();
         return true;
+    }
+
+    /**
+     * Server: a crane that is standing still and has nothing to do faces the aisle it stands on.
+     * <p>
+     * {@link #HOME_POSE} faces north, because north is what every pose of a warehouse meant before M21 — so without
+     * this a freshly placed dock on an east-facing aisle would swing a quarter turn on its very first job, and every
+     * trip of that warehouse would be measured against a travel time that does not include it (ADR-033). It is a snap
+     * rather than a turn precisely because nothing is happening: the machine is idle, holds no job, and the aisle it
+     * faces is the one it has always stood on.
+     * <p>
+     * It also puts a crane straight again after a wrench turned its dock, which is the same kind of change as the
+     * whole aisle moving to another line of blocks.
+     */
+    private void alignRestingCrane() {
+        CraneState<ItemKey, RackPosition> state = craneState;
+        if (state.phase() != CranePhase.IDLE || state.job().isPresent())
+            return;
+        // The aisle the crane is parked on, not the dock's own: a machine idling round a corner faces the way that
+        // aisle runs, and one on an aisle the warehouse no longer knows is left exactly as it stands.
+        double yaw = craneNetwork().restingYaw(state.pose().branch(), state.pose().yaw());
+        if (state.pose().yaw() == yaw && state.target().yaw() == yaw)
+            return;
+        CranePose straight = state.pose().withYaw(yaw);
+        craneState = state.withPoses(straight, straight).withTarget(state.target().withYaw(yaw));
+        execution.requestSync();
+    }
+
+    /**
+     * Says in the log where the warehouse stops and why, whenever that changes to something a player did not ask for:
+     * another dock on the same rails, a branching rail this version cannot follow, a configured cap, or a chunk that is
+     * not loaded. The rails a player closed on purpose and a warehouse that simply ends say nothing.
+     * <p>
+     * This is the whole report for now. The goggle line, the controller status and {@code /wareworks network} come with
+     * the controller's half of the milestone; until then the fault is at least never <b>silent</b>, which is the one
+     * thing discovery must not be.
+     */
+    private void reportNetworkStop(RailNetwork network) {
+        NetworkStop stop = network.stop();
+        if (!stop.isFault()) {
+            reportedStop = NetworkStop.END; // it healed, so the same fault is worth reporting if it comes back
+            return;
+        }
+        if (stop == reportedStop)
+            return; // already said, and a standing fault belongs in the goggles rather than in the log
+        if (!networkStops.tryLog(level.getGameTime()))
+            return; // a fault that keeps changing (a piston flipping a rail) costs one line per interval
+        reportedStop = stop;
+        BlockPos stopped = worldPosition.offset(network.stopDx(), 0, network.stopDz());
+        Wareworks.LOGGER.info("The warehouse of the stacker crane dock at {} stops at {}: {} (rails: {}, "
+                + "aisles: {})", worldPosition, stopped, stop.name(), network.rails(),
+                network.branchCount());
     }
 
     /**
@@ -315,6 +609,20 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     }
 
     /**
+     * Where the machine stands at {@code partialTicks}, as an offset from this dock block, measured along the rails it
+     * drives on rather than along {@link CranePose#x()} (M21, ADR-033).
+     * <p>
+     * The two differ for exactly one tick per corner: a hand-over renames the machine onto the next aisle without
+     * moving it, so the {@code x} before and the {@code x} after belong to different lines of blocks and cannot be
+     * interpolated against each other ({@code WarehouseLayout#railOffset}). Taken through the rails, the same tick is
+     * the short drive up to the corner block it always was.
+     */
+    public Vec3 renderOffset(float partialTicks) {
+        CraneState<ItemKey, RackPosition> state = craneState;
+        return warehouse().railOffset(state.previousPose(), state.pose(), partialTicks);
+    }
+
+    /**
      * Client levels only: shows the crane standing still at {@code pose} in {@code phase}, holding {@code held}, for
      * deterministic render poses (the visual smoke test). The same as {@link #showClientPose(CranePose, CranePose,
      * CranePhase, List)} with the pose as its own target.
@@ -337,13 +645,41 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      * @return whether the pose is shown (false on a server level or without level)
      */
     public boolean showClientPose(CranePose pose, CranePose target, CranePhase phase, List<KeyCount<Item>> held) {
+        // Poses of this dock's own aisle: a caller that names no network means the one straight aisle the dock stands
+        // on, so both poses face the way that aisle runs rather than north (M21, ADR-033). Every pose written before
+        // M21 is such a pose, which is why Ponder scenes and visual scenarios need no edit.
+        return showClientPose(null, pose.withYaw(restingYaw()), target.withYaw(restingYaw()), phase, held);
+    }
+
+    /**
+     * The pose a crane of this dock parks in: position 0 of the aisle at the dock, at dock level, with the arm
+     * retracted and the machine facing the way that aisle runs.
+     */
+    public CranePose homePose() {
+        return HOME_POSE.withYaw(restingYaw());
+    }
+
+    /**
+     * Client levels only: the same as {@link #showClientPose(CranePose, CranePose, CranePhase, List)}, with the rail
+     * network the shown crane drives on (M21, ADR-033).
+     * <p>
+     * A Ponder level never runs the server-only {@code refreshGeometry}, and a visual scenario freezes the server, so
+     * neither would otherwise know that the warehouse bends — and a crane that does not know its own network cannot
+     * turn a corner, however many rails are drawn under it. A {@code null} network means the one straight aisle every
+     * build that does not bend is.
+     */
+    public boolean showClientPose(@Nullable NetworkGeometry network, CranePose pose, CranePose target, CranePhase phase,
+            List<KeyCount<Item>> held) {
         Objects.requireNonNull(pose, "pose");
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(phase, "phase");
         if (level == null || !level.isClientSide)
             return false;
+        warehouseNetwork = network == null || network.branchCount() < 2 ? null : network;
+        cachedWarehouse = null;
         craneState = CraneState.displayed(pose, target, phase);
-        goggleInfo = new CraneGoggleInfo(phase, CranePauseReason.NONE, Optional.empty(), held, goggleInfo.aisleLetter());
+        goggleInfo = new CraneGoggleInfo(phase, CranePauseReason.NONE, Optional.empty(), held,
+                goggleInfo.aisleLetters());
         clientSynced = true;
         return true;
     }
@@ -432,7 +768,17 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     private void refreshGoggleInfo() {
         goggleInfo = new CraneGoggleInfo(craneState.phase(), execution.pauseReason(),
                 craneState.job().map(CraneJobSummary::of), CraneGoggleInfo.heldByType(head.held()),
-                linkedControllerEntity().map(WarehouseControllerBlockEntity::aisleLetter));
+                linkedControllerEntity().map(StackerCraneBlockEntity::aisleLettersOf).orElse(""));
+    }
+
+    /**
+     * The aisle letters of the warehouse a controller runs, one per branch (M21, ADR-033), so that a job round a corner
+     * names the rack it is going to by the letter of <b>its own</b> aisle. A controller that has no warehouse yet
+     * answers with its own letter alone, which is the aisle at the dock and the only one such a controller can mean.
+     */
+    private static String aisleLettersOf(WarehouseControllerBlockEntity controller) {
+        return controller.warehouse().map(WarehouseLayout::branchLetters)
+                .orElseGet(() -> String.valueOf(controller.aisleLetter()));
     }
 
     private void onHeadChanged() {
@@ -475,8 +821,17 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     private void tickClientMotion() {
         CraneState<ItemKey, RackPosition> state = craneState;
         CraneSpeeds speeds = currentSpeeds();
-        craneState = state.paused() || speeds.isStopped() ? state.withPreviousPose(state.pose())
-                : CraneMotion.step(state, speeds);
+        if (state.paused() || speeds.isStopped()) {
+            craneState = state.withPreviousPose(state.pose());
+            return;
+        }
+        CraneNetwork network = craneNetwork();
+        CranePose pose = state.pose();
+        CranePose target = state.target();
+        CraneRoute route = pose.branch() == target.branch() ? null
+                : network.route(pose.branch(), pose.x(), target.branch(), target.x()).orElse(null);
+        craneState = CraneMotion.step(state, speeds, route, network.turnPenaltyBlocks());
+        wheelOdometer += CraneMotion.blocksDriven(pose, craneState.pose(), route);
     }
 
     /**
@@ -583,6 +938,13 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         if (!controller.equals(linkedController))
             return;
         linkedController = null;
+        // Nobody names its aisles any more, so it is the one straight aisle its own rails and facing describe. A
+        // kept network would otherwise outlive the warehouse that defined it and let the crane drive on rails the
+        // world no longer has (ADR-033).
+        setWarehouseNetwork(null);
+        // ... and with it the home point that controller named: nothing knows any more whether that block is still
+        // there or still the first one, and a crane with no warehouse waits where it stands (M21, ADR-034).
+        setHomePoint(null);
         updateLinkFlag();
     }
 
@@ -617,23 +979,35 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         super.write(tag, registries, clientPacket);
         tag.putInt(AISLE_LENGTH_TAG, aisleLength);
+        // Only a warehouse that really bends writes a network; a straight aisle saves and syncs exactly what it did
+        // before M21 (ADR-033).
+        if (warehouseNetwork != null)
+            tag.putIntArray(NETWORK_TAG, warehouseNetwork.pack());
         if (clientPacket) {
             tag.putBoolean(CONTROLLER_LINKED_TAG, controllerLinked);
-            tag.put(CranePersistence.SYNC_TAG, CranePersistence.writeSync(craneState));
+            tag.put(CranePersistence.SYNC_TAG, CranePersistence.writeSync(craneState, restingYaw()));
             CompoundTag goggles = new CompoundTag();
             goggleInfo.write(goggles);
             tag.put(GOGGLE_TAG, goggles);
             return;
         }
-        CranePersistence.writeState(tag, craneState, registries);
+        CranePersistence.writeState(tag, craneState, registries, restingYaw());
         tag.put(CranePersistence.HEAD_TAG, head.save(registries));
     }
 
     @Override
     protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         AisleGeometry before = geometry();
+        NetworkGeometry networkBefore = warehouseNetwork;
         super.read(tag, registries, clientPacket);
         aisleLength = Mth.clamp(tag.getInt(AISLE_LENGTH_TAG), 0, AisleGeometry.MAX_LENGTH);
+        // Never throws: an unreadable network is simply none, and the warehouse is the straight aisle it was.
+        warehouseNetwork = tag.contains(NETWORK_TAG, Tag.TAG_INT_ARRAY)
+                ? NetworkGeometry.unpack(tag.getIntArray(NETWORK_TAG)).filter(read -> read.branchCount() > 1)
+                        .orElse(null)
+                : null;
+        if (!Objects.equals(networkBefore, warehouseNetwork))
+            cachedWarehouse = null;
         // Keep the value box range in step with the (possibly reloaded or synced) config on both sides.
         mastHeight.between(MIN_MAST_HEIGHT, maxMastHeight());
         // A missing or broken "ScrollValue" reads as 0, which is no valid height.
@@ -642,7 +1016,7 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         else if (mastHeight.getValue() > AisleGeometry.MAX_HEIGHT)
             mastHeight.value = AisleGeometry.MAX_HEIGHT;
         if (!clientPacket) {
-            craneState = CranePersistence.readState(tag, registries);
+            craneState = CranePersistence.readState(tag, registries, restingYaw());
             head.load(tag.getCompound(CranePersistence.HEAD_TAG), registries);
             // Made consistent with the head and resumed on the first server tick.
             execution.onLoaded();
@@ -651,7 +1025,7 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         controllerLinked = tag.getBoolean(CONTROLLER_LINKED_TAG);
         readClientCrane(tag.getCompound(CranePersistence.SYNC_TAG));
         goggleInfo = CraneGoggleInfo.read(tag.getCompound(GOGGLE_TAG));
-        if (!geometry().equals(before))
+        if (!geometry().equals(before) || !Objects.equals(networkBefore, warehouseNetwork))
             invalidateRenderBoundingBox();
     }
 
@@ -661,7 +1035,7 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      * ({@link CraneResync#diverges}); otherwise the client keeps its smooth pose and continues towards the new target.
      */
     private void readClientCrane(CompoundTag syncTag) {
-        CraneState<ItemKey, RackPosition> synced = CranePersistence.readSync(syncTag);
+        CraneState<ItemKey, RackPosition> synced = CranePersistence.readSync(syncTag, restingYaw());
         CranePose own = craneState.pose();
         if (!clientSynced || CraneResync.diverges(own, synced.pose(), currentSpeeds())) {
             craneState = synced;
@@ -672,16 +1046,61 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         clientSynced = true;
     }
 
+    /**
+     * The yaw a crane of this dock faces at rest when nothing says otherwise: the way the aisle at the dock runs.
+     * <p>
+     * This is what an <b>absent</b> saved or synced yaw means (M21, ADR-033). North would be wrong: a crane saved on
+     * an east-facing aisle before 0.6 would spin a quarter turn on its first job after the update, in a warehouse
+     * whose rails never bent at all.
+     */
+    public double restingYaw() {
+        return CranePose.yawOf(Headings.of(facing()));
+    }
+
     @Override
     protected AABB createRenderBoundingBox() {
-        return layout().bounds().inflate(RENDER_BOUNDS_MARGIN);
+        return warehouse().bounds().inflate(RENDER_BOUNDS_MARGIN);
+    }
+
+    /** Aisle blocks of {@code network} beyond the dock: the rails a player laid, counted the way the goggles say it. */
+    private static int networkRails(NetworkGeometry network) {
+        int rails = 0;
+        for (BranchGeometry branch : network.branches())
+            rails += branch.length();
+        return rails;
+    }
+
+    /**
+     * "On aisle B at position 7" — where the machine is standing, for a warehouse that bends. Empty while the aisle it
+     * stands on has no letter, which is every dock without a linked controller: a position without the letter that
+     * gives it meaning would be worse than no line at all ({@link CraneGoggleInfo#aisleLetters()}).
+     */
+    private Optional<LangBuilder> craneOnAisleLine() {
+        CranePose pose = craneState.pose();
+        String letters = goggleInfo.aisleLetters();
+        if (pose.branch() < 0 || pose.branch() >= letters.length())
+            return Optional.empty();
+        char letter = letters.charAt(pose.branch());
+        if (letter == CraneGoggleInfo.NO_LETTER)
+            return Optional.empty();
+        return Optional.of(WareworksLang.craneOnAisle(letter, (int) Math.round(pose.x())));
     }
 
     @Override
     public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
         WareworksLang.translate(WareworksLang.GOGGLES_STACKER_CRANE).forGoggles(tooltip);
         AisleGeometry shown = geometry();
-        WareworksLang.aisleSize(shown.length(), shown.height()).forGoggles(tooltip, 1);
+        NetworkGeometry network = networkGeometry();
+        // A warehouse of one aisle reads exactly as it always did. One that bends says how big the whole network is —
+        // the dock is the only surface that knows that without a controller — and then where the machine is standing,
+        // which on a network is a question its own line has to answer (M21, issue #1, ADR-033).
+        if (network.branchCount() > 1) {
+            WareworksLang.networkSize(networkRails(network), network.branchCount(), shown.height())
+                    .forGoggles(tooltip, 1);
+            craneOnAisleLine().ifPresent(line -> line.forGoggles(tooltip, 1));
+        } else {
+            WareworksLang.aisleSize(shown.length(), shown.height()).forGoggles(tooltip, 1);
+        }
         if (controllerLinked)
             WareworksLang.translate(WareworksLang.GOGGLES_CONTROLLER_LINKED).style(ChatFormatting.GREEN)
                     .forGoggles(tooltip, 1);

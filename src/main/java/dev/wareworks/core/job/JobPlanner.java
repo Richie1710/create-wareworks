@@ -350,8 +350,8 @@ public final class JobPlanner<K, L> {
                 continue;
             work = true;
             RackPosition stationPos = position(station);
-            long toStation = TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), stationPos.x(),
-                    stationPos.y());
+            long toStation = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(),
+                    stationPos.branch(), stationPos.x(), stationPos.y());
             // Why this input got no job: "no room anywhere" and "no filter accepts these items" are different problems
             // for the player, and only the first is relieved by a retrieval (ADR-021, §7.4).
             StoreSurvey survey = new StoreSurvey();
@@ -375,7 +375,7 @@ public final class JobPlanner<K, L> {
                 int storageLimit = headroom <= 0 ? 0
                         : limit(Math.min(buffer.count(key), headroom), input.carryLimit().applyAsInt(key));
                 Optional<Selection<L>> selection = selectStoreTarget(input, key, portLimit, storageLimit, null,
-                        stationPos.x(), stationPos.y(), toStation, budget, survey);
+                        stationPos.branch(), stationPos.x(), stationPos.y(), toStation, budget, survey);
                 if (selection.isPresent()) {
                     L target = selection.get().location();
                     TransportJob<K, L> job = selection.get().kind() == LocationKind.STORAGE
@@ -415,6 +415,7 @@ public final class JobPlanner<K, L> {
         if (amount < 1)
             throw new IllegalArgumentException("amount must be at least 1: " + amount);
         Budget budget = new Budget(input.liveSimulationBudget());
+        int branch = input.craneBranch();
         double x = input.craneX();
         double y = input.craneY();
         return switch (type) {
@@ -424,11 +425,11 @@ public final class JobPlanner<K, L> {
             // anyway, because the next store plan offers them to the port. The port list is the gated one, so "off means
             // off" holds on a reroute too, and a port's filter is hard here — which cannot park the crane, because
             // advisory-filter storage is still a target and HOLDING is still the floor.
-            case STORE -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, false, null)
+            case STORE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null)
                     .map(Selection::target)
                     .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
                             new Budget(input.liveSimulationBudget())).map(Selection::target))
-                    .or(() -> selectPorts(input, key, amount, failedTarget, x, y,
+                    .or(() -> selectPorts(input, key, amount, failedTarget, branch, x, y,
                             new Budget(input.liveSimulationBudget())).map(Selection::target));
             // Back into storage first: another output never asked for these items (its own requests are served by
             // their own jobs), so delivering there would over-deliver. Only when no storage location accepts them.
@@ -436,7 +437,7 @@ public final class JobPlanner<K, L> {
             // whose filter rejects them is ranked last rather than dropped — otherwise a location that was
             // re-dedicated while its stock was inside could not take that stock back, and a fully partitioned aisle
             // could park the crane in HOLDING for ever (§8).
-            case RETRIEVE -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, true, null)
+            case RETRIEVE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null)
                     .map(Selection::target)
                     .or(() -> selectStation(input, withoutPorts(input, input.outputs()), LocationKind.OUTPUT, key,
                             amount, failedTarget, new Budget(input.liveSimulationBudget())).map(Selection::target));
@@ -446,7 +447,7 @@ public final class JobPlanner<K, L> {
             // Retrieve and supply leftovers are never offered to an accepting port (M17): only items the warehouse chose
             // not to store may leave through one, so a player can reason that what comes out of a port is surplus and
             // the mod never quietly feeds a shredder with items somebody requested.
-            case SUPPLY -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, true, null)
+            case SUPPLY -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null)
                     .map(Selection::target);
             // Collected items are storing items (M18, issue #13), so a rejecting filter drops the location as in the
             // store plan, and the fallback is an input buffer — from where they are stored normally. A port is
@@ -454,7 +455,7 @@ public final class JobPlanner<K, L> {
             // OUTPUT target at all, which is what keeps a diversion from defeating the headroom that stopped the
             // collecting in the first place (§5, guard 2). The station fallback gets its own budget, so storage
             // candidates that used it up never hide an input that accepts the items.
-            case COLLECT -> selectStorage(input, key, amount, failedTarget, x, y, 0L, budget, false, null)
+            case COLLECT -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null)
                     .map(Selection::target)
                     .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
                             new Budget(input.liveSimulationBudget())).map(Selection::target));
@@ -510,8 +511,10 @@ public final class JobPlanner<K, L> {
                 continue;
             RackPosition pos = position(location);
             long travel = TravelTimeModel.add(
-                    TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), pos.x(), pos.y()),
-                    TravelTimeModel.travelTicks(input.speeds(), pos.x(), pos.y(), outputPos.x(), outputPos.y()));
+                    input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(), pos.branch(),
+                            pos.x(), pos.y()),
+                    input.travel().travelTicks(pos.branch(), pos.x(), pos.y(), outputPos.branch(), outputPos.x(),
+                            outputPos.y()));
             // Retrieval never reads a storage priority (M16) and never a port rank (M17): the neutral values are passed
             // literally, so the shortest path wins and neither a prioritised location nor a port can send the crane past
             // a nearer source of the same item.
@@ -571,8 +574,8 @@ public final class JobPlanner<K, L> {
     private Optional<PlannedJob<K, L>> planCollect(PlannerInput<K, L> input, L source, InventorySnapshot<K> held,
             Budget budget, Set<NoJobReason> reasons) {
         RackPosition sourcePos = position(source);
-        long toSource = TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), sourcePos.x(),
-                sourcePos.y());
+        long toSource = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(),
+                sourcePos.branch(), sourcePos.x(), sourcePos.y());
         StoreSurvey survey = new StoreSurvey();
         for (K key : held.keys()) {
             // The port's filter first: cheapest test, and a rejected key must not cost a live call (ADR-021). It is
@@ -606,7 +609,7 @@ public final class JobPlanner<K, L> {
                 continue;
             }
             Optional<Selection<L>> selection = selectStorage(input, key, Math.min(limit, extractable), null,
-                    sourcePos.x(), sourcePos.y(), toSource, budget, false, survey);
+                    sourcePos.branch(), sourcePos.x(), sourcePos.y(), toSource, budget, false, survey);
             if (selection.isPresent()) {
                 L target = selection.get().location();
                 TransportJob<K, L> job = TransportJob.collect(newId(), source, target, key,
@@ -638,11 +641,12 @@ public final class JobPlanner<K, L> {
      * @param storageLimit the amount a storage candidate may take (0 for none, e.g. a key at its maximum)
      */
     private Optional<Selection<L>> selectStoreTarget(PlannerInput<K, L> input, K key, int portLimit, int storageLimit,
-            @Nullable L excluded, double fromX, double fromY, long baseTravel, Budget budget,
+            @Nullable L excluded, int fromBranch, double fromX, double fromY, long baseTravel, Budget budget,
             @Nullable StoreSurvey survey) {
         List<Candidate<L>> candidates = new ArrayList<>();
-        collectPorts(input, candidates, key, portLimit, excluded, fromX, fromY, baseTravel, survey);
-        collectStorage(input, candidates, key, storageLimit, excluded, fromX, fromY, baseTravel, false, survey);
+        collectPorts(input, candidates, key, portLimit, excluded, fromBranch, fromX, fromY, baseTravel, survey);
+        collectStorage(input, candidates, key, storageLimit, excluded, fromBranch, fromX, fromY, baseTravel, false,
+                survey);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget);
     }
@@ -661,10 +665,11 @@ public final class JobPlanner<K, L> {
      * @param survey        collects why locations were skipped, for {@link NoJobReason#NO_MATCHING_FILTER}; may be null
      */
     private Optional<Selection<L>> selectStorage(PlannerInput<K, L> input, K key, int limit, @Nullable L excluded,
-            double fromX, double fromY, long baseTravel, Budget budget, boolean allowRejected,
+            int fromBranch, double fromX, double fromY, long baseTravel, Budget budget, boolean allowRejected,
             @Nullable StoreSurvey survey) {
         List<Candidate<L>> candidates = new ArrayList<>();
-        collectStorage(input, candidates, key, limit, excluded, fromX, fromY, baseTravel, allowRejected, survey);
+        collectStorage(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, baseTravel, allowRejected,
+                survey);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget);
     }
@@ -695,16 +700,16 @@ public final class JobPlanner<K, L> {
 
     /** Accepting warehouse ports alone, for the last resort of a store reroute (§8, M17). */
     private Optional<Selection<L>> selectPorts(PlannerInput<K, L> input, K key, int limit, @Nullable L excluded,
-            double fromX, double fromY, Budget budget) {
+            int fromBranch, double fromX, double fromY, Budget budget) {
         List<Candidate<L>> candidates = new ArrayList<>();
-        collectPorts(input, candidates, key, limit, excluded, fromX, fromY, 0L, null);
+        collectPorts(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, 0L, null);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget);
     }
 
     /** Adds the storage candidates for {@code key} to {@code candidates}; see {@link #selectStorage}. */
     private void collectStorage(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
-            @Nullable L excluded, double fromX, double fromY, long baseTravel, boolean allowRejected,
+            @Nullable L excluded, int fromBranch, double fromX, double fromY, long baseTravel, boolean allowRejected,
             @Nullable StoreSurvey survey) {
         if (limit < 1)
             return;
@@ -740,7 +745,7 @@ public final class JobPlanner<K, L> {
             int priority = input.storePriority().applyAsInt(location);
             RackPosition pos = position(location);
             long travel = TravelTimeModel.add(baseTravel,
-                    TravelTimeModel.travelTicks(input.speeds(), fromX, fromY, pos.x(), pos.y()));
+                    input.travel().travelTicks(fromBranch, fromX, fromY, pos.branch(), pos.x(), pos.y()));
             candidates.add(new Candidate<>(location, LocationKind.STORAGE, CLASS_STORAGE, filter.storeRank(),
                     consolidates, compatible, priority, travel, rank, limit));
             if (survey != null)
@@ -772,7 +777,8 @@ public final class JobPlanner<K, L> {
      * can no more eat the live-simulation budget than a partitioned warehouse can (ADR-021).
      */
     private void collectPorts(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
-            @Nullable L excluded, double fromX, double fromY, long baseTravel, @Nullable StoreSurvey survey) {
+            @Nullable L excluded, int fromBranch, double fromX, double fromY, long baseTravel,
+            @Nullable StoreSurvey survey) {
         if (limit < 1 || input.ports().isEmpty())
             return;
         // Collected apart from the caller's list so the cap can be applied by rank; merged unsorted when it does not bite,
@@ -791,7 +797,7 @@ public final class JobPlanner<K, L> {
                 continue;
             RackPosition pos = position(port);
             long travel = TravelTimeModel.add(baseTravel,
-                    TravelTimeModel.travelTicks(input.speeds(), fromX, fromY, pos.x(), pos.y()));
+                    input.travel().travelTicks(fromBranch, fromX, fromY, pos.branch(), pos.x(), pos.y()));
             ports.add(new Candidate<>(port, LocationKind.OUTPUT,
                     portRank > NOT_A_PORT ? CLASS_DIVERSION : CLASS_OVERFLOW, filter.storeRank(), false, false,
                     portStrength(portRank), travel, rank, limit));
@@ -836,7 +842,8 @@ public final class JobPlanner<K, L> {
             if (location.equals(excluded) || !input.available().test(location))
                 continue;
             RackPosition pos = position(location);
-            long travel = TravelTimeModel.travelTicks(input.speeds(), input.craneX(), input.craneY(), pos.x(), pos.y());
+            long travel = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(),
+                    pos.branch(), pos.x(), pos.y());
             // A station is no storage location: it has no store filter, no storage priority (M16) and no class of its
             // own (M17) — a station fallback is reached only when nothing else took the items.
             candidates.add(new Candidate<>(location, kind, CLASS_STORAGE, NEUTRAL_FILTER_RANK, false, false,
@@ -878,8 +885,13 @@ public final class JobPlanner<K, L> {
     private long tripTicks(PlannerInput<K, L> input, L source, L target) {
         RackPosition from = position(source);
         RackPosition to = position(target);
-        return TravelTimeModel.tripTicks(input.speeds(), input.transferTicks(), input.craneX(), input.craneY(), from.x(),
-                from.y(), to.x(), to.y());
+        long stop = TravelTimeModel.stopTicks(input.speeds(), input.transferTicks());
+        long total = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(), from.branch(),
+                from.x(), from.y());
+        total = TravelTimeModel.add(total, stop);
+        total = TravelTimeModel.add(total,
+                input.travel().travelTicks(from.branch(), from.x(), from.y(), to.branch(), to.x(), to.y()));
+        return TravelTimeModel.add(total, stop);
     }
 
     private RackPosition position(L location) {

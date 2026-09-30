@@ -2,7 +2,11 @@
 
 > Status: **binding design** since MVP 0.1. Changes to the design are recorded here with a reason.
 
-## 1. Physical layout of an aisle
+## 1. Physical layout
+
+A warehouse is **one connected set of warehouse rails** served by one dock and one controller. Every straight run of
+those rails is an **aisle** (the code word is *branch*); a warehouse of one aisle is the whole of §1 below and is exactly
+what every warehouse was up to 0.5.0. What a bend adds is in §1.1.
 
 ```text
 Top view, aisle direction f = facing of the Stacker Crane (here: east →)
@@ -18,7 +22,7 @@ Top view, aisle direction f = facing of the Stacker Crane (here: east →)
 | Element | Rule |
 |---|---|
 | **Stacker Crane** (dock) | Block `wareworks:stacker_crane`, horizontal `FACING` = aisle direction `f`. Position index **0**. Kinetic input from **below** (rotation axis Y). |
-| **Warehouse Rail** | Block `wareworks:warehouse_rail`, horizontal axis property. The aisle **length L** = number of consecutive rails at `dock + f·1 … dock + f·L` whose axis equals `f.getAxis()`, capped at `maxAisleLength` (config, default 32). |
+| **Warehouse Rail** | Block `wareworks:warehouse_rail`. The aisle **length L** = number of consecutive rails at `dock + f·1 … dock + f·L`, capped at `maxAisleLength` (config, default 32). Since M21 the rail's `AXIS` is **cosmetic** and plays no part in this count; a rail a wrench has **closed** is not part of any warehouse and ends the run (§1.1). |
 | **Mast height H** | Scroll value on the crane, `1 … maxMastHeight` (config, default 16), default 4. Levels `0 … H-1` are reachable. |
 | **Controller** | Block `wareworks:warehouse_controller`, must be directly **behind** the dock (`dock − f`) and face the dock. |
 | **Rack positions** | For position `x ∈ [0, L]`, level `y ∈ [0, H-1]`, side `s ∈ {LEFT, RIGHT}`: `rackPos = dock + f·x + s·1 + up·y`. |
@@ -27,9 +31,115 @@ Top view, aisle direction f = facing of the Stacker Crane (here: east →)
 
 Blocks at rack positions that do not satisfy the facing rule are ignored and reported in the controller's goggle tooltip ("misaligned").
 
-**Implementation (M2, aisle core):** (M4 polish: the rail model has a `display.gui` scale of 0.85 lifted by 5 px, so the thin rail reads as an inventory icon.) `content.crane.WarehouseRailBlock` is a thin 3 px block with `HORIZONTAL_AXIS` from the player's look direction. It is waterloggable, the wrench toggles its axis, and it has no block entity; pickaxe only, drops itself. Rails are not relocation-protected, because moving one only changes the next rail count. The dock is described in `stacker-crane.md` §2.1. The rack position formula lives in `content.controller.AisleLayout`, and rail counting in `content.crane.RailScan` (`stacker-crane.md` §3.1). GameTest `aislelayoutroundtrip` checks the mapping for all four facings.
+**Implementation (M2, aisle core):** (M4 polish: the rail model has a `display.gui` scale of 0.85 lifted by 5 px, so the thin rail reads as an inventory icon.) `content.crane.WarehouseRailBlock` is a thin 3 px block with `HORIZONTAL_AXIS` from the player's look direction. It is waterloggable and has no block entity; pickaxe only, drops itself. Rails are not relocation-protected, because moving one only changes the next rail count. The dock is described in `stacker-crane.md` §2.1. The rack position formula lives in `content.controller.BranchLayout` (the M2 `AisleLayout`, renamed in M21), the warehouse's own mapping in `content.controller.WarehouseLayout`, and discovery in `content.crane.RailNetworkScan` (`stacker-crane.md` §3.1). GameTest `aislelayoutroundtrip` checks the mapping for all four facings.
+* **M21 change:** the wrench no longer turns the axis — it toggles `CLOSED` (§1.1). The axis stopped meaning anything the moment a second rail touched the block, and closing a rail is the thing a player actually needs.
 
 **Implementation (M2, controller):** `content.controller.WarehouseControllerBlock` faces the player's horizontal look direction on placement (standing behind the dock, looking at it). The controller links only to a dock at `pos + FACING` whose `HORIZONTAL_FACING` equals its own. Facing rules per kind are in `core.warehouse.LocationKind` and `content.controller.WarehouseMember#isAlignedWith`. Details: §3.3.1 and §4.
+
+### 1.1 The rail network: aisles that bend (M21, issue #1)
+
+> Decision and reasons: **ADR-033**. The crane's side of it — turning, routes, travel cost, rendering, sound — is
+> `stacker-crane.md` §3, §5, §7 and §8.
+
+**What a player builds.** The same rails as always. **Rails that touch, connect** — there is no junction block, no marker
+and nothing to configure. Lay a run of rails in front of the dock, lay a second run at right angles to it, and the block
+they share becomes a **corner**: the crane rolls onto it, swings a quarter turn and drives on down the second run. The
+rail draws itself as a straight, a corner, a T, a cross or a stub, so the shape of the warehouse is visible on the floor.
+
+```text
+Top view of an L, north up and east right. Aisle A runs east out of the dock and ends on the block C;
+aisle B runs north out of that same block. C is A's position 4 AND B's position 0.
+
+                              [rail]        B's rails (B positions 2 and 1)
+                        [ X  ][rail]
+[CTRL][DOCK][rail][rail][rail][  C ][ i  ]  A's line (positions 0 … 4); i = B-01-00R
+                              [ i  ]        i = A-01-04R
+```
+
+Both `i` are real storage locations **on the corner block's two aisles**, and the interface's own facing is what says
+which: the one east of C faces **east** (away from aisle B), the one south of C faces **south** (away from aisle A). `X`
+is the case every simpler rule misses — it is not a neighbour of C at all, yet it is laterally beside a *straight* rail of
+A and a *straight* rail of B, so it can be `A-01-03L` or `B-01-01L`, again decided by which way its interface faces.
+
+| Term | Meaning |
+|---|---|
+| **Warehouse** (code: network) | one connected set of aisle blocks reached from one dock |
+| **Aisle** (code: branch) | one maximal **straight** run of rails inside it. Two collinear rails that touch are always the same aisle, so a run does not fragment where something joins it |
+| **Aisle block** | the dock itself, or a `warehouse_rail` whose `CLOSED` is false |
+| **Corner** | one block that is on two perpendicular aisles at once. It has a legal position number on **both**, which is why the crane's hand-over from one aisle to the next is a rename of one world block and not a special case |
+
+**Connectivity, exactly.** Two orthogonally adjacent aisle blocks connect when each *offers* towards the other. A rail
+offers in all four horizontal directions. **The dock offers only towards its own `HORIZONTAL_FACING`**, so a rail beside
+the dock is still a rack position and the crane enters its warehouse the way it always did. **Another dock offers
+nothing — it is a wall**: the walk stops there, both warehouses keep working, and that is the generalisation of what two
+opposing straight aisles already did.
+
+**Block states of the rail, and which of them the warehouse reads.**
+
+| State | Read by the warehouse? | Meaning |
+|---|---|---|
+| `NORTH` / `EAST` / `SOUTH` / `WEST` | **no** | derived like a fence's, purely cosmetic: they pick one of five shapes — the plain rail, `end`, `corner`, `tee`, `cross` — turned onto the sides it is connected on. A stale flag in an untouched chunk is a wrong *picture* that the first neighbour update repairs, never a wrong warehouse |
+| `CLOSED` | **yes — the only one** | a rail a **wrench** has closed. Still a rail, no part of any warehouse: it carries a brass stop across its bed, so it is unmistakable at a glance and in the dark. It is allowed to be logic because its failure direction is *less network, visibly marked, one click to undo* |
+| `AXIS` | no | kept from before M21 and now cosmetic: it picks the model of a rail with **no** connections at all (a lone decorative rail, and the item icon) |
+| `WATERLOGGED` | no | unchanged |
+
+**Aisle letters and positions are pinned to the rails, not to discovery order** (§2). Ordinary building — extending an
+aisle at either end, shortening it, laying a new aisle somewhere else — never reshuffles a player's addresses.
+
+**A rack at a corner belongs to the aisle it faces.** `WarehouseLayout#candidates(BlockPos)` answers with one candidate
+per horizontal neighbour that is an aisle block of a perpendicular aisle — at most four — and the member's own `FACING`
+selects: a storage interface faces **away** from its aisle, a station faces **towards** it. A block that is **itself**
+an aisle block is no candidate of anything: the rail before a corner is laterally beside the aisle round it, and neither
+it nor the column above it — which is where the mast travels — may ever be a rack (M21 review fix). Because each
+candidate has a different neighbour, each requires a **different** facing, so exactly zero or one can be satisfied. The
+rule is therefore total and there are no dead corners. It also covers the block that every "free faces of the corner
+block" rule misses: the **inner** corner of an L is laterally beside a *straight* rail of both aisles and is not a
+neighbour of the corner block at all. The one thing a player has to know is the whole rule: **point the interface away
+from the aisle it belongs to.**
+
+**What is refused in step one, and what a player gets instead.** The walk follows a **chain**: every aisle block may have
+at most two connections and the rails may not lead back onto a block already taken. Lay a T and the warehouse **stops
+before the branching rail** — the rails beyond it are simply not part of it. The result is always a valid, possibly
+shorter warehouse: never nothing, and never the straight aisle taken away. The reason is that in a chain there is exactly
+**one** route between any two points, so routing is a walk rather than a search; the branching case is held back to its
+own milestone (issue #2) while everything a player experiences — corners, corner racks, the turning machine, the
+addresses, the migration — ships here. Every stop is named on the controller's goggles with the coordinates of the block
+to walk to (`core.warehouse.NetworkStop`):
+
+| Stop | It means |
+|---|---|
+| `END` | the rails end. Nothing is wrong, and nothing is reported |
+| `CLOSED` | the next rail is closed with a wrench — exactly what closing it asked for, so this is a real end too |
+| `SECOND_DOCK` | another dock stands there. It is a wall; both warehouses keep working |
+| `UNLOADED` | the next aisle block is in a chunk that is not loaded, so the warehouse beyond it is unknown. The **last known network is kept** rather than shortened, because a chunk boundary must never renumber a position — except that its aisle at the dock is cut back to the length the dock itself confirmed, which renumbers nothing and takes the rest of the chain with it (§4, M21 review fix) |
+| `BRANCHED` | the rails split here, which needs a later version |
+| `LOOPED` | the rails lead back onto a block already taken. Cannot normally happen (the first block of a ring has three connections and reads as `BRANCHED`) and exists so a walk can never run for ever |
+| `MAX_RAILS` / `MAX_BRANCHES` / `MAX_LENGTH` | a configured cap (§9) |
+
+**Not in step one:** T-junctions, crosses and rings (issue #2). A player who lays one gets a shorter warehouse with the
+branching rail named, never nothing.
+
+**A crane on a bent warehouse drives home when it has nothing to do** (M21, ADR-034): to the **warehouse home point** if
+a player placed one (§3.7) and otherwise to its dock, after `crane.returnHomeIdleTicks` without work. On a warehouse of
+**one** straight aisle it stands where its last job left it, exactly as before this version. The rule is
+`stacker-crane.md` §4.7; a home point per crane is also how a player will assign areas in the multi-crane milestone,
+without a zone editor.
+
+**Renumbering, and why nothing is ever lost.** A warehouse's decomposition into aisles can genuinely change — a corner
+appears in the middle of an aisle, an origin end is built past, a rail is closed. When it does, the controller **remaps**
+rather than rebuilds: every saved record, count, misaligned position, stock rule, production order and the crane's own
+pose, motion target and job are carried from their old label to their new one **through the world block they stood for**
+(`world = oldLayout.rackPos(old)` → `newLayout.candidates(world)`, resolved by the member's facing). A record whose world
+position is no longer a rack position is dropped exactly as a member that left the aisle is dropped, and its items stay
+in its chest. **No item moves during a remap**, so nothing can be lost — and a production order is re-pointed or
+cancelled rather than left aiming at a different machine, which is the one case neither the membership pass nor
+`clearAisleState` covered before.
+
+**Chunk loading (§11) is per warehouse, not per straight aisle.** The footprint is the union of every aisle's box, counted
+once where two aisles share a chunk. A bend costs more chunks than any single aisle of the same length cap can, so
+`chunkLoading.maxChunksPerAisle` no longer follows from `aisle.maxAisleLength`; its default was raised from 8 to 10 in
+M21 (§9, §11.3). The M19 rule is unchanged: a warehouse over the cap holds **nothing at all** and says which number it
+would have needed.
 
 ## 2. Addresses
 
@@ -37,9 +147,9 @@ Blocks at rack positions that do not satisfy the facing rule are ignored and rep
 A-03-07R    aisle A · level 03 · position 07 · rack side R
 ```
 
-* **Aisle letter**: scroll value on the controller (A–Z), default `A`.
+* **Aisle letter**: scroll value on the controller (A–Z), default `A`. Since M21 that value names the **first** aisle — the one the dock stands on. Every further aisle of the same warehouse gets its own letter (see below), so one controller letters its whole warehouse.
 * **Level** = `y + 1`, two digits. Level 01 is the dock's height.
-* **Position** = `x`, two digits. Position 00 is the dock column, 01 the first rail.
+* **Position** = `x`, two digits. Position 00 is the dock column, 01 the first rail. On an aisle that is not the dock's, position 00 is the **corner block it starts at**, so a corner has a position number on both of its aisles.
 * **Side**: `L` or `R`, relative to the aisle direction. It is appended because racks are two-sided and `A-LL-PP` alone would be ambiguous.
 * Addresses are derived from geometry and never stored as the source of truth. The source of truth is `(x, y, side)` relative to the dock.
 
@@ -47,6 +157,34 @@ A-03-07R    aisle A · level 03 · position 07 · rack side R
 * **Refinement:** level and position are written with at least two digits (`%02d`), so values from 100 on get three digits (`B-100-128L`). Both are limited to 999, which also bounds `AisleGeometry`.
 * `parse` accepts only the canonical form that `format` produces (upper-case letter, no extra leading zeros, no whitespace), so every address has exactly one spelling.
 * JUnit: `StorageAddressTest` (round trip over all letters, sides and boundary numbers; invalid inputs), `AisleGeometryTest`.
+
+**Implementation (M21, a warehouse of several aisles; ADR-033):** `RackPosition` becomes `(branch, x, y, side)` with
+`FIRST_BRANCH = 0` and `MAX_BRANCH = StorageAddress.AISLE_COUNT - 1` — an aisle needs a letter, so the letter count is the
+bound — and `branch` is `ORDER`'s **first** key, so on a warehouse of one aisle the order is literally the order it was
+and neither the round-robin cursor nor a planner tie-break moves. A three-argument `RackPosition(x, y, side)` and
+`of(x, y, side)` both mean branch 0, which is why none of the 314 construction sites across 78 files had to be edited. A
+branch is written to NBT **only when it is not 0** in each of the three rack codecs, so a straight warehouse saves the
+bytes it always did.
+
+**The letters and origins are pinned to the rails** (`content.controller.BranchTable`), which is what keeps ordinary
+building from reshuffling a player's addresses:
+* An entry is keyed by an aisle's **line**: its axis plus the one coordinate fixed along it, dock-relative. A line
+  survives exactly the things a player does — extending an aisle at either end, shortening it, a junction appearing in
+  its middle. Only tearing an aisle down and building it elsewhere makes a new line, and that really is a new aisle.
+* A line is infinite, so it is not by itself an aisle: a serpentine can lay two disjoint aisles on the same line. A line
+  therefore holds one entry **per aisle on it**, matched by whose pinned origin still lies on that aisle's own stretch of
+  rails (preferring one of its two ends). While each line held a single entry those two aisles **traded letters on every
+  refresh**, for ever — found by the M21 review, fixed here.
+* **Letters:** branch 0 always takes the controller's own value box. Every further aisle takes its pinned letter if it has
+  one and nothing nearer has claimed it, otherwise the **lowest free** letter. Assignment is a function of the aisle order
+  and the table alone, so it is reproducible across restarts.
+* **Origins:** an aisle is numbered from its origin outwards, so moving the origin renumbers every position on it. A saved
+  origin is kept whenever it is still one of the aisle's two ends; if it became the **far** end the aisle is flipped
+  rather than renumbered. An origin that is no longer an end at all cannot be kept, and the controller remaps the records
+  through their world positions instead (§1.1).
+* Bounded by one entry per letter; the least recently seen aisle is dropped first.
+* JUnit: `RackPositionTest`, `HeadingTest`, `NetworkGeometryTest`, `RackOwnershipTest`, `BranchTableTest` (including the
+  two aisles on one line that used to trade letters).
 
 ## 3. Components
 
@@ -980,7 +1118,7 @@ Registered as `WareworksBlocks.WAREHOUSE_CONTROLLER` / `WareworksBlockEntityType
 
   A re-link costs one block entity lookup. It runs on the next tick after a hint and at the latest every `geometryRefreshTicks`. Hints: a block update in front, a dock geometry change, the dock's load, rotation or removal (`StackerCraneBlockEntity#notifyControllerBehind`), the controller's own rotation, and load. While the dock position is not loaded, the known layout is kept.
   * **Dock link (M2 review fix, owner-aware):** the controller links the dock with `linkController(controllerPos)` and unlinks it with `unlinkController(controllerPos)`, which is ignored unless that controller is the dock's current owner. Before, a bare flag let a controller that lost the dock (dock rotated between two controllers) clear the new controller's link, depending on ticker order. A controller whose chunk unloads unregisters its aisle in `invalidate()`, and the only level access on that path is the per-level `WorldAttached` registry map, which catnip backs with a `WeakHashMap` keyed by the level (safe while a level unloads, §4). It does **not** probe the world there; the dock re-validates its owner at its geometry refresh cadence (`validateControllerLink`: loaded, a controller, `isLinkedTo(dock)`; one block entity lookup) and clears a lost link.
-* **Layout changes**: the `AisleLayout` with its letter is registered in `WarehouseRegistry`.
+* **Layout changes**: the `WarehouseLayout` with its letters is registered in `WarehouseRegistry` (the `AisleLayout` of one aisle until M21).
   * A letter change only re-registers.
   * A geometry change marks all positions dirty; unloaded records are kept.
   * A changed dock position or aisle direction clears records, stock counts, pending snapshots, shared inventories and requests, then rebuilds the list with a full scan (unloaded positions are not kept), so every member joins again and is snapshotted. **M2 review fix:** before, only the list was invalidated, and a record of the same kind at the same aisle-local position (for example after wrenching the controller from one dock straight to a dock on an adjacent face) kept the old aisle's per-location counts without a snapshot.
@@ -989,7 +1127,7 @@ Registered as `WareworksBlocks.WAREHOUSE_CONTROLLER` / `WareworksBlockEntityType
 * **API for M3/M4**: `layout()`, `status()`, `aisleLetter()`, `isLinkedTo(BlockPos)`, `locations()`, `storageLocations()`, `inputStations()`, `outputStations()`, `misalignedCount()`, `stockIndex()` (read-only `StockView<ItemKey, RackPosition>`), `countOf(ItemKey)`, `isSnapshotPending(RackPosition)`, `pendingSnapshotCount()`, `sharedInventoryOf(RackPosition)` (the location whose index entry counts the inventory; M3 plans capacity and extraction there), `locationsSharingInventory(RackPosition)`, `addressOf(BlockPos)`, `locationAt(BlockPos)`, `worldPosOf(RackPosition)`, `refreshLocation(RackPosition)`, `requestRelink()`.
   * The location id is the aisle-local `RackPosition`: stable across restarts and independent of world coordinates.
   * Requests (stations task, §7.2): `request(outputPos, ItemKey, amount)` → `RequestResult`, `availableStock(ItemKey)`, `reservedStock(ItemKey)` (M3: the ledger formula, §7.5), `deliveredFor(BlockPos)` (M3), `openRequests()`, `openRequestCount()`, `oldestOpenRequest()`, `requestsFor(BlockPos)`, `requestedFor(BlockPos)`, `deliverRequest(UUID, amount)`, `cancelRequest(UUID)`.
-* **Goggles** (observer-driven through `GoggleObservers`): "Warehouse Controller:", "Aisle X", the status, "Aisle: L long, mast H high", "Storage locations: N", "Inputs: N, outputs: M", "Misaligned blocks: N" (only if > 0), "Item types: N", "Items stored: N", "Open requests: N"; from M3 on also the linked crane's status and job and the last planning result (§7.5). **M19:** above the crane block, one line about the aisle's chunk hold — what it holds and why, or what stops it from holding — omitted entirely while there is nothing to report, which is every aisle while `chunkLoading` is off (§11.7).
+* **Goggles** (observer-driven through `GoggleObservers`): "Warehouse Controller:", "Aisle X", the status, "Aisle: L long, mast H high", "Storage locations: N", "Inputs: N, outputs: M", "Misaligned blocks: N" (only if > 0), "Item types: N", "Items stored: N", "Open requests: N"; from M3 on also the linked crane's status and job and the last planning result (§7.5). **M19:** above the crane block, one line about the aisle's chunk hold — what it holds and why, or what stops it from holding — omitted entirely while there is nothing to report, which is every aisle while `chunkLoading` is off (§11.7). **M21:** for a warehouse that really bends, "Warehouse: 41 rails, 3 aisles, mast 6 high" replaces the single-aisle size line and is followed by "Aisles: A 16 · B 12 · C 13" (at most six, then "and N more"); and whenever the rails stop short of something a player would want, one sentence per reason — "Warehouse stops at 148 64 -37: the rails split here, which needs a later version" — never merged into one message (the M5 `NO_DOCK` / `DOCK_MISALIGNED` lesson) and naming the block to walk to. `content.controller.NetworkGoggleInfo` carries both, nested in `ControllerGoggleSummary` exactly as `CraneGoggleInfo` is, and is **absent from the synced tag entirely** for a warehouse of one aisle whose rails simply end — which is every warehouse built before M21. It is present for a straight warehouse that stops at a **fault**, because that is the case it exists for: a player who has just laid a T on a straight aisle has to be told where their warehouse now stops. World coordinates rather than an address, because the block the walk stopped at is by definition outside the warehouse and has none. JUnit `NetworkGoggleInfoTest` plus the world half in `WarehouseNetworkGameTests#networkgogglesnametheaislesandwheretheystop`, which reads the line back out of the synced tag — the only path a player's screen ever sees.
   * Synced as a `ControllerGoggleSummary`: a status name and numbers only, so it has a fixed size.
   * Recomputed in O(1) on observation and sent only when changed, at most once per `GoggleObservers.SUMMARY_SYNC_MIN_INTERVAL_TICKS` (20, `SyncThrottle`).
 * **Persistence** (`ControllerPersistence`): `Layout {Facing, Length, Height}`, `Locations [{X, Y, Side, Kind, Stock [{Item: ItemKey, Count: long}]}]`, `Misaligned` (int array of x, y, side ordinal), `Requests [{Id: UUID, Item: ItemKey, Requested, Remaining, Destination: int[3] offset from the controller}]` in queue order.
@@ -2798,15 +2936,83 @@ rather than reading the modifiers of a click, so the *skip* is driven through th
 and Alt held (everything after that — the amount, the acknowledgement, the payload and the server's decision — is the
 real path), and the physical keys stay a question for manual check 103.
 
+### 3.7 Warehouse Home Point (`content.station`, M21, issue #1)
+
+> Decision and reasons: **ADR-034**. When a crane returns, what counts as idle and which pose it parks in:
+> `stacker-crane.md` §4.7. The config key is §9.
+
+**What it is.** The rack position a stacker crane with nothing to do waits at. A player places it **beside the rails**
+where the next job usually starts — next to the terminal, next to an input, at a corner — and the machine parks in front
+of it instead of standing wherever its last job ended. Without a home point the **dock** stays the crane's home, exactly
+as before M21.
+
+**It is a rack member, not a rail** (`LocationKind.HOME`, §4). It is placed like every other station: the plate faces the
+player, so standing in the aisle and placing it into the rack gives the aligned facing, and the wrench on the top or
+bottom face turns it. It therefore has an **address** (`B-01-03R`), which is precisely what the crane needs — the aisle
+and the position to drive to — and the rails stay rails: nothing in discovery, connectivity or the chain rule of §1.1
+sees anything new. It holds no items, exposes no item capability, is no mechanical arm target, has no ticker and saves
+nothing at all: its whole content is *where it stands*.
+
+**Two lamps and one shape.** The plate carries a rose quartz lamp (`create:block/rose_quartz_lamp_dim` dark,
+`rose_quartz_lamp` lit, `rose_quartz_lamp_powered` refused), and the **refused** state additionally grows a crossed
+brass stop over the plate — the same "readable across the room and in the dark" standard the closed rail sets (§1.1),
+because the two lamp textures alone are a shade apart and the difference here means "your crane's home" versus "this
+block does nothing". The blockstate is a **multipart** one for that reason (`WareworksBlockStateGen#homePointBlockProvider`):
+the stop is its own part over the refused body.
+
+**What the warehouse does with it** (`content.station.HomePointStatus`, derived by the controller, synced, never saved):
+
+| Status | Lamps | The goggle sentence, and what it means |
+|---|---|---|
+| `SERVING` | lit | "The stacker crane waits here" — this is the home point the crane really uses |
+| `SECOND` | **refused** | "Without effect: this warehouse already has a home point". A warehouse has one crane, so it has one home |
+| `UNREACHABLE` | **refused** | "Without effect: the crane cannot drive here" — the rails between the machine and this aisle are broken, closed or gone. **Reported rather than obeyed:** the crane waits where it is, and the **dock** becomes home again, never the second home point |
+| `SINGLE_AISLE` | dark | "Without effect: on one aisle the crane waits where it is" — the pre-M21 behaviour, deliberately unchanged |
+| `SWITCHED_OFF` | dark | "Without effect: this server switched returning home off" (`crane.returnHomeIdleTicks = 0`) |
+| `NO_WAREHOUSE` | dark | "Not part of a warehouse" — not an aligned member of a loaded warehouse, so it says nothing about any crane |
+
+**Goggles**: the header "Warehouse Home Point:", then the aisle assignment (address, "Misaligned" with the station hint,
+or "Not part of an aisle"), then the status sentence — green while the crane really waits here, red for the two states a
+player has to act on, gold for the rest. Observer-driven like every other goggle summary (`GoggleObservers`, throttled
+to `SUMMARY_SYNC_MIN_INTERVAL_TICKS`), and the derived summary travels in the client packet only.
+
+**The controller decides, the block only shows it**
+(`WarehouseControllerBlockEntity#refreshHomePoints` / `#homePoint()` / `#homePointStatusAt(pos)`):
+* The warehouse's home is the **first** of its home points in `RackPosition.ORDER` — the same block on every tick and
+  after every restart — and only if its own status is `SERVING`. Everything else hands the dock over instead.
+* It runs on the first tick after a load, at the re-link cadence (`geometryRefreshTicks`) and whenever a home point
+  joins or leaves — **never per tick**. A warehouse without any home point pays a single counter read
+  (`AisleMembership#homePointCount`); one with home points pays one route question plus one block entity lookup each.
+* Reachability is `RouteTable#canDrive` from where the machine really stands, the single definition ADR-033 introduced,
+  so the lamp on the block and the machine can never mean two different things by "it can get there". A dock whose chunk
+  is away is asked from position 0 of the aisle at the dock, so an unload does not turn a working home point red.
+* **Lamps that have to go out are tracked by world position** (`writtenHomePoints`), because that is the one thing that
+  still means the right block after a player has broken the aisle a rack position was named on. A chunk unload clears
+  nothing (ADR-013): a lamp that flickers off whenever a player walks away says nothing true.
+
+**Recipe** (`data/wareworks/recipe/warehouse_home_point.json`): a rose quartz lamp over an andesite casing flanked by two
+andesite alloy. It stays at the **andesite** tier, with no electron tube and no precision mechanism, because it holds
+nothing and decides nothing; only the warehouse input and the warehouse interface are cheaper. It is the **tenth** and last item of the
+creative tab (`WareworksItemGameTests#creativeTabOrderAndIcon`).
+
+**No Ponder scene yet**, and the home point is not in the Ponder tag, so `PonderVisualScenario.SUBJECTS` is unchanged
+(manual check 42 says so, so a tester does not read it as a defect).
+
+**Tests**: `gametest.HomePointGameTests` (7) and `core.crane.HomeReturnTest` (12 JUnit) — listed in
+`stacker-crane.md` §4.7 — plus `WareworksItemGameTests` for the recipe, its ingredient set and the tab order. The
+`home` visual scenario (`./gradlew runVisualTest -Pwareworks.visualTest=home`) photographs the block, both lamp states
+and a whole trip home; the `blocks` scenario shows the model as an exhibit.
+
+
 ## 4. Discovery and membership (no permanent world searches)
 
 * **`WarehouseRegistry`** (server-side, per `ServerLevel` via catnip `WorldAttached`, in-memory) maps controller position to `AisleBounds`. A controller registers in `onLoad()` (bounds become known after its first tick) and whenever its geometry changes. It unregisters in `invalidate()`/`remove()` (Create's `setRemoved` is final).
 * **Members** (interface, input, output) call `WarehouseRegistry.memberChanged(level, pos)` in `onLoad()`, on placement and on removal. Every controller whose bounds contain `pos` marks its membership dirty.
-* **Geometry refresh**: the dock re-counts rails at most every `geometryRefreshTicks` (default 40, ≤ `maxAisleLength` block-state reads) and immediately when the mast height changes. If the geometry changed, the controller marks membership dirty. Implemented in M2 (`stacker-crane.md` §3.1), including on load, after a facing change, and the rule that a scan reaching an unloaded chunk keeps the known length.
+* **Geometry refresh**: the dock re-discovers its rails at most every `geometryRefreshTicks` (default 40, ≤ `maxNetworkRails` block-state reads since M21) and immediately when the mast height changes. If the geometry changed, the controller marks membership dirty. Implemented in M2 (`stacker-crane.md` §3.1), including on load, after a facing change, and the rule that a scan reaching an unloaded chunk keeps the known length.
 * **Membership scan** runs only when dirty. It iterates the rack positions of the bounds (≤ 2 · (L+1) · H), **only in loaded chunks**. Records in unloaded chunks are kept from the persisted list.
 
 **Implementation (M2, controller) and deviations:**
-* **Registry**: `WarehouseRegistry` maps controller position → registered `AisleLayout`. This is the design's `AisleBounds`; containment is `AisleLayout#worldToLocal`, exact rack positions instead of an AABB.
+* **Registry**: `WarehouseRegistry` maps controller position → registered `WarehouseLayout` (one `AisleLayout` until M21, now one `BranchLayout` per aisle). This is the design's `AisleBounds`; containment is `worldToLocal`, exact rack positions instead of an AABB.
   * `memberChanged(level, pos)` passes the aisle-local `RackPosition` to every loaded controller whose layout contains `pos`.
   * `contentChanged(level, pos)` (M2 review fix) does the same for a content hint of a storage member; the controller queues the location for an urgent snapshot if it is a storage record (§5).
   * `findController(level, pos)` prefers the aisle in which the member there is aligned, because two aisles can share a rack plane. A position can lie in several aisles, so the winner is decided by a fixed rule and never by map iteration order (**M5 review fix**): aligned beats not aligned, then the **closest dock** wins, then the lower controller position. A redstone request at an output that two opposing aisles reach is therefore always served by the same aisle (GameTest `twoaislessharearackplane`).
@@ -2817,14 +3023,16 @@ real path), and the physical keys stay a question for manual check 103.
   * Full scans run after load, geometry changes and layout changes.
   * Reason: otherwise, building a rack wall one interface at a time would rescan up to 2 · (L+1) · H positions per placement.
 * **Members** implement `content.controller.WarehouseMember`: `locationKind()`, `facing()`, `isAlignedWith(layout, side)` and, since M10, `alignToAisle(controller, layout, side)` — a hook the probe calls immediately before `isAlignedWith` for a member whose block state depends on *where the aisle is*. Its only implementation is the warehouse terminal's intake port (§3.4.3, ADR-022); the contract is that it writes the block state only when it really changes **and only when `WarehouseRegistry#ownsMemberState(level, member, controller)` names this controller**, so the probe stays a read for every other member and two aisles sharing a rack plane cannot fight over one block state (M10 review fix). A write from inside the probe marks that position dirty again; `core.warehouse.AisleMembership#reconcile` snapshots and clears its dirty set *before* the probe loop, so the mark is kept for the next pass rather than lost or probed twice, and the cost is one further reconcile in which nothing is written. Storage members also implement `StorageMember` (`attachedPos()`, `snapshot()`).
-  * `core.warehouse.LocationKind`: `STORAGE` faces away from the aisle; `INPUT`, `OUTPUT`, (since M11) `PRODUCTION` and
-    (since M15) `KEEPER` face the aisle. `OUTPUT` and `PRODUCTION` are the two **delivery targets** a crane drops at on
-    behalf of something that asked (`isDeliveryTarget()`, §3.5, ADR-024); only `OUTPUT` is a retrieval destination.
-    `KEEPER` is neither, and it is the first kind that holds **no inventory at all**: the crane never visits a stock
-    keeper, nothing is ever planned to or from it, and the only thing the controller wants from that rack position is
-    the block entity's list of rules (§3.6.2). Because of it, `isStation()` is now the explicit list
-    `INPUT | OUTPUT | PRODUCTION` instead of "everything that is not `STORAGE`" — the same trap a fourth aisle-facing
-    kind would fall into again, so the enum says why.
+  * `core.warehouse.LocationKind`: `STORAGE` faces away from the aisle; `INPUT`, `OUTPUT`, (since M11) `PRODUCTION`,
+    (since M15) `KEEPER` and (since M21) `HOME` face the aisle. `OUTPUT` and `PRODUCTION` are the two **delivery
+    targets** a crane drops at on behalf of something that asked (`isDeliveryTarget()`, §3.5, ADR-024); only `OUTPUT` is
+    a retrieval destination. `KEEPER` is neither, and it was the first kind that holds **no inventory at all**: the
+    crane never visits a stock keeper, nothing is ever planned to or from it, and the only thing the controller wants
+    from that rack position is the block entity's list of rules (§3.6.2). Because of it, `isStation()` is now the
+    explicit list `INPUT | OUTPUT | PRODUCTION` instead of "everything that is not `STORAGE`" — the same trap a fourth
+    aisle-facing kind would fall into again, so the enum says why. `HOME` is the second such kind and proves the point
+    (M21, ADR-034, §3.7): the only thing read from it is **where it stands**, and `TransferContexts` resolves a `HOME`
+    location as **missing**, so no job can ever name one even if something tried.
   * The warehouse input and output implement `WarehouseMember` (kinds `INPUT` / `OUTPUT`, §3.2.1); the controller needed no change for them. A `STORAGE` member that is not a `StorageMember` is ignored.
 * **Deviation: members notify in `remove()`, not in `invalidate()`.**
   * `SmartBlockEntity#setRemoved` calls `remove()` for every real removal, while `invalidate()` also runs on chunk unload.
@@ -2832,6 +3040,46 @@ real path), and the physical keys stay a question for manual check 103.
   * Controllers still unregister in both `invalidate()` and `remove()`.
 * **Unloaded chunks**: probes check `Level#isLoaded` and never load a chunk. An unloaded position keeps its record and misaligned flag, also across restarts since records are saved, unless the layout changed.
 * **Limitation**: members in loaded chunks are not tracked while their controller's chunk is unloaded; the controller scans fully when it loads. GameTests cannot cover unloaded chunks (test areas are force-loaded); the rules are covered by `AisleMembershipTest`.
+
+**Implementation (M21, network discovery; ADR-033):** `content.crane.RailNetworkScan` replaces `content.crane.RailScan`
+and is owned by the dock, exactly as the rail count was.
+* **The walk** is breadth-first from the dock, taking neighbours in the fixed order *forward, right, left, back* relative
+  to the **dock's facing** — dock-relative, so a rotated copy of a build discovers in the same order and gets the same
+  letters. It refuses a block with three or more connections (`BRANCHED`) or one already taken from another direction
+  (`LOOPED`), records where it stopped, and ends. The result is always a valid chain.
+* **It never loads a chunk.** It stops at an unloaded neighbour and marks the scan incomplete; `AisleGeometry`'s old rule
+  generalises to the **whole warehouse and not per aisle** — a complete scan is authoritative, an incomplete one keeps the
+  last known network. A partial network would renumber positions, and renumbering must never be caused by a chunk
+  boundary.
+* **What an incomplete scan may still shrink: the aisle at the dock.** The scan carries **two** unloaded flags
+  (`RailNetwork`): the narrow `firstBranchIncomplete` for the dock's own line and the broad `reachedUnloadedChunk` for
+  anything the walk looked at, including the rack plane beside the rails. The controller refuses to reshape a warehouse
+  on the broad flag, but it cuts the kept network back to the length the **dock** resolved with the narrow one
+  (`NetworkGeometry#truncatedToFirstBranchLength`): truncating at the far end renumbers nothing, and every further aisle
+  of a chain begins at that far end, so a shorter first aisle takes the rest of the chain with it. Without that cut a
+  single unloaded block beside the surviving rails froze the old length for ever, and the crane planned routes, answered
+  `canDrive` and parked against rails a player had broken (M21 review fix; pinned by `NetworkGeometryTest`, which is
+  where the rule lives — a GameTest area is force-loaded, so no GameTest can produce the unloaded neighbour).
+* **Bounded** by `aisle.maxNetworkRails` block-state reads, `aisle.maxBranches` aisles and `aisle.maxAisleLength` per
+  aisle (§9). At the first two the last valid network is **kept** and the stop is reported, because truncating would
+  renumber and the walk order is not *stable* under a rail added in the middle; the length cap still truncates one aisle at
+  its **far** end, which renumbers nothing.
+* **Decomposition is pure:** `core.warehouse.RailGraph` takes the set of dock-relative rail offsets plus the dock's facing
+  and returns a `RailNetwork` — a `core.address.NetworkGeometry` (one `BranchGeometry` per aisle plus the `BranchLink`s
+  where they meet) and a `NetworkStop` with the position it stopped at. No Minecraft types, so it is JUnit-tested
+  (`RailGraphTest`).
+* **No rail hint: a rail change is still noticed by the periodic scan only.** The design study proposed one
+  (`WarehouseRailBlock` telling every controller whose network bounds contain the position to look again), and it was
+  **not built**: `WarehouseRegistry` has no `railChanged`, and placing or breaking a rail is picked up within
+  `geometryRefreshTicks` (2 s by default) exactly as it was before M21. The deviation recorded in `stacker-crane.md`
+  §3.1 therefore stands rather than being closed, and it is the first thing to build if the delay ever reads as a bug —
+  a corner appears the moment two runs touch, which makes two seconds more visible than it was on a straight aisle.
+* **Saved on the dock** (the `Network` tag, beside the length tag that a warehouse of one aisle still writes), for the same
+  reason the length was: so a warehouse that loads into an unloaded neighbour does not renumber itself.
+* GameTests: `RailNetworkGameTests` (the connection states and the wrench, discovery around a bend, the refusal at a T,
+  a second dock as a wall, the caps), `RackBranchGameTests` (the corner block's two racks, resolved by facing),
+  `WarehouseNetworkGameTests` (letters and origins pinned, the remap of records, orders, rules and the crane, the goggles'
+  network and stop lines).
 
 ## 5. Snapshots and stock index
 
@@ -3122,13 +3370,17 @@ The table above is covered by automated tests. What only a running game can reac
 
 | Key | Default | Meaning |
 |---|---|---|
-| `maxAisleLength` | 32 | rail count cap |
+| `maxAisleLength` | 32 | rails in **one straight aisle** |
+| `maxNetworkRails` | 256 | aisle blocks in **one whole warehouse**, over all of its aisles (M21). Rails that touch connect, so this is what bounds the cost of one discovery run. Rails beyond it are not part of the warehouse and the dock reports where it stopped; nothing is truncated (§4) |
+| `maxBranches` | 16 | straight **aisles** in one warehouse (M21). The ceiling is 26, because every aisle needs an address letter. **1 keeps every warehouse the single straight aisle it was before M21** — discovery then follows the dock's facing and reads nothing beside it — which is both the escape hatch and the regression oracle (ADR-033) |
 | `maxMastHeight` | 16 | mast height cap |
 | `stressImpact` | 4.0 | SU per RPM of the crane |
 | `travelBlocksPerTickPerRpm` | 1/384 | X speed factor |
 | `liftBlocksPerTickPerRpm` | 1/512 | Y speed factor |
 | `armExtendPerTickPerRpm` | 1/192 | arm speed factor (fraction of full extension) |
 | `maxBlocksPerTick` | 1.0 | hard speed cap per axis |
+| `turnPenaltyBlocks` | 1.0 | what **one quarter turn at a corner** costs the crane, measured in blocks of travel (M21). It runs off the same shaft as driving, so it scales with RPM as everything else does; the job planner counts turns with the same number, so a rack round a corner ranks behind an equally distant one on the aisle the crane is already on. **0 is a turn in a single tick** (`stacker-crane.md` §5) |
+| `returnHomeIdleTicks` | 200 | ticks a crane waits for work before it drives back to its **home** — the warehouse home point if there is one, otherwise position 0 of the aisle at the dock (M21, §3.7, `stacker-crane.md` §4.7). Only a warehouse of **more than one aisle** sends its crane anywhere: on a single straight aisle it stands where its last job left it, exactly as before M21. The trip is no job — it is interrupted by the next real one in the tick that job arrives, even mid-turn, and it holds no chunk. **0 switches returning home off everywhere** |
 | `transferTicks` | 10 | duration of pick/drop animation |
 | `grabberStacks` / `grabberMaxItems` | 1 / 64 | carry limit |
 | `inputBufferSlots` / `outputBufferSlots` | 9 / 9 | station buffers |
@@ -3157,7 +3409,7 @@ The table above is covered by automated tests. What only a running game can reac
 | `maxRestockOrderAmount` | 512 | the largest amount of the **product** one automatic order may ask for, so a minimum of 100 000 is refilled in several bounded orders instead of one with hundreds of crane trips. The pattern rounds it up to whole runs, which is why a warehouse settles a little above its minimum — but never past the whole runs the rule's own maximum leaves room for (§3.6.3) |
 | `maxRestockIngredientItems` | 64 | the largest number of **ingredient items** one automatic order may spend — the bound that really limits what a broken machine can swallow before the safety stop fires, because the amount above counts the product and a pattern of nine ingots to one block would turn 512 blocks into 4608 ingots. One run is always allowed even when it costs more; `maxRestockOrdersPerRule` then sequences the rest (§3.6.3) |
 | `maxTicketedAislesPerLevel` | **0 (off)** | how many aisles of **one dimension** may hold their own chunks loaded while they have work. **0 switches the whole feature off, and that is the default**, so a server that does not want a chunk loader pays nothing and every aisle behaves exactly as before M19. Above 0 this **is** a chunk loader; the aisle lets go as soon as it is idle (§11) |
-| `maxChunksPerAisle` | 8 | how many chunks **one** aisle may hold. An aisle whose footprint needs more holds **nothing** (never a partial hold) and says so through goggles. 8 is exactly the worst case of the default `maxAisleLength` of 32 — 12 at 64, 20 at 128 — so raising the length cap means raising this too (§11.3) |
+| `maxChunksPerAisle` | 10 | how many chunks **one whole warehouse** may hold, over all of its aisles together. A warehouse whose footprint needs more holds **nothing** (never a partial hold) and says so through goggles **and in `/wareworks chunks`**, both naming the number it would have needed. Since M21 this no longer follows from `maxAisleLength`, because a corner turns one long rectangle into two shorter ones at right angles: one straight aisle needs 8 (12 at a length cap of 64, 20 at 128), an L of 32 + 16 rails needs 10, an L of two full 32-rail aisles 12, a U of three 16, and the widest chain `maxNetworkRails = 256` allows 36. **The default is deliberately not the worst case any more** — it covers every straight aisle of the default length plus a first corner, and a bigger warehouse has to raise it. It is a chunk-loading budget, not a build limit (§11.3) |
 | `releaseDelayTicks` | 100 | how long a holding aisle lingers after its last work before it lets go (5 s). The anti-thrash bound: work that comes back inside the window never releases in between (§11.4) |
 | `maxHoldTicks` | 72000 | the longest a single aisle may hold without a break (1 hour). When it runs out the aisle lets go, says so, and may only hold again once its work really changed. **0 means unlimited, and then one stuck aisle is a permanent chunk loader** (§11.4) |
 | `maxCollectHoldAislesPerLevel` | **0 (off)** | separate opt-in: how many aisles of one dimension may hold their chunks **only** because a collecting port has items waiting, with no job, request or order of their own. It keeps a **running** collection alive across the gap between one machine output and the next; it cannot make an idle aisle notice a machine that starts producing later (§11.1). These aisles also count against `maxTicketedAislesPerLevel`, so the smaller of the two wins |
@@ -3166,8 +3418,8 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 
 | Section | Keys | Ranges |
 |---|---|---|
-| `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks` | 1–128, 1–64, 1–1200 |
-| `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 1–200, 1–27, 1–1728 |
+| `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks`, `maxNetworkRails`, `maxBranches` | 1–128, 1–64, 1–1200, 16–1024, 1–26 |
+| `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `turnPenaltyBlocks`, `returnHomeIdleTicks`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 0–16, 0–72000, 1–200, 1–27, 1–1728 |
 | `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–8 |
 | `controller` | `snapshotIntervalTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
@@ -3208,6 +3460,9 @@ interface is only that its filter slot now has a second reason to be read.
 
 ```text
 Aisle A: Ready          the aisle letter and the short controller status
+Aisles: A B C           only while the warehouse really has more than one aisle (M21); "(cut short)" is appended
+                        while the rails stop short of what was laid, so the board says THAT something is wrong and
+                        the controller's goggles say what
 Locations: 3 / 30       inventories holding at least one item, of all inventories the aisle counts
 Item types: 3           distinct item keys in the stock index
 Items: 176              total stored amount
@@ -3220,7 +3475,7 @@ Stopped products: 1                  only while the safety stop holds something 
 Chunks: 4 held          only while the aisle really holds its own chunks loaded (M19, §11.7)
 ```
 
-The port line, the rule line, the stopped line and the chunk line are **left out entirely** unless they say something: a display has few rows, and
+The aisle-list line, the port line, the rule line, the stopped line and the chunk line are **left out entirely** unless they say something: a display has few rows, and
 "Rules: 0 · below min 0 · at max 0" or "Ports: 0 accepting" would push a number a player asked for off a four-tube
 board. The port count is the other explanation — next to the at-maximum count — for a warehouse input that is backing up,
 and it is the same number the controller's goggles show, so board and goggles agree (§3.2.3). The at-maximum count is
@@ -3453,6 +3708,12 @@ tick, so it can never *appear* while the aisle is unloaded, and the moment it is
 hold reason it would let one forgotten item in one input hold four chunks for ever — the failure mode this whole
 feature has to avoid.
 
+**A crane driving home needed nothing here either** (M21, ADR-034, `stacker-crane.md` §4.7). Returning home is the
+resting target of the `IDLE` phase and not a `TransportJob`, so the first row of the table above is false for it and
+this warehouse still counts as idle: it keeps letting its chunks go while its machine rolls back, and a warehouse that
+would otherwise be idle holds nothing for a trip home. A GameTest asserts 0 held chunks and `ChunkKeepReason.NONE` on
+every tick of a whole return trip, with the level cap open.
+
 ### 11.3 What is held, and what a held chunk does
 
 `content.controller.AisleChunkSpan` (pure integer maths, no Minecraft imports) turns the aisle box **inflated by one
@@ -3460,7 +3721,7 @@ block horizontally** — aisle-local `x` in `[-1, length + 1]`, lateral `-2..+2`
 between its corners, sorted by `(chunkX, chunkZ)` and de-duplicated by construction. Nothing is searched for. That one
 inflation is what covers every position the feature needs:
 
-* the **controller itself**, at aisle-local `x = -1`, which lies outside `AisleLayout#bounds()` and is the ticket
+* the **controller itself**, at aisle-local `x = -1`, which lies outside `BranchLayout#bounds()` and is the ticket
   *owner*, so its own chunk has to tick;
 * the dock at `x = 0` and the rails at `x = 1..length`;
 * every rack position (interfaces, stations, ports, keepers, terminals) at lateral `±1`;
@@ -3468,8 +3729,23 @@ inflation is what covers every position the feature needs:
   further, by construction (ADR-030);
 * a double chest whose other half pairs one block past either end of the aisle, through the `x` inflation.
 
-Chunks are columns, so the mast height never costs a chunk. The footprint is cached per `AisleLayout` instance and
-recomputed only when the layout really changes.
+Chunks are columns, so the mast height never costs a chunk. The footprint is cached per layout instance and recomputed
+only when the layout really changes.
+
+**Since M21 the footprint is the whole warehouse, not one straight aisle** (ADR-033). `AisleChunkSpan#networkChunks`
+takes the **union** of every aisle's inflated box, counted once where two aisles share a chunk — so a bend holds the
+chunks of both of its aisles and nothing twice. The class keeps its name; its unit tests are `NetworkChunkSpanTest`.
+The consequence for the cap is arithmetic, and it is pinned by tests rather than asserted in prose: a corner turns one
+long rectangle into two shorter ones at right angles, so **a bend costs more chunks than any single aisle of the same
+length cap ever can** (a straight aisle of 32 rails needs 8, an L of 32 + 16 needs 10, an L of two full aisles 12, a U of
+three 16, and the widest chain `aisle.maxNetworkRails = 256` allows 36 — the same 36 a single 256-rail aisle would need
+if the length cap let you build one). `chunkLoading.maxChunksPerAisle` therefore no longer follows from
+`aisle.maxAisleLength`, its default is **10** rather than 8, and it is deliberately not the worst case: it covers every
+straight aisle of the default length plus a first corner. `NetworkChunkSpanTest` pins exactly the five numbers the config
+comment prints, over all 16 × 16 orientations of each quoted shape, so the comment cannot drift from the maths. The
+worst case of 36 is *measured* (exhaustively over all 2¹⁵ bend patterns of 16 × 16 rails and all 2⁷ of 8 × 32, plus
+about 23 000 random chains) rather than proved, and the comment says "the widest chain the rail cap allows" for that
+reason.
 
 **The ticket is a non-ticking block ticket.** `TicketController#forceChunk(level, owner, x, z, add, ticking = false)`
 adds a region ticket at distance 2, i.e. chunk level `33 - 2 = 31`, which is `ENTITY_TICKING_LEVEL`. Verified in the
@@ -3592,12 +3868,14 @@ layers, all in `content.controller.AisleChunkTickets`:
   a default server:
   * `Chunk loading: 4 chunks (crane job)`, and the same with "open requests", "production orders", "collecting from a
     machine" or "idle, letting go".
-  * `Chunk loading: none (server limit: 2 aisles)` — `AT_LEVEL_LIMIT`.
-  * `Chunk loading: none (collecting limit: 1 aisles)` — `AT_COLLECT_LIMIT`, the collect opt-in's own cap. Its own line
+  * `Chunk loading: none (server limit: 2 warehouses)` — `AT_LEVEL_LIMIT`. The wording says *warehouse* since M21,
+    because a ticket holder is one controller and every aisle it owns (§11.3) — the config key keeps its M19 name.
+  * `Chunk loading: none (collecting limit: 1 warehouses)` — `AT_COLLECT_LIMIT`, the collect opt-in's own cap. Its own line
     rather than none at all: an aisle queued behind it used to be byte-for-byte an idle aisle, so an operator who set the
     opt-in could not see who was waiting (M19 review).
-  * `Chunk loading: none (this aisle needs 12 of 8 chunks)` — `TOO_MANY_CHUNKS`, naming **both** numbers, because that
-    is the only form a player can act on. Also the line of an aisle whose cap was **lowered** under it while it held.
+  * `Chunk loading: none (this warehouse needs 12 of 10 chunks)` — `TOO_MANY_CHUNKS`, naming **both** numbers, because
+    that is the only form a player can act on. Also the line of a warehouse whose cap was **lowered** under it while it
+    held. The wording says *warehouse* since M21, because the footprint is the union of every aisle's (§11.3).
   * `Chunk loading: none (let go; holds again when its work changes)` — `GAVE_UP`. The text says what the aisle *is*
     doing rather than which of the two causes it was (the timeout, or an operator's release): the cause is in the
     server log for the first and in the command's own answer for the second. Found by the `chunks` visual scenario,
@@ -3605,10 +3883,16 @@ layers, all in `content.controller.AisleChunkTickets`:
 * **An aisle display** (§10.1) gains `Chunks: 4 held`, and only while the aisle really holds — the same rule the port
   and rule lines follow, for the same reason: a four-tube board has few rows.
 * **`/wareworks chunks`** (`command.WareworksCommands`, permission level 2, the same as `/forceload`). Per dimension it
-  prints one row per holding aisle (position, aisle letter, chunk count, reason, seconds held), then the totals, and per
-  dimension **two** numbers: how many chunks are force-loaded there by **block tickets** of any mod — the number the rows
-  are comparable with, so a discrepancy is what a leak looks like — and how many are force-loaded in total, entity tickets
-  and vanilla `/forceload` included. Those are three independent stores in `ForcedChunksSavedData`, so the first number is
+  prints one row per holding **warehouse** (position, its controller's letter, chunk count, reason, seconds held), then
+  the totals, and per dimension **two** numbers: how many chunks are force-loaded there by **block tickets** of any mod
+  — the number the rows are comparable with, so a discrepancy is what a leak looks like — and how many are force-loaded
+  in total, entity tickets and vanilla `/forceload` included. **Since M21 it also prints one row per warehouse that is
+  over the cap**, with the number of chunks it would have needed — the shortfall the goggles have named since M19, now
+  in the operator's own listing. The row is written or removed on **every** chunk-keep decision, not only on a refusal,
+  so a raised cap makes it disappear in the same breath as the warehouse starts holding; it appears only while the
+  warehouse really has work, because an idle one never reaches the cap check, which is exactly when the number matters.
+  The store is bounded like the refusal set (64 entries per dimension); above that the shortfall is still on the
+  controller's goggles. Those are three independent stores in `ForcedChunksSavedData`, so the first number is
   emphatically not a total, and the line used to claim it was (M19 review). A dimension where the mod holds nothing is
   listed as soon as anything at all is force-loaded in it, because "we hold nothing here and NeoForge tracks four block
   tickets" is exactly what a leak looks like and leaving the line out in that state hid it.

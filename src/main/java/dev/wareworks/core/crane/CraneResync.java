@@ -21,6 +21,8 @@ public final class CraneResync {
     public static final double SNAP_DISTANCE = 0.5;
     /** Ticks of motion per axis a synced pose may differ by without a snap, if that is more than {@link #SNAP_DISTANCE}. */
     public static final double SNAP_SPEED_TICKS = 2.0;
+    /** Smallest difference in yaw (quarter turns) that makes a client snap: a fifth of a quarter turn (ADR-033). */
+    public static final double SNAP_YAW = 0.25;
 
     private CraneResync() {
     }
@@ -36,13 +38,22 @@ public final class CraneResync {
      * <p>
      * The side is only compared while both arms are extended: a retracted arm has no visible side, so snapping for it
      * would be a jump with no cause.
+     * <p>
+     * <b>Position is only compared on the same branch.</b> A hand-over at a corner renames the crane's position
+     * without moving it by a hair (ADR-033), so the two sides of a sync can name the same world block with different
+     * numbers for a tick; comparing those numbers would snap a crane that is standing perfectly still. The yaw term
+     * catches a client that really did turn the wrong way, and a crane that guessed the wrong branch corrects itself
+     * on the next packet it agrees with.
      */
     public static boolean diverges(CranePose own, CranePose synced, CraneSpeeds speeds) {
         Objects.requireNonNull(own, "own");
         Objects.requireNonNull(synced, "synced");
         Objects.requireNonNull(speeds, "speeds");
+        if (own.branch() != synced.branch())
+            return Math.abs(CranePose.yawDelta(own.yaw(), synced.yaw())) > SNAP_YAW;
         return Math.abs(own.x() - synced.x()) > snapDistance(speeds.vx())
                 || Math.abs(own.y() - synced.y()) > snapDistance(speeds.vy())
+                || Math.abs(CranePose.yawDelta(own.yaw(), synced.yaw())) > SNAP_YAW
                 || Math.abs(own.arm() - synced.arm()) > snapDistance(speeds.va())
                 || (own.side() != synced.side() && own.arm() > CranePose.RETRACTED
                         && synced.arm() > CranePose.RETRACTED);

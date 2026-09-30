@@ -178,6 +178,23 @@ public record TransportJob<K, L>(UUID id, JobType type, L source, L target, Loca
                 deliveredAmount);
     }
 
+    /**
+     * This job with its source and target under other labels for the <b>same two places</b>: the one rename a
+     * warehouse that was rebuilt under a working crane needs (M21, ADR-033).
+     * <p>
+     * Nothing about the job changes but the names — not the kind, not the amounts, not the request it serves — because
+     * the blocks it picks from and drops into are the ones it always was. A label whose place really disappeared is
+     * <b>not</b> renamed by the caller and reaches the crane as the missing location it already handles.
+     */
+    public TransportJob<K, L> relabelled(L newSource, L newTarget) {
+        Objects.requireNonNull(newSource, "newSource");
+        Objects.requireNonNull(newTarget, "newTarget");
+        if (newSource.equals(source) && newTarget.equals(target))
+            return this;
+        return new TransportJob<>(id, type, newSource, newTarget, targetKind, key, plannedAmount, requestId, picked,
+                pickedAmount, deliveredAmount);
+    }
+
     /** This job without a request (the request was cancelled, or the items go elsewhere). */
     public TransportJob<K, L> withoutRequest() {
         if (requestId.isEmpty())

@@ -12,6 +12,7 @@ import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
@@ -40,6 +41,7 @@ import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
@@ -47,7 +49,8 @@ import net.minecraft.world.level.levelgen.Heightmap;
  * polish).
  * <p>
  * A row of exhibits along +X, {@value #SPACING} blocks apart, each turned so that the side a player stands at faces the
- * front camera (+Z): the dock with its parked crane (aisle side), two rails in a line (joint), the controller (display),
+ * front camera (+Z): the dock with its parked crane (aisle side), a straight run of rails and the corner, tee, cross
+ * and closed shapes a rail draws itself as (M21, ADR-033), the controller (display),
  * the interface (framed aisle plate; brass port at the back), input and output (aisle openings; intake on top, pull port at
  * the back), since M11 the copper-bodied production station (aisle opening) and, since M20, the same station with its
  * <b>stopped</b> lamp burning. The warehouse terminal is the one
@@ -92,9 +95,14 @@ public final class BlocksVisualScenario implements VisualScenario {
      * {@code 9 · }{@value #SPACING}{@code  + 1} blocks, and the row distance grew with it, because at 10 blocks the
      * dock's mast ran out of the frame again, exactly as it did before M8. Since M20 the stopped production station is
      * the twelfth exhibit and the row spans {@code 11 · }{@value #SPACING}{@code  + 1} blocks, which is what these
-     * distances are sized for now — the row distance grew again, because at 11.5 the dock ran out of the frame on the
-     * left and the keeper on the right; the {@code blocks-row} and {@code blocks-far} shots are what to check after
-     * adding a thirteenth.
+     * distances were sized for.
+     * <p>
+     * <b>They no longer frame the whole row</b>, and deliberately so: M21 gave the rail its four junction shapes and a
+     * closed one, and M21's home point two lamp states, so the row is now <b>nineteen</b> exhibits and
+     * {@code 18 · }{@value #SPACING}{@code  + 1} blocks wide. Pulling the overview cameras back far enough for that
+     * would make every block in {@code blocks-row} too small to judge, which is the one thing those two shots exist
+     * for; the per-exhibit close-ups are what carries the check now. The overviews stay as the two shots that show
+     * z-fighting and the row's left end.
      */
     private static final double ROW_HEIGHT = 5.5;
     private static final double ROW_DISTANCE = 15.0;
@@ -122,11 +130,19 @@ public final class BlocksVisualScenario implements VisualScenario {
     private static final List<Exhibit> EXHIBITS = List.of(
             new Exhibit("dock", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.STACKER_CRANE.getDefaultState()
                     .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, Direction.SOUTH))),
-            new Exhibit("rail", (level, pos) -> {
-                level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_RAIL.getDefaultState()
-                        .setValue(WarehouseRailBlock.AXIS, Direction.Axis.Z));
-                level.setBlockAndUpdate(pos.north(), WareworksBlocks.WAREHOUSE_RAIL.getDefaultState()
-                        .setValue(WarehouseRailBlock.AXIS, Direction.Axis.Z));
+            // Since M21 the rail's picture follows the rails around it (ADR-033), so every shape it can draw gets an
+            // exhibit: a straight run with an end at each end, a corner, a tee, a cross, and a closed rail cutting a
+            // line in two. The connection flags are never set here - they are derived when the block is placed, which
+            // is exactly what these five exhibits check.
+            new Exhibit("rail", (level, pos) -> rails(level, pos, Direction.NORTH, Direction.SOUTH)),
+            new Exhibit("rail_corner", (level, pos) -> rails(level, pos, Direction.NORTH, Direction.EAST)),
+            new Exhibit("rail_tee", (level, pos) -> rails(level, pos, Direction.NORTH, Direction.EAST,
+                    Direction.SOUTH)),
+            new Exhibit("rail_cross", (level, pos) -> rails(level, pos, Direction.NORTH, Direction.EAST,
+                    Direction.SOUTH, Direction.WEST)),
+            new Exhibit("rail_closed", (level, pos) -> {
+                rails(level, pos, Direction.NORTH, Direction.SOUTH);
+                level.setBlockAndUpdate(pos, rail().setValue(WarehouseRailBlock.CLOSED, true));
             }),
             new Exhibit("controller", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_CONTROLLER
                     .getDefaultState().setValue(WarehouseControllerBlock.FACING, Direction.NORTH))),
@@ -176,7 +192,31 @@ public final class BlocksVisualScenario implements VisualScenario {
             new Exhibit("stock_keeper", (level, pos) -> level.setBlockAndUpdate(pos,
                     WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                             .setValue(WarehouseStockKeeperBlock.FACING, Direction.SOUTH)
-                            .setValue(WarehouseStockKeeperBlock.LIT, true))));
+                            .setValue(WarehouseStockKeeperBlock.LIT, true))),
+            // The home point faces the aisle like the stations, so its plate looks at the front camera. Shown with the
+            // green lamp burning, i.e. "the crane waits here" (M21, ADR-034).
+            new Exhibit("home_point", (level, pos) -> level.setBlockAndUpdate(pos,
+                    WareworksBlocks.WAREHOUSE_HOME_POINT.getDefaultState()
+                            .setValue(WarehouseHomePointBlock.FACING, Direction.SOUTH)
+                            .setValue(WarehouseHomePointBlock.LIT, true))),
+            // And with the red lamp, the one state a player has to act on: a second home point, or one the crane
+            // cannot drive to. It is the only state of this block that differs from its item model.
+            new Exhibit("home_point_refused", (level, pos) -> level.setBlockAndUpdate(pos,
+                    WareworksBlocks.WAREHOUSE_HOME_POINT.getDefaultState()
+                            .setValue(WarehouseHomePointBlock.FACING, Direction.SOUTH)
+                            .setValue(WarehouseHomePointBlock.REFUSED, true))));
+
+    /** A rail at {@code pos} with one rail on each named side, so the middle one draws the shape those sides make. */
+    private static void rails(ServerLevel level, BlockPos pos, Direction... sides) {
+        level.setBlockAndUpdate(pos, rail());
+        for (Direction side : sides)
+            level.setBlockAndUpdate(pos.relative(side), rail());
+    }
+
+    private static BlockState rail() {
+        return WareworksBlocks.WAREHOUSE_RAIL.getDefaultState()
+                .setValue(WarehouseRailBlock.AXIS, Direction.Axis.Z);
+    }
 
     /** The creative tab contents as checked on the client; the chest screen shows them in this order. */
     private volatile List<Item> tabItems = List.of();
@@ -302,7 +342,7 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), WareworksBlocks.WAREHOUSE_INTERFACE.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
-                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem());
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem());
         if (!shown.equals(expected) || icon != WareworksBlocks.STACKER_CRANE.asItem())
             throw new VisualTestException("unexpected creative tab: icon " + icon + ", items " + shown);
         tabItems = shown;

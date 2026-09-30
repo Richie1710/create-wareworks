@@ -16,7 +16,7 @@ import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkTickets;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -334,7 +334,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
                     WareworksBlocks.WAREHOUSE_RAIL.getDefaultState().setValue(WarehouseRailBlock.AXIS, AISLE.getAxis()));
         placeController(server, context);
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(INPUT), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
                 .setValue(WarehouseInputBlock.FACING, layout.sideDirection(INPUT.side()).getOpposite()));
         for (Side side : Side.values()) {
@@ -515,8 +515,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
         return context.origin().relative(AISLE.getOpposite());
     }
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static StackerCraneBlockEntity crane(MinecraftServer server, VisualContext context) {

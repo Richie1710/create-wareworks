@@ -21,7 +21,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringB
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleAssignment;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
@@ -117,7 +117,7 @@ public final class WarehouseStationGameTests {
     private static final BlockPos CONTROLLER = new BlockPos(0, BASE_Y, 3);
     private static final BlockPos DOCK = new BlockPos(1, BASE_Y, 3);
     private static final int RAILS = 5;
-    private static final AisleLayout RELATIVE = AisleLayout.of(DOCK, AISLE, AisleGeometry.of(RAILS, 1));
+    private static final BranchLayout RELATIVE = BranchLayout.of(DOCK, AISLE, AisleGeometry.of(RAILS, 1));
     private static final RackPosition STORAGE_RACK = new RackPosition(1, 0, Side.LEFT);
     private static final RackPosition OUTPUT_RACK = new RackPosition(0, 0, Side.RIGHT);
     private static final RackPosition INPUT_RACK = new RackPosition(2, 0, Side.RIGHT);

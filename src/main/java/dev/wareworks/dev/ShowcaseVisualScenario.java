@@ -27,7 +27,7 @@ import com.simibubi.create.content.logistics.funnel.FunnelBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
@@ -442,13 +442,13 @@ public final class ShowcaseVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(dock.relative(AISLE.getOpposite()),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         placeStations(level, layout);
         placeRacks(level, layout);
     }
 
     /** Terminal, input with its feed chest, output with its hopper, pull chest and lever. */
-    private static void placeStations(ServerLevel level, AisleLayout layout) {
+    private static void placeStations(ServerLevel level, BranchLayout layout) {
         level.setBlockAndUpdate(layout.rackPos(TERMINAL), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
                 .setValue(WarehouseTerminalBlock.FACING, layout.sideDirection(TERMINAL.side()).getOpposite()));
 
@@ -478,7 +478,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
     }
 
     /** Storage locations on both sides: a chest behind the rack wall and a warehouse interface facing it. */
-    private static void placeRacks(ServerLevel level, AisleLayout layout) {
+    private static void placeRacks(ServerLevel level, BranchLayout layout) {
         List<ItemStack> stock = stock();
         int next = 0;
         for (Side side : Side.values()) {
@@ -535,7 +535,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      */
     private static void buildSawmill(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         Direction outward = layout.sideDirection(SAW_STATION.side());
 
         level.setBlockAndUpdate(layout.rackPos(SAW_STATION), WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
@@ -571,26 +571,26 @@ public final class ShowcaseVisualScenario implements VisualScenario {
     }
 
     /** The mechanical saw: one block outside the rack wall, beside the warehouse input it hands its shafts to. */
-    private static BlockPos sawPos(AisleLayout layout) {
+    private static BlockPos sawPos(BranchLayout layout) {
         return layout.rackPos(SAW_RETURN).relative(layout.sideDirection(SAW_RETURN.side()));
     }
 
-    private static BlockPos sawMotorPos(AisleLayout layout) {
+    private static BlockPos sawMotorPos(BranchLayout layout) {
         return sawPos(layout).relative(AISLE.getOpposite());
     }
 
     /** First block of the saw's feed belt, one block outside the rack wall. */
-    private static BlockPos sawBeltStartPos(AisleLayout layout) {
+    private static BlockPos sawBeltStartPos(BranchLayout layout) {
         return layout.rackPos(SAW_BELT_START).relative(layout.sideDirection(SAW_BELT_START.side()));
     }
 
     /** Last block of the saw's feed belt; the block beyond it, in the belt's direction, is the saw. */
-    private static BlockPos sawBeltEndPos(AisleLayout layout) {
+    private static BlockPos sawBeltEndPos(BranchLayout layout) {
         return layout.rackPos(SAW_BELT_END).relative(layout.sideDirection(SAW_BELT_END.side()));
     }
 
     /** A belt running along the aisle turns on the axis across it, so its motor sits beside the belt's first pulley. */
-    private static BlockPos sawBeltMotorPos(AisleLayout layout) {
+    private static BlockPos sawBeltMotorPos(BranchLayout layout) {
         return sawBeltStartPos(layout).relative(layout.sideDirection(SAW_BELT_START.side()));
     }
 
@@ -606,7 +606,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      */
     private static void buildCrafterLoop(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         Direction outward = layout.sideDirection(CRAFTER_RETURN.side());
         Direction inward = outward.getOpposite();
 
@@ -662,43 +662,43 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      * axis — on the <b>dock</b> side of the belt, because the aisle position beyond the belt lane is already the first
      * storage location.
      */
-    private static BlockPos beltMotorPos(AisleLayout layout) {
+    private static BlockPos beltMotorPos(BranchLayout layout) {
         return layout.rackPos(CRAFTER_BELT_START).relative(AISLE.getOpposite());
     }
 
     /** Last block of the crafter loop's belt. */
-    private static BlockPos crafterBeltEndPos(AisleLayout layout) {
+    private static BlockPos crafterBeltEndPos(BranchLayout layout) {
         return layout.rackPos(CRAFTER_BELT_START).relative(layout.sideDirection(CRAFTER_BELT_START.side()),
                 CRAFTER_BELT_LENGTH);
     }
 
     /** The chest beyond the end of the crafter loop's belt; nothing may ever arrive in it. */
-    private static BlockPos crafterBeltCatchPos(AisleLayout layout) {
+    private static BlockPos crafterBeltCatchPos(BranchLayout layout) {
         return crafterBeltEndPos(layout).relative(layout.sideDirection(CRAFTER_BELT_START.side()));
     }
 
     /** The hopper that buffers one ingredient between its belt funnel and its crafter (class comment). */
-    private static BlockPos crafterFeedHopperPos(AisleLayout layout, int index) {
+    private static BlockPos crafterFeedHopperPos(BranchLayout layout, int index) {
         return crafterPos(layout, index).relative(AISLE);
     }
 
     /** The filtered belt funnel of a crafter: one position further along the aisle, directly above the belt. */
-    private static BlockPos crafterFunnelPos(AisleLayout layout, int index) {
+    private static BlockPos crafterFunnelPos(BranchLayout layout, int index) {
         return crafterPos(layout, index).relative(AISLE, 2);
     }
 
     /** The cogwheel that drives the crafter chain: directly above the crafter nearest the aisle, on the aisle axis. */
-    private static BlockPos crafterCogPos(AisleLayout layout) {
+    private static BlockPos crafterCogPos(BranchLayout layout) {
         return crafterPos(layout, 0).above();
     }
 
     /** The crafters' motor turns their cogwheel along the aisle axis, in line with it. */
-    private static BlockPos crafterMotorPos(AisleLayout layout) {
+    private static BlockPos crafterMotorPos(BranchLayout layout) {
         return crafterCogPos(layout).relative(AISLE.getOpposite());
     }
 
     /** Crafter {@code index}: the chain runs from the far one back towards the aisle, so index 0 is the last one. */
-    private static BlockPos crafterPos(AisleLayout layout, int index) {
+    private static BlockPos crafterPos(BranchLayout layout, int index) {
         return layout.rackPos(CRAFTER_RETURN).relative(layout.sideDirection(CRAFTER_RETURN.side()), index + 1);
     }
 
@@ -754,7 +754,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
     /** Writes both production patterns into their stations, exactly as a player would in the pattern screen. */
     private static void writePatterns(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
 
         WarehouseProductionBlockEntity saw = productionAt(level, layout, SAW_STATION);
         if (!saw.setPatternEntry(0, 0, sawIngredient(), 1)
@@ -775,7 +775,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
     /** Runs the three machine motors of the production loops up to {@value #MACHINE_RPM} RPM. */
     private static void startMachineMotors(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (BlockPos motor : List.of(sawMotorPos(layout), sawBeltMotorPos(layout), beltMotorPos(layout),
                 crafterMotorPos(layout)))
             motorAt(level, motor).generatedSpeed.setValue(MACHINE_RPM);
@@ -788,7 +788,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      */
     private static void checkMachinesPowered(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         List<String> dead = new ArrayList<>();
         report(level, "saw", sawPos(layout), sawMotorPos(layout),
                 AllBlockEntityTypes.SAW.getNullable(level, sawPos(layout)), dead);
@@ -825,7 +825,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      */
     private static void aimSaw(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         Direction wanted = layout.sideDirection(SAW_RETURN.side()).getOpposite();
         Direction actual = sawMovement(level, layout);
         LOGGER.info(PREFIX + "showcase: the saw pushes {} and must push {}", actual, wanted);
@@ -836,12 +836,12 @@ public final class ShowcaseVisualScenario implements VisualScenario {
     }
 
     private static boolean sawAimed(MinecraftServer server, VisualContext context) {
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         return sawMovement(server.overworld(), layout)
                 == layout.sideDirection(SAW_RETURN.side()).getOpposite();
     }
 
-    private static Direction sawMovement(ServerLevel level, AisleLayout layout) {
+    private static Direction sawMovement(ServerLevel level, BranchLayout layout) {
         SawBlockEntity saw = AllBlockEntityTypes.SAW.getNullable(level, sawPos(layout));
         if (saw == null)
             throw new VisualTestException("the mechanical saw of the sawmill loop is missing");
@@ -857,7 +857,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      */
     private static void aimBelts(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         aimBelt(level, "the crafter loop's belt", layout.rackPos(CRAFTER_BELT_START), beltMotorPos(layout),
                 layout.sideDirection(CRAFTER_BELT_START.side()));
         aimBelt(level, "the sawmill's feed belt", sawBeltStartPos(layout), sawBeltMotorPos(layout),
@@ -875,7 +875,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
 
     private static boolean beltsAimed(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         return beltMovement(level, layout.rackPos(CRAFTER_BELT_START))
                 == layout.sideDirection(CRAFTER_BELT_START.side())
                 && beltMovement(level, sawBeltStartPos(layout)) == AISLE.getOpposite();
@@ -893,7 +893,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
     private static void placeLabels(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         Direction left = layout.sideDirection(Side.LEFT);
         Direction right = layout.sideDirection(Side.RIGHT);
 
@@ -1061,7 +1061,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      */
     private static void orderProducts(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         WarehouseControllerBlockEntity controller = controllerAt(level, context.origin());
         if (controller == null)
             throw new VisualTestException("the controller of the showcase aisle is missing");
@@ -1107,7 +1107,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
     }
 
     /** Logs both orders and the contents of every inventory of both loops, so a stalled chain names its own culprit. */
-    private static void logProductionProgress(ServerLevel level, AisleLayout layout,
+    private static void logProductionProgress(ServerLevel level, BranchLayout layout,
             WarehouseControllerBlockEntity controller) {
         for (ProductionOrder<ItemKey, RackPosition> order : controller.productionOrders())
             LOGGER.info(PREFIX + "showcase: order {} is {} (delivered {}, still owed {}, still awaited {})",
@@ -1189,7 +1189,7 @@ public final class ShowcaseVisualScenario implements VisualScenario {
      */
     private static void loopsLostNothing(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         BlockPos catchPos = crafterBeltCatchPos(layout);
         String caught = contentsAt(level, "catch", catchPos);
         if (!caught.endsWith("=[]"))
@@ -1256,15 +1256,15 @@ public final class ShowcaseVisualScenario implements VisualScenario {
 
     // --- helpers ---------------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static WarehouseControllerBlockEntity controllerAt(ServerLevel level, BlockPos dock) {
         return WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER.getNullable(level, dock.relative(AISLE.getOpposite()));
     }
 
-    private static WarehouseProductionBlockEntity productionAt(ServerLevel level, AisleLayout layout,
+    private static WarehouseProductionBlockEntity productionAt(ServerLevel level, BranchLayout layout,
             RackPosition rack) {
         WarehouseProductionBlockEntity station = WareworksBlockEntityTypes.WAREHOUSE_PRODUCTION.getNullable(level,
                 layout.rackPos(rack));

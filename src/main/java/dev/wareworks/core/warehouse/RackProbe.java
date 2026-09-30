@@ -23,7 +23,9 @@ public enum RackProbe {
     /** An aligned warehouse production station. */
     PRODUCTION(LocationKind.PRODUCTION),
     /** An aligned warehouse stock keeper ({@code docs/warehouse-system.md} §3.6, M15). */
-    KEEPER(LocationKind.KEEPER);
+    KEEPER(LocationKind.KEEPER),
+    /** An aligned warehouse home point ({@code docs/stacker-crane.md} §4.7, M21). */
+    HOME(LocationKind.HOME);
 
     private final LocationKind kind;
 
@@ -44,6 +46,7 @@ public enum RackProbe {
             case OUTPUT -> OUTPUT;
             case PRODUCTION -> PRODUCTION;
             case KEEPER -> KEEPER;
+            case HOME -> HOME;
         };
     }
 }

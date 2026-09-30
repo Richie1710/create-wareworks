@@ -2,6 +2,7 @@ package dev.wareworks.content.controller;
 
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -17,29 +18,30 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 
 /**
- * Server-side, in-memory index of the aisles of a level: controller position → registered {@link AisleLayout}
- * ({@code docs/warehouse-system.md} §4, ADR-010).
+ * Server-side, in-memory index of the warehouses of a level: controller position → its registered
+ * {@link WarehouseLayout} ({@code docs/warehouse-system.md} §4, ADR-010).
  * <p>
  * Controllers register when their layout becomes known or changes (and again in {@code onLoad()}), and unregister in
- * {@code invalidate()}/{@code remove()}. Members report changes with {@link #memberChanged}, which marks only the affected
- * rack position dirty at every controller whose aisle contains it, and storage members report content changes of their
+ * {@code invalidate()}/{@code remove()}. Members report changes with {@link #memberChanged}, which marks only the rack
+ * positions the member could occupy dirty at every controller whose warehouse reaches it (one on an aisle that never
+ * bends, at most four beside a corner, ADR-033), and storage members report content changes of their
  * attached inventory with {@link #contentChanged}. Nothing is persisted: after a restart or chunk load,
  * controllers register again from their own saved layout, and members notify again from their {@code onLoad()}.
  * <p>
  * Per-level maps live in a catnip {@link WorldAttached}, which Create clears on level unload. Only
  * {@link ServerLevel}s are accepted; calls with client or Ponder levels do nothing. Cost of a notification or lookup:
- * one arithmetic containment test per registered controller of the level, plus one block entity lookup per containing
- * controller. Server thread only.
+ * one arithmetic containment test per branch of every registered controller of the level (one for a warehouse that
+ * never bends, at most 26), plus one block entity lookup per containing controller. Server thread only.
  */
 public final class WarehouseRegistry {
-    private static final WorldAttached<Map<BlockPos, AisleLayout>> CONTROLLERS =
+    private static final WorldAttached<Map<BlockPos, WarehouseLayout>> CONTROLLERS =
             new WorldAttached<>(level -> new HashMap<>());
 
     private WarehouseRegistry() {
     }
 
     /** Registers or replaces the layout of the controller at {@code controller}. */
-    public static void register(Level level, BlockPos controller, AisleLayout layout) {
+    public static void register(Level level, BlockPos controller, WarehouseLayout layout) {
         Objects.requireNonNull(controller, "controller");
         Objects.requireNonNull(layout, "layout");
         if (level instanceof ServerLevel)
@@ -54,7 +56,7 @@ public final class WarehouseRegistry {
     }
 
     /** The layout registered for the controller at {@code controller}. */
-    public static Optional<AisleLayout> registeredLayout(Level level, BlockPos controller) {
+    public static Optional<WarehouseLayout> registeredLayout(Level level, BlockPos controller) {
         if (!(level instanceof ServerLevel))
             return Optional.empty();
         return Optional.ofNullable(CONTROLLERS.get(level).get(controller));
@@ -125,13 +127,15 @@ public final class WarehouseRegistry {
         Objects.requireNonNull(member, "member");
         if (!(level instanceof ServerLevel))
             return 0;
-        Map<BlockPos, AisleLayout> controllers = CONTROLLERS.get(level);
+        Map<BlockPos, WarehouseLayout> controllers = CONTROLLERS.get(level);
         int notified = 0;
-        Iterator<Map.Entry<BlockPos, AisleLayout>> iterator = controllers.entrySet().iterator();
+        Iterator<Map.Entry<BlockPos, WarehouseLayout>> iterator = controllers.entrySet().iterator();
         while (iterator.hasNext()) {
-            Map.Entry<BlockPos, AisleLayout> entry = iterator.next();
-            Optional<RackPosition> rack = entry.getValue().worldToLocal(member);
-            if (rack.isEmpty())
+            Map.Entry<BlockPos, WarehouseLayout> entry = iterator.next();
+            // A block beside a corner is a rack position of both branches that meet there (ADR-033), and the member is
+            // free to own either, so every candidate is marked dirty and the probe decides. At most four.
+            List<RackPosition> racks = entry.getValue().candidates(member);
+            if (racks.isEmpty())
                 continue;
             WarehouseControllerBlockEntity controller = loadedController(level, entry.getKey());
             if (controller == null) {
@@ -139,7 +143,8 @@ public final class WarehouseRegistry {
                     iterator.remove();
                 continue;
             }
-            notification.accept(controller, rack.get());
+            for (RackPosition rack : racks)
+                notification.accept(controller, rack);
             notified++;
         }
         return notified;
@@ -160,17 +165,17 @@ public final class WarehouseRegistry {
         WarehouseMember memberEntity = level.isLoaded(member)
                 && level.getBlockEntity(member) instanceof WarehouseMember found ? found : null;
         WarehouseControllerBlockEntity best = null;
-        AisleLayout bestLayout = null;
+        WarehouseLayout bestLayout = null;
         boolean bestAligned = false;
-        for (Map.Entry<BlockPos, AisleLayout> entry : CONTROLLERS.get(level).entrySet()) {
-            AisleLayout layout = entry.getValue();
-            Optional<RackPosition> rack = layout.worldToLocal(member);
-            if (rack.isEmpty())
+        for (Map.Entry<BlockPos, WarehouseLayout> entry : CONTROLLERS.get(level).entrySet()) {
+            WarehouseLayout layout = entry.getValue();
+            List<RackPosition> racks = layout.candidates(member);
+            if (racks.isEmpty())
                 continue;
             WarehouseControllerBlockEntity controller = loadedController(level, entry.getKey());
             if (controller == null)
                 continue;
-            boolean aligned = memberEntity != null && memberEntity.isAlignedWith(layout, rack.get().side());
+            boolean aligned = memberEntity != null && isAlignedWithAny(memberEntity, layout, racks);
             if (best != null && !isBetterCandidate(member, aligned, layout, controller, bestAligned, bestLayout, best))
                 continue;
             best = controller;
@@ -205,10 +210,10 @@ public final class WarehouseRegistry {
         if (!(level instanceof ServerLevel))
             return false;
         BlockPos owner = null;
-        AisleLayout ownerLayout = null;
-        for (Map.Entry<BlockPos, AisleLayout> entry : CONTROLLERS.get(level).entrySet()) {
-            AisleLayout layout = entry.getValue();
-            if (layout.worldToLocal(member).isEmpty() || loadedController(level, entry.getKey()) == null)
+        WarehouseLayout ownerLayout = null;
+        for (Map.Entry<BlockPos, WarehouseLayout> entry : CONTROLLERS.get(level).entrySet()) {
+            WarehouseLayout layout = entry.getValue();
+            if (!layout.isRackPosition(member) || loadedController(level, entry.getKey()) == null)
                 continue;
             if (owner != null && !isNearerDock(member, layout, entry.getKey(), ownerLayout, owner))
                 continue;
@@ -218,9 +223,21 @@ public final class WarehouseRegistry {
         return owner == null || owner.equals(controller);
     }
 
+    /**
+     * Whether {@code member} is aligned at any of its candidate positions of one warehouse. At most one of them can be
+     * satisfied by a single facing, because each candidate has a distinct aisle block beside it (ADR-033).
+     */
+    private static boolean isAlignedWithAny(WarehouseMember member, WarehouseLayout layout, List<RackPosition> racks) {
+        for (RackPosition rack : racks) {
+            if (member.isAlignedWith(layout.branch(rack.branch()), rack.side()))
+                return true;
+        }
+        return false;
+    }
+
     /** The tie-break of {@link #ownsMemberState}: dock distance, then controller position — never alignment. */
-    private static boolean isNearerDock(BlockPos member, AisleLayout layout, BlockPos controller,
-                                        AisleLayout bestLayout, BlockPos best) {
+    private static boolean isNearerDock(BlockPos member, WarehouseLayout layout, BlockPos controller,
+                                        WarehouseLayout bestLayout, BlockPos best) {
         double distance = layout.dock().distSqr(member);
         double bestDistance = bestLayout.dock().distSqr(member);
         if (distance != bestDistance)
@@ -229,9 +246,9 @@ public final class WarehouseRegistry {
     }
 
     /** The tie-break of {@link #findController}: alignment first, then dock distance, then controller position. */
-    private static boolean isBetterCandidate(BlockPos member, boolean aligned, AisleLayout layout,
+    private static boolean isBetterCandidate(BlockPos member, boolean aligned, WarehouseLayout layout,
                                              WarehouseControllerBlockEntity controller, boolean bestAligned,
-                                             AisleLayout bestLayout, WarehouseControllerBlockEntity best) {
+                                             WarehouseLayout bestLayout, WarehouseControllerBlockEntity best) {
         if (aligned != bestAligned)
             return aligned;
         double distance = layout.dock().distSqr(member);
@@ -303,21 +320,23 @@ public final class WarehouseRegistry {
         if (!(level instanceof ServerLevel))
             return MemberScan.NONE;
         boolean containedMisaligned = false;
-        for (Map.Entry<BlockPos, AisleLayout> entry : CONTROLLERS.get(level).entrySet()) {
-            AisleLayout layout = entry.getValue();
-            Optional<RackPosition> rack = layout.worldToLocal(pos);
-            if (rack.isEmpty())
+        for (Map.Entry<BlockPos, WarehouseLayout> entry : CONTROLLERS.get(level).entrySet()) {
+            WarehouseLayout layout = entry.getValue();
+            List<RackPosition> racks = layout.candidates(pos);
+            if (racks.isEmpty())
                 continue;
             WarehouseControllerBlockEntity controller = loadedController(level, entry.getKey());
             if (controller == null)
                 continue;
-            if (!member.isAlignedWith(layout, rack.get().side())) {
-                containedMisaligned = true;
-                continue;
+            for (RackPosition rack : racks) {
+                if (!member.isAlignedWith(layout.branch(rack.branch()), rack.side())) {
+                    containedMisaligned = true;
+                    continue;
+                }
+                Optional<StorageAddress> address = layout.address(rack);
+                if (address.isPresent())
+                    return new MemberScan(new AlignedMember(controller, rack, address.get()), containedMisaligned);
             }
-            Optional<StorageAddress> address = layout.address(rack.get());
-            if (address.isPresent())
-                return new MemberScan(new AlignedMember(controller, rack.get(), address.get()), containedMisaligned);
         }
         return new MemberScan(null, containedMisaligned);
     }

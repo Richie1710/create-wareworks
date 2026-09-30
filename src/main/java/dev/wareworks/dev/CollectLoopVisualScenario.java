@@ -32,7 +32,7 @@ import org.jetbrains.annotations.Nullable;
 
 import net.createmod.catnip.math.Pointing;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -618,7 +618,7 @@ public final class CollectLoopVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(controllerPos(dock), WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState()
                 .setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         // The rack wall the crane stores into, on the plane opposite the machines.
         Direction storageOutward = layout.sideDirection(Side.LEFT);
         for (int x = STORAGE_FIRST; x <= STORAGE_LAST; x++) {
@@ -1506,21 +1506,21 @@ public final class CollectLoopVisualScenario implements VisualScenario {
 
     // --- world helpers -----------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static BlockPos controllerPos(BlockPos dock) {
         return dock.relative(AISLE.getOpposite());
     }
 
-    private static Direction towardsAisle(AisleLayout layout, RackPosition rack) {
+    private static Direction towardsAisle(BranchLayout layout, RackPosition rack) {
         return layout.sideDirection(rack.side()).getOpposite();
     }
 
     /** The inventory a port reaches into: the block behind it, i.e. away from the aisle. */
     private static BlockPos machinePos(BlockPos dock, RackPosition rack) {
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         return layout.rackPos(rack).relative(layout.sideDirection(rack.side()));
     }
 

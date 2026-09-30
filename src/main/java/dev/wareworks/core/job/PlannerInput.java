@@ -10,6 +10,9 @@ import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
 import java.util.function.ToLongFunction;
 
+import org.jetbrains.annotations.Nullable;
+
+import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.inventory.StockView;
 
@@ -21,9 +24,15 @@ import dev.wareworks.core.inventory.StockView;
  * {@link JobPlanner.LiveExtract} / {@link JobPlanner.LiveInsert} callbacks (simulated item handler calls in the content
  * layer), falling through to the next candidate when the live result is too low ({@code docs/warehouse-system.md} §5).
  *
+ * @param craneBranch          branch (aisle) of the warehouse the crane stands on; {@value
+ *                             dev.wareworks.core.address.RackPosition#FIRST_BRANCH} on a warehouse that does not bend
  * @param craneX               crane position along the aisle
  * @param craneY               crane level
  * @param speeds               crane speeds for travel time ranking ({@link CraneSpeeds#STOPPED} ranks by list order)
+ * @param travel               what it costs the crane to drive from one rack position to another; the default
+ *                             {@link TravelCost#straight} is the formula a single straight aisle always used
+ *                             ({@link TravelTimeModel#travelTicks}), so an input built without it is <b>literally</b>
+ *                             the input the planner received before M21
  * @param transferTicks        duration of one pick or drop, for {@link PlannedJob#estimatedTicks()}
  * @param carryLimit           items of a key one trip carries ({@code CapacityMath.carryLimit})
  * @param itemType             the item type of a key (for Minecraft items: the item without its components); for a new
@@ -110,7 +119,8 @@ import dev.wareworks.core.inventory.StockView;
  * @param <K>                  item key type
  * @param <L>                  location type
  */
-public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speeds, int transferTicks,
+public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, CraneSpeeds speeds, TravelCost travel,
+        int transferTicks,
         ToIntFunction<? super K> carryLimit, Function<? super K, ?> itemType, StockView<K, L> stock,
         ReservationView<K, L> reservations, List<OpenRequest<K, L>> requests, List<SupplyNeed<K, L>> supplies,
         List<L> storageLocations, List<L> inputs, List<L> outputs, List<L> ports, List<L> collectSources,
@@ -150,10 +160,39 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         return location -> InventorySnapshot.empty();
     }
 
+    /**
+     * What driving from one rack position to another costs the crane, in ticks (M21, ADR-033).
+     * <p>
+     * The planner learns nothing about rail networks: it asks this and ranks by the answer. A warehouse of one aisle
+     * hands it {@link #straight}, which ignores the branches and is literally
+     * {@link TravelTimeModel#travelTicks} — so "a warehouse that does not bend plans exactly as it did before M21" is
+     * a property of the type, not a claim about the code. A warehouse with corners hands it a cost that counts the
+     * route's blocks <b>and its quarter turns</b> ({@code crane.turnPenaltyBlocks}).
+     * <p>
+     * Unreachable is not this function's business: a rack the crane cannot drive to is dropped by
+     * {@link PlannerInput#available()}, exactly like one in an unloaded chunk. An implementation that has no route
+     * anyway answers {@link TravelTimeModel#UNAVAILABLE}, which ranks last and never becomes a job.
+     */
+    @FunctionalInterface
+    public interface TravelCost {
+        /** Ticks the crane needs to travel between two rack positions with the arm retracted. */
+        long travelTicks(int fromBranch, double fromX, double fromY, int toBranch, double toX, double toY);
+
+        /** The cost of a warehouse of one straight aisle: the branch is ignored, as it was before M21. */
+        static TravelCost straight(CraneSpeeds speeds) {
+            Objects.requireNonNull(speeds, "speeds");
+            return (fromBranch, fromX, fromY, toBranch, toX, toY) ->
+                    TravelTimeModel.travelTicks(speeds, fromX, fromY, toX, toY);
+        }
+    }
+
     public PlannerInput {
+        if (craneBranch < 0)
+            throw new IllegalArgumentException("craneBranch must not be negative: " + craneBranch);
         if (!Double.isFinite(craneX) || !Double.isFinite(craneY))
             throw new IllegalArgumentException("crane position must be finite: " + craneX + ", " + craneY);
         Objects.requireNonNull(speeds, "speeds");
+        Objects.requireNonNull(travel, "travel");
         if (transferTicks < 0)
             throw new IllegalArgumentException("transferTicks must not be negative: " + transferTicks);
         Objects.requireNonNull(carryLimit, "carryLimit");
@@ -247,9 +286,11 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
     public static final class Builder<K, L> {
         private final StockView<K, L> stock;
         private final ReservationView<K, L> reservations;
+        private int craneBranch;
         private double craneX;
         private double craneY;
         private CraneSpeeds speeds = CraneSpeeds.STOPPED;
+        private @Nullable TravelCost travel;
         private int transferTicks;
         private ToIntFunction<? super K> carryLimit;
         private Function<? super K, ?> itemType = key -> key;
@@ -280,9 +321,24 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
             this.reservations = Objects.requireNonNull(reservations, "reservations");
         }
 
+        /** The crane on the only branch a warehouse that does not bend has. */
         public Builder<K, L> crane(double x, double y) {
+            return crane(RackPosition.FIRST_BRANCH, x, y);
+        }
+
+        public Builder<K, L> crane(int branch, double x, double y) {
+            this.craneBranch = branch;
             this.craneX = x;
             this.craneY = y;
+            return this;
+        }
+
+        /**
+         * What driving costs. Left unset, it is {@link TravelCost#straight} over {@link #speeds}, which is the formula
+         * a single straight aisle always used.
+         */
+        public Builder<K, L> travel(TravelCost travel) {
+            this.travel = travel;
             return this;
         }
 
@@ -440,7 +496,9 @@ public record PlannerInput<K, L>(double craneX, double craneY, CraneSpeeds speed
         }
 
         public PlannerInput<K, L> build() {
-            return new PlannerInput<>(craneX, craneY, speeds, transferTicks, carryLimit, itemType, stock, reservations,
+            return new PlannerInput<>(craneBranch, craneX, craneY, speeds,
+                    travel != null ? travel : TravelCost.straight(speeds), transferTicks, carryLimit, itemType, stock,
+                    reservations,
                     requests, supplies, storageLocations, inputs, outputs, ports, collectSources, collectBuffers,
                     inputBuffers, inputCursor, available,
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter, storePriority,

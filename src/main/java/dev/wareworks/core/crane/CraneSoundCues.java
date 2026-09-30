@@ -18,6 +18,13 @@ import dev.wareworks.core.job.CraneSpeeds;
  *       continues silently.</li>
  *   <li>{@link Cue#TRAVEL_START} when X/Y travel begins, at most once per {@value #TRAVEL_START_MIN_INTERVAL_TICKS}
  *       ticks; {@link Cue#TRAVEL_STOP} in the tick travel reaches its target.</li>
+ *   <li>{@link Cue#TURN} in the tick a quarter turn at a corner starts, at most once per
+ *       {@value #TURN_MIN_INTERVAL_TICKS} ticks, and {@link Cue#TURN_SETTLE} in the tick that same turn squares up
+ *       with its new aisle: the two ends of one swing, so a corner is heard as a machine that starts and finishes
+ *       turning instead of as a noise per tick. A turn whose start was rate-limited away settles silently, so the
+ *       pair is never split. The machine is standing still along the rails while it turns, so the rail clack is
+ *       <b>suppressed</b> for those ticks — a corner would otherwise clack for travel that is not happening
+ *       (ADR-033).</li>
  *   <li>While travelling, {@link Cue#RAIL_CLACK} when the base crosses a rail joint (between two aisle blocks), at most
  *       once per {@value #RAIL_CLACK_MIN_INTERVAL_TICKS} ticks; while lifting, {@link Cue#LIFT_CHAIN} every
  *       {@value #LIFT_CUE_SPACING} levels, at most once per {@value #LIFT_CHAIN_MIN_INTERVAL_TICKS} ticks. Their
@@ -35,6 +42,10 @@ public final class CraneSoundCues {
     public enum Cue {
         TRAVEL_START,
         TRAVEL_STOP,
+        /** The whole machine swinging a quarter turn at a corner (M21, ADR-033). */
+        TURN,
+        /** The same turn locking in: the tick the machine squares up with the aisle it turned onto. */
+        TURN_SETTLE,
         RAIL_CLACK,
         LIFT_CHAIN,
         ARM_EXTEND,
@@ -61,6 +72,11 @@ public final class CraneSoundCues {
     public static final int TRAVEL_START_MIN_INTERVAL_TICKS = 20;
     /** Minimum game ticks between two rail clacks (fast cranes cross several joints per second). */
     public static final int RAIL_CLACK_MIN_INTERVAL_TICKS = 4;
+    /**
+     * Minimum game ticks between two turn cues. A quarter turn takes 3 ticks at the default speed and penalty, so a
+     * zigzag of corners one block apart still gets one sound per corner and never a rattle.
+     */
+    public static final int TURN_MIN_INTERVAL_TICKS = 6;
     /** Minimum game ticks between two lift cues. */
     public static final int LIFT_CHAIN_MIN_INTERVAL_TICKS = 4;
     /** Levels between two lift cues. */
@@ -82,6 +98,10 @@ public final class CraneSoundCues {
     private static final long NEVER = Long.MIN_VALUE / 2;
 
     private boolean travelling;
+    private boolean turning;
+    /** Whether the turn that is running was announced, so only an audible swing gets its settling clack. */
+    private boolean turnSounded;
+    private long lastTurnTick = NEVER;
     private long lastTravelStartTick = NEVER;
     private long lastRailClackTick = NEVER;
     private long lastLiftChainTick = NEVER;
@@ -103,10 +123,35 @@ public final class CraneSoundCues {
         Objects.requireNonNull(speeds, "speeds");
         if (paused)
             return List.of();
-        boolean movedX = Math.abs(after.x() - before.x()) > EPSILON;
+        // A hand-over at a corner renames the machine onto the next aisle, where x counts from that aisle's own end:
+        // the number jumps by a whole branch length without the machine moving, so it is travel (it drove up to the
+        // corner block) but the two values must not be measured against each other.
+        boolean handedOver = before.branch() != after.branch();
+        boolean movedX = handedOver || Math.abs(after.x() - before.x()) > EPSILON;
         boolean movedY = Math.abs(after.y() - before.y()) > EPSILON;
-        List<Sound> sounds = new ArrayList<>(2);
-        if (movedX || movedY) {
+        boolean yawed = Math.abs(CranePose.yawDelta(before.yaw(), after.yaw())) > EPSILON;
+        List<Sound> sounds = new ArrayList<>(3);
+        if (yawed) {
+            if (!turning) {
+                turning = true;
+                turnSounded = gameTime - lastTurnTick >= TURN_MIN_INTERVAL_TICKS;
+                if (turnSounded) {
+                    lastTurnTick = gameTime;
+                    sounds.add(new Sound(Cue.TURN, motionVolume(speeds.vx())));
+                }
+            }
+            // Squared up again: the swing is over, in the very tick the machine locks onto its new aisle. A turn that
+            // is interrupted by a new target keeps yawing and settles when it finally stands straight.
+            if (after.isAligned()) {
+                turning = false;
+                if (turnSounded)
+                    sounds.add(new Sound(Cue.TURN_SETTLE, motionVolume(speeds.vx())));
+                turnSounded = false;
+            }
+        } else {
+            turning = false;
+        }
+        if (movedX || movedY || yawed) {
             if (!travelling) {
                 travelling = true;
                 if (gameTime - lastTravelStartTick >= TRAVEL_START_MIN_INTERVAL_TICKS) {
@@ -114,7 +159,7 @@ public final class CraneSoundCues {
                     sounds.add(new Sound(Cue.TRAVEL_START, motionVolume(Math.max(speeds.vx(), speeds.vy()))));
                 }
             }
-            if (after.sameXY(target)) {
+            if (arrived(after, target)) {
                 // Arrived in this tick: stop now, before the arm starts to extend in the next tick.
                 travelling = false;
                 sounds.add(new Sound(Cue.TRAVEL_STOP, FULL_VOLUME));
@@ -122,10 +167,14 @@ public final class CraneSoundCues {
         } else if (travelling) {
             // Standing still without a pause and not arrived last tick: the target moved onto the crane (e.g. a cancelled job).
             travelling = false;
-            if (after.sameXY(target))
+            if (arrived(after, target))
                 sounds.add(new Sound(Cue.TRAVEL_STOP, FULL_VOLUME));
         }
-        if (movedX && crosses(before.x() + RAIL_JOINT_OFFSET, after.x() + RAIL_JOINT_OFFSET, RAIL_JOINT_SPACING)
+        // The clack is a wheel over a rail joint; while the machine swings on the spot no wheel crosses one, and in the
+        // tick it is renamed onto the next aisle the two x values lie on different lines of blocks, so no joint can be
+        // read from them. The corner is the one joint that goes unheard, between the turn's own two voices.
+        if (movedX && !yawed && !handedOver
+                && crosses(before.x() + RAIL_JOINT_OFFSET, after.x() + RAIL_JOINT_OFFSET, RAIL_JOINT_SPACING)
                 && gameTime - lastRailClackTick >= RAIL_CLACK_MIN_INTERVAL_TICKS) {
             lastRailClackTick = gameTime;
             sounds.add(new Sound(Cue.RAIL_CLACK, motionVolume(speeds.vx())));
@@ -180,6 +229,14 @@ public final class CraneSoundCues {
             return FULL_VOLUME;
         double volume = MIN_VOLUME + (FULL_VOLUME - MIN_VOLUME) * (speed / FULL_VOLUME_SPEED);
         return Math.max(MIN_VOLUME, Math.min(FULL_VOLUME, volume));
+    }
+
+    /**
+     * Whether the machine is standing where it has to stand <b>and facing the way it has to face</b>: a crane that
+     * still has to swing has not arrived, so the stop cue does not play a quarter turn early (ADR-033).
+     */
+    private static boolean arrived(CranePose after, CranePose target) {
+        return after.sameCell(target) && after.sameYaw(target);
     }
 
     /** Whether moving from {@code from} to {@code to} crosses a multiple of {@code spacing} (in either direction). */

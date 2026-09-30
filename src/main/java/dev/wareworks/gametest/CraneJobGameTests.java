@@ -16,7 +16,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringB
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.LocationReservationSummary;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -81,7 +81,7 @@ public final class CraneJobGameTests {
     private static final int AISLE_Z = 3;
     private static final BlockPos DOCK = new BlockPos(1, BASE_Y, AISLE_Z);
     private static final int RAILS = 6;
-    private static final AisleLayout RELATIVE = AisleLayout.of(DOCK, AISLE, AisleGeometry.of(RAILS, 1));
+    private static final BranchLayout RELATIVE = BranchLayout.of(DOCK, AISLE, AisleGeometry.of(RAILS, 1));
     private static final RackPosition INPUT = new RackPosition(0, 0, Side.RIGHT);
     private static final RackPosition OUTPUT = new RackPosition(1, 0, Side.RIGHT);
     private static final RackPosition NEAR = new RackPosition(2, 0, Side.LEFT);
@@ -445,7 +445,7 @@ public final class CraneJobGameTests {
                     helper.assertValueEqual(dock.pauseReason(), CranePauseReason.NO_ROTATION, "pause reason");
                     helper.assertFalse(dock.canAcceptJob(), "no job without rotation");
                     helper.assertTrue(dock.currentJob().isEmpty(), "no job assigned");
-                    helper.assertValueEqual(dock.craneState().pose(), StackerCraneBlockEntity.HOME_POSE, "crane parked");
+                    helper.assertValueEqual(dock.craneState().pose(), dock.homePose(), "crane parked");
                     helper.assertValueEqual(stationCount(helper, INPUT, IRON), (long) STORED_IRON, "input untouched");
                     helper.assertValueEqual(chestCount(helper, FAR, IRON), 0L, "nothing stored");
                     helper.assertTrue(controllerAt(helper).reservations().isEmpty(), "nothing reserved");

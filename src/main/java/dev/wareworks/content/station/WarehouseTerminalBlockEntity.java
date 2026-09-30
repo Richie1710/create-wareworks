@@ -20,7 +20,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
@@ -145,7 +145,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * opposite the aisle, where its player already stood. Nothing is migrated (ADR-022).
      */
     @Override
-    public void alignToAisle(BlockPos controller, AisleLayout layout, Side side) {
+    public void alignToAisle(BlockPos controller, BranchLayout layout, Side side) {
         if (!(level instanceof ServerLevel) || isRemoved() || isVirtual())
             return;
         BlockState state = getBlockState();

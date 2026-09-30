@@ -22,7 +22,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringB
 
 import dev.wareworks.client.gui.WarehouseStockKeeperScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerGoggleSummary;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.RequestRejection;
@@ -479,7 +479,7 @@ public final class StockRulesVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(controllerPos(dock),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(KEEPER), WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                 .setValue(WarehouseStockKeeperBlock.FACING, inward(layout, KEEPER)));
         level.setBlockAndUpdate(layout.rackPos(TERMINAL), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
@@ -506,7 +506,7 @@ public final class StockRulesVisualScenario implements VisualScenario {
     }
 
     /** Storage behind both rack planes: barrels rather than chests, so nothing ever merges into a double chest. */
-    private static void buildStorage(ServerLevel level, AisleLayout layout) {
+    private static void buildStorage(ServerLevel level, BranchLayout layout) {
         for (Side side : Side.values()) {
             Direction outward = layout.sideDirection(side);
             for (int x : side == Side.LEFT ? STORAGE_LEFT : STORAGE_RIGHT) {
@@ -1105,12 +1105,12 @@ public final class StockRulesVisualScenario implements VisualScenario {
 
     // --- positions ----------------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     /** The direction a member at {@code rack} faces: towards the aisle, like every other station. */
-    private static Direction inward(AisleLayout layout, RackPosition rack) {
+    private static Direction inward(BranchLayout layout, RackPosition rack) {
         return layout.sideDirection(rack.side()).getOpposite();
     }
 

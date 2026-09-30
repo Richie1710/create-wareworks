@@ -49,7 +49,12 @@ public record StorageAddress(char aisle, int level, int position, Side side) {
         Objects.requireNonNull(side, "side");
     }
 
-    /** The address of an aisle-local rack position in the given aisle: level {@code y + 1}, position {@code x}. */
+    /**
+     * The address of an aisle-local rack position in the given aisle: level {@code y + 1}, position {@code x}.
+     * <p>
+     * The <b>caller</b> supplies the letter, so {@code rack}'s {@link RackPosition#branch()} is not read here: which
+     * letter a branch carries is the warehouse's business (ADR-033), not the address format's.
+     */
     public static StorageAddress of(char aisle, RackPosition rack) {
         Objects.requireNonNull(rack, "rack");
         if (rack.y() >= MAX_LEVEL)
@@ -57,7 +62,11 @@ public record StorageAddress(char aisle, int level, int position, Side side) {
         return new StorageAddress(aisle, rack.y() + 1, rack.x(), rack.side());
     }
 
-    /** The aisle-local rack position of this address. */
+    /**
+     * The aisle-local rack position of this address, on {@link RackPosition#FIRST_BRANCH}: an address names its branch
+     * by <b>letter</b> and the letter-to-branch mapping belongs to the warehouse, so this cannot recover a branch index
+     * and does not pretend to.
+     */
     public RackPosition rackPosition() {
         return new RackPosition(position, level - 1, side);
     }

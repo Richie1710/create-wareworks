@@ -9,6 +9,7 @@ import dev.wareworks.client.render.WarehouseInterfaceRenderer;
 import dev.wareworks.client.render.WarehouseOutputRenderer;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
@@ -100,6 +101,15 @@ public final class WareworksBlockEntityTypes {
     public static final BlockEntityEntry<WarehouseStockKeeperBlockEntity> WAREHOUSE_STOCK_KEEPER = REGISTRATE
             .blockEntity("warehouse_stock_keeper", WarehouseStockKeeperBlockEntity::new)
             .validBlocks(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
+            .register();
+
+    /**
+     * Warehouse home point: no renderer (a static block model with two lamp variants) and <b>no capability at all</b> —
+     * it holds no items. It saves nothing either: its content is where it stands (M21, ADR-034).
+     */
+    public static final BlockEntityEntry<WarehouseHomePointBlockEntity> WAREHOUSE_HOME_POINT = REGISTRATE
+            .blockEntity("warehouse_home_point", WarehouseHomePointBlockEntity::new)
+            .validBlocks(WareworksBlocks.WAREHOUSE_HOME_POINT)
             .register();
 
     private WareworksBlockEntityTypes() {

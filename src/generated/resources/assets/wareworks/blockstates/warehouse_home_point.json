@@ -1,0 +1,168 @@
+{
+  "multipart": [
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_refused"
+      },
+      "when": {
+        "facing": "north",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/stop"
+      },
+      "when": {
+        "facing": "north",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_active"
+      },
+      "when": {
+        "facing": "north",
+        "lit": "true",
+        "refused": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block"
+      },
+      "when": {
+        "facing": "north",
+        "lit": "false",
+        "refused": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_refused",
+        "y": 90
+      },
+      "when": {
+        "facing": "east",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/stop",
+        "y": 90
+      },
+      "when": {
+        "facing": "east",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_active",
+        "y": 90
+      },
+      "when": {
+        "facing": "east",
+        "lit": "true",
+        "refused": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block",
+        "y": 90
+      },
+      "when": {
+        "facing": "east",
+        "lit": "false",
+        "refused": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_refused",
+        "y": 180
+      },
+      "when": {
+        "facing": "south",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/stop",
+        "y": 180
+      },
+      "when": {
+        "facing": "south",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_active",
+        "y": 180
+      },
+      "when": {
+        "facing": "south",
+        "lit": "true",
+        "refused": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block",
+        "y": 180
+      },
+      "when": {
+        "facing": "south",
+        "lit": "false",
+        "refused": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_refused",
+        "y": 270
+      },
+      "when": {
+        "facing": "west",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/stop",
+        "y": 270
+      },
+      "when": {
+        "facing": "west",
+        "refused": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block_active",
+        "y": 270
+      },
+      "when": {
+        "facing": "west",
+        "lit": "true",
+        "refused": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/warehouse_home_point/block",
+        "y": 270
+      },
+      "when": {
+        "facing": "west",
+        "lit": "false",
+        "refused": "false"
+      }
+    }
+  ]
+}

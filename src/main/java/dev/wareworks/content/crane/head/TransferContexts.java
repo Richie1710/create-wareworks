@@ -7,8 +7,9 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.StorageMember;
+import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseDeliveryStationBlockEntity;
@@ -76,15 +77,38 @@ public final class TransferContexts {
     }
 
     /**
-     * The context of the member of {@code kind} at {@code rack} of {@code layout} (server). The member must stand at the
-     * rack position with the facing rule of its kind ({@link WarehouseMember#isAlignedWith}).
+     * The context of the member of {@code kind} at {@code rack} of a whole warehouse (server): the same rule as
+     * {@link #resolve(Level, BranchLayout, RackPosition, LocationKind)}, applied to the aisle the position names
+     * (M21, ADR-033).
+     * <p>
+     * A position naming an aisle this warehouse does not have is {@link Resolution#MISSING}, whatever block lies where
+     * the label used to point: a vanished aisle's label stands for no block at all, and the crane's existing
+     * source-or-target-missing ladder is what handles it.
      */
-    public static Resolution resolve(Level level, AisleLayout layout, RackPosition rack, LocationKind kind) {
+    public static Resolution resolve(Level level, WarehouseLayout warehouse, RackPosition rack, LocationKind kind) {
+        Objects.requireNonNull(warehouse, "warehouse");
+        Objects.requireNonNull(rack, "rack");
+        return warehouse.branchOf(rack).map(branch -> resolve(level, branch, rack, kind)).orElse(Resolution.MISSING);
+    }
+
+    /**
+     * The context of the member of {@code kind} at {@code rack} of <b>one aisle</b> (server). The member must stand at
+     * the rack position with the facing rule of its kind ({@link WarehouseMember#isAlignedWith}).
+     * <p>
+     * A position of <b>another aisle</b> is {@link Resolution#MISSING} here, whatever stands at the block this aisle
+     * would read it as: a {@code BranchLayout} maps exactly one aisle, so a position of another one means nothing to
+     * it. Callers that may see any aisle of a warehouse take
+     * {@link #resolve(Level, WarehouseLayout, RackPosition, LocationKind)} instead.
+     */
+    public static Resolution resolve(Level level, BranchLayout layout, RackPosition rack, LocationKind kind) {
         Objects.requireNonNull(level, "level");
         Objects.requireNonNull(layout, "layout");
         Objects.requireNonNull(rack, "rack");
         Objects.requireNonNull(kind, "kind");
-        if (!layout.geometry().contains(rack))
+        // The branch is compared against the layout's own, and only the position against its size: AisleGeometry
+        // describes one aisle and its RackPosition overload answers false for every position that is not on the first
+        // one, which would make every rack of a bent warehouse missing (M21 part two, ADR-033).
+        if (rack.branch() != layout.branch() || !layout.geometry().contains(rack.x(), rack.y()))
             return Resolution.MISSING;
         BlockPos pos = layout.rackPos(rack);
         if (!level.isLoaded(pos))
@@ -118,9 +142,10 @@ public final class TransferContexts {
                     yield resolveCollect(level, pos, port);
                 yield Resolution.available(ofDelivery(level, delivery, kind));
             }
-            // A warehouse stock keeper holds no items at all, so no job can ever name it as a source or a target
-            // (M15): a crane that somehow asked for one is told the member is not there, which is exactly true.
-            case KEEPER -> Resolution.MISSING;
+            // A warehouse stock keeper and a home point hold no items at all, so no job can ever name one as a source
+            // or a target (M15, M21): a crane that somehow asked for one is told the member is not there, which is
+            // exactly true.
+            case KEEPER, HOME -> Resolution.MISSING;
         };
     }
 

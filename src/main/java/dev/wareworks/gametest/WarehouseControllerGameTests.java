@@ -20,12 +20,13 @@ import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollVa
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleAssignment;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.AisleLetterBehaviour;
 import dev.wareworks.content.controller.ControllerGoggleSummary;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
@@ -100,7 +101,7 @@ public final class WarehouseControllerGameTests {
     private static final BlockPos MOTOR = new BlockPos(1, FLOOR_Y, 3);
     private static final int RAILS = 5;
     /** Test-relative aisle mapping (rack positions do not depend on the geometry). */
-    private static final AisleLayout RELATIVE = AisleLayout.of(DOCK, AISLE, AisleGeometry.of(RAILS, 1));
+    private static final BranchLayout RELATIVE = BranchLayout.of(DOCK, AISLE, AisleGeometry.of(RAILS, 1));
 
     private static final RackPosition RACK_01_00R = new RackPosition(0, 0, Side.RIGHT);
     private static final RackPosition RACK_01_00L = new RackPosition(0, 0, Side.LEFT);
@@ -122,9 +123,9 @@ public final class WarehouseControllerGameTests {
     private static final BlockPos SWITCH_CONTROLLER = new BlockPos(2, BASE_Y, 3);
     private static final BlockPos SWITCH_DOCK_EAST = SWITCH_CONTROLLER.east();
     private static final BlockPos SWITCH_DOCK_SOUTH = SWITCH_CONTROLLER.south();
-    private static final AisleLayout SWITCH_EAST_LAYOUT = AisleLayout.of(SWITCH_DOCK_EAST, Direction.EAST,
+    private static final BranchLayout SWITCH_EAST_LAYOUT = BranchLayout.of(SWITCH_DOCK_EAST, Direction.EAST,
             AisleGeometry.of(0, 1));
-    private static final AisleLayout SWITCH_SOUTH_LAYOUT = AisleLayout.of(SWITCH_DOCK_SOUTH, Direction.SOUTH,
+    private static final BranchLayout SWITCH_SOUTH_LAYOUT = BranchLayout.of(SWITCH_DOCK_SOUTH, Direction.SOUTH,
             AisleGeometry.of(0, 1));
     // Dock link owner layout: a second controller south of the dock, facing north.
     private static final BlockPos SOUTH_OF_DOCK = DOCK.south();
@@ -179,7 +180,7 @@ public final class WarehouseControllerGameTests {
                 .thenExecute(() -> {
                     ServerLevel level = helper.getLevel();
                     WarehouseControllerBlockEntity controller = controllerAt(helper);
-                    AisleLayout layout = controller.layout().orElse(null);
+                    BranchLayout layout = controller.layout().orElse(null);
                     if (layout == null) {
                         helper.fail("a READY controller must have a layout");
                         return;
@@ -227,8 +228,8 @@ public final class WarehouseControllerGameTests {
                                     new LocationCount<>(RACK_02_03R, (long) IRON_AT_02_03R)), "iron by location");
                     helper.assertTrue(stock.snapshotOf(RACK_04_05L).isPresent(), "an empty chest was snapshotted too");
 
-                    helper.assertValueEqual(WarehouseRegistry.registeredLayout(level, helper.absolutePos(CONTROLLER)),
-                            Optional.of(layout), "registered layout");
+                    helper.assertValueEqual(WarehouseRegistry.registeredLayout(level, helper.absolutePos(CONTROLLER))
+                            .map(WarehouseLayout::firstBranch), Optional.of(layout), "registered layout");
                     helper.assertTrue(WarehouseRegistry.findController(level, absRack(helper, RACK_02_03R))
                             .orElse(null) == controller, "the registry finds the controller of a member");
                     helper.assertTrue(WarehouseRegistry.findController(level, absRack(helper, RACK_OUTSIDE)).isEmpty(),
@@ -358,7 +359,7 @@ public final class WarehouseControllerGameTests {
         helper.startSequence()
                 .thenWaitUntil(() -> {
                     WarehouseControllerBlockEntity controller = switchControllerAt(helper);
-                    helper.assertValueEqual(controller.layout().map(AisleLayout::dock),
+                    helper.assertValueEqual(controller.layout().map(BranchLayout::dock),
                             Optional.of(helper.absolutePos(SWITCH_DOCK_EAST)), "linked to the east dock");
                     helper.assertFalse(controller.isMembershipDirty(), "membership processed");
                     helper.assertValueEqual(controller.pendingSnapshotCount(), 0, "snapshots taken");
@@ -368,7 +369,7 @@ public final class WarehouseControllerGameTests {
                 .thenExecute(() -> helper.setBlock(SWITCH_CONTROLLER, controllerState(Direction.SOUTH)))
                 .thenWaitUntil(() -> {
                     WarehouseControllerBlockEntity controller = switchControllerAt(helper);
-                    helper.assertValueEqual(controller.layout().map(AisleLayout::dock),
+                    helper.assertValueEqual(controller.layout().map(BranchLayout::dock),
                             Optional.of(helper.absolutePos(SWITCH_DOCK_SOUTH)), "linked to the south dock");
                     helper.assertFalse(controller.isMembershipDirty(), "membership processed");
                     helper.assertValueEqual(controller.pendingSnapshotCount(), 0, "snapshots taken");
@@ -461,7 +462,8 @@ public final class WarehouseControllerGameTests {
                     helper.assertValueEqual(addressText(helper, controller, RACK_03_02R), Optional.of("C-03-02R"),
                             "addresses follow the letter");
                     helper.assertValueEqual(WarehouseRegistry.registeredLayout(level, helper.absolutePos(CONTROLLER))
-                            .flatMap(AisleLayout::letter), Optional.of('C'), "the registry has the new letter");
+                            .map(WarehouseLayout::firstBranch).flatMap(BranchLayout::letter), Optional.of('C'),
+                            "the registry has the new letter");
                     assertAssignment(helper, RACK_03_02R, AisleAssignment.assigned(StorageAddress.parse("C-03-02R")));
                     assertAssignment(helper, RACK_01_01L, AisleAssignment.MISALIGNED);
 
@@ -798,7 +800,7 @@ public final class WarehouseControllerGameTests {
                 })
                 .thenExecute(() -> {
                     WarehouseControllerBlockEntity controller = controllerAt(helper);
-                    AisleLayout layout = controller.layout().orElse(null);
+                    BranchLayout layout = controller.layout().orElse(null);
                     if (layout == null) {
                         helper.fail("a READY controller must have a layout");
                         return;
@@ -925,7 +927,7 @@ public final class WarehouseControllerGameTests {
     }
 
     /** A chest with the given contents behind an aligned interface at {@code rack} of {@code layout}. */
-    private static void storageAt(GameTestHelper helper, AisleLayout layout, RackPosition rack, ItemStack... contents) {
+    private static void storageAt(GameTestHelper helper, BranchLayout layout, RackPosition rack, ItemStack... contents) {
         BlockPos interfacePos = layout.rackPos(rack);
         BlockPos chest = interfacePos.relative(layout.sideDirection(rack.side()));
         helper.setBlock(chest, Blocks.CHEST);

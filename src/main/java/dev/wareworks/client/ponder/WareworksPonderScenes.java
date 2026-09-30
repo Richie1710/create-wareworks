@@ -5,6 +5,7 @@ import com.tterrag.registrate.util.entry.ItemProviderEntry;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.client.ponder.scenes.CraneScenes;
+import dev.wareworks.client.ponder.scenes.NetworkScenes;
 import dev.wareworks.client.ponder.scenes.PortScenes;
 import dev.wareworks.client.ponder.scenes.ProductionScenes;
 import dev.wareworks.client.ponder.scenes.StockRuleScenes;
@@ -34,7 +35,7 @@ import net.minecraft.resources.ResourceLocation;
  * <table>
  *   <caption>Scenes per component</caption>
  *   <tr><th>Component</th><th>Scenes</th></tr>
- *   <tr><td>stacker_crane, warehouse_rail</td><td>stacker_crane/overview</td></tr>
+ *   <tr><td>stacker_crane, warehouse_rail</td><td>stacker_crane/overview, warehouse/corner</td></tr>
  *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_input</td><td>warehouse/storing</td></tr>
@@ -123,5 +124,13 @@ public final class WareworksPonderScenes {
         scenes.forComponents(WareworksBlocks.WAREHOUSE_PRODUCTION, WareworksBlocks.WAREHOUSE_TERMINAL)
                 .addStoryBoard("warehouse/production_chain", ProductionScenes::chain,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // Rails around a corner (M21, issue #1, ADR-033), and last for the same reason as the scenes above: a player
+        // meets "what a stacker crane is" first and "and the rails may bend" after it. It belongs to <b>both</b> the
+        // rail and the crane — the rails decide where the warehouse goes, the machine is what turns on them — so a
+        // player who picked up either one finds it.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_RAIL, WareworksBlocks.STACKER_CRANE)
+                .addStoryBoard("warehouse/corner", NetworkScenes::corner,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
     }
 }

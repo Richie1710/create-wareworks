@@ -14,7 +14,7 @@ import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -22,6 +22,8 @@ import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseDeliveryStationBlockEntity;
+import dev.wareworks.content.station.WarehouseHomePointBlock;
+import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
@@ -75,7 +77,7 @@ final class AisleFixture {
     private final BlockPos dock;
     private final BlockPos motor;
     private final int rails;
-    private final AisleLayout relative;
+    private final BranchLayout relative;
 
     /**
      * @param aisleZ test-relative z of the aisle line
@@ -88,7 +90,7 @@ final class AisleFixture {
         this.motor = new BlockPos(1, FLOOR_Y, aisleZ);
         this.rails = rails;
         // The relative layout only maps rack positions; its height covers the dock's default mast height.
-        this.relative = AisleLayout.of(dock, AISLE, AisleGeometry.of(rails, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+        this.relative = BranchLayout.of(dock, AISLE, AisleGeometry.of(rails, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     // --- building --------------------------------------------------------------------------------------------------
@@ -206,6 +208,15 @@ final class AisleFixture {
                 .setValue(WarehouseStockKeeperBlock.FACING, relative.sideDirection(rack.side()).getOpposite()));
     }
 
+    /**
+     * An aligned warehouse home point at {@code rack}: its plate looks into the aisle, like an input or an output
+     * ({@code docs/stacker-crane.md} §4.7, M21). It says where a crane with nothing to do waits and holds no items.
+     */
+    void homePoint(RackPosition rack) {
+        helper.setBlock(rackPos(rack), WareworksBlocks.WAREHOUSE_HOME_POINT.getDefaultState()
+                .setValue(WarehouseHomePointBlock.FACING, relative.sideDirection(rack.side()).getOpposite()));
+    }
+
     /** Breaks the block at a test-relative position like a player would (block entity removal logic runs, no block drop). */
     void breakBlock(BlockPos pos) {
         helper.getLevel().destroyBlock(helper.absolutePos(pos), false);
@@ -304,6 +315,14 @@ final class AisleFixture {
                 .getNullable(helper.getLevel(), absoluteRackPos(rack));
         if (be == null)
             helper.fail("missing warehouse stock keeper block entity", rackPos(rack));
+        return be;
+    }
+
+    WarehouseHomePointBlockEntity homePointAt(RackPosition rack) {
+        WarehouseHomePointBlockEntity be = WareworksBlockEntityTypes.WAREHOUSE_HOME_POINT
+                .getNullable(helper.getLevel(), absoluteRackPos(rack));
+        if (be == null)
+            helper.fail("missing warehouse home point block entity", rackPos(rack));
         return be;
     }
 

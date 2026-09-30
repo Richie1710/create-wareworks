@@ -55,6 +55,10 @@ import net.minecraft.nbt.Tag;
  *                          {@link ChunkKeepReason#isHolding()}, and how many the aisle's footprint would need while it
  *                          is refused. A single number rather than two, so the tag stays as bounded as the record's
  *                          contract requires
+ * @param network           the rail network the warehouse is made of, when it has anything beyond a clean straight
+ *                          aisle to say about it (M21, issue #1, ADR-033): more than one aisle, or a discovery that
+ *                          stopped short. Empty — and absent from the synced tag — for every warehouse that never
+ *                          bends, which is every warehouse built before M21 ({@link NetworkGoggleInfo})
  * @param crane             the linked crane's goggle data (empty without a loaded, linked dock)
  * @param lastPlanReason    why the last planning run created no job (empty if it created one or never ran)
  */
@@ -65,6 +69,7 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                                       int misaligned, int itemTypes, long totalItems, int openRequests,
                                       int productionOrders, int stockRules, int rulesBelowMinimum, int rulesAtMaximum,
                                       int rulesPaused, ChunkKeepReason chunkKeepReason, int chunkKeepChunks,
+                                      Optional<NetworkGoggleInfo> network,
                                       Optional<CraneGoggleInfo> crane,
                                       Optional<NoJobReason> lastPlanReason) {
     public static final ControllerGoggleSummary NONE =
@@ -92,6 +97,7 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
     private static final String ITEM_TYPES = "ItemTypes";
     private static final String TOTAL_ITEMS = "TotalItems";
     private static final String OPEN_REQUESTS = "OpenRequests";
+    private static final String NETWORK = "Network";
     private static final String CRANE = "Crane";
     private static final String LAST_PLAN = "LastPlan";
 
@@ -120,6 +126,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         if (chunkKeepReason == null)
             chunkKeepReason = ChunkKeepReason.NONE;
         chunkKeepChunks = Math.max(0, chunkKeepChunks);
+        if (network == null)
+            network = Optional.empty();
         if (crane == null)
             crane = Optional.empty();
         if (lastPlanReason == null)
@@ -145,19 +153,20 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes,
                 totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused,
-                ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty());
+                ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     /**
      * This summary without crane data and planning result (the counts only, filtered locations included). The chunk
      * loading state is kept: it is a property of the aisle, not of the crane, and it reads {@link ChunkKeepReason#NONE}
-     * for every aisle while the feature is off.
+     * for every aisle while the feature is off. The network is kept for the same reason — it is the shape of the rails,
+     * not of the machine — and is empty for every warehouse that does not bend.
      */
     public ControllerGoggleSummary withoutCrane() {
         return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes, totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum,
-                rulesPaused, chunkKeepReason, chunkKeepChunks, Optional.empty(), Optional.empty());
+                rulesPaused, chunkKeepReason, chunkKeepChunks, network, Optional.empty(), Optional.empty());
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -207,6 +216,13 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
             tag.putString(CHUNK_KEEP, chunkKeepReason.name());
             tag.putInt(CHUNK_KEEP_CHUNKS, chunkKeepChunks);
         }
+        // Left out entirely for a warehouse of one aisle whose rails simply end (M21, issue #1): that is every
+        // warehouse built before M21, and its packet must not grow by a single byte for a feature it does not use.
+        network.ifPresent(info -> {
+            CompoundTag networkTag = new CompoundTag();
+            info.write(networkTag);
+            tag.put(NETWORK, networkTag);
+        });
         crane.ifPresent(info -> {
             CompoundTag craneTag = new CompoundTag();
             info.write(craneTag);
@@ -219,6 +235,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
     public static ControllerGoggleSummary read(CompoundTag tag) {
         Optional<CraneGoggleInfo> crane = tag.contains(CRANE, Tag.TAG_COMPOUND)
                 ? Optional.of(CraneGoggleInfo.read(tag.getCompound(CRANE))) : Optional.empty();
+        Optional<NetworkGoggleInfo> network = NetworkGoggleInfo.isPresent(tag, NETWORK)
+                ? Optional.of(NetworkGoggleInfo.read(tag.getCompound(NETWORK))) : Optional.empty();
         return new ControllerGoggleSummary(ControllerStatus.byName(tag.getString(STATUS)).orElse(ControllerStatus.NO_DOCK),
                 tag.getInt(LENGTH), tag.getInt(HEIGHT), tag.getInt(STORAGE), tag.getInt(FILTERED),
                 tag.getInt(PRIORITISED), tag.getInt(INPUTS), tag.getInt(OUTPUTS), tag.getInt(ACCEPTING_PORTS),
@@ -228,7 +246,7 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 tag.getLong(TOTAL_ITEMS), tag.getInt(OPEN_REQUESTS), tag.getInt(PRODUCTION_ORDERS),
                 tag.getInt(STOCK_RULES), tag.getInt(RULES_BELOW_MINIMUM), tag.getInt(RULES_AT_MAXIMUM),
                 tag.getInt(RULES_PAUSED), ChunkKeepReason.byName(tag.getString(CHUNK_KEEP)),
-                tag.getInt(CHUNK_KEEP_CHUNKS), crane, reasonByName(tag.getString(LAST_PLAN)));
+                tag.getInt(CHUNK_KEEP_CHUNKS), network, crane, reasonByName(tag.getString(LAST_PLAN)));
     }
 
     private static Optional<NoJobReason> reasonByName(String name) {

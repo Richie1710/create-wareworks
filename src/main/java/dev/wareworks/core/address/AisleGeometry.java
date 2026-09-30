@@ -11,14 +11,14 @@ import java.util.RandomAccess;
  * <p>
  * This is the pure part of the design's {@code AisleGeometry { dock; facing; length; height }}
  * ({@code docs/stacker-crane.md} §3). The world mapping (dock position and facing) lives in the content layer
- * ({@code content.controller.AisleLayout}), so this record stays free of Minecraft types.
+ * ({@code content.controller.BranchLayout}), so this record stays free of Minecraft types.
  * <p>
  * Limits follow the address format: every rack position of a valid geometry has a {@link StorageAddress}.
  *
  * @param length number of rails, {@code 0..}{@value #MAX_LENGTH}
  * @param height mast height (number of levels), {@value #MIN_HEIGHT}..{@value #MAX_HEIGHT}
  */
-public record AisleGeometry(int length, int height) {
+public record AisleGeometry(int length, int height) implements RackSpace {
     public static final int MAX_LENGTH = StorageAddress.MAX_POSITION;
     public static final int MIN_HEIGHT = 1;
     public static final int MAX_HEIGHT = StorageAddress.MAX_LEVEL;
@@ -50,6 +50,7 @@ public record AisleGeometry(int length, int height) {
     }
 
     /** Number of rack positions on both sides: {@code 2 · (length + 1) · height}. */
+    @Override
     public int rackPositionCount() {
         return SIDES.length * positionCount() * height;
     }
@@ -59,8 +60,14 @@ public record AisleGeometry(int length, int height) {
         return x >= 0 && x <= length && y >= 0 && y < height;
     }
 
+    /**
+     * Whether {@code rack} is a position of this aisle. An {@code AisleGeometry} describes <b>one</b> branch, so a
+     * position on any branch but {@link RackPosition#FIRST_BRANCH} is outside it (ADR-033; the network geometry is what
+     * holds several branches).
+     */
+    @Override
     public boolean contains(RackPosition rack) {
-        return contains(rack.x(), rack.y());
+        return rack.isOnFirstBranch() && contains(rack.x(), rack.y());
     }
 
     /**
@@ -68,11 +75,13 @@ public record AisleGeometry(int length, int height) {
      * {@link Side#RIGHT}). The list is an unmodifiable, random-access view computed on access; it allocates no backing
      * storage.
      */
+    @Override
     public List<RackPosition> rackPositions() {
         return new RackPositionList(this);
     }
 
     /** Index of {@code rack} in {@link #rackPositions()}, or {@code -1} if it lies outside this geometry. */
+    @Override
     public int indexOf(RackPosition rack) {
         Objects.requireNonNull(rack, "rack");
         if (!contains(rack))
@@ -81,6 +90,7 @@ public record AisleGeometry(int length, int height) {
     }
 
     /** The rack position at {@code index} of {@link #rackPositions()}. */
+    @Override
     public RackPosition rackPosition(int index) {
         Objects.checkIndex(index, rackPositionCount());
         int side = index % SIDES.length;

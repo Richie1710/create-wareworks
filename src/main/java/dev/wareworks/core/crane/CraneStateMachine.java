@@ -9,6 +9,7 @@ import java.util.function.Function;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.warehouse.CraneRoute;
 
 /**
  * The crane state machine as a pure transition function ({@code docs/stacker-crane.md} §4): {@code (state, event) →
@@ -68,18 +69,38 @@ public final class CraneStateMachine<K, L> {
 
     private final Function<? super L, RackPosition> positions;
     private final CraneTimings timings;
+    private final CraneNetwork network;
 
     /**
+     * A machine on a warehouse of one straight aisle: exactly what every warehouse was before M21, and what the crane
+     * falls back to while its dock has not discovered a network yet.
+     *
      * @param positions maps a location to its aisle-local rack position (the crane's X, level and arm side there)
      * @param timings   transfer and retry durations
      */
     public CraneStateMachine(Function<? super L, RackPosition> positions, CraneTimings timings) {
+        this(positions, timings, CraneNetwork.SINGLE_BRANCH);
+    }
+
+    /**
+     * @param positions maps a location to its branch-local rack position (the crane's branch, X, level and arm side)
+     * @param timings   transfer and retry durations
+     * @param network   the rails the crane drives on, and what a turn on them costs
+     */
+    public CraneStateMachine(Function<? super L, RackPosition> positions, CraneTimings timings,
+            CraneNetwork network) {
         this.positions = Objects.requireNonNull(positions, "positions");
         this.timings = Objects.requireNonNull(timings, "timings");
+        this.network = Objects.requireNonNull(network, "network");
     }
 
     public CraneTimings timings() {
         return timings;
+    }
+
+    /** The rails this machine plans its motion on. */
+    public CraneNetwork network() {
+        return network;
     }
 
     /**
@@ -130,16 +151,16 @@ public final class CraneStateMachine<K, L> {
         if (s.paused() || speeds.isStopped())
             return s;
         return switch (s.phase()) {
-            case IDLE -> CraneMotion.step(s, speeds);
+            case IDLE -> move(s, speeds);
             case COMPLETE -> enter(s, CranePhase.IDLE, effects);
             case TRAVEL_TO_SOURCE, EXTEND_SOURCE, RETRACT_SOURCE, TRAVEL_TO_TARGET, EXTEND_TARGET, RETRACT_TARGET -> {
-                CraneState<K, L> moved = CraneMotion.step(s, speeds);
+                CraneState<K, L> moved = move(s, speeds);
                 yield CraneMotion.isAt(moved.pose(), moved.target()) ? motionComplete(moved, effects) : moved;
             }
             case PICK, DROP -> transferTick(s, effects);
             case REROUTE -> enter(s, CranePhase.HOLDING, effects); // the reroute request was not answered
             case HOLDING, WAITING_FOR_TARGET -> {
-                CraneState<K, L> moved = CraneMotion.step(s, speeds);
+                CraneState<K, L> moved = move(s, speeds);
                 int left = moved.retryTicks() - 1;
                 if (left > 0)
                     yield moved.withRetryTicks(left);
@@ -147,6 +168,20 @@ public final class CraneStateMachine<K, L> {
                         effects);
             }
         };
+    }
+
+    /**
+     * One motion tick along the route the network answers right now. A crane that stays on its own branch needs no
+     * route at all — {@link CraneMotion} then drives it straight at the target and turns it towards the target's own
+     * yaw — which is why a warehouse of one aisle never asks the network a question.
+     */
+    private CraneState<K, L> move(CraneState<K, L> s, CraneSpeeds speeds) {
+        CranePose pose = s.pose();
+        CranePose target = s.target();
+        if (pose.branch() == target.branch())
+            return CraneMotion.step(s, speeds, null, network.turnPenaltyBlocks());
+        CraneRoute route = network.route(pose.branch(), pose.x(), target.branch(), target.x()).orElse(null);
+        return CraneMotion.step(s, speeds, route, network.turnPenaltyBlocks());
     }
 
     private CraneState<K, L> transferTick(CraneState<K, L> s, List<CraneEffect<K, L>> effects) {
@@ -340,11 +375,12 @@ public final class CraneStateMachine<K, L> {
         if (s.phase() == CranePhase.IDLE)
             return retractedHere;
         TransportJob<K, L> job = requireJob(s);
+        double here = s.pose().yaw();
         return switch (s.phase()) {
-            case TRAVEL_TO_SOURCE -> poseAt(job.source(), CranePose.RETRACTED);
-            case EXTEND_SOURCE, PICK -> poseAt(job.source(), CranePose.EXTENDED);
-            case TRAVEL_TO_TARGET -> poseAt(job.target(), CranePose.RETRACTED);
-            case EXTEND_TARGET, DROP -> poseAt(job.target(), CranePose.EXTENDED);
+            case TRAVEL_TO_SOURCE -> poseAt(job.source(), CranePose.RETRACTED, here);
+            case EXTEND_SOURCE, PICK -> poseAt(job.source(), CranePose.EXTENDED, here);
+            case TRAVEL_TO_TARGET -> poseAt(job.target(), CranePose.RETRACTED, here);
+            case EXTEND_TARGET, DROP -> poseAt(job.target(), CranePose.EXTENDED, here);
             case IDLE, RETRACT_SOURCE, RETRACT_TARGET, COMPLETE, REROUTE, HOLDING, WAITING_FOR_TARGET -> retractedHere;
         };
     }
@@ -394,9 +430,15 @@ public final class CraneStateMachine<K, L> {
 
     // --- helpers -------------------------------------------------------------------------------------------------
 
-    private CranePose poseAt(L location, double arm) {
+    /**
+     * The pose a location asks the machine to stand in: on that location's branch, at its position and level, facing
+     * the way that branch runs. A network that does not know the branch — a warehouse of one aisle — leaves the yaw
+     * where the crane already holds it, so nothing ever turns there.
+     */
+    private CranePose poseAt(L location, double arm, double fallbackYaw) {
         RackPosition position = Objects.requireNonNull(positions.apply(location), "no rack position for " + location);
-        return new CranePose(position.x(), position.y(), arm, position.side());
+        return new CranePose(position.branch(), position.x(), position.y(), arm, position.side(),
+                network.restingYaw(position.branch(), fallbackYaw));
     }
 
     private static <K, L> CraneState<K, L> withMergedInterruption(CraneState<K, L> s, CraneInterruption incoming) {

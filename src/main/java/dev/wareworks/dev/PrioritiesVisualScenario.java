@@ -23,7 +23,7 @@ import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerGoggleSummary;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
@@ -476,7 +476,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
         StringBuilder status = new StringBuilder();
         ClientLevel level = context.minecraft().level;
         if (level != null) {
-            AisleLayout layout = layout(context.origin());
+            BranchLayout layout = layout(context.origin());
             for (Rack rack : ROW) {
                 status.append(status.isEmpty() ? "row=" : ",").append(rack.position().x()).append(':');
                 if (level.getBlockEntity(layout.rackPos(rack.position())) instanceof WarehouseInterfaceBlockEntity be)
@@ -524,7 +524,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(controllerPos(dock),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(INPUT), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
                 .setValue(WarehouseInputBlock.FACING, inward(layout, INPUT)));
         level.setBlockAndUpdate(layout.rackPos(OUTPUT), WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
@@ -551,7 +551,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
      * in {@value #PREFERRED_SLOTS} trips, so "the preferred location is used until it is full" is something the crane
      * does in this run rather than something the scenario arranges by hand. A barrel would have taken 27 stacks.
      */
-    private static void buildRow(ServerLevel level, AisleLayout layout) {
+    private static void buildRow(ServerLevel level, BranchLayout layout) {
         Direction outward = layout.sideDirection(ROW_SIDE);
         for (Rack rack : ROW) {
             BlockPos interfacePos = layout.rackPos(rack.position());
@@ -672,7 +672,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     /** Sets the priorities as holding the click on the filter slot would, and the one store filter. */
     private static void setStoreSettings(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (Rack rack : ROW) {
             WarehouseInterfaceBlockEntity storage = interfaceAt(level, layout, rack.position());
             storage.setStorePriority(rack.priority());
@@ -728,7 +728,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     private static void assertInventoryShapes(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         for (Rack rack : ROW) {
             BlockPos inventory = inventoryPos(layout, rack.position());
@@ -755,7 +755,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     private void startFeed(MinecraftServer server, VisualContext context, Item item, int amount) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         feeding = item;
         feedTotal = amount;
         deliveries.clear();
@@ -776,7 +776,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     private boolean feedStep(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         feedBelt(level, dock);
         for (Rack rack : ROW) {
             RackPosition position = rack.position();
@@ -841,7 +841,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
      */
     private void assertGoldOrder(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         RackPosition preferred = rack(Role.PREFERRED).position();
         RackPosition fallback = rack(Role.FALLBACK).position();
         if (deliveries.isEmpty())
@@ -881,7 +881,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     /** What the changed number claims: the second item type went to the raised location and nowhere else. */
     private void assertChangeOrder(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         RackPosition changed = rack(Role.CHANGED).position();
         if (deliveries.isEmpty())
             throw new VisualTestException("nothing was stored after the priority was raised");
@@ -904,7 +904,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     }
 
     /** Every location of the row holds exactly what {@code expected} says of {@code item}, and the rest holds none. */
-    private static void assertRowContents(ServerLevel level, AisleLayout layout, Item item,
+    private static void assertRowContents(ServerLevel level, BranchLayout layout, Item item,
             Map<RackPosition, Long> expected) {
         for (Rack rack : ROW) {
             long actual = countAt(level, inventoryPos(layout, rack.position()), item);
@@ -968,7 +968,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     private boolean craneParkedAtOutput(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
         if (crane == null)
             throw new VisualTestException("the dock of the aisle is missing");
@@ -1019,7 +1019,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
         ClientLevel level = context.minecraft().level;
         if (level == null)
             return false;
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (Rack rack : ROW) {
             if (!(level.getBlockEntity(layout.rackPos(rack.position()))
                     instanceof WarehouseInterfaceBlockEntity storage))
@@ -1163,8 +1163,8 @@ public final class PrioritiesVisualScenario implements VisualScenario {
 
     // --- geometry ----------------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static BlockPos controllerPos(BlockPos dock) {
@@ -1172,18 +1172,18 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     }
 
     /** Which way a station on {@code rack} faces to look into the aisle. */
-    private static Direction inward(AisleLayout layout, RackPosition rack) {
+    private static Direction inward(BranchLayout layout, RackPosition rack) {
         return layout.sideDirection(rack.side()).getOpposite();
     }
 
     /** The inventory behind a storage location: one block further away from the aisle than its interface. */
-    private static BlockPos inventoryPos(AisleLayout layout, RackPosition rack) {
+    private static BlockPos inventoryPos(BranchLayout layout, RackPosition rack) {
         return layout.rackPos(rack).relative(layout.sideDirection(rack.side()));
     }
 
     /** Beside the output, one block further out than the station itself, standing on the superflat floor. */
     private static BlockPos leverPos(BlockPos dock) {
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         return layout.rackPos(OUTPUT).relative(layout.sideDirection(OUTPUT.side()));
     }
 
@@ -1240,7 +1240,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
         return controller;
     }
 
-    private static WarehouseInterfaceBlockEntity interfaceAt(ServerLevel level, AisleLayout layout, RackPosition rack) {
+    private static WarehouseInterfaceBlockEntity interfaceAt(ServerLevel level, BranchLayout layout, RackPosition rack) {
         WarehouseInterfaceBlockEntity storage = WareworksBlockEntityTypes.WAREHOUSE_INTERFACE.getNullable(level,
                 layout.rackPos(rack));
         if (storage == null)
@@ -1284,7 +1284,7 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     }
 
     /** Whether the inventory behind {@code rack} takes no further item of {@code item} at all. */
-    private static boolean isFull(ServerLevel level, AisleLayout layout, RackPosition rack, Item item) {
+    private static boolean isFull(ServerLevel level, BranchLayout layout, RackPosition rack, Item item) {
         IItemHandler handler = handlerAt(level, inventoryPos(layout, rack));
         return !ItemHandlerHelper.insertItem(handler, new ItemStack(item, 1), true).isEmpty();
     }

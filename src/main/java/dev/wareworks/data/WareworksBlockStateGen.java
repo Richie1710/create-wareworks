@@ -1,10 +1,18 @@
 package dev.wareworks.data;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import org.jetbrains.annotations.Nullable;
+
+import com.simibubi.create.foundation.block.ProperWaterloggedBlock;
 import com.tterrag.registrate.providers.DataGenContext;
 import com.tterrag.registrate.providers.RegistrateBlockstateProvider;
 import com.tterrag.registrate.util.nullness.NonNullBiConsumer;
 
+import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.station.TerminalDisplaySide;
+import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
@@ -96,6 +104,55 @@ public final class WareworksBlockStateGen {
     }
 
     /**
+     * The warehouse home point's <b>multipart</b> blockstate ({@code docs/stacker-crane.md} §4.7, M21, ADR-034): the
+     * hand-made {@code block} model turned onto {@code FACING}, with {@code block_active} in its place while the crane
+     * really waits here and {@code block_refused} while something keeps it from being used — plus, over the refused
+     * one, a brass {@code stop} crossed over its plate.
+     * <p>
+     * <b>The colour alone is not enough</b>, and that is why this block is not a three-variant provider. The three body
+     * models differ in one texture, the lamp bar across the plate, and they speak the lamp language the rest of the mod
+     * already does: dim rose quartz for "nothing is happening", lit for "this is working" and the <b>powered</b> lamp of
+     * the safety stop for "a player has to do something". Lit and powered rose quartz are a shade apart, though — which
+     * is right on a stock keeper, where both states are warnings, and wrong here, where the two states are "this is your
+     * crane's home" and "this block does nothing". The crossed brass stop is the same answer the closed rail gives:
+     * <b>readable at a glance, across the room and in the dark</b>, and readable without colour at all.
+     * <p>
+     * Create's {@code BlockStateGen.horizontalBlockProvider} would give every lamp value the same model, which is right
+     * for a stored edge nobody can see and wrong for a lamp; a variant blockstate could not draw the stop without a
+     * second copy of the whole geometry, which is what the multipart avoids (the terminal's pattern).
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            homePointBlockProvider() {
+        return (context, provider) -> {
+            String folder = "block/" + context.getName() + "/";
+            ModelFile dark = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+            ModelFile active = provider.models().getExistingFile(provider.modLoc(folder + "block_active"));
+            ModelFile refused = provider.models().getExistingFile(provider.modLoc(folder + "block_refused"));
+            ModelFile stop = provider.models().getExistingFile(provider.modLoc(folder + "stop"));
+            MultiPartBlockStateBuilder builder = provider.getMultipartBuilder(context.getEntry());
+            for (Direction facing : Direction.Plane.HORIZONTAL) {
+                int rotation = rotationOnto(facing);
+                // Refused outranks lit, exactly as every "you have to do something" lamp of this mod does.
+                homePointPart(builder, refused, rotation, facing, true, null);
+                homePointPart(builder, stop, rotation, facing, true, null);
+                homePointPart(builder, active, rotation, facing, false, true);
+                homePointPart(builder, dark, rotation, facing, false, false);
+            }
+        };
+    }
+
+    /** One part of the home point: {@code model} turned onto {@code facing}, for one refused (and lit) state. */
+    private static void homePointPart(MultiPartBlockStateBuilder builder, ModelFile model, int rotation,
+                                      Direction facing, boolean refused, @Nullable Boolean lit) {
+        MultiPartBlockStateBuilder.PartBuilder part = builder.part().modelFile(model).rotationY(rotation).addModel()
+                .condition(WarehouseHomePointBlock.FACING, facing)
+                .condition(WarehouseHomePointBlock.REFUSED, refused);
+        if (lit != null)
+            part.condition(WarehouseHomePointBlock.LIT, lit);
+        part.end();
+    }
+
+    /**
      * The warehouse production station's blockstate (M20, issue #4, ADR-032): the hand-made {@code block} model turned
      * onto {@code FACING}, with {@code block_stopped} in its place while the <b>safety stop</b> holds something this
      * station makes ({@link WarehouseProductionBlock#STOPPED}).
@@ -163,6 +220,84 @@ public final class WareworksBlockStateGen {
             case COLLECT -> collect;
             case REQUEST -> request;
         };
+    }
+
+    /**
+     * The warehouse rail's blockstate (M21, issue #1, ADR-033): one of five hand-made shapes, turned onto the sides the
+     * rail is connected on, plus the closed rail's own model.
+     * <p>
+     * Rails that touch connect, so a player has to be able to read "the crane can turn here" from across the room. The
+     * four connection flags are <b>derived and cosmetic</b> — the warehouse itself never looks at them — and they pick
+     * {@code block} (a straight rail, and a lone one with no connection at all, which is the only case
+     * {@link WarehouseRailBlock#AXIS} still decides), {@code end}, {@code corner}, {@code tee} or {@code cross}. A rail
+     * the wrench has closed shows {@code closed}, whatever its neighbours do, because it belongs to no warehouse.
+     * <p>
+     * The shapes are authored on fixed sides — {@code end} to the north, {@code corner} north and east, {@code tee}
+     * everywhere but west — and turned from there, the same way every other model of this mod is authored on the north
+     * face. A multipart blockstate (the terminal's pattern) is deliberately <b>not</b> used: a corner and a tee are not
+     * the sum of independent arms, they are their own shapes.
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            railBlockProvider() {
+        return (context, provider) -> {
+            String folder = "block/" + context.getName() + "/";
+            ModelFile straight = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+            ModelFile end = provider.models().getExistingFile(provider.modLoc(folder + "end"));
+            ModelFile corner = provider.models().getExistingFile(provider.modLoc(folder + "corner"));
+            ModelFile tee = provider.models().getExistingFile(provider.modLoc(folder + "tee"));
+            ModelFile cross = provider.models().getExistingFile(provider.modLoc(folder + "cross"));
+            ModelFile closed = provider.models().getExistingFile(provider.modLoc(folder + "closed"));
+            provider.getVariantBuilder(context.getEntry())
+                    .forAllStatesExcept(state -> railModel(state, straight, end, corner, tee, cross, closed),
+                            ProperWaterloggedBlock.WATERLOGGED);
+        };
+    }
+
+    private static ConfiguredModel[] railModel(BlockState state, ModelFile straight, ModelFile end, ModelFile corner,
+                                               ModelFile tee, ModelFile cross, ModelFile closed) {
+        if (state.getValue(WarehouseRailBlock.CLOSED))
+            return turned(closed, alongAxis(state));
+        List<Direction> connected = new ArrayList<>(4);
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            if (state.getValue(WarehouseRailBlock.connection(direction)))
+                connected.add(direction);
+        }
+        return switch (connected.size()) {
+            case 0 -> turned(straight, alongAxis(state));
+            case 1 -> turned(end, rotationOnto(connected.getFirst()));
+            case 2 -> connected.get(0) == connected.get(1).getOpposite()
+                    ? turned(straight, connected.getFirst().getAxis() == Direction.Axis.Z ? 0 : FULL_TURN / 4)
+                    : turned(corner, rotationOnto(cornerSlot(connected)));
+            case 3 -> turned(tee, rotationOnto(missingOf(connected)) - rotationOnto(Direction.WEST) + FULL_TURN);
+            default -> turned(cross, 0);
+        };
+    }
+
+    /** The rotation a model authored along the Z axis needs for the (now purely cosmetic) axis of a lone rail. */
+    private static int alongAxis(BlockState state) {
+        return state.getValue(WarehouseRailBlock.AXIS) == Direction.Axis.Z ? 0 : FULL_TURN / 4;
+    }
+
+    /**
+     * The side the {@code corner} model's north arm has to end up on: of its two connected sides, the one whose
+     * <b>clockwise</b> neighbour is the other, because the model is authored connecting north and east.
+     */
+    private static Direction cornerSlot(List<Direction> connected) {
+        Direction first = connected.getFirst();
+        return connected.contains(first.getClockWise()) ? first : connected.getLast();
+    }
+
+    /** The one side a three-way rail is not connected on; the {@code tee} model is authored missing its west side. */
+    private static Direction missingOf(List<Direction> connected) {
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            if (!connected.contains(direction))
+                return direction;
+        }
+        throw new IllegalArgumentException("a three-way rail leaves one side free: " + connected);
+    }
+
+    private static ConfiguredModel[] turned(ModelFile model, int rotationY) {
+        return ConfiguredModel.builder().modelFile(model).rotationY(rotationY % FULL_TURN).build();
     }
 
     /** One shell of one state: {@code model} turned onto the {@code shellFace} of the block. */

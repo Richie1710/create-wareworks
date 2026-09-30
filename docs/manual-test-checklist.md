@@ -10,19 +10,22 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly eight items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
-   interface, warehouse input, warehouse output, warehouse terminal, warehouse production station.
+   lists exactly **ten** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   interface, warehouse input, warehouse output, warehouse terminal, warehouse production station, warehouse stock
+   keeper, warehouse home point. (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from there
+   if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the eight items shows a Create-style description; the stacker crane additionally shows its
+3. Holding Shift on each of the **ten** items shows a Create-style description; the stacker crane additionally shows its
    stress impact.
-4. JEI/EMI shows eight recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
+4. JEI/EMI shows **ten** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
-   terminal takes a **precision mechanism** (not a funnel) like the controller, and the output takes two **brass
-   nuggets** the input does not. In the **vanilla recipe book** six of them appear (controller, rail, interface, input,
-   output, terminal) once you hold one of their ingredients — the terminal shows up with a precision mechanism and the
-   output with a brass nugget — while the stacker crane never does, because mechanical crafting has no recipe-book
-   category (Create's own mechanical crafting recipes behave the same).
+   terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass
+   nuggets** the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an
+   andesite casing between two andesite alloy, with no electron tube and no precision mechanism). In the **vanilla recipe book** the other **nine** appear once you hold one of
+   their ingredients — the terminal shows up with a precision mechanism and the output with a brass nugget — while the
+   stacker crane never does, because mechanical crafting has no recipe-book category (Create's own mechanical crafting
+   recipes behave the same).
 4a. Lay out the **input** recipe (funnel over casing) and then the **output** recipe (casing over funnel with a brass
     nugget on each side of the funnel) in a crafting table: each gives exactly its own block, and neither turns into
     the warehouse interface (casing + funnel + brass nugget, shapeless).
@@ -176,9 +179,12 @@ if you are already standing at the wall.
 
 ## H. Ponder
 
-42. Hover any of the **nine** items and hold **W**: a scene opens. Crane and rail show "Moving Items with a Stacker
-    Crane"; the controller, the **warehouse terminal** and the **stock keeper** have two scenes each, the **interface
-    has three** and the **production station** one (arrow keys or scroll switch them).
+42. Hover any of the **nine** pondered items and hold **W**: a scene opens, and the arrow keys or the scroll wheel switch
+    between the scenes of one item. The counts are the ones `PonderVisualScenario.SUBJECTS` pins, so read them from there
+    rather than from this list if the two ever disagree: **stacker crane 2** and **warehouse rail 2** — both show
+    "Moving Items with a Stacker Crane" first and "Rails Around a Corner" second — **controller 2**, **interface 3**,
+    **input 1**, **output 4**, **warehouse terminal 3**, **production station 3** and **stock keeper 3**. The warehouse
+    home point has no scene yet and is not in the tag either.
 43. `/ponder index` and the Ponder tag screen list **"Automated Warehouses"** with the stacker crane as its icon and all
     **nine** blocks inside — terminal and production station since M13, the stock keeper since M15; the dock also
     appears under Create's "Kinetic Appliances", and interface, input, output, terminal, production station and stock
@@ -264,7 +270,7 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
 
 ## L. Warehouse terminal (M6)
 
-57. The creative tab ends with the **Warehouse Terminal** after the output; its item icon shows the **screen side** — a
+57. The **Warehouse Terminal** comes after the output in the creative tab (it was the last item until M11); its item icon shows the **screen side** — a
     brass frame around a dark teal display with a search row and a grid of item cells, and the take-out tray below it —
     with no missing-texture checkerboard.
 58. **Stand on the far side of the rack, not in the aisle**, and place the terminal into a rack position: the **screen
@@ -593,7 +599,7 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
 
     **Automated** (GameTest `displaysourcesregistered`): the four ids resolve in Create's registry, each name uses the
     generated lang key, and `DisplaySource.getAll` returns exactly the expected list, in the expected order, for all
-    eight blocks. The screen itself is never opened by a test. **By eye:** that the screen really lists them that way
+    nine blocks it lists (every Wareworks block except the home point, which has no display source and no ticker). The screen itself is never opened by a test. **By eye:** that the screen really lists them that way
     and that nothing is cut off in German, plus the preselection after a restart.
 94. Point a link on the **controller** at a display board (or a row of nixie tubes) with "Aisle Summary". Within about
     five seconds it reads `Aisle A: Ready`, `Locations: 3 / 30`, `Item types: 3`, `Items: 176`. Put on goggles and look
@@ -1133,7 +1139,9 @@ spawn chunks stay loaded whatever you do — and something the warehouse does by
 production station, or a **collecting** port pointed at a machine that keeps producing. `F3+G` draws chunk borders and the
 `C:` line of `F3` counts loaded chunks; both are worth having on screen. The setting lives in
 `config/wareworks-server.toml` (per world: `<world>/serverconfig/wareworks-server.toml`), section `chunkLoading`, and it
-needs a server restart or a `/reload` to be re-read.
+needs a server restart or a `/reload` to be re-read. Since M21 a warehouse may bend, so the unit of every number here
+is one **warehouse** — one controller and every aisle it owns — and `maxChunksPerAisle` defaults to **10** chunks
+rather than 8, which is what a warehouse of two or three aisles needs.
 
 133. **The shipped default, first.** Do not touch the config yet. Start a job — or let the warehouse start one for itself
     — and walk away until the aisle unloads (watch the `C:` count drop, or simply go 500 blocks and wait). Come back. The
@@ -1170,13 +1178,14 @@ needs a server restart or a `/reload` to be re-read.
     Then `/wareworks chunks release <the controller's x y z>`: it answers, the goggle line changes to **"Chunk loading:
     none (let go; holds again when its work changes)"**, and a second `/wareworks chunks` lists nothing. The aisle must
     **not** take the chunks straight back although its job is unchanged. Give it a genuinely new request and it holds
-    again. Finally check `/wareworks chunks` with no aisle holding at all: "No Wareworks aisle is holding any chunks".
+    again. Finally check `/wareworks chunks` with no warehouse holding at all: "No Wareworks warehouse is holding any
+    chunks".
 
     **Scope**, worth checking once: `release <x y z>` acts on the dimension you run it in, exactly as `/forceload` does.
     From the server console (always the overworld) a Nether aisle needs
-    `/execute in the_nether run wareworks chunks release <x y z>`, and running it without that must answer "No aisle at
+    `/execute in the_nether run wareworks chunks release <x y z>`, and running it without that must answer "No warehouse at
     ... is holding chunks in minecraft:overworld" — naming the dimension it looked in. `release all`, by contrast, covers
-    **every** dimension and answers with how many aisles in how many dimensions.
+    **every** dimension and answers with how many warehouses in how many dimensions.
 
     Check the permission too: a non-op player must not see the command at all.
 
@@ -1203,16 +1212,17 @@ needs a server restart or a `/reload` to be re-read.
     cannot help you here — it does not see mod tickets, which is why `/wareworks chunks` exists.
 
 138. **The caps, and that a refusal costs nothing.** Set `maxChunksPerAisle` **below** what your aisle needs (check 134
-    told you the number) and restart. The goggles must read **"Chunk loading: none (this aisle needs 6 of 3 chunks)"**,
-    naming both numbers — and the warehouse must go on working exactly as in check 133, pause and all. Nothing may be
-    held partially: `/wareworks chunks` lists nothing.
+    told you the number) and restart. The goggles must read **"Chunk loading: none (this warehouse needs 6 of 3
+    chunks)"**, naming both numbers — and the warehouse must go on working exactly as in check 133, pause and all.
+    Nothing may be held partially: `/wareworks chunks` lists nothing.
 
     Then the level cap: set `maxTicketedAislesPerLevel = 1`, give two aisles work at the same time, and check that the
-    second one reads **"Chunk loading: none (server limit: 1 aisles)"** while still serving its request. Let the first aisle finish — the second must take the freed slot by itself, without you doing anything.
+    second one reads **"Chunk loading: none (server limit: 1 warehouses)"** while still serving its request. Let the
+    first aisle finish — the second must take the freed slot by itself, without you doing anything.
 
     Then lower a cap **under** a holding aisle: with the aisle holding N chunks, set `maxChunksPerAisle` to N − 1 and
-    `/reload`. It must let go within a second and read "Chunk loading: none (this aisle needs N of N−1 chunks)"; a hold
-    that stays above the number you just set is a defect. The same with `maxTicketedAislesPerLevel` lowered below the
+    `/reload`. It must let go within a second and read "Chunk loading: none (this warehouse needs N of N−1 chunks)";
+    a hold that stays above the number you just set is a defect. The same with `maxTicketedAislesPerLevel` lowered below the
     number of aisles currently holding: enough of them must let go to respect it.
 
     And the emergency valve against a cap: with `maxTicketedAislesPerLevel = 1`, one aisle holding and a second waiting
@@ -1232,11 +1242,11 @@ needs a server restart or a `/reload` to be re-read.
 
     Then switch the client to **German** and read every line again: "Chunks geladen: 4 (Auftrag des
     Regalbediengeräts)", "(offene Anforderungen)", "(Produktionsaufträge)", "(holt aus einer Maschine ab)", "(untätig,
-    gibt frei)", "Chunks geladen: keine (Serverlimit: 1 Gänge)", "Chunks geladen: keine (Abhol-Limit: 1 Gänge)",
-    "Chunks geladen: keine (dieser Gang braucht 6 von 3 Chunks)", "Chunks geladen: keine (hat losgelassen; hält erst wieder, wenn sich die Arbeit ändert)", the display row
-    "Chunks: 4 geladen" and the command's own answers ("Kein Wareworks-Gang hält Chunks geladen", "Die Chunks des Gangs
-    bei ... wurden freigegeben", "Kein Gang bei ... hält in ... Chunks geladen"). Nothing may show a raw key, run out
-    of its box or be cut off.
+    gibt frei)", "Chunks geladen: keine (Serverlimit: 1 Lager)", "Chunks geladen: keine (Abhol-Limit: 1 Lager)",
+    "Chunks geladen: keine (dieses Lager braucht 6 von 3 Chunks)", "Chunks geladen: keine (hat losgelassen; hält erst
+    wieder, wenn sich die Arbeit ändert)", the display row "Chunks: 4 geladen" and the command's own answers ("Kein
+    Wareworks-Lager hält Chunks geladen", "Die Chunks des Lagers bei ... wurden freigegeben", "Kein Lager bei ... in ...
+    hält Chunks geladen"). Nothing may show a raw key, run out of its box or be cut off.
 
     **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
     nothing about how they look. The screenshot runs render English only.
@@ -1247,8 +1257,8 @@ needs a server restart or a `/reload` to be re-read.
     that was **already running** keeps going while you are away, and the goggles read "(collecting from a machine)".
 
     With the opt-in still at 1, give a **second** aisle a collecting port with items waiting as well. One of the two holds
-    and the other must read **"Chunk loading: none (collecting limit: 1 aisles)"** — an aisle queued behind this cap has
-    to say so rather than look idle. Raise the opt-in to 2 and both must hold.
+    and the other must read **"Chunk loading: none (collecting limit: 1 warehouses)"** — a warehouse queued behind this
+    cap has to say so rather than look idle. Raise the opt-in to 2 and both must hold.
     Finally let the machine run empty, leave, and start it again from a distance (a redstone clock, a timer): the aisle
     must **not** notice. It cannot, and the docs say so. If you ever see it fetch from a machine it could not have read,
     something polls an unloaded chunk and that is a defect.
@@ -1366,3 +1376,148 @@ below.
     **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders, and that
     every refusal sentence names its item and fits the status row — nothing about how any of it looks. The screenshot runs
     render English only, and the harness drives every click through a screen's own API rather than with a real mouse.
+
+## X. Rails around corners (M21, issue #1)
+
+Setup for this whole section: a **creative** flat world, a Stacker Crane dock powered from below (a creative motor at about
+64 RPM reads best for judging the turn), a Warehouse Controller behind it, and rails you are willing to rebuild several
+times. Goggles in a slot for every check. Have a **Wrench** and a few spare Warehouse Rails on the hotbar. Where a check
+says "an L", build a run of six rails out of the dock and a second run of six at right angles out of its last rail.
+
+149. **Does the turn read as a machine turning?** This is the question the whole milestone is judged on, and no test can
+    answer it. Build an L, put a chest and a Warehouse Interface at a rack position on the far aisle, feed the warehouse
+    through an input on the near aisle, and **watch a whole trip from the side** — not from above. The machine must arrive
+    at the corner, *stop*, swing, and set off again: judge whether the stop reads as a deliberate manoeuvre or as a stutter,
+    whether the swing is too fast to see or slow enough to be annoying, and whether the chassis looks like it is turning on
+    its own centre rather than sliding. Then watch the same trip again **from the end of the far aisle**, head on. Then at a
+    low RPM (16) and a high one (192): at 16 the turn takes about twelve ticks and at 192 about one, so if either reads
+    badly, `crane.turnPenaltyBlocks` is the knob and this check is where that gets decided.
+
+150. **The wheels, and nothing else, betray a fake.** Watch the wheels through a corner and then on the way **back**. They
+    must roll forwards on the way out, backwards on the way home, and **not move at all** in the tick the machine changes
+    aisle (it is renamed there, it does not travel). A wheel spinning the wrong way on a return trip is the exact regression
+    the odometer exists for, and only an eye catches it.
+
+151. **Does the corner rack look obvious?** On the corner block, place one Warehouse Interface facing **away** from the near
+    aisle and, on the opposite side of the same block, one facing away from the far aisle. Stand in each aisle in turn and
+    ask, without goggles: **can you tell which rack belongs to the aisle you are standing in?** Then put the goggles on and
+    check the two addresses agree with what you guessed. Now turn one of them the wrong way (towards the rails) and confirm
+    it is reported as misaligned rather than silently ignored. This rule is the one thing a player must understand about
+    corners, and if the block does not show it, the Ponder scene has to carry more of the weight.
+
+152. **The rail models, across the room and in the dark.** Lay a straight run, an L, a T and a cross, plus one lone rail.
+    From about twenty blocks away, at day and at night, can you read the shape of the network off the floor — especially,
+    can you tell the **corner** from the straight rails beside it? Then close one rail with the **Wrench**: the brass end
+    stop must be unmistakable from the same distance and in the dark, because that block is the difference between one
+    warehouse and two.
+
+153. **The wrench message, and that the axis really is gone.** Right-click a rail with the Wrench: the action bar must say
+    that the rail was closed, and a second click must open it again. Then confirm the wrench does **not** rotate the rail
+    any more — this changed, so a player who used the old behaviour has to be told by the block rather than by the
+    changelog.
+
+154. **A T is a shorter warehouse, not a broken one.** With a working L, lay one extra rail so that the corner becomes a
+    T-junction. The warehouse must keep working up to the branching rail; the controller's goggles must say where it stops
+    and that a split needs a later version, and the coordinates they name must be **the block you just made into a
+    junction** — walk to them and check. Break the extra rail again and the warehouse must come back whole with the same
+    addresses. Judge the sentence as a player: does it tell you what to do, or does it read like an internal error?
+
+155. **The network lines on the goggles, and whether they fit.** On a warehouse of **three** aisles, read the controller's
+    goggles: the size line, the aisle list with a letter and a length each, and — if anything is cut short — the stop line.
+    Check that nothing overflows its tooltip or wraps badly at **GUI scale 1 and 4**, and that a warehouse of **one** aisle
+    still reads exactly as it always did (no network line at all). Then build seven aisles and confirm the list says "and N
+    more" rather than running off the screen. Same on the dock: "On aisle B at position 7" under the size line.
+
+156. **The Ponder scene, watched once through as a new player.** `/ponder wareworks:warehouse_rail`, paged to the **corner**
+    scene (the second one). Watch it start to finish without skipping. Does it teach, in order, that rails connect wherever
+    they touch, that a corner is the block two runs share, that the machine turns there, and that a corner rack belongs to
+    the aisle it faces away from? Is the turn actually **visible** from the camera angle, or is a rack row in front of it?
+    Is any caption on screen too long to read before it moves on, and is the whole scene (about 65 seconds) too long to sit
+    through? Then check the two addresses in caption nine really match what the goggles say on a warehouse you build the
+    same way.
+
+157. **German, everywhere this feature speaks.** Restart with a German client and read every surface of this section: the
+    item descriptions of rail, dock and controller (Shift tooltips), the wrench message, the goggle lines on controller and
+    dock, the aisle list, the stop sentence for each reason you can provoke (a split, a second dock, a rail cap you lower
+    in the config — a rail you closed with the wrench is a deliberate end and deliberately gets no sentence), the aisle
+    display line, the `/wareworks chunks` over-cap row, and the whole Ponder scene. Nothing may show a raw key, run out of
+    its box or be cut off, at **GUI scale 1 and 4**.
+
+    **Automated for this section:** `RailNetworkGameTests`, `RackBranchGameTests`, `WarehouseNetworkGameTests` and
+    `CraneCornerGameTests` prove the world behaviour (connections and the wrench, discovery around a bend and its refusal at
+    a T, the corner block's two racks, pinned letters and origins, the remap, the goggle lines through the synced tag, a
+    real job round a corner, a rail broken behind the machine, a save in mid-turn); `CraneModelLayoutTest` and
+    `WarehouseRailModelTest` pin the chassis sweep and the rail models to the pixel; the `corner` visual scenario
+    photographs the bend and every stage of a quarter turn and counts the turn sound over a real cogwheel drivetrain; the
+    `ponder` scenario compiles the scene against a real `PonderLevel`. None of that can judge whether the turn **reads**
+    well, whether the corner rack is obvious, or whether the German lines fit — which is what 149 to 157 are for.
+
+## Y. The warehouse home point (M21, issue #1)
+
+Setup: the same creative flat world and powered dock as section X, an **L** of rails (six out of the dock, six at right
+angles out of its last rail), a Warehouse Controller, one input and one rack on the near aisle so the warehouse has real
+work, and a Warehouse Terminal on the **far** aisle — a home point exists because you walk somewhere. Goggles in a slot.
+The default idle delay is 10 seconds (`crane.returnHomeIdleTicks`); lower it to about 40 ticks in the server config if
+you get tired of waiting, and put it back before judging check 160.
+
+158. **Does the block say "wait here" without a manual?** Place the home point at a rack position on the far aisle,
+    standing in the aisle so its plate faces you. Without goggles: can you tell it is a marker and not a station — that
+    there is no opening for items anywhere on it? Then watch the lamp come on (it takes up to one geometry refresh, ~2 s)
+    and confirm that a block whose lamp is **on** reads as "this one is in use" rather than as a warning.
+
+159. **Does a refusal read across a room, and in the dark?** Place a **second** home point on the same warehouse. It must
+    turn red **and** grow the crossed brass stop over its plate. Now walk back about ten blocks and ask, without goggles,
+    which of the two the crane uses. Then do it again **at night with no light source**: the two lamp textures are only a
+    shade apart, so the stop is what has to carry it. If the stop cannot be read at distance or in the dark, the model is
+    wrong, not the tester. Then place a third one on the **near** aisle: which home point serves is decided by address
+    order — aisle A before aisle B, then the lower position number — and not by the order you placed them, so the new one
+    must take over and both on the far aisle must turn red.
+
+160. **Does a machine coming home feel right, or does it feel like it is in your way?** This is the question the feature
+    is judged on and no test can answer it. With the **default** 10-second delay, work the warehouse for a few minutes as
+    a player: feed the input, request something at the terminal, walk away, come back. Judge three things. Does the
+    machine turn up where you are about to need it, or does it look like it is fussing? Does a request you make while it
+    is rolling home ever feel **delayed** (it must not — it takes the job in the same tick, including mid-corner, so if it
+    ever feels slow that is a real defect)? And is 10 seconds right — too twitchy between two jobs, or too long to be
+    useful? `crane.returnHomeIdleTicks` is the knob and this check is where it gets decided.
+
+161. **Every "without effect" sentence, provoked for real.** Read the home point's goggles in each of these states and
+    judge the sentence as a player — does it tell you what to do?
+    * **serving:** "Warehouse Home Point: / Address: B-01-03R / The stacker crane waits here" — and the machine really is
+      parked there while you read it.
+    * **a second one:** "Without effect: this warehouse already has a home point".
+    * **unreachable:** this one is deliberately hard to provoke, because closing or breaking a rail normally takes the
+      far aisle out of the warehouse altogether and you get "Not part of a warehouse" instead. The state you are after
+      is a machine standing further out on its aisle than the aisle now reaches: drive the crane out to the far end of
+      the **near** aisle, take its power away, break the rails behind it, and read the home point on the other aisle.
+      Red lamp, "Without effect: the crane cannot drive here", and the crane waits where it is instead of pushing at the
+      gap. If you cannot get there in a few minutes, leave it: `HomePointGameTests` builds exactly this and the state is
+      defensive until junctions land (issue #2).
+    * **one straight aisle:** on a warehouse with **no** corner at all, both lamps stay dark and it reads "Without
+      effect: on one aisle the crane waits where it is" — and the machine must stand exactly where its last job left it,
+      which is the behaviour this whole feature must not change.
+    * **switched off:** set `crane.returnHomeIdleTicks = 0` and it reads "Without effect: this server switched returning
+      home off"; no machine anywhere drives home.
+    * **not part of a warehouse:** place one out in a field, or turn one away from the rails — "Not part of a warehouse",
+      or "Misaligned" with the station hint.
+
+162. **Break it and watch the machine go back to its dock.** With a serving home point on the far aisle, break the block
+    while the machine is parked at it. Within a refresh it must set off, turn the corner and park at position 0 of the
+    aisle at the dock, facing the way that aisle runs — with no message, no lamp left burning anywhere, and nothing in
+    the log.
+
+163. **German, everywhere this block speaks.** Restart with a German client: the block's name (**"Warteplatz"** — is that
+    the right word for a German player, or does it read like a bus stop?), all five Shift tooltip rows with their
+    conditions, the goggle header and each of the six status sentences from check 161, at **GUI scale 1 and 4**. Nothing
+    may show a raw key, run out of its box or be cut off. "Ohne Wirkung: In einem einzelnen Gang wartet das Gerät, wo es
+    ist" is the longest of them and the one to measure.
+
+    **Automated for this section:** `HomePointGameTests` proves the world behaviour (a home point served round an L with
+    the parked pose measured to the block, breaking it falling back to the dock, a second one refused while the first
+    keeps serving, an unreachable one reported and handed to nobody, a return interrupted **mid-turn** by real work with
+    the stack still stored, a whole trip home asserting zero held chunks on every tick, and a single straight aisle whose
+    pose is compared against a recorded one on every tick for three idle delays); `HomeReturnTest` (12 JUnit) pins the
+    rule itself; `WareworksItemGameTests` pins the recipe and the tenth creative slot; the `home` visual scenario
+    (`./gradlew runVisualTest -Pwareworks.visualTest=home`) photographs the block, both lamp states, the trip and the
+    English goggle tooltip. None of that can judge whether the crossed stop reads at distance, whether "Warteplatz" is
+    the right word, or whether a machine that comes to meet you feels right — which is what 158 to 163 are for.

@@ -1,15 +1,24 @@
 package dev.wareworks.client.ponder.scenes;
 
 import java.util.List;
+import java.util.Optional;
+
+import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
+import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.core.address.Heading;
+import dev.wareworks.core.address.NetworkGeometry;
+import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CraneMotion;
+import dev.wareworks.core.crane.CraneNetwork;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.CraneSpeeds;
+import dev.wareworks.core.warehouse.CraneRoute;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.Item;
 
@@ -33,6 +42,13 @@ import net.minecraft.world.item.Item;
  * The speeds mirror {@code StackerCraneBlockEntity#currentSpeeds()}, including its rule that a configured factor of 0
  * stops the crane entirely. With such a config the crane simply stands still and the scene keeps its pacing through
  * {@link #MIN_MOVE_TICKS}.
+ * <p>
+ * <b>A warehouse that bends</b> (M21, ADR-033) needs one thing more: the network. A {@code PonderLevel} never runs the
+ * server-only {@code refreshGeometry}, so a dock in a scene does not know that its rails turn a corner, and a machine
+ * that does not know its own network cannot drive round one however many rails are drawn under it. {@link
+ * #onNetwork(CreateSceneBuilder, BlockPos, NetworkGeometry)} hands it over with every pose, and the same network is
+ * used to work out how long a move takes — so the {@code idle} of a beat that crosses a corner includes the quarter
+ * turn ({@code crane.turnPenaltyBlocks}) exactly as the machine spends it.
  */
 public final class CraneScript {
     /** Kinetic speed the scenes drive the dock with: slow enough to read, fast enough not to drag. */
@@ -45,19 +61,41 @@ public final class CraneScript {
     private final CreateSceneBuilder scene;
     private final BlockPos dock;
     private final CraneSpeeds speeds;
+    /** The rails the shown machine drives on, or {@code null} for a warehouse of one straight aisle. */
+    @Nullable
+    private final NetworkGeometry network;
+    private final CraneNetwork rails;
     private CranePose pose;
     private List<KeyCount<Item>> held = List.of();
 
     public CraneScript(CreateSceneBuilder scene, BlockPos dock, int rpm, CranePose start) {
+        this(scene, dock, rpm, null, start);
+    }
+
+    private CraneScript(CreateSceneBuilder scene, BlockPos dock, int rpm, @Nullable NetworkGeometry network,
+            CranePose start) {
         this.scene = scene;
         this.dock = dock;
         this.speeds = speedsAt(rpm);
+        this.network = network;
+        this.rails = network == null ? CraneNetwork.SINGLE_BRANCH
+                : CraneNetwork.of(network, WareworksConfig.turnPenaltyBlocks());
         this.pose = start;
     }
 
     /** A crane script starting at the parking pose, driven at {@link #PONDER_RPM}. */
     public static CraneScript parkedAt(CreateSceneBuilder scene, BlockPos dock) {
         return new CraneScript(scene, dock, PONDER_RPM, StackerCraneBlockEntity.HOME_POSE);
+    }
+
+    /**
+     * A crane script for a warehouse that bends: parked at position 0 of the branch at the dock, facing the way that
+     * branch runs, and driven at {@link #PONDER_RPM} ({@link #onNetwork} in the class comment).
+     */
+    public static CraneScript onNetwork(CreateSceneBuilder scene, BlockPos dock, NetworkGeometry network) {
+        CranePose parked = StackerCraneBlockEntity.HOME_POSE
+                .facing(network.firstBranch().heading());
+        return new CraneScript(scene, dock, PONDER_RPM, network, parked);
     }
 
     /**
@@ -70,11 +108,24 @@ public final class CraneScript {
 
     /** Ticks the shared motion needs to get from {@code from} to {@code to}; 0 for a stopped crane. */
     public static int ticksBetween(CranePose from, CranePose to, CraneSpeeds speeds) {
+        return ticksBetween(from, to, speeds, CraneNetwork.SINGLE_BRANCH);
+    }
+
+    /**
+     * Ticks the shared motion needs to get from {@code from} to {@code to} on {@code rails}; 0 for a stopped crane.
+     * <p>
+     * The route is recomputed from the pose on every simulated tick, exactly as {@code
+     * StackerCraneBlockEntity#tickClientMotion} does it, so this counts the ticks the block entity will really spend —
+     * including the quarter turns of the route.
+     */
+    public static int ticksBetween(CranePose from, CranePose to, CraneSpeeds speeds, CraneNetwork rails) {
         if (speeds.isStopped())
             return 0;
         CranePose current = from;
         for (int ticks = 1; ticks <= MAX_SIMULATED_TICKS; ticks++) {
-            current = CraneMotion.step(current, to, speeds);
+            CraneRoute route = current.branch() == to.branch() ? null
+                    : rails.route(current.branch(), current.x(), to.branch(), to.x()).orElse(null);
+            current = CraneMotion.step(current, to, speeds, route, rails.turnPenaltyBlocks());
             if (CraneMotion.isAt(current, to))
                 return ticks;
         }
@@ -84,6 +135,28 @@ public final class CraneScript {
     /** The pose the crane stands at after everything enqueued so far. */
     public CranePose pose() {
         return pose;
+    }
+
+    /**
+     * The pose at {@code (branch, x, y, side)} with the arm retracted, facing the way that branch runs — the
+     * branch-aware form of {@link CranePose#at(double, double, Side)}.
+     *
+     * @throws IllegalStateException if this script drives a warehouse of one straight aisle
+     */
+    public CranePose at(int branch, double x, double y, Side side) {
+        return CranePose.at(branch, x, y, side, headingOf(branch));
+    }
+
+    /** {@link #at(int, double, double, Side)} with the arm fully extended into the rack. */
+    public CranePose extendedAt(int branch, double x, double y, Side side) {
+        return at(branch, x, y, side).withArm(CranePose.EXTENDED);
+    }
+
+    private Heading headingOf(int branch) {
+        Optional<Heading> heading = rails.headingOf(branch);
+        if (heading.isEmpty())
+            throw new IllegalStateException("this crane script drives no branch " + branch + ": " + rails);
+        return heading.get();
     }
 
     /** Shows {@code count} items of {@code item} in the grabber from the next instruction on. */
@@ -98,10 +171,7 @@ public final class CraneScript {
 
     /** Re-asserts the current pose and held items in {@code phase} without moving. */
     public void show(CranePhase phase) {
-        CranePose shown = pose;
-        List<KeyCount<Item>> shownHeld = held;
-        scene.world().modifyBlockEntity(dock, StackerCraneBlockEntity.class,
-                crane -> crane.showClientPose(shown, shown, phase, shownHeld));
+        showPose(pose, pose, phase);
     }
 
     /**
@@ -111,13 +181,27 @@ public final class CraneScript {
      */
     public int moveTo(CranePose target, CranePhase phase) {
         CranePose from = pose;
-        List<KeyCount<Item>> shownHeld = held;
-        scene.world().modifyBlockEntity(dock, StackerCraneBlockEntity.class,
-                crane -> crane.showClientPose(from, target, phase, shownHeld));
-        int ticks = Math.max(MIN_MOVE_TICKS, ticksBetween(from, target, speeds));
+        showPose(from, target, phase);
+        int ticks = Math.max(MIN_MOVE_TICKS, ticksBetween(from, target, speeds, rails));
         scene.idle(ticks);
         pose = target;
         return ticks;
+    }
+
+    /**
+     * Hands pose, target and network to the dock's block entity. A script without a network calls the four-argument
+     * form, which faces both poses the way the dock's own aisle runs — exactly what every scene did before M21.
+     */
+    private void showPose(CranePose from, CranePose target, CranePhase phase) {
+        List<KeyCount<Item>> shownHeld = held;
+        NetworkGeometry rails = network;
+        if (rails == null) {
+            scene.world().modifyBlockEntity(dock, StackerCraneBlockEntity.class,
+                    crane -> crane.showClientPose(from, target, phase, shownHeld));
+            return;
+        }
+        scene.world().modifyBlockEntity(dock, StackerCraneBlockEntity.class,
+                crane -> crane.showClientPose(rails, from, target, phase, shownHeld));
     }
 
     /** Stands still in {@code phase} for {@code ticks}, e.g. while the grabber transfers items. */

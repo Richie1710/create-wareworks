@@ -16,7 +16,7 @@ import java.util.function.Function;
 
 import org.jetbrains.annotations.Nullable;
 
-import dev.wareworks.core.address.AisleGeometry;
+import dev.wareworks.core.address.RackSpace;
 import dev.wareworks.core.address.RackPosition;
 
 /**
@@ -51,6 +51,7 @@ public final class AisleMembership {
     private int outputs;
     private int productions;
     private int keepers;
+    private int homePoints;
     private boolean fullScanPending;
     private boolean dropUnverified;
     @Nullable
@@ -122,12 +123,12 @@ public final class AisleMembership {
      * raised during a pass is kept for the <i>next</i> {@link #reconcile} instead of being lost or probed twice, and
      * the loop can never see a concurrent modification. Do not move the clearing to the end of the pass.
      *
-     * @param geometry the current aisle size
+     * @param geometry the current rack positions of the warehouse (one aisle or a whole rail network)
      * @param probe    classifies one rack position; called at most once per position, in {@link RackPosition#ORDER}.
      *                 May call {@link #markDirty} for the position it is probing (see above)
      * @return the added and removed records, in scan order
      */
-    public MembershipChanges reconcile(AisleGeometry geometry, Function<RackPosition, RackProbe> probe) {
+    public MembershipChanges reconcile(RackSpace geometry, Function<RackPosition, RackProbe> probe) {
         Objects.requireNonNull(geometry, "geometry");
         Objects.requireNonNull(probe, "probe");
         if (!isDirty())
@@ -160,7 +161,7 @@ public final class AisleMembership {
         return new MembershipChanges(added, removed);
     }
 
-    private List<RackPosition> outsideOf(AisleGeometry geometry) {
+    private List<RackPosition> outsideOf(RackSpace geometry) {
         List<RackPosition> outside = new ArrayList<>();
         for (RackPosition position : members.keySet()) {
             if (!geometry.contains(position))
@@ -185,7 +186,7 @@ public final class AisleMembership {
                 removeMember(position, removed);
                 misaligned.add(position);
             }
-            case STORAGE, INPUT, OUTPUT, PRODUCTION, KEEPER -> {
+            case STORAGE, INPUT, OUTPUT, PRODUCTION, KEEPER, HOME -> {
                 misaligned.remove(position);
                 LocationKind kind = result.kind().orElseThrow();
                 LocationKind existing = members.get(position);
@@ -214,6 +215,7 @@ public final class AisleMembership {
             case OUTPUT -> outputs++;
             case PRODUCTION -> productions++;
             case KEEPER -> keepers++;
+            case HOME -> homePoints++;
             // Not exhaustiveness-checked (a switch statement, not an expression): a kind added later would keep a
             // counter at 0 for ever, and a count of 0 is what switches whole features off.
             default -> throw new IllegalStateException("unhandled location kind: " + kind);
@@ -230,6 +232,7 @@ public final class AisleMembership {
             case OUTPUT -> outputs--;
             case PRODUCTION -> productions--;
             case KEEPER -> keepers--;
+            case HOME -> homePoints--;
             // See addMember: the compiler does not demand every kind here either.
             default -> throw new IllegalStateException("unhandled location kind: " + kind);
         }
@@ -277,6 +280,7 @@ public final class AisleMembership {
         outputs = 0;
         productions = 0;
         keepers = 0;
+        homePoints = 0;
         fullScanPending = false;
         dropUnverified = false;
         roundRobinCursor = null;
@@ -341,6 +345,11 @@ public final class AisleMembership {
     /** Aligned warehouse stock keepers ({@code docs/warehouse-system.md} §3.6, M15). */
     public int keeperCount() {
         return keepers;
+    }
+
+    /** Aligned warehouse home points ({@code docs/stacker-crane.md} §4.7, M21). */
+    public int homePointCount() {
+        return homePoints;
     }
 
     public int misalignedCount() {

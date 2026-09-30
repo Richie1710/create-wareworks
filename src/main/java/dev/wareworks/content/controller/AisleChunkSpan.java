@@ -8,7 +8,7 @@ package dev.wareworks.content.controller;
  * feature needs, and nothing is ever searched for:
  * <ul>
  * <li>the controller itself sits at aisle-local {@code x = -1} (it is {@code dock - facing}), which lies
- * <b>outside</b> {@code AisleLayout#bounds()} — and it is the ticket owner, so its own chunk must tick;</li>
+ * <b>outside</b> {@code BranchLayout#bounds()} — and it is the ticket owner, so its own chunk must tick;</li>
  * <li>the dock at {@code x = 0} and the rails at {@code x = 1..length} are the aisle line;</li>
  * <li>rack positions (interfaces, stations, ports, keepers, terminals) are lateral {@code ±1};</li>
  * <li>the inventories behind them, and the machine behind a collecting port, are lateral {@code ±2} — no port reaches
@@ -21,10 +21,19 @@ package dev.wareworks.content.controller;
  * the rectangle of chunk columns between its corners: de-duplicated by construction and returned sorted by
  * {@code (chunkX, chunkZ)}, so trimming at a cap is reproducible across restarts.
  * <p>
- * <b>Worst case</b> (what the {@code chunkLoading.maxChunksPerAisle} default is derived from): {@code length + 3} blocks
- * along the aisle span at most {@code floor((length + 2) / 16) + 2} columns, and 5 blocks laterally span at most 2, so an
- * aisle needs at most {@code 2 · (floor((length + 2) / 16) + 2)} chunks — 8 at the default
- * {@code aisle.maxAisleLength = 32}, 12 at 64 and 20 at the configurable maximum of 128.
+ * <b>Worst case of one aisle</b>: {@code length + 3} blocks along the aisle span at most
+ * {@code floor((length + 2) / 16) + 2} columns, and 5 blocks laterally span at most 2, so an aisle needs at most
+ * {@code 2 · (floor((length + 2) / 16) + 2)} chunks — 8 at the default {@code aisle.maxAisleLength = 32}, 12 at 64 and
+ * 20 at the configurable maximum of 128.
+ * <p>
+ * <b>Worst case of a warehouse</b> ({@link #networkChunks}) has no closed form, because the union depends on how the
+ * aisles fold: {@code Σ_b worstCaseChunkCount(L_b)} is an upper bound and a loose one, since consecutive branches
+ * always share the chunk of their corner. What matters for the cap is that a warehouse which <b>bends</b> needs more
+ * columns than a single aisle of the same length cap ever could — a corner turns one long rectangle into two shorter
+ * ones at right angles — so {@code chunkLoading.maxChunksPerAisle} cannot be derived from
+ * {@code aisle.maxAisleLength} alone any more. The numbers the config comment quotes for the default length cap are
+ * pinned in {@code NetworkChunkSpanTest}: 8 for one straight aisle of 32, 10 for an L of 32 + 16, 12 for an L of two
+ * 32s, 16 for a U of three, and 36 for the widest chain {@code aisle.maxNetworkRails = 256} allows.
  * <p>
  * Pure integer maths with no Minecraft imports, so it is JUnit-testable; the content layer turns the pairs into chunk keys
  * with {@code ChunkPos#asLong} and never re-implements that packing.
@@ -32,6 +41,8 @@ package dev.wareworks.content.controller;
 public final class AisleChunkSpan {
     /** How far the aisle box is inflated horizontally, in blocks: the attached inventories and the controller. */
     public static final int INFLATE = 1;
+    /** Ints one branch contributes to {@link #networkChunks}: originX, originZ, stepX, stepZ, length. */
+    public static final int INTS_PER_BRANCH = 5;
     /** Lateral half-width of a rack plane in blocks (the rack position itself). */
     private static final int RACK_LATERAL = 1;
 
@@ -66,6 +77,41 @@ public final class AisleChunkSpan {
         return result;
     }
 
+    /**
+     * The chunk columns of a whole warehouse: the <b>de-duplicated union</b> of its branches' own footprints, sorted by
+     * {@code (chunkX, chunkZ)} so trimming at a cap is reproducible across restarts (ADR-033).
+     * <p>
+     * The one-block inflation stays <b>per branch</b> rather than being applied once to a bounding box: it is what
+     * covers the inventory behind a rack position, the machine behind a collecting port and a double chest pairing one
+     * block past either end of an aisle, and every branch has its own two ends. A warehouse of one aisle therefore
+     * gets literally what {@link #chunks} gives that aisle.
+     *
+     * @param branches one {@code {originX, originZ, stepX, stepZ, length}} group per branch
+     * @return {@code 2 · chunkCount} ints: {@code [x0, z0, x1, z1, ...]}
+     */
+    public static int[] networkChunks(int[] branches) {
+        if (branches == null || branches.length == 0 || branches.length % INTS_PER_BRANCH != 0)
+            throw new IllegalArgumentException("a branch is " + INTS_PER_BRANCH + " ints: "
+                    + (branches == null ? "null" : branches.length));
+        if (branches.length == INTS_PER_BRANCH)
+            return chunks(branches[0], branches[1], branches[2], branches[3], branches[4]);
+        java.util.TreeSet<Long> columns = new java.util.TreeSet<>(
+                java.util.Comparator.comparingInt((Long column) -> (int) (column >> 32))
+                        .thenComparingInt(column -> (int) (long) column));
+        for (int i = 0; i < branches.length; i += INTS_PER_BRANCH) {
+            int[] own = chunks(branches[i], branches[i + 1], branches[i + 2], branches[i + 3], branches[i + 4]);
+            for (int j = 0; j < own.length; j += 2)
+                columns.add(((long) own[j] << 32) | (own[j + 1] & 0xFFFFFFFFL));
+        }
+        int[] result = new int[columns.size() * 2];
+        int i = 0;
+        for (long column : columns) {
+            result[i++] = (int) (column >> 32);
+            result[i++] = (int) column;
+        }
+        return result;
+    }
+
     /** How many chunk columns {@link #chunks} would return, without building the array. */
     public static int chunkCount(int dockX, int dockZ, int stepX, int stepZ, int length) {
         int[] box = box(dockX, dockZ, stepX, stepZ, length);
@@ -73,8 +119,8 @@ public final class AisleChunkSpan {
     }
 
     /**
-     * The largest number of chunks any aisle of {@code length} rails can need, whatever its direction and alignment. The
-     * bound the config comment of {@code chunkLoading.maxChunksPerAisle} quotes.
+     * The largest number of chunks any <b>single</b> aisle of {@code length} rails can need, whatever its direction and
+     * alignment. A warehouse of several aisles is not bounded by this — see the class comment.
      */
     public static int worstCaseChunkCount(int length) {
         if (length < 0)

@@ -57,6 +57,21 @@ public enum NoJobReason {
     NOT_IN_STOCK,
     /** An open request's output station is unavailable (not loaded or gone). */
     LOCATION_UNAVAILABLE,
+    /**
+     * The warehouse has racks that could have served this run, and the crane cannot <b>drive</b> to them: a rail was
+     * broken or closed, so a part of the network no longer joins the aisle the machine stands on (M21, ADR-033).
+     * <p>
+     * Reported by the controller rather than by the planner, which never learns about rails at all: a rack with no
+     * route is dropped by {@link PlannerInput#available()} exactly like one in an unloaded chunk, so the planner's own
+     * answer would be a true statement about the racks that were left — "not in stock", "no matching filter" — and
+     * useless to the player whose rails are broken. It is declared here, below the answers that are about a specific
+     * station and above {@link #BUDGET_EXHAUSTED}, because it is about the warehouse as a whole.
+     * <p>
+     * It arms <b>no</b> back-off, with {@link #AT_MAXIMUM}'s argument: reachability is a walk over at most 26 aisles
+     * before any candidate is ranked, so there is no expensive scan to protect — and the cure is one rail, which a
+     * player may place at any moment.
+     */
+    UNREACHABLE,
     /** The planner ran out of live simulations for this run; the next run continues. */
     BUDGET_EXHAUSTED,
     /**

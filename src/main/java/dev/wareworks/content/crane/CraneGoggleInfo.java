@@ -21,23 +21,34 @@ import net.minecraft.world.item.Item;
 
 /**
  * What the goggle tooltip of a stacker crane shows and what M4 rendering needs besides the pose, as synced to clients:
- * phase, pause reason, the current job, the held items by item <b>type</b> and the aisle letter of the linked controller.
+ * phase, pause reason, the current job, the held items by item <b>type</b> and the aisle letters of the warehouse the
+ * linked controller runs.
  * <p>
- * The synced size is bounded: a few enum names, at most {@value #MAX_HELD_ENTRIES} item ids and one job summary; no item
- * components ever leave the server. Reading never throws.
+ * <b>One letter per branch</b> (M21, ADR-033). A warehouse is a rail network of straight branches, each with its own
+ * aisle letter, and a crane drives all of them — so a job "from the input on aisle A to a rack on aisle B" has to say
+ * so. Before M21 there was a single letter here, which was right because there was a single aisle; with a warehouse
+ * that bends it would name every rack of every aisle with the letter of the one at the dock.
+ * <p>
+ * The synced size is bounded: a few enum names, at most {@value #MAX_HELD_ENTRIES} item ids, one job summary and at
+ * most {@link StorageAddress#AISLE_COUNT} letters (a warehouse can never have more branches than the address format
+ * has letters); no item components ever leave the server. Reading never throws.
  *
- * @param phase       state machine phase
- * @param pauseReason why the crane is paused, {@link CranePauseReason#NONE} if it is not
- * @param job         the current job
- * @param held        held item types with amounts, at most {@value #MAX_HELD_ENTRIES}
- * @param aisleLetter the linked controller's aisle letter (for addresses)
+ * @param phase        state machine phase
+ * @param pauseReason  why the crane is paused, {@link CranePauseReason#NONE} if it is not
+ * @param job          the current job
+ * @param held         held item types with amounts, at most {@value #MAX_HELD_ENTRIES}
+ * @param aisleLetters the aisle letter of each branch of the linked warehouse, branch {@value
+ *                     RackPosition#FIRST_BRANCH} first; {@value #NO_LETTER} for a branch without one, and an empty
+ *                     string without a controller (for addresses)
  */
 public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Optional<CraneJobSummary> job,
-                              List<KeyCount<Item>> held, Optional<Character> aisleLetter) {
+                              List<KeyCount<Item>> held, String aisleLetters) {
     /** Most held entries synced. */
     public static final int MAX_HELD_ENTRIES = 4;
+    /** Stands for a branch that carries no aisle letter, so the letters of the branches behind it stay readable. */
+    public static final char NO_LETTER = '?';
     public static final CraneGoggleInfo NONE = new CraneGoggleInfo(CranePhase.IDLE, CranePauseReason.NONE,
-            Optional.empty(), List.of(), Optional.empty());
+            Optional.empty(), List.of(), "");
 
     private static final String PHASE = "Phase";
     private static final String PAUSE = "Pause";
@@ -45,6 +56,10 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
     private static final String HELD = "Held";
     private static final String ITEM = "Item";
     private static final String COUNT = "Count";
+    /**
+     * Save and packet key of the aisle letters. Up to 0.5.0 this held the single letter of the single aisle, which is
+     * exactly what the first character means now, so a crane saved then reads back with the same address.
+     */
     private static final String LETTER = "Letter";
 
     public CraneGoggleInfo {
@@ -55,8 +70,39 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
         if (job == null)
             job = Optional.empty();
         held = held == null ? List.of() : List.copyOf(held.subList(0, Math.min(held.size(), MAX_HELD_ENTRIES)));
-        if (aisleLetter == null || aisleLetter.filter(StorageAddress::isValidAisle).isEmpty())
-            aisleLetter = Optional.empty();
+        aisleLetters = sanitizeLetters(aisleLetters);
+    }
+
+    /**
+     * The letters as they are synced: at most {@link StorageAddress#AISLE_COUNT} of them, anything that is not an aisle
+     * letter as {@value #NO_LETTER}, and no trailing placeholders — so a warehouse of one lettered aisle syncs the one
+     * character it always did, and a broken packet can never make an address out of a stray byte.
+     */
+    private static String sanitizeLetters(String letters) {
+        if (letters == null || letters.isEmpty())
+            return "";
+        int length = Math.min(letters.length(), StorageAddress.AISLE_COUNT);
+        while (length > 0 && !StorageAddress.isValidAisle(letters.charAt(length - 1)))
+            length--;
+        StringBuilder sanitized = new StringBuilder(length);
+        for (int branch = 0; branch < length; branch++) {
+            char letter = letters.charAt(branch);
+            sanitized.append(StorageAddress.isValidAisle(letter) ? letter : NO_LETTER);
+        }
+        return sanitized.toString();
+    }
+
+    /** The aisle letter of one branch, empty when that branch has none (or the warehouse has no such branch). */
+    public Optional<Character> letterOf(int branch) {
+        if (branch < 0 || branch >= aisleLetters.length())
+            return Optional.empty();
+        char letter = aisleLetters.charAt(branch);
+        return StorageAddress.isValidAisle(letter) ? Optional.of(letter) : Optional.empty();
+    }
+
+    /** The aisle letter of the branch at the dock — the whole warehouse of every build that never bends. */
+    public Optional<Character> aisleLetter() {
+        return letterOf(RackPosition.FIRST_BRANCH);
     }
 
     /** Held items by item type (in pick order), capped at {@value #MAX_HELD_ENTRIES} entries. */
@@ -79,12 +125,13 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
     }
 
     /**
-     * The address text of a rack position: {@code A-03-07R} with the controller's letter, otherwise the letter-less
-     * {@code 03-07R}.
+     * The address text of a rack position: {@code A-03-07R} with the letter of the branch the position is <b>on</b>,
+     * otherwise the letter-less {@code 03-07R}.
      */
     public String address(RackPosition rack) {
-        if (aisleLetter.isPresent() && rack.y() < StorageAddress.MAX_LEVEL)
-            return StorageAddress.of(aisleLetter.get(), rack).format();
+        Optional<Character> letter = letterOf(rack.branch());
+        if (letter.isPresent() && rack.y() < StorageAddress.MAX_LEVEL)
+            return StorageAddress.of(letter.get(), rack).format();
         return String.format(Locale.ROOT, "%02d-%02d%c", rack.y() + 1, rack.x(), rack.side().letter());
     }
 
@@ -132,7 +179,8 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
             heldTag.add(entryTag);
         }
         tag.put(HELD, heldTag);
-        aisleLetter.ifPresent(letter -> tag.putString(LETTER, String.valueOf(letter)));
+        if (!aisleLetters.isEmpty())
+            tag.putString(LETTER, aisleLetters);
     }
 
     /** Reads a summary written by {@link #write}. Never throws; invalid data reads as empty values. */
@@ -145,10 +193,9 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
             if (count > 0)
                 ItemTypeSummaries.itemById(entryTag.getString(ITEM)).ifPresent(item -> held.add(new KeyCount<>(item, count)));
         }
-        String letter = tag.getString(LETTER);
         return new CraneGoggleInfo(CranePhase.byName(tag.getString(PHASE)).orElse(CranePhase.IDLE),
                 CranePauseReason.byName(tag.getString(PAUSE)),
                 tag.contains(JOB, Tag.TAG_COMPOUND) ? CraneJobSummary.read(tag.getCompound(JOB)) : Optional.empty(), held,
-                letter.length() == 1 ? Optional.of(letter.charAt(0)) : Optional.empty());
+                tag.getString(LETTER));
     }
 }

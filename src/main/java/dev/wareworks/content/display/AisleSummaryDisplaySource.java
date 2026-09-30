@@ -9,6 +9,7 @@ import com.simibubi.create.content.redstone.displayLink.DisplayLinkContext;
 import com.simibubi.create.content.redstone.displayLink.target.DisplayTargetStats;
 
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.NetworkGoggleInfo;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
@@ -42,6 +43,14 @@ public class AisleSummaryDisplaySource extends DisplaySource {
         // controller stops at the same point.
         if (status == ControllerStatus.NO_DOCK || status == ControllerStatus.DOCK_MISALIGNED)
             return WarehouseDisplays.limit(lines, stats);
+
+        // Which aisles the warehouse is made of (M21, issue #1, ADR-033), and only for one that really bends: a
+        // display has few rows, and on a straight aisle this line would repeat the letter the line above already
+        // carries. A discovery that stopped short of what a player laid is marked rather than explained — the reason
+        // takes a sentence, and the controller's goggles and the log are where a sentence belongs.
+        controller.networkInfo().filter(network -> network.aisleCount() > 1).ifPresent(network -> lines.add(
+                WareworksLang.translateDirect(network.stopsShort() ? WareworksLang.DISPLAY_AISLE_LINE_AISLES_CUT
+                        : WareworksLang.DISPLAY_AISLE_LINE_AISLES, aisleLetters(network))));
 
         StockView<ItemKey, RackPosition> stock = controller.stockIndex();
         // Both numbers must be drawn from the same population, or the line could never read full: an alias of a shared
@@ -103,6 +112,20 @@ public class AisleSummaryDisplaySource extends DisplaySource {
             lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS,
                     WareworksLang.number(controller.chunkKeepChunks())));
         return WarehouseDisplays.limit(lines, stats);
+    }
+
+    /**
+     * The aisle letters of a warehouse, space-separated and in aisle order — "A B C". Letters only: a display row is
+     * short, and the lengths belong on the controller's goggles, which have the room for them.
+     */
+    private static String aisleLetters(NetworkGoggleInfo network) {
+        StringBuilder letters = new StringBuilder(2 * network.aisleCount());
+        for (int aisle = 0; aisle < network.aisleCount(); aisle++) {
+            if (aisle > 0)
+                letters.append(' ');
+            letters.append(network.letterOf(aisle).map(String::valueOf).orElse("?"));
+        }
+        return letters.toString();
     }
 
     /** The short status text of a display, not the goggle sentence. */

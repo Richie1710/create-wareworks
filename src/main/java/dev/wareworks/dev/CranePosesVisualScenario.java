@@ -6,7 +6,7 @@ import java.util.StringJoiner;
 
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.core.address.AisleGeometry;
@@ -77,8 +77,8 @@ public final class CranePosesVisualScenario implements VisualScenario {
     /** One posed crane. */
     private record Stand(String label, Direction facing, BlockPos dockOffset, CranePose pose, CranePhase phase,
                          List<KeyCount<Item>> held) {
-        AisleLayout layout(BlockPos origin) {
-            return AisleLayout.of(origin.offset(dockOffset), facing,
+        BranchLayout layout(BlockPos origin) {
+            return BranchLayout.of(origin.offset(dockOffset), facing,
                     AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
         }
 
@@ -177,7 +177,7 @@ public final class CranePosesVisualScenario implements VisualScenario {
                 origin.offset(CLEAR_RADIUS, CLEAR_HEIGHT, CLEAR_RADIUS)))
             level.setBlockAndUpdate(pos.immutable(), Blocks.AIR.defaultBlockState());
         for (Stand stand : STANDS) {
-            AisleLayout layout = stand.layout(origin);
+            BranchLayout layout = stand.layout(origin);
             level.setBlockAndUpdate(layout.dock(), WareworksBlocks.STACKER_CRANE.getDefaultState()
                     .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, stand.facing()));
             for (int x = 1; x <= RAILS; x++)

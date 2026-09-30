@@ -49,14 +49,14 @@ public interface WarehouseMember {
      * which that class tolerates by design (it snapshots the dirty set before probing); the cost is one further
      * reconcile pass, in which nothing is written any more. The default does nothing.
      */
-    default void alignToAisle(BlockPos controller, AisleLayout layout, Side side) {
+    default void alignToAisle(BlockPos controller, BranchLayout layout, Side side) {
     }
 
     /**
      * Whether this member satisfies the facing rule of its kind at a rack position on {@code side} of {@code layout}:
      * storage faces away from the aisle ({@code FACING == side direction}), stations face the aisle.
      */
-    default boolean isAlignedWith(AisleLayout layout, Side side) {
+    default boolean isAlignedWith(BranchLayout layout, Side side) {
         Direction awayFromAisle = layout.sideDirection(side);
         return facing() == (locationKind().facesAwayFromAisle() ? awayFromAisle : awayFromAisle.getOpposite());
     }

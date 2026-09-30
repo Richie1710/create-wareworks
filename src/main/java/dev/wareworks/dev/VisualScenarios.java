@@ -11,6 +11,8 @@ final class VisualScenarios {
     private static final Map<String, Supplier<VisualScenario>> SCENARIOS = Map.ofEntries(
             Map.entry(AisleVisualScenario.NAME, AisleVisualScenario::new),
             Map.entry(CranePosesVisualScenario.NAME, CranePosesVisualScenario::new),
+            Map.entry(CornerVisualScenario.NAME, CornerVisualScenario::new),
+            Map.entry(HomeVisualScenario.NAME, HomeVisualScenario::new),
             Map.entry(BlocksVisualScenario.NAME, BlocksVisualScenario::new),
             Map.entry(FiltersVisualScenario.NAME, FiltersVisualScenario::new),
             Map.entry(PrioritiesVisualScenario.NAME, PrioritiesVisualScenario::new),

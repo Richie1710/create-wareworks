@@ -29,7 +29,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkSpan;
 import dev.wareworks.content.controller.AisleChunkTickets;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ChunkKeepReason;
 import dev.wareworks.content.controller.ControllerGoggleSummary;
 import dev.wareworks.content.controller.ControllerStatus;
@@ -108,7 +108,7 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <p>
  * <b>The operator's view</b> is the other half of the run, because a chunk loader nobody can inspect is a chunk loader
  * nobody can trust: the controller's goggle line in all of its shapes (nothing at all while the feature is off, holding
- * for a waiting machine, holding for a crane job, refused because this aisle needs more chunks than the server allows,
+ * for a waiting machine, holding for a crane job, refused because this warehouse needs more chunks than the server allows,
  * and gave up), and {@code /wareworks chunks} with its rows, its totals and its {@code release} valve, run as a player
  * runs them and read back out of the chat. Every chapter ends by proving that <b>no ticket is left</b>: after the work
  * finishes, after the controller is broken, and after the setting is switched off.
@@ -677,7 +677,7 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
                     .setValue(WarehouseRailBlock.AXIS, AISLE.getAxis()));
         placeController(server, context);
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         Direction storageOutward = layout.sideDirection(Side.LEFT);
         for (int x = STORAGE_FIRST_POSITION; x <= STORAGE_LAST_POSITION; x++) {
             BlockPos rack = layout.rackPos(RackPosition.of(x, 0, Side.LEFT));
@@ -1275,13 +1275,13 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
         GoggleShots.requireLine(lines, WareworksLang.chunkLoadingNone(reason).component().getString());
     }
 
-    /** "Chunk loading: none (this aisle needs 4 of 3 chunks)": the one refusal a player can act on. */
+    /** "Chunk loading: none (this warehouse needs 4 of 3 chunks)": the one refusal a player can act on. */
     private void checkRefusedChunkLine(VisualContext context) {
         List<String> lines = GoggleShots.lines(context, controllerPos(context.origin()));
         LOGGER.info(PREFIX + "chunks: controller goggles over the per-aisle cap {}", lines);
         int needed = footprintSize(context.origin());
         if (needed <= TOO_SMALL_CHUNK_CAP)
-            throw new VisualTestException("this aisle needs only " + needed + " chunk(s), which the cap "
+            throw new VisualTestException("this warehouse needs only " + needed + " chunk(s), which the cap "
                     + TOO_SMALL_CHUNK_CAP + " allows, so nothing would be refused");
         GoggleShots.requireLine(lines,
                 WareworksLang.chunkLoadingTooMany(needed, TOO_SMALL_CHUNK_CAP).component().getString());
@@ -1460,8 +1460,8 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
 
     // --- helpers -----------------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static BlockPos controllerPos(BlockPos dock) {
@@ -1470,7 +1470,7 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
 
     /** The inventory a collecting port reaches into: the block behind it, i.e. away from the aisle. */
     private static BlockPos machinePos(BlockPos dock) {
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         return layout.rackPos(PORT).relative(layout.sideDirection(PORT.side()));
     }
 

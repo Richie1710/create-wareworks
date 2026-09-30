@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Your rails may turn corners now, and the crane turns with them.** Lay a run of Warehouse Rails in front of the dock
+  as always, then lay a second run at right angles to it: the block they share becomes a **corner**. The crane drives out
+  to it, stops, swings the whole machine a quarter turn with a deep rumble and a metal clack, and rolls on down the next
+  aisle — still lifting on the way. A warehouse can follow the shape of your base instead of forcing a straight hall
+  through it, and goods from every aisle reach one block
+- **Every straight run of rails is an aisle with its own letter**, and one controller letters the lot: the aisle at the
+  dock takes the letter from the controller's own value box, each further one the next free letter. Addresses do not
+  change — `A-03-07R` still means aisle A, level 3, position 7, right side. The letters and the position numbers are
+  **pinned to the rails**, so extending an aisle, shortening it or laying a new one somewhere else never reshuffles the
+  addresses you have already written on a sign
+- **Racks in a corner work**, which is the whole reason corners are not travel-only. The corner block carries one rack on
+  **each** of its two aisles, and the rule for which is the only rule there is: **the rack belongs to the aisle its
+  interface faces away from.** Point it away from the aisle you mean, and the address tells you which one you got
+- **A wrench closes a rail.** A closed rail is still a rail — it grows a brass end stop you can see across the room and in
+  the dark — but it is no part of any warehouse. That is how you keep a decorative rail out of your warehouse, and how you
+  cut one warehouse into two
+- **One controller, one terminal, one stock list and one crane for the whole warehouse.** Nothing above the rails changed:
+  the same requests, the same filters and priorities, the same ports, stock rules and production chains, on a warehouse
+  that now bends
+- **A new block, the Warehouse Home Point: "wait here".** Place it beside the rails where your next job usually starts —
+  next to your terminal, next to an input, at a corner — and the crane comes back and waits in front of it when it has
+  nothing to do, instead of standing wherever its last trip ended. Its lamp burns while your crane really uses it, and
+  its goggles read out its address and one sentence saying what the warehouse does with it. It costs no more than the
+  andesite tier, because it holds nothing and decides nothing: a rose quartz lamp, an andesite casing and two andesite
+  alloy — no electron tube and no precision mechanism
+- **A warehouse has one crane, so it has one home point** — and a second one is **refused where you can see it**, not
+  quietly ignored: the plate turns red and grows a crossed brass stop, and the goggles say "Without effect: this
+  warehouse already has a home point". The same happens to one the crane cannot **drive to**, for instance because a
+  rail between them is broken or closed — then your dock is home again, never the second home point. Break the home
+  point and the **dock** is home, exactly as it always was
+- **The trip home is free, and that is a promise the game keeps.** It is not a job: the moment there is real work the
+  crane takes it, in that very tick, **even in the middle of a corner**, so waiting at a home point never costs you a
+  single item of throughput. And it holds **no chunks** loaded — a warehouse whose only remaining activity is a machine
+  rolling home still counts as idle and still lets its chunks go
+- **A Ponder scene for rails around a corner.** Hold **W** over a Warehouse Rail or a Stacker Crane and the second scene
+  shows it: a straight run of rails, a run laid at right angles, the block they share becoming a corner, the machine
+  rolling onto it and swinging a quarter turn, items carried from one aisle into the next, the corner block's **two**
+  racks served — one on each aisle, told apart by the way the interface faces — the address that names the aisle, and the
+  Wrench that closes a rail
+- **The controller's goggles describe the whole warehouse.** A warehouse that bends reads "Warehouse: 41 rails, 3 aisles,
+  mast 6 high" and lists them underneath ("Aisles: A 16 · B 12 · C 13", at most six before "and N more"). A warehouse of
+  one aisle reads exactly as it always did
+- **And they say where the rails stop, and why.** "Warehouse stops at 148 64 -37: the rails split here, which needs a
+  later version" — one sentence per reason (a split, a loop, a second dock, a chunk that is not loaded, and each of
+  the three server limits), never merged into one message, and naming the block you have to walk to. It is
+  the line that answers "why is half of what I built not in my warehouse"
+- **The dock says which aisle its machine is on**: "On aisle B at position 7", beside the size of the network. Only for a
+  warehouse that bends, where the position alone would not say where the machine is
+- **The Aisle Summary display source lists the aisles** of a warehouse that bends ("Aisles: A B C"), and marks it "(cut
+  short)" while the rails stop short of what you laid — the board says that something is wrong, the controller's goggles
+  say what
+
+### Changed
+
+- **Rails that touch now connect — read this one before you load an old world.** A warehouse used to be the straight line
+  of rails in front of the dock whose axis matched it; it is now the whole connected set of rails. Two consequences in a
+  world you already built: a **decorative rail orthogonally beside your aisle line joins the warehouse** as a one-block
+  aisle of its own, and a rail laid **across** the aisle, which used to *stop* the count, now connects and lets the run
+  beyond it join too. Nothing is lost — the new positions are simply new, and anything that stopped being a rack keeps its
+  record until the warehouse next reconciles and then leaves normally with its items still in its chest. The one-click cure
+  is the **wrench**: close the rail you did not mean to include. If you would rather have none of this, set
+  `aisle.maxBranches = 1` in the server config and every warehouse is the single straight aisle it was
+- **The wrench on a Warehouse Rail toggles "closed" instead of turning the rail's axis.** The axis stopped meaning anything
+  the moment a second rail touched the block, and it is now only the look of a lone rail with nothing attached to it
+- **On a warehouse of more than one aisle an idle crane now drives back home.** After ten seconds without work
+  (`crane.returnHomeIdleTicks`, and **0 switches it off**) it returns to its Warehouse Home Point, or, if you have not
+  placed one, to its dock. On a warehouse of **one straight aisle nothing changed at all**: the machine stands exactly
+  where its last job left it, as it always did, and a home point there says so instead of pretending to work. So this
+  only ever moves a machine on a warehouse that bends — which no world had before this version
+- **A rack round a corner ranks behind an equally distant one on the aisle the crane is already on.** A quarter turn costs
+  travel time (`crane.turnPenaltyBlocks`, default one block's worth, and it scales with RPM like everything else the crane
+  does), and the job planner counts it. So a bent warehouse is measurably slower per trip than the same number of racks in
+  one straight hall — physically honest, and worth knowing before you build a very long one
+- **Branching rails are not supported yet.** A T-junction, a cross or a ring stops the warehouse **before** the branching
+  rail: the rails beyond it are simply not part of it, everything up to it keeps working exactly as before, and the
+  controller's goggles name the block where it stopped and why. You are never left with nothing, and never with the straight
+  aisle you had taken away. Splits are the next milestone
+- **Optional chunk loading is now measured per warehouse, and its default cap rose from 8 to 10 chunks.** A corner turns one
+  long rectangle into two shorter ones at right angles, so a warehouse that bends needs more chunks than any single aisle of
+  the same length ever could: a straight aisle of 32 rails needs 8, an L of 32 + 16 needs 10, an L of two full aisles 12.
+  The rule is unchanged — a warehouse over the cap holds **nothing at all** and works exactly as it always did — and the
+  number it would have needed is now named in the controller's goggles **and in `/wareworks chunks`**. A server that had
+  set the value itself keeps its own value, which is what a config is for; at 8 it will meet the cap at its first corner.
+  The lines say **warehouse** where they used to count aisles — the goggle line for each of the two server limits, and
+  every row and total of `/wareworks chunks` — because one holder is one controller and every aisle it owns
+- The item descriptions of the Warehouse Rail, the Stacker Crane and the Warehouse Controller now say what all of them
+  do since rails may bend: rails lay out **aisles** and turn corners where they meet at right angles, the machine drives
+  round them, and one controller gives **every** aisle of its warehouse a letter — the first one from its own value
+  panel, each further one the next free letter
+
 ## [0.5.0-alpha] - 2026-09-28
 
 ### Added

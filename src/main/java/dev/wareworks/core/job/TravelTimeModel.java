@@ -21,6 +21,12 @@ public final class TravelTimeModel {
     public static final double SNAP_EPSILON = 1.0E-6;
     /** Arm extension of a fully extended arm. */
     public static final double FULL_EXTENSION = 1.0;
+    /** Blocks of travel one quarter turn costs by default ({@code crane.turnPenaltyBlocks}). */
+    public static final double DEFAULT_TURN_PENALTY_BLOCKS = 1.0;
+    /** Smallest allowed turn penalty: a quarter turn is free and happens in one tick. */
+    public static final double MIN_TURN_PENALTY_BLOCKS = 0.0;
+    /** Largest allowed turn penalty. */
+    public static final double MAX_TURN_PENALTY_BLOCKS = 16.0;
 
     private TravelTimeModel() {
     }
@@ -49,6 +55,39 @@ public final class TravelTimeModel {
     public static long travelTicks(CraneSpeeds speeds, double fromX, double fromY, double toX, double toY) {
         Objects.requireNonNull(speeds, "speeds");
         return Math.max(ticksToCover(toX - fromX, speeds.vx()), ticksToCover(toY - fromY, speeds.vy()));
+    }
+
+    /**
+     * What a route costs in blocks: the blocks travelled plus {@code turnPenaltyBlocks} per quarter turn
+     * ({@code crane.turnPenaltyBlocks}, ADR-033).
+     * <p>
+     * A turn is priced in blocks rather than in ticks on purpose: the whole route is then <b>one scalar in blocks</b>,
+     * which {@link #travelAlongTicks} consumes with the same formula a straight aisle always used, and with no turn it
+     * returns literally the distance. {@code core.warehouse.CraneMotion} spends exactly this many blocks of travel per
+     * route, so the count is tick-exact and not an estimate.
+     *
+     * @throws IllegalArgumentException if the distance is not finite, the turns are negative or the penalty is not a
+     *                                  finite, non-negative number
+     */
+    public static double routeBlocks(double blocks, int turns, double turnPenaltyBlocks) {
+        if (!Double.isFinite(blocks))
+            throw new IllegalArgumentException("blocks must be finite: " + blocks);
+        if (turns < 0)
+            throw new IllegalArgumentException("turns must not be negative: " + turns);
+        if (!Double.isFinite(turnPenaltyBlocks) || turnPenaltyBlocks < MIN_TURN_PENALTY_BLOCKS)
+            throw new IllegalArgumentException(
+                    "turnPenaltyBlocks must be finite and not negative: " + turnPenaltyBlocks);
+        return Math.abs(blocks) + turns * turnPenaltyBlocks;
+    }
+
+    /**
+     * Ticks to travel a route of {@code routeBlocks} blocks ({@link #routeBlocks}) while the level changes from
+     * {@code fromY} to {@code toY}, with the arm retracted. X and Y still move simultaneously, so it is the larger of
+     * the two — the same formula {@link #travelTicks} has always been, with the route in the distance's place.
+     */
+    public static long travelAlongTicks(CraneSpeeds speeds, double routeBlocks, double fromY, double toY) {
+        Objects.requireNonNull(speeds, "speeds");
+        return Math.max(ticksToCover(routeBlocks, speeds.vx()), ticksToCover(toY - fromY, speeds.vy()));
     }
 
     /** Ticks to extend (or retract) the arm fully: {@code ceil(1 / va)}. */

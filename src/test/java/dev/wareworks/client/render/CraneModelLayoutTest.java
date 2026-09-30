@@ -1,5 +1,9 @@
 package dev.wareworks.client.render;
 
+import static dev.wareworks.client.render.ModelJson.array;
+import static dev.wareworks.client.render.ModelJson.number;
+import static dev.wareworks.client.render.ModelJson.object;
+import static dev.wareworks.client.render.ModelJson.read;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,7 +32,7 @@ import org.junit.jupiter.api.Test;
  * core column plus four interchangeable shells chosen by a <b>multipart</b> blockstate (ADR-022), so nothing at load
  * time checks that the twelve combinations tile the block — {@link #terminalShellsTileTheBlockAroundTheArmPort} does.
  * <p>
- * Reads the model JSON files with a minimal JSON reader (the test classpath has no JSON library); runs without Minecraft.
+ * Reads the model JSON files with {@link ModelJson} (the test classpath has no JSON library); runs without Minecraft.
  * That every referenced Create texture exists is checked by {@code runClient} (missing texture warnings) and the visual
  * smoke test.
  */
@@ -144,6 +148,9 @@ class CraneModelLayoutTest {
     void everyPartialIsAValidBlockModel() throws IOException {
         for (String name : PARTIALS)
             assertValidBlockModel(MODELS.resolve(name + ".json"), name);
+        // The dock's own two hand-made models: the block a player places and the bake its item icon shows.
+        for (String name : List.of("block", "item"))
+            assertValidBlockModel(MODELS.resolve(name + ".json"), "stacker_crane/" + name);
         // The terminal's hand-made models are picked by a multipart blockstate and by the item model, never by
         // Registrate, so the same validity rules are checked here rather than at load time.
         for (String name : List.of("block", "item", "shell_display", "shell_intake", "shell_plain"))
@@ -257,6 +264,193 @@ class CraneModelLayoutTest {
                 "the turned front wheel stays behind the chassis front");
         assertTrue(CraneModelLayout.REAR_WHEEL_Z_PX + reach <= chassis.max(Z) + EPSILON,
                 "the turned rear wheel stays in front of the chassis back");
+    }
+
+    /**
+     * <b>The turn sweep.</b> Since M21 the machine turns corners (ADR-033): the whole tower rotates about the centre of
+     * the block it stands on, so every corner of every part travels a circle of its own distance from that centre.
+     * Half a block is 8 px and the blocks beside a corner are rack positions holding a player's chests, so a part that
+     * reaches further than {@link CraneModelLayout#TURN_SWEEP_RADIUS_PX} visibly cuts through them for the few ticks
+     * the swing takes.
+     * <p>
+     * Checked for every part that stands in the aisle block with the arm retracted — which is every part there is
+     * while a turn runs, because {@code CraneMotion} pulls the arm in before anything else moves — plus the wheels at
+     * both axles (the disc turned by 45° reaches {@code √2} times as far in Z) and the drive cog, which is Create's
+     * model and is therefore measured from the layout constants rather than from a file.
+     * <p>
+     * This is the invariant the M21 model pass exists for: the chassis, the bogies, the buffers and the mast all came
+     * in from the block edge to satisfy it. Without it a later edit could widen any of them by a pixel and nobody
+     * would notice until a chest looked chewed.
+     */
+    @Test
+    void theMachineSweepStaysInsideItsBlockWhileItTurns() throws IOException {
+        float limit = CraneModelLayout.TURN_SWEEP_RADIUS_PX;
+        for (String name : AISLE_PARTS) {
+            for (Box box : boxes(name))
+                assertSweepWithin(box, limit);
+        }
+        for (Box wheel : placedWheels())
+            assertSweepWithin(wheel, limit);
+        assertTrue(CraneModelLayout.driveCogSweepRadiusPx() <= limit + EPSILON,
+                "the drive cog sweeps " + CraneModelLayout.driveCogSweepRadiusPx() + " px, over the limit " + limit);
+        // The carried items ride the same transform on the retracted stage, the second copy turned about its centre.
+        for (Box item : heldItemBoxes())
+            assertSweepWithin(item, limit);
+    }
+
+    /**
+     * The dock's item model is a hand-made bake of the dock with its crane parked on it ({@code item.json}; nothing at
+     * load time ties it to the animated parts). Every one of its elements above the rail head is a piece of that
+     * machine, so all of them must fit the same sweep as the parts they stand for — which is what says the icon shows
+     * the machine that really turns corners, and not the wider one from before the M21 model pass, which reached
+     * 9.80 px and would not have fitted its own block.
+     */
+    @Test
+    void theCraneBakedIntoTheDockItemIsTheMachineThatFitsItsBlock() throws IOException {
+        int machineParts = 0;
+        for (Box box : boxes(MODELS.resolve("item.json"), "stacker_crane/item")) {
+            // Below the rail head is the dock's own rail bed, which is the block and may fill it.
+            if (box.min(Y) < CraneModelLayout.RAIL_TOP_PX)
+                continue;
+            machineParts++;
+            assertSweepWithin(box, CraneModelLayout.TURN_SWEEP_RADIUS_PX);
+        }
+        assertTrue(machineParts >= PARTIALS.size(),
+                "the item bakes the whole machine, not only the dock: " + machineParts + " parts");
+    }
+
+    /**
+     * <b>The rails the machine swings over.</b> The blocks around a corner along the aisles are rails, and a rail is
+     * solid from the floor up to its head ({@link CraneModelLayout#RAIL_TOP_PX}) right across the block. So a part
+     * that reaches below the rail head must not leave its own block while the machine turns, or it swings through the
+     * bed of the next rail.
+     * <p>
+     * It holds for the simplest possible reason, and this test pins that reason rather than a number: the only parts
+     * that reach down to the rail at all are the <b>wheels</b>, which stand on it and stay well inside the block at
+     * every angle; everything else — chassis, bogies, buffers, mast, carriage, arm — sits at or above the rail head
+     * and therefore sweeps through the air over the neighbouring rails, wherever the accepted graze of
+     * {@link CraneModelLayout#TURN_SWEEP_RADIUS_PX} takes it.
+     */
+    @Test
+    void nothingBelowTheRailHeadLeavesItsOwnBlockWhileItTurns() throws IOException {
+        for (String name : AISLE_PARTS) {
+            float base = lowestPlacedY(name);
+            for (Box box : boxes(name))
+                assertTrue(base + box.min(Y) >= CraneModelLayout.RAIL_TOP_PX - EPSILON,
+                        box + " reaches down to " + (base + box.min(Y)) + " px, into the bed of a rail it swings over");
+        }
+        boolean touchesTheRail = false;
+        for (Box wheel : placedWheels()) {
+            // Half a block, not the accepted graze: down here the neighbour is not air but a rail.
+            assertSweepWithin(wheel, CraneModelLayout.BLOCK_CENTER_PX);
+            touchesTheRail |= wheel.min(Y) <= CraneModelLayout.RAIL_TOP_PX + EPSILON;
+        }
+        assertTrue(touchesTheRail, "the wheels are the parts that reach the rail");
+    }
+
+    /**
+     * An extended arm may never turn with the machine: it reaches a whole block into a rack position, so swinging it
+     * would drag the grabber and everything on it through two rack blocks and the rails between them. {@code
+     * CraneMotion} pulls the arm in before anything else moves, and this says what that rule is worth — the swept
+     * shape of an extended machine is nowhere near a block it could turn in, so the retracted machine really is the
+     * only shape the sweep limit has to hold for.
+     */
+    @Test
+    void anExtendedArmCouldNotPossiblyTurnWithTheMachine() throws IOException {
+        float inner = (float) CraneModelLayout.innerStageOffset(1.0) * BLOCK;
+        double reach = 0.0;
+        for (Box box : boxes("grabber")) {
+            Box extended = box.moved(inner, 0.0F, 0.0F);
+            for (float x : new float[] {extended.min(X), extended.max(X)}) {
+                for (float z : new float[] {extended.min(Z), extended.max(Z)})
+                    reach = Math.max(reach, CraneModelLayout.sweepRadiusPx(x, z));
+            }
+        }
+        assertTrue(reach > 2 * CraneModelLayout.TURN_SWEEP_RADIUS_PX, "a fully extended grabber sweeps " + reach
+                + " px, far past the limit " + CraneModelLayout.TURN_SWEEP_RADIUS_PX + ": it must be in before a turn");
+    }
+
+    /** Both wheels where the renderer puts them, the 45° disc as the envelope it really occupies. */
+    private static List<Box> placedWheels() throws IOException {
+        List<Box> wheels = new ArrayList<>();
+        float dy = CraneModelLayout.WHEEL_AXLE_Y_PX - CraneModelLayout.BLOCK_CENTER_PX;
+        for (float axle : new float[] {CraneModelLayout.FRONT_WHEEL_Z_PX, CraneModelLayout.REAR_WHEEL_Z_PX}) {
+            float dz = axle - CraneModelLayout.BLOCK_CENTER_PX;
+            for (Box box : boxes("wheel")) {
+                // The 45° disc turns about the X axis through the block centre, so its Z half-extent grows by √2.
+                Box placed = box.rotated() ? turnedAboutTheAxle(box) : box;
+                wheels.add(placed.moved(0.0F, dy, dz));
+            }
+        }
+        return wheels;
+    }
+
+    /**
+     * Where the renderer puts the bottom of a part, in pixels above the floor of the crane's block, at the lowest
+     * carriage level: the mast stands on the chassis, the cap on the mast, the belt on the carriage, and the carriage
+     * and arm models are authored at their level-0 height already.
+     */
+    private static float lowestPlacedY(String part) {
+        return switch (part) {
+            case "mast_segment" -> CraneModelLayout.MAST_BASE_Y_PX;
+            case "mast_top" -> (float) CraneModelLayout.mastTopY(1) * BLOCK;
+            case "hoist_belt" -> CraneModelLayout.CARRIAGE_TOP_Y_PX;
+            default -> 0.0F;
+        };
+    }
+
+    /** The held item models on the retracted stage: flat and block items in every slot, both stacked copies. */
+    private static List<Box> heldItemBoxes() {
+        List<Box> items = new ArrayList<>();
+        float flatWidth = BLOCK * CraneModelLayout.ITEM_SCALE;
+        float flatHeight = CraneModelLayout.FLAT_ITEM_THICKNESS_PX * CraneModelLayout.ITEM_SCALE;
+        float blockSize = CraneModelLayout.BLOCK_ITEM_SIZE_PX * CraneModelLayout.ITEM_SCALE;
+        for (float x : CraneModelLayout.ITEM_SLOT_X_PX) {
+            for (int copy = 0; copy < FLAT_ITEM_COPIES; copy++) {
+                Box flat = itemBox("flat item " + x + "/" + copy, x, flatWidth, flatHeight)
+                        .moved(0.0F, copy * CraneModelLayout.FLAT_ITEM_STACK_PX, 0.0F);
+                Box block = itemBox("block item " + x + "/" + copy, x, blockSize, blockSize)
+                        .moved(0.0F, copy * CraneModelLayout.BLOCK_ITEM_STACK_PX, 0.0F);
+                // The second copy is turned about its own centre (ITEM_STACK_YAW_DEGREES), so take its envelope.
+                items.add(copy == 0 ? flat : turnedAboutItsCentre(flat));
+                items.add(copy == 0 ? block : turnedAboutItsCentre(block));
+            }
+        }
+        return items;
+    }
+
+    /** {@code box} turned about its own vertical axis by any angle, as the envelope it can occupy. */
+    private static Box turnedAboutItsCentre(Box box) {
+        float centreX = (box.min(X) + box.max(X)) / 2.0F;
+        float centreZ = (box.min(Z) + box.max(Z)) / 2.0F;
+        float reach = (float) Math.hypot(box.max(X) - centreX, box.max(Z) - centreZ);
+        return new Box(box.model(), box.name() + " (turned)", new float[] {centreX - reach, box.min(Y), centreZ - reach},
+                new float[] {centreX + reach, box.max(Y), centreZ + reach}, false, box.faces());
+    }
+
+    /** Fails if any corner of {@code box} is further than {@code limit} px from the block centre in the XZ plane. */
+    private static void assertSweepWithin(Box box, float limit) {
+        for (float x : new float[] {box.min(X), box.max(X)}) {
+            for (float z : new float[] {box.min(Z), box.max(Z)}) {
+                double radius = CraneModelLayout.sweepRadiusPx(x, z);
+                assertTrue(radius <= limit + EPSILON,
+                        box + " sweeps " + radius + " px from the block centre, over the limit " + limit);
+            }
+        }
+    }
+
+    /**
+     * The wheel element that is turned by 45° about its axle, as the envelope it really occupies: the rotation is about
+     * the X axis through the block centre, so X is untouched and the Z half-extent of the turned box grows to the
+     * half-diagonal of its Y/Z cross-section.
+     */
+    private static Box turnedAboutTheAxle(Box box) {
+        float halfY = (box.max(Y) - box.min(Y)) / 2.0F;
+        float halfZ = (box.max(Z) - box.min(Z)) / 2.0F;
+        float centreZ = (box.max(Z) + box.min(Z)) / 2.0F;
+        float reach = (float) Math.hypot(halfY, halfZ);
+        return new Box(box.model(), box.name() + " (turned)", new float[] {box.min(X), box.min(Y), centreZ - reach},
+                new float[] {box.max(X), box.max(Y), centreZ + reach}, false, box.faces());
     }
 
     @Test
@@ -715,160 +909,4 @@ class CraneModelLayoutTest {
         return new float[] {(float) number(list.get(X)), (float) number(list.get(Y)), (float) number(list.get(Z))};
     }
 
-    private static Map<String, Object> read(Path path) throws IOException {
-        assertTrue(Files.isRegularFile(path), "missing model " + path);
-        return object(new JsonReader(Files.readString(path, StandardCharsets.UTF_8)).readDocument());
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> object(Object value) {
-        assertTrue(value instanceof Map, "JSON object expected: " + value);
-        return (Map<String, Object>) value;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<Object> array(Object value) {
-        assertTrue(value instanceof List, "JSON array expected: " + value);
-        return (List<Object>) value;
-    }
-
-    private static double number(Object value) {
-        assertTrue(value instanceof Double, "JSON number expected: " + value);
-        return (Double) value;
-    }
-
-    /** Minimal JSON reader for the model files: objects, arrays, strings (simple escapes), numbers, booleans, null. */
-    private static final class JsonReader {
-        private final String text;
-        private int position;
-
-        JsonReader(String text) {
-            this.text = text;
-        }
-
-        Object readDocument() {
-            Object value = readValue();
-            skipWhitespace();
-            if (position != text.length())
-                throw new IllegalArgumentException("trailing content at " + position);
-            return value;
-        }
-
-        private Object readValue() {
-            skipWhitespace();
-            char next = peek();
-            return switch (next) {
-                case '{' -> readObject();
-                case '[' -> readArray();
-                case '"' -> readString();
-                case 't', 'f', 'n' -> readLiteral();
-                default -> readNumber();
-            };
-        }
-
-        private Map<String, Object> readObject() {
-            Map<String, Object> result = new LinkedHashMap<>();
-            expect('{');
-            skipWhitespace();
-            if (peek() == '}') {
-                position++;
-                return result;
-            }
-            while (true) {
-                skipWhitespace();
-                String key = readString();
-                skipWhitespace();
-                expect(':');
-                result.put(key, readValue());
-                skipWhitespace();
-                if (peek() == ',') {
-                    position++;
-                    continue;
-                }
-                expect('}');
-                return result;
-            }
-        }
-
-        private List<Object> readArray() {
-            List<Object> result = new ArrayList<>();
-            expect('[');
-            skipWhitespace();
-            if (peek() == ']') {
-                position++;
-                return result;
-            }
-            while (true) {
-                result.add(readValue());
-                skipWhitespace();
-                if (peek() == ',') {
-                    position++;
-                    continue;
-                }
-                expect(']');
-                return result;
-            }
-        }
-
-        private String readString() {
-            expect('"');
-            StringBuilder result = new StringBuilder();
-            while (peek() != '"') {
-                char c = text.charAt(position++);
-                if (c == '\\') {
-                    char escaped = text.charAt(position++);
-                    result.append(switch (escaped) {
-                        case 'n' -> '\n';
-                        case 't' -> '\t';
-                        default -> escaped;
-                    });
-                } else {
-                    result.append(c);
-                }
-            }
-            position++;
-            return result.toString();
-        }
-
-        private Object readLiteral() {
-            for (Map.Entry<String, Object> literal : Map.<String, Object>of("true", Boolean.TRUE, "false", Boolean.FALSE)
-                    .entrySet()) {
-                if (text.startsWith(literal.getKey(), position)) {
-                    position += literal.getKey().length();
-                    return literal.getValue();
-                }
-            }
-            if (text.startsWith("null", position)) {
-                position += "null".length();
-                return null;
-            }
-            throw new IllegalArgumentException("unexpected literal at " + position);
-        }
-
-        private Double readNumber() {
-            int start = position;
-            while (position < text.length() && "+-0123456789.eE".indexOf(text.charAt(position)) >= 0)
-                position++;
-            if (start == position)
-                throw new IllegalArgumentException("unexpected character '" + peek() + "' at " + position);
-            return Double.parseDouble(text.substring(start, position));
-        }
-
-        private void skipWhitespace() {
-            while (position < text.length() && Character.isWhitespace(text.charAt(position)))
-                position++;
-        }
-
-        private char peek() {
-            if (position >= text.length())
-                throw new IllegalArgumentException("unexpected end of JSON");
-            return text.charAt(position);
-        }
-
-        private void expect(char expected) {
-            if (peek() != expected)
-                throw new IllegalArgumentException("expected '" + expected + "' at " + position + " but found '" + peek() + "'");
-            position++;
-        }
-    }
 }

@@ -28,15 +28,23 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.HomePointStatus;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalRequestOutcome;
+import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
+import dev.wareworks.core.address.AisleGeometry;
+import dev.wareworks.core.address.BranchGeometry;
+import dev.wareworks.core.address.Heading;
+import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.AbortReason;
+import dev.wareworks.core.crane.CranePose;
+import dev.wareworks.core.crane.HomeReturn;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.inventory.SharedInventories;
 import dev.wareworks.core.inventory.SnapshotQueue;
@@ -88,7 +96,9 @@ import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.MembershipChanges;
 import dev.wareworks.core.warehouse.RackProbe;
+import dev.wareworks.core.warehouse.RailNetwork;
 import dev.wareworks.util.GoggleObservers;
+import dev.wareworks.util.Headings;
 import dev.wareworks.util.LogThrottle;
 import dev.wareworks.util.SyncThrottle;
 import dev.wareworks.util.WareworksLang;
@@ -107,15 +117,20 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity of the warehouse controller: the logical warehouse state of one aisle ({@code docs/warehouse-system.md}
+ * Block entity of the warehouse controller: the logical state of one warehouse ({@code docs/warehouse-system.md}
  * §3.3-§8). It plans and counts, but never moves items.
  * <p>
  * <b>Layout.</b> The controller links to the stacker crane dock directly in front of it ({@code pos + FACING}) if that
- * dock faces the same direction, and builds an {@link AisleLayout} from the dock's geometry and its own aisle letter
- * ("Aisle" value box, A-Z). The layout is registered in the {@link WarehouseRegistry}. Re-linking runs on the next tick
+ * dock faces the same direction, and builds a {@link WarehouseLayout} from the rail network that dock discovered: one
+ * {@link BranchLayout} per straight aisle, the first of them at the dock under the controller's own aisle letter
+ * ("Aisle" value box, A-Z) and every further one under the letter its line of rails has pinned ({@link BranchTable}).
+ * A warehouse that never bends is a network of exactly one aisle, which is what every warehouse up to 0.5.0 is. The
+ * layout is registered in the {@link WarehouseRegistry}. Re-linking runs on the next tick
  * after a hint (block update in front, dock geometry change, dock load or removal, own rotation) and at the latest every
  * {@code geometryRefreshTicks}; it costs one block entity lookup. While the dock position is not loaded, the known
- * layout is kept. A changed dock position or aisle direction rebuilds records, counts and requests from scratch.
+ * layout is kept, and so are its aisles whenever a scan ran into a chunk that is not loaded. A changed dock position
+ * or aisle direction rebuilds records, counts and requests from scratch; an aisle that moved its origin or turned
+ * round has everything remapped through the world positions its labels stand for ({@code remapState}, ADR-033).
  * <p>
  * <b>Membership.</b> An {@link AisleMembership} of rack positions: members notify through the registry, which marks
  * only their position dirty; geometry changes mark all positions dirty. Dirty positions are probed on the next tick,
@@ -248,9 +263,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             new ProductionOrders<>(configuredMaxProductionOrders());
     /** Job planning and reservations; derived from the crane's job, not saved. */
     private final CraneDispatch dispatch = new CraneDispatch(this);
-    /** The linked aisle including the letter; {@code null} without dock. Saved. */
+    /**
+     * The whole warehouse — every straight aisle of the connected rail network, with their letters; {@code null}
+     * without dock. Saved (ADR-033).
+     * <p>
+     * A warehouse that never bends is a network of exactly one branch, so this is literally the single aisle every
+     * version up to 0.5.0 held: the same rack positions, the same addresses, the same containment. The branches are
+     * rediscovered from the rails on every re-link; what is saved is what lets a reload answer before the first scan
+     * and what the remap compares a new shape against.
+     */
     @Nullable
-    private AisleLayout layout;
+    private WarehouseLayout layout;
+    /** The aisle letters and origin ends pinned to the lines of rails ({@link BranchTable}). Saved with the network. */
+    private final BranchTable branchTable = new BranchTable();
     private ControllerStatus status = ControllerStatus.NO_DOCK;
 
     // --- server only, not saved ---
@@ -271,6 +296,27 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * ({@link #onStockRulesChanged}).
      */
     private boolean stockRulesRefreshPending = true;
+    /**
+     * The home points of this warehouse are judged again on the next tick (M21, ADR-034). Set on load, after a layout
+     * change, on every re-link check and whenever a home point joins or leaves, so a lamp is never more than one
+     * {@code geometryRefreshTicks} behind the truth.
+     */
+    private boolean homePointsRefreshPending = true;
+    /**
+     * The rack position of the home point this warehouse's crane really waits at, or empty while the dock is home.
+     * Derived from the membership records and never saved: the records are, and the first tick after a load decides it
+     * again.
+     */
+    private Optional<RackPosition> servingHomePoint = Optional.empty();
+    /**
+     * The <b>world positions</b> of the home points this controller last wrote a lamp to, so it can switch them off
+     * again — including the ones whose aisle a player has just broken away.
+     * <p>
+     * World positions on purpose, not rack positions: a label means a block only through the layout it belongs to, and
+     * the moment that aisle is gone the label names nothing, which is exactly how a stock keeper's lamp was left
+     * burning for ever (M21 review). A block position never stops meaning the block it meant.
+     */
+    private final Set<BlockPos> writtenHomePoints = new HashSet<>();
     /**
      * A restore is waiting to be finished on the first tick that knows the game time: restored orders have no deadline
      * yet, and a saved production plan has not been checked yet ({@code ProductionOrders#validatePlans}).
@@ -374,7 +420,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** The aisle's chunk footprint, cached per layout instance ({@link AisleChunkSpan}); recomputed nowhere else. */
     private int[] chunkFootprintCache = EMPTY_FOOTPRINT;
     @Nullable
-    private AisleLayout chunkFootprintOf;
+    private WarehouseLayout chunkFootprintOf;
     /** Rate limit for the "cannot hold chunks" line, so a permanently capped aisle does not fill the log. */
     private final LogThrottle chunkKeepRefusals = new LogThrottle();
 
@@ -415,8 +461,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return status;
     }
 
-    /** The linked aisle with its letter; empty without dock (and on clients, which receive only the goggle summary). */
-    public Optional<AisleLayout> layout() {
+    /**
+     * The aisle at the dock with its letter; empty without dock (and on clients, which receive only the goggle
+     * summary). This is the whole warehouse of every build that never bends; {@link #warehouse()} answers for all of
+     * its aisles.
+     */
+    public Optional<BranchLayout> layout() {
+        return layout == null ? Optional.empty() : Optional.of(layout.firstBranch());
+    }
+
+    /** The whole warehouse — every aisle of the rail network; empty without dock and on clients. */
+    public Optional<WarehouseLayout> warehouse() {
         return Optional.ofNullable(layout);
     }
 
@@ -668,12 +723,20 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public Optional<LocationRecord> locationAt(BlockPos pos) {
         if (layout == null)
             return Optional.empty();
-        return layout.worldToLocal(pos).flatMap(rack -> membership.kindAt(rack).map(kind -> new LocationRecord(rack, kind)));
+        return rackAt(pos).flatMap(rack -> membership.kindAt(rack).map(kind -> new LocationRecord(rack, kind)));
     }
 
-    /** The world position of a rack position of this aisle. */
+    /**
+     * The rack position a world block holds in this warehouse, decided by the member standing there where a corner
+     * leaves a choice ({@link #resolveRack}); empty if the block is no rack position at all.
+     */
+    Optional<RackPosition> rackOf(BlockPos pos) {
+        return rackAt(pos);
+    }
+
+    /** The world position of a rack position of this warehouse; empty without a warehouse or without that aisle. */
     public Optional<BlockPos> worldPosOf(RackPosition rack) {
-        return layout == null ? Optional.empty() : Optional.of(layout.rackPos(rack));
+        return layout == null ? Optional.empty() : layout.worldPosOf(rack);
     }
 
     /** The goggle summary as of the last observation (server) or sync (client). */
@@ -964,7 +1027,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(portPos, "portPos");
         if (layout == null)
             return 0L;
-        return layout.worldToLocal(portPos).map(rack -> collections.totalAt(rack, ports.filterKeyAt(rack))).orElse(0L);
+        return rackAt(portPos).map(rack -> collections.totalAt(rack, ports.filterKeyAt(rack))).orElse(0L);
     }
 
     /**
@@ -983,7 +1046,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Optional<NoJobReason> reason = lastPlanReason().filter(NoJobReason::refusesCollecting);
         if (reason.isEmpty())
             return Optional.empty();
-        return layout.worldToLocal(portPos)
+        return rackAt(portPos)
                 .filter(rack -> collections.hasItems(rack, ports.filterKeyAt(rack))).isPresent()
                 ? reason : Optional.empty();
     }
@@ -995,7 +1058,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public boolean collectsFromOwnStorage(BlockPos portPos) {
         Objects.requireNonNull(portPos, "portPos");
-        return layout != null && layout.worldToLocal(portPos).map(collections::isOwnStorage).orElse(false);
+        return layout != null && rackAt(portPos).map(collections::isOwnStorage).orElse(false);
     }
 
     private boolean isArmed(BlockPos pos) {
@@ -1199,14 +1262,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * reported a new identity (M5 release review). Because the aisle is the bound now, the old 4096-block cap is gone,
      * so very large vaults are handled as well.
      */
-    private void queueOtherReaders(AisleLayout current, RackPosition rack, Object identity) {
+    private void queueOtherReaders(WarehouseLayout current, RackPosition rack, Object identity) {
         if (!(identity instanceof InventoryIdentifier identifier))
             return; // a bare position identifies exactly one block: no other location can read it as something else
         for (LocationRecord record : membership.records(LocationKind.STORAGE)) {
             RackPosition other = record.position();
             if (other.equals(rack) || identity.equals(sharedInventories.identityOf(other).orElse(null)))
                 continue;
-            Direction side = current.sideDirection(other.side());
+            Direction side = current.sideDirection(other);
             if (identifier.contains(new BlockFace(current.rackPos(other).relative(side), side.getOpposite())))
                 pendingSnapshots.addUrgent(other);
         }
@@ -1360,7 +1423,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(station, "station");
         if (layout == null)
             return List.of();
-        return layout.worldToLocal(station).map(productionOrders::ordersFor).orElse(List.of());
+        return rackAt(station).map(productionOrders::ordersFor).orElse(List.of());
     }
 
     /**
@@ -1433,7 +1496,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(station, "station");
         if (layout == null)
             return;
-        layout.worldToLocal(station).ifPresent(this::cancelProductionOrdersAt);
+        rackAt(station).ifPresent(this::cancelProductionOrdersAt);
     }
 
     private void cancelProductionOrdersAt(RackPosition rack) {
@@ -2267,13 +2330,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return RequestRejection.NOT_IN_STOCK;
     }
 
-    private boolean isOutputStation(AisleLayout current, BlockPos pos) {
-        Optional<RackPosition> rack = current.worldToLocal(pos);
+    private boolean isOutputStation(WarehouseLayout current, BlockPos pos) {
+        Optional<RackPosition> rack = resolveRack(current, pos);
         if (rack.isEmpty() || !level.isLoaded(pos))
             return false;
         BlockEntity blockEntity = level.getBlockEntity(pos);
         return blockEntity instanceof WarehouseMember member && !blockEntity.isRemoved()
-                && member.locationKind() == LocationKind.OUTPUT && member.isAlignedWith(current, rack.get().side());
+                && member.locationKind() == LocationKind.OUTPUT
+                && member.isAlignedWith(current.branch(rack.get().branch()), rack.get().side());
     }
 
     /**
@@ -2283,7 +2347,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      *
      * @return whether a request was cancelled
      */
-    private boolean pruneRequests(AisleLayout current) {
+    private boolean pruneRequests(WarehouseLayout current) {
         if (requests.isEmpty())
             return false;
         boolean cancelled = false;
@@ -2292,7 +2356,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             BlockPos destination = request.destination();
             if (!checked.add(destination))
                 continue;
-            boolean outside = current.worldToLocal(destination).isEmpty();
+            boolean outside = !current.isRackPosition(destination);
             if (outside || (level.isLoaded(destination) && !isOutputStation(current, destination)))
                 cancelled |= cancelRequestsFor(destination);
         }
@@ -2404,7 +2468,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(keeperPos, "keeperPos");
         if (level == null || level.isClientSide || layout == null)
             return List.of();
-        Optional<RackPosition> rack = layout.worldToLocal(keeperPos);
+        Optional<RackPosition> rack = rackAt(keeperPos);
         if (rack.isEmpty())
             return List.of();
         OptionalInt offset = stockRules.offsetOf(rack.get());
@@ -2439,7 +2503,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(key, "key");
         if (level == null || level.isClientSide || layout == null || ruleIndex < 0)
             return false;
-        Optional<RackPosition> rack = layout.worldToLocal(keeperPos);
+        Optional<RackPosition> rack = rackAt(keeperPos);
         if (rack.isEmpty())
             return false;
         OptionalInt offset = stockRules.offsetOf(rack.get());
@@ -2509,7 +2573,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(keeperPos, "keeperPos");
         if (level == null || level.isClientSide || layout == null)
             return List.of();
-        Optional<RackPosition> rack = layout.worldToLocal(keeperPos);
+        Optional<RackPosition> rack = rackAt(keeperPos);
         if (rack.isEmpty())
             return List.of();
         OptionalInt offset = stockRules.offsetOf(rack.get());
@@ -2586,11 +2650,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private boolean readStockRulesAt(RackPosition rack) {
         if (level == null || level.isClientSide || layout == null)
             return false;
-        BlockPos pos = layout.rackPos(rack);
+        Optional<BranchLayout> branch = layout.branchOf(rack);
+        if (branch.isEmpty())
+            // The aisle this rule was read on is gone, so the label names no block. Judging it by what a shorter
+            // warehouse would point at would clear an unrelated keeper's lamp - or, since branch(i) bounds-checks
+            // where rackPos did not, throw straight out of this block entity's tick (M21 review fix). The keeper
+            // itself, if it is still standing, was quietened when its aisle went away, by the very pass that took it
+            // (quietenKeepersOutside) - the last moment a layout that still named its block was in hand.
+            return stockRules.remove(rack);
+        BlockPos pos = branch.get().rackPos(rack);
         if (!level.isLoaded(pos))
             return false;
         if (level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper && !keeper.isRemoved()
-                && keeper.isAlignedWith(layout, rack.side()))
+                && keeper.isAlignedWith(branch.get(), rack.side()))
             return stockRules.set(rack, keeper.rules().rules());
         return dropStockRulesAt(rack);
     }
@@ -2616,12 +2688,15 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * Never called from {@code invalidate()} or from a load: a chunk unload leaves a keeper exactly as it was
      * (ADR-013), and only a real loss of the warehouse quietens it.
      */
-    private void clearKeeperRuleState(@Nullable AisleLayout current, RackPosition rack) {
+    private void clearKeeperRuleState(@Nullable WarehouseLayout current, RackPosition rack) {
         if (level == null || level.isClientSide || current == null)
             return;
-        BlockPos pos = current.rackPos(rack);
-        if (level.isLoaded(pos)
-                && level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper && !keeper.isRemoved())
+        // A label whose aisle this warehouse does not have names no block, and the keeper it meant is not the one a
+        // shorter warehouse would point at (M21 review fix).
+        Optional<BlockPos> pos = current.worldPosOf(rack);
+        if (pos.isPresent() && level.isLoaded(pos.get())
+                && level.getBlockEntity(pos.get()) instanceof WarehouseStockKeeperBlockEntity keeper
+                && !keeper.isRemoved())
             keeper.clearRuleState();
     }
 
@@ -2629,7 +2704,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * Every keeper this controller holds rules for in {@code current} stops signalling, because that aisle is gone or
      * because this controller is — the counterpart of the rule tick, which is what switched those states on.
      */
-    private void clearAllKeeperRuleStates(@Nullable AisleLayout current) {
+    private void clearAllKeeperRuleStates(@Nullable WarehouseLayout current) {
         for (RackPosition rack : List.copyOf(stockRules.keepers()))
             clearKeeperRuleState(current, rack);
     }
@@ -2662,6 +2737,147 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 keeper.refreshRuleState(this);
         }
         refreshProductionStops();
+    }
+
+    // --- home point ----------------------------------------------------------------------------------------------
+
+    /**
+     * The rack position of the home point this warehouse's crane really waits at, or empty while the <b>dock</b> is
+     * home (M21, issue #1, ADR-034, {@code docs/stacker-crane.md} §4.7).
+     * <p>
+     * A warehouse has one crane, so it has one home: the <b>first</b> of its home points in
+     * {@link RackPosition#ORDER}, which is the same one on every tick and after every restart. Everything else is
+     * empty here and reported on the block instead — a second home point ({@link HomePointStatus#SECOND}), one the
+     * crane cannot drive to ({@link HomePointStatus#UNREACHABLE}), a warehouse of one aisle
+     * ({@link HomePointStatus#SINGLE_AISLE}) and a server that switched returning home off
+     * ({@link HomePointStatus#SWITCHED_OFF}). In every one of those cases the dock is home, which is where a crane has
+     * always started.
+     */
+    public Optional<RackPosition> homePoint() {
+        return servingHomePoint;
+    }
+
+    /**
+     * What this warehouse does with the home point at {@code pos} — the sentence its goggles show
+     * ({@link HomePointStatus}). {@link HomePointStatus#NO_WAREHOUSE} when this controller has no aligned home point
+     * there at all, which is also what a controller without a warehouse answers.
+     */
+    public HomePointStatus homePointStatusAt(BlockPos pos) {
+        WarehouseLayout current = layout;
+        if (current == null || level == null || level.isClientSide)
+            return HomePointStatus.NO_WAREHOUSE;
+        Optional<RackPosition> rack = rackAt(pos);
+        if (rack.isEmpty() || membership.kindAt(rack.get()).orElse(null) != LocationKind.HOME)
+            return HomePointStatus.NO_WAREHOUSE;
+        List<LocationRecord> homes = membership.records(LocationKind.HOME);
+        RackPosition first = homes.isEmpty() ? null : homes.getFirst().position();
+        return statusOfHomePoint(current, rack.get(), first, first != null && craneCanDriveTo(current, first));
+    }
+
+    /**
+     * Decides which home point this warehouse's crane uses, hands it to the dock and lets every home point show what
+     * it is doing.
+     * <p>
+     * Runs on the first tick after a load, on every re-link check ({@code geometryRefreshTicks}) and whenever a home
+     * point joins or leaves — never per tick. It costs one route question plus one block entity lookup per home point,
+     * and a warehouse without any home point pays a single counter read ({@link AisleMembership#homePointCount}).
+     * <p>
+     * <b>Switching a lamp off is tracked by world position</b> ({@link #writtenHomePoints}), because that is the one
+     * thing that still means the right block after a player has broken the aisle a rack position was named on.
+     */
+    private void refreshHomePoints() {
+        if (level == null || level.isClientSide)
+            return;
+        WarehouseLayout current = layout;
+        List<LocationRecord> homes = current == null || membership.homePointCount() == 0 ? List.<LocationRecord>of()
+                : membership.records(LocationKind.HOME);
+        RackPosition first = homes.isEmpty() ? null : homes.getFirst().position();
+        boolean reachable = current != null && first != null && craneCanDriveTo(current, first);
+        // Only a home point that is really used is handed over, and that is exactly the one whose own status says so:
+        // an unreachable one is reported rather than obeyed, a warehouse of one aisle waits where it is, and a server
+        // may have switched the whole thing off. Falling through to the SECOND home point in any of those cases would
+        // make "at most one per crane" depend on the rails.
+        HomePointStatus firstStatus = current == null || first == null ? null
+                : statusOfHomePoint(current, first, first, reachable);
+        servingHomePoint = firstStatus == HomePointStatus.SERVING ? Optional.of(first) : Optional.empty();
+        linkedDockEntity().ifPresent(dock -> dock.setHomePoint(servingHomePoint.orElse(null)));
+        Set<BlockPos> written = new HashSet<>();
+        if (current != null) {
+            for (LocationRecord record : homes) {
+                Optional<BlockPos> pos = current.worldPosOf(record.position());
+                if (pos.isEmpty())
+                    continue;
+                // Tracked even while its chunk sleeps, so a home point that leaves the warehouse in the meantime is
+                // still switched off when it comes back into a controller that never wrote to it.
+                written.add(pos.get().immutable());
+                homePointAt(pos.get()).ifPresent(home -> home.applyStatus(
+                        statusOfHomePoint(current, record.position(), first, reachable)));
+            }
+        }
+        for (BlockPos pos : writtenHomePoints) {
+            if (!written.contains(pos))
+                homePointAt(pos).ifPresent(WarehouseHomePointBlockEntity::clearStatus);
+        }
+        writtenHomePoints.clear();
+        writtenHomePoints.addAll(written);
+    }
+
+    /**
+     * What one home point is doing, in the order the rules apply: "only one per crane" always holds, then the rails,
+     * then the two reasons a warehouse does not send its crane anywhere at all ({@link HomeReturn}).
+     */
+    private HomePointStatus statusOfHomePoint(WarehouseLayout current, RackPosition rack, @Nullable RackPosition first,
+                                              boolean reachable) {
+        if (!rack.equals(first))
+            return HomePointStatus.SECOND;
+        if (!reachable)
+            return HomePointStatus.UNREACHABLE;
+        if (current.branchCount() <= 1)
+            return HomePointStatus.SINGLE_AISLE;
+        if (WareworksConfig.returnHomeIdleTicks() <= HomeReturn.OFF)
+            return HomePointStatus.SWITCHED_OFF;
+        return HomePointStatus.SERVING;
+    }
+
+    /**
+     * Whether the crane could drive from where it stands to {@code rack} — the very question {@code CraneMotion}
+     * answers, asked through {@link dev.wareworks.core.warehouse.RouteTable#canDrive} so that the lamp on the block and
+     * the machine can never mean two different things by "it can get there".
+     * <p>
+     * A dock whose chunk is away is asked from position 0 of the aisle at the dock instead, which is where its crane
+     * parks: an unload must not turn a working home point red.
+     */
+    private boolean craneCanDriveTo(WarehouseLayout current, RackPosition rack) {
+        int from = RackPosition.FIRST_BRANCH;
+        double fromX = 0.0;
+        Optional<StackerCraneBlockEntity> dock = linkedDockEntity();
+        if (dock.isPresent()) {
+            CranePose pose = dock.get().craneState().pose();
+            if (pose.branch() < current.branchCount()) {
+                from = pose.branch();
+                fromX = pose.x();
+            }
+        }
+        return current.routes().canDrive(from, fromX, rack.branch(), rack.x());
+    }
+
+    private Optional<WarehouseHomePointBlockEntity> homePointAt(BlockPos pos) {
+        if (level == null || level.isClientSide || !level.isLoaded(pos))
+            return Optional.empty();
+        return level.getBlockEntity(pos) instanceof WarehouseHomePointBlockEntity home && !home.isRemoved()
+                ? Optional.of(home) : Optional.empty();
+    }
+
+    /**
+     * Every home point this controller lit goes dark, because this warehouse is gone or this controller is — the
+     * counterpart of {@link #refreshHomePoints}, which is what switched those lamps on. Needs no layout: the positions
+     * are world positions.
+     */
+    private void clearAllHomePointStates() {
+        for (BlockPos pos : List.copyOf(writtenHomePoints))
+            homePointAt(pos).ifPresent(WarehouseHomePointBlockEntity::clearStatus);
+        writtenHomePoints.clear();
+        servingHomePoint = Optional.empty();
     }
 
     /**
@@ -3412,6 +3628,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             stockRulesRefreshPending = false;
             refreshAllStockRules();
         }
+        // After the membership pass, so a home point placed in this very tick is already a member when it is judged.
+        if (homePointsRefreshPending) {
+            homePointsRefreshPending = false;
+            refreshHomePoints();
+        }
         drainPendingSnapshots();
         if (!productionOrders.isEmpty()) {
             if (observeProductionResults(now))
@@ -3560,10 +3781,24 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
         if (chunkFootprintOf != layout) {
             chunkFootprintOf = layout;
-            chunkFootprintCache = AisleChunkSpan.chunks(layout.dock().getX(), layout.dock().getZ(),
-                    layout.facing().getStepX(), layout.facing().getStepZ(), layout.geometry().length());
+            chunkFootprintCache = AisleChunkSpan.networkChunks(branchSpans(layout));
         }
         return chunkFootprintCache;
+    }
+
+    /** One {@code {originX, originZ, stepX, stepZ, length}} group per aisle, for {@link AisleChunkSpan#networkChunks}. */
+    private static int[] branchSpans(WarehouseLayout warehouse) {
+        int[] spans = new int[warehouse.branchCount() * AisleChunkSpan.INTS_PER_BRANCH];
+        for (int i = 0; i < warehouse.branchCount(); i++) {
+            BranchLayout branch = warehouse.branch(i);
+            int at = i * AisleChunkSpan.INTS_PER_BRANCH;
+            spans[at] = branch.origin().getX();
+            spans[at + 1] = branch.origin().getZ();
+            spans[at + 2] = branch.heading().getStepX();
+            spans[at + 3] = branch.heading().getStepZ();
+            spans[at + 4] = branch.geometry().length();
+        }
+        return spans;
     }
 
     /**
@@ -3712,6 +3947,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
         int held = AisleChunkTickets.heldChunkCount(serverLevel, worldPosition);
         chunkKeepReason = decision.reason();
+        // The operator's row in /wareworks chunks, kept in step with the decision itself rather than only with a refusal
+        // (M21, ADR-033): a cap raised under a warehouse that then holds its chunks has to drop the row in the same
+        // breath, or the listing would go on claiming it holds nothing.
+        if (decision.reason() == ChunkKeepReason.TOO_MANY_CHUNKS)
+            AisleChunkTickets.overCap(serverLevel, worldPosition, footprint.length / 2);
+        else
+            AisleChunkTickets.notOverCap(serverLevel, worldPosition);
         // The one number the goggle line is about: what is held while holding, what would be needed while refused, and
         // nothing at all when there is nothing to report (which keeps the synced summary empty on a default server).
         chunkKeepChunks = switch (decision.reason()) {
@@ -3727,16 +3969,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /**
      * An aisle that wants to hold and may not: remembered for the cap wake-up while the cap is the kind that frees up
      * again, and reported once per throttle window. The two permanent refusals ({@code TOO_MANY_CHUNKS}, {@code GAVE_UP})
-     * are deliberately forgotten instead — nothing another aisle does can change them.
+     * are deliberately not woken — nothing another aisle does can change them.
+     * <p>
+     * {@code TOO_MANY_CHUNKS} is listed for the operator all the same, with the number this warehouse would need; that
+     * record is written by {@link #applyChunkKeep} on every decision, because it has to disappear again the moment the
+     * warehouse is no longer over the cap (M21, ADR-033).
      */
     private void rememberRefusal(ServerLevel serverLevel, ChunkKeepReason reason, int[] footprint, long now) {
+        int needed = footprint.length / 2;
         if (reason == ChunkKeepReason.AT_LEVEL_LIMIT || reason == ChunkKeepReason.AT_COLLECT_LIMIT)
             AisleChunkTickets.refuse(serverLevel, worldPosition);
         else
             AisleChunkTickets.forget(serverLevel, worldPosition);
         if (reason != ChunkKeepReason.NONE && chunkKeepRefusals.tryLog(now))
-            Wareworks.LOGGER.warn("Aisle at {} may not hold its chunks: {} (its footprint needs {} chunks)",
-                    worldPosition, reason.name(), footprint.length / 2);
+            Wareworks.LOGGER.warn("Warehouse at {} may not hold its chunks: {} (its footprint needs {} chunks, the "
+                    + "limit is {})", worldPosition, reason.name(), needed, WareworksConfig.maxChunksPerAisle());
     }
 
     private void relink(long now) {
@@ -3745,6 +3992,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // The stock rules ride the geometry cadence: a keeper edited while this controller was unloaded is picked up
         // here at the latest, and a changed maxStockRules takes effect (AisleStockRules#setCap).
         stockRulesRefreshPending = true;
+        // ... and so do the home points: a changed returnHomeIdleTicks, a rail somebody broke between the crane and
+        // its home point, and a home point placed while this controller slept all reach the block within one cadence.
+        homePointsRefreshPending = true;
         Direction facing = facing();
         BlockPos dockPos = worldPosition.relative(facing);
         if (!level.isLoaded(dockPos))
@@ -3764,7 +4014,18 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             unlinkDock();
         linkedDock = dockPos.immutable();
         dock.linkController(worldPosition);
-        applyLayout(AisleLayout.of(dockPos, facing, dock.geometry()).withLetter(aisleLetter()));
+        // The pinned lines are offsets from the dock, so a dock that moved or turned describes other rails entirely.
+        // Cleared before the aisles are assigned, not after, or the fresh assignment would go with them.
+        if (layout != null && (!layout.dock().equals(dockPos) || layout.facing() != facing))
+            branchTable.clear();
+        applyLayout(warehouseOf(dock, dockPos, facing));
+        // The crane drives in this controller's numbering, not in the raw scan's: the branch table pins aisle letters
+        // and origin ends, so only the network the controller resolved agrees with the rack positions of a job
+        // (M21, ADR-033). Handed over on every relink, which is also what a geometry change triggers.
+        dock.setWarehouseNetwork(layout == null ? null : layout.network());
+        // Idempotent, and it keeps a dock that was just linked (or relinked after a save) in step at once rather than
+        // one tick later: without a home point this hands over nothing, which means "the dock is home" (M21, ADR-034).
+        dock.setHomePoint(layout == null ? null : servingHomePoint.orElse(null));
         if (layout == null)
             return;
         if (pruneRequests(layout))
@@ -3773,8 +4034,52 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         dispatch.adopt(dock.currentJob());
     }
 
-    private void applyLayout(@Nullable AisleLayout next) {
-        AisleLayout previous = layout;
+    /**
+     * The warehouse this controller serves right now: the branches the dock discovered, with their pinned letters and
+     * origin ends ({@link BranchTable}).
+     * <p>
+     * <b>An incomplete scan never reshapes a warehouse.</b> A discovery that ran into a chunk that is not loaded may
+     * have found less than there is, and a shorter network would renumber positions — so the branches the controller
+     * already knows are kept, exactly as the dock keeps its own aisle length in that case
+     * ({@code AisleGeometry#scannedLength}). Renumbering must never be caused by a chunk boundary.
+     */
+    private WarehouseLayout warehouseOf(StackerCraneBlockEntity dock, BlockPos dockPos, Direction facing) {
+        AisleGeometry own = dock.geometry();
+        Heading heading = Headings.of(facing);
+        NetworkGeometry discovered = dock.discoveredNetwork()
+                .filter(scan -> !scan.reachedUnloadedChunk())
+                // A scan taken while the dock faced another way describes another warehouse: every branch of it is
+                // measured from that heading, so adopting it would name other blocks under the same addresses. The
+                // dock re-scans on the tick after a facing change; until then the branches this controller knows are
+                // the ones that match the world.
+                .filter(scan -> scan.geometry().firstBranch().heading() == heading)
+                .map(RailNetwork::geometry)
+                .orElseGet(() -> keptNetwork(own, facing));
+        BranchTable.Assignment assignment = branchTable.assign(discovered.withHeight(own.height()), aisleLetter());
+        return WarehouseLayout.of(dockPos, facing, assignment.network(), Optional.of(aisleLetter()))
+                .withBranchLetters(assignment.letters());
+    }
+
+    /**
+     * What a partial scan falls back to: the branches this controller already knows, or the dock's own aisle.
+     * <p>
+     * The kept branches are <b>cut back to the aisle length the dock itself confirmed</b>
+     * ({@link RailNetwork#resolveFirstBranchLength}, the narrow flag). Keeping them verbatim froze the first aisle's
+     * old length for as long as anything the walk looked at was unloaded — a rack column beside the surviving part of
+     * the aisle is enough — and the crane then planned routes, answered {@code canDrive} and parked against rails that
+     * a player had broken. The broad flag is the right reason not to <b>reshape</b> a warehouse, because a shorter scan
+     * renumbers; it is not a reason to keep a length that a loaded block has already disproved
+     * ({@link NetworkGeometry#truncatedToFirstBranchLength} renumbers nothing, M21 review fix).
+     */
+    private NetworkGeometry keptNetwork(AisleGeometry own, Direction facing) {
+        WarehouseLayout known = layout;
+        if (known != null && known.branchCount() > 1 && known.facing() == facing)
+            return known.network().truncatedToFirstBranchLength(own.length());
+        return NetworkGeometry.of(own, Headings.of(facing));
+    }
+
+    private void applyLayout(@Nullable WarehouseLayout next) {
+        WarehouseLayout previous = layout;
         status = statusOf(next);
         if (Objects.equals(previous, next)) {
             if (next != null)
@@ -3790,8 +4095,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             // The keepers lose their warehouse, so they stop calling for items. Their world positions come from the
             // layout that is being taken away. A real loss of the aisle on a loaded controller, never an unload.
             clearAllKeeperRuleStates(previous);
+            // The home points lose their warehouse, so their lamps go out and nothing claims to be a crane's home.
+            clearAllHomePointStates();
             clearAllProductionStops();
             clearAisleState(); // no aisle, no locations, no output stations to deliver to
+            branchTable.clear(); // the lines this table pinned belong to a warehouse that is gone
         } else {
             WarehouseRegistry.register(level, worldPosition, next);
             if (previous == null || !previous.dock().equals(next.dock()) || previous.facing() != next.facing()) {
@@ -3800,10 +4108,190 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // member joins again and is read.
                 clearAisleState();
                 membership.invalidateAll();
-            } else if (!previous.geometry().equals(next.geometry()))
+            } else if (!previous.namesTheSameBlocks(next)) {
+                // A branch moved its origin or turned round, so its positions name other blocks than they did. Nothing
+                // may be carried over under its old label (ADR-033).
+                remapState(previous, next);
+            } else if (!previous.network().equals(next.network())) {
+                // A branch that disappeared (a rail closed with a wrench or broken before the corner) keeps its origin
+                // and its heading, so this is the arm a lost aisle lands in - no remap runs, and the removal pass that
+                // follows is handed the NEW layout, whose labels for that branch name no block at all. Its keepers
+                // must therefore be quietened here, while the layout that still names their blocks is in hand, or a
+                // keeper left the warehouse with its lamp burning and its comparator running for ever (M21 review fix).
+                quietenKeepersOutside(previous, next);
                 membership.markAllDirty();
+            }
         }
         setChanged();
+    }
+
+    /**
+     * Every keeper this controller holds rules for whose rack position {@code next} no longer has stops signalling —
+     * reached through {@code previous}, the layout that still names its block.
+     * <p>
+     * It deliberately does not remove the rules: {@link #refreshAllStockRules} and the membership pass drop them on the
+     * evidence of a loaded block, which is the rule a maximum and a reserve depend on. This only takes the lamp and the
+     * comparator value off a block nothing writes any more.
+     */
+    private void quietenKeepersOutside(WarehouseLayout previous, WarehouseLayout next) {
+        for (RackPosition rack : List.copyOf(stockRules.keepers())) {
+            if (!next.contains(rack))
+                clearKeeperRuleState(previous, rack);
+        }
+    }
+
+    /**
+     * Moves everything this controller knows from the labels of {@code previous} to those of {@code next}, through the
+     * <b>world positions</b> the labels stand for: {@code world = previous.rackPos(record)}, then the position
+     * {@code next} gives that block, decided by the member standing there when a corner leaves a choice
+     * ({@link #resolveRack}). A record whose block is no longer a rack position of this warehouse is dropped, exactly
+     * as a member that left the aisle is dropped — and its items stay where they are, in the chest a player can still
+     * open (ADR-033, {@code docs/warehouse-system.md} §4).
+     * <p>
+     * <b>No path here can lose an item.</b> Nothing is moved, taken or dropped: a remap only renames. The crane's
+     * head is not touched at all, and its pose, its motion target and its job's locations are renamed through the same
+     * world blocks as everything else ({@link #remapCrane}); a position that stopped existing reaches the crane as the
+     * {@code MISSING} it already handles by aborting before the pick and rerouting after it. Filters and priorities live on the
+     * blocks, stock rules are re-read from their keepers, request destinations are saved as world offsets and every
+     * remapped storage location is snapshotted again, so every number is re-derived from the world within a few ticks.
+     * <p>
+     * What is deliberately <b>cancelled</b> rather than carried over is an open production order whose station no
+     * longer exists: an order that kept its label would send a player's ingredients to a different machine, which is
+     * the one failure this remap exists to prevent ({@code processMembership} only ever cancelled orders of a
+     * <i>removed</i> record, and a renumber removes none).
+     */
+    private void remapState(WarehouseLayout previous, WarehouseLayout next) {
+        List<LocationRecord> records = membership.records();
+        List<RackPosition> misaligned = List.copyOf(membership.misalignedPositions());
+        Map<RackPosition, Map<ItemKey, Long>> counts = new HashMap<>();
+        for (LocationRecord record : records) {
+            if (record.kind() == LocationKind.STORAGE)
+                counts.put(record.position(), stock.countsAt(record.position()));
+        }
+        Map<RackPosition, List<StockRule<ItemKey>>> rules = stockRules.saved();
+        List<ProductionOrder<ItemKey, RackPosition>> orders = productionOrders.all();
+        List<RetrievalRequest<ItemKey, BlockPos>> openRequests = requests.requests();
+        Map<RackPosition, RackPosition> moved = new HashMap<>();
+        Set<RackPosition> taken = new HashSet<>();
+        for (RackPosition position : knownPositions(records, misaligned, rules, orders)) {
+            Optional<RackPosition> to = resolveRack(next, previous.rackPos(position));
+            // Two labels of the old warehouse can name one block (a rack beside a corner has a position on both of its
+            // aisles), and only one of them may survive. The lowest in RackPosition.ORDER wins, and the loser is
+            // dropped like any position that stopped existing; the next probe puts the block back where it belongs.
+            if (to.isPresent() && next.contains(to.get()) && taken.add(to.get()))
+                moved.put(position, to.get());
+        }
+
+        clearAisleState();
+        List<LocationRecord> remappedRecords = new ArrayList<>(records.size());
+        for (LocationRecord record : records) {
+            RackPosition to = moved.get(record.position());
+            if (to != null)
+                remappedRecords.add(new LocationRecord(to, record.kind()));
+        }
+        List<RackPosition> remappedMisaligned = new ArrayList<>(misaligned.size());
+        for (RackPosition position : misaligned) {
+            RackPosition to = moved.get(position);
+            if (to != null)
+                remappedMisaligned.add(to);
+        }
+        membership.restore(remappedRecords, remappedMisaligned);
+        for (LocationRecord record : membership.records(LocationKind.STORAGE)) {
+            stock.restore(record.position(), Map.of());
+            pendingSnapshots.addUrgent(record.position());
+            // Until that snapshot runs, the planner must not read the missing filter entry as "accepts everything".
+            filters.markUnread(record.position());
+        }
+        for (Map.Entry<RackPosition, Map<ItemKey, Long>> entry : counts.entrySet()) {
+            RackPosition to = moved.get(entry.getKey());
+            if (to != null && stock.contains(to))
+                stock.restore(to, entry.getValue());
+        }
+        for (LocationRecord record : membership.records(LocationKind.OUTPUT))
+            ports.markUnread(record.position());
+        Map<RackPosition, List<StockRule<ItemKey>>> remappedRules = new LinkedHashMap<>();
+        List<RackPosition> droppedKeepers = new ArrayList<>();
+        for (Map.Entry<RackPosition, List<StockRule<ItemKey>>> entry : rules.entrySet()) {
+            RackPosition to = moved.get(entry.getKey());
+            if (to != null)
+                remappedRules.put(to, entry.getValue());
+            else
+                droppedKeepers.add(entry.getKey());
+        }
+        stockRules.restore(remappedRules);
+        // A keeper this warehouse no longer reads must stop signalling, or it leaves a lit lamp and a comparator value
+        // for a rule nothing enforces any more (M15 review). Its world position comes from the layout that is being
+        // taken away, which is why the old one is passed in.
+        for (RackPosition dropped : droppedKeepers)
+            clearKeeperRuleState(previous, dropped);
+        stockRules.setCap(WareworksConfig.maxStockRules());
+        requests.restore(openRequests); // destinations are world positions, so they never needed a label
+        // Restored before they are cancelled, so an order whose machine is gone goes through the very path a removed
+        // production station already uses: its plan ends with it, a crane fetching for it aborts or reroutes, and the
+        // request waiting for it is given its promise back. It is then an ended order a player can see the reason of,
+        // rather than one that silently vanished.
+        List<ProductionOrder<ItemKey, RackPosition>> remappedOrders = new ArrayList<>(orders.size());
+        Set<RackPosition> orphaned = new LinkedHashSet<>();
+        for (ProductionOrder<ItemKey, RackPosition> order : orders) {
+            RackPosition to = moved.get(order.station());
+            if (to == null) {
+                remappedOrders.add(order);
+                if (order.isOpen())
+                    orphaned.add(order.station());
+                continue;
+            }
+            remappedOrders.add(order.atStation(to));
+        }
+        productionOrders.restore(remappedOrders);
+        int cancelled = 0;
+        for (RackPosition station : orphaned) {
+            cancelled += productionOrders.ordersFor(station).size();
+            cancelProductionOrdersAt(station);
+        }
+        productionRestorePending = true; // a truncated plan is checked on the first tick that knows the game time
+        remapCrane(previous, next, moved);
+        membership.markAllDirty();
+        stockRulesRefreshPending = true;
+        homePointsRefreshPending = true;
+        Wareworks.LOGGER.info("The warehouse at {} was rebuilt: {} of {} locations kept their place, {} aisles"
+                + (cancelled > 0 ? ", {} production orders cancelled with their station" : " ({} orders kept)"),
+                worldPosition, remappedRecords.size(), records.size(), next.branchCount(),
+                cancelled > 0 ? cancelled : remappedOrders.size());
+    }
+
+    /**
+     * The crane goes through the same remap as everything else (M21 review fix, ADR-033): its pose, its motion target
+     * and its job's two locations are moved from the old labels to the new ones through the world blocks they stood
+     * for.
+     * <p>
+     * It used to be left out on the argument that "the branch at the dock is pinned to the dock, so a remap can never
+     * move a position the crane is working on" — which holds for branch 0 and for nothing else. Branch indices are the
+     * discovery order, and a rebuilt aisle can keep its index while it runs the other way or names another line of
+     * blocks entirely; a crane that kept its number would be drawn on the wrong aisle from one tick to the next, drive
+     * its route from a point it is not at, and deliver its items into whatever chest inherited its target's number.
+     * <p>
+     * A pose whose block is no longer on any aisle goes back onto the aisle at the dock
+     * ({@link WarehouseLayout#parkedAtDock}), and a job location that was dropped keeps its old label and reaches the
+     * crane as the missing location it already handles. <b>No item moves here.</b>
+     */
+    private void remapCrane(WarehouseLayout previous, WarehouseLayout next, Map<RackPosition, RackPosition> moved) {
+        linkedDockEntity().ifPresent(dock -> dock.remapOnto(
+                pose -> next.renamedFrom(previous, pose).orElseGet(() -> next.parkedAtDock(pose)),
+                rack -> moved.getOrDefault(rack, rack)));
+    }
+
+    /** Every rack position this controller holds anything for, in {@link RackPosition#ORDER} and without duplicates. */
+    private static List<RackPosition> knownPositions(List<LocationRecord> records, List<RackPosition> misaligned,
+                                                     Map<RackPosition, List<StockRule<ItemKey>>> rules,
+                                                     List<ProductionOrder<ItemKey, RackPosition>> orders) {
+        Set<RackPosition> positions = new TreeSet<>(RackPosition.ORDER);
+        for (LocationRecord record : records)
+            positions.add(record.position());
+        positions.addAll(misaligned);
+        positions.addAll(rules.keySet());
+        for (ProductionOrder<ItemKey, RackPosition> order : orders)
+            positions.add(order.station());
+        return List.copyOf(positions);
     }
 
     /**
@@ -3828,13 +4316,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         collections.clear();
         pendingCollections.clear();
         stockRulesRefreshPending = true;
+        homePointsRefreshPending = true;
         sharedInventories.clear();
         requests.clear();
         productionOrders.clear();
         dispatch.reset();
     }
 
-    private ControllerStatus statusOf(@Nullable AisleLayout layout) {
+    private ControllerStatus statusOf(@Nullable WarehouseLayout layout) {
         if (layout == null)
             return dockMisaligned ? ControllerStatus.DOCK_MISALIGNED : ControllerStatus.NO_DOCK;
         return layout.geometry().length() == 0 ? ControllerStatus.NO_RAILS : ControllerStatus.READY;
@@ -3847,17 +4336,24 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         linkedDock = null;
         if (dockPos != null && level != null && level.isLoaded(dockPos)
                 && level.getBlockEntity(dockPos) instanceof StackerCraneBlockEntity dock)
+            // Which also puts its warehouse back to the one straight aisle its own rails describe: nobody names its
+            // further aisles any more (ADR-033).
             dock.unlinkController(worldPosition);
     }
 
-    private void processMembership(AisleLayout current) {
-        MembershipChanges changes = membership.reconcile(current.geometry(), rack -> probe(current, rack));
+    private void processMembership(WarehouseLayout current) {
+        MembershipChanges changes = membership.reconcile(current.network(), rack -> probe(current, rack));
         boolean changed = pruneRequests(current);
         for (LocationRecord removed : changes.removed()) {
             if (removed.kind() == LocationKind.STORAGE)
                 forgetStorageLocation(removed.position());
             else if (removed.kind() == LocationKind.OUTPUT) {
-                cancelRequestsFor(current.rackPos(removed.position())); // nothing can be delivered there any more
+                // Through worldPosOf, not rackPos: a record whose aisle the warehouse no longer has stands for no
+                // block at all, and reading it as one cancelled the open requests of whatever really stands at that
+                // (x, y, side) on the first aisle - a working output station, losing a player's requests and the job
+                // serving them (M21 review fix). The requests of the station that really left were cancelled two
+                // lines above by pruneRequests, which asks the world rather than a label.
+                current.worldPosOf(removed.position()).ifPresent(this::cancelRequestsFor);
                 forgetPort(removed.position());
             }
             else if (removed.kind() == LocationKind.PRODUCTION)
@@ -3866,6 +4362,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // The keeper left the aisle (broken, replaced or turned away from it): its rules go with it, and if the
                 // block is still there it stops calling for items — nothing enforces them any more.
                 dropStockRulesAt(removed.position());
+            else if (removed.kind() == LocationKind.HOME)
+                // The home point left the warehouse (broken, replaced or turned away): the crane falls back to its
+                // dock, and a second home point may become the first. Both are decided by the refresh, which also
+                // switches the lamps of the blocks that are still standing (M21, ADR-034).
+                homePointsRefreshPending = true;
             changed = true;
         }
         for (LocationRecord added : changes.added()) {
@@ -3874,6 +4375,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // Read at once, not on a later tick: a keeper a player just placed governs from now on, and a plan in
                 // this very tick must not store past the maximum it carries.
                 readStockRulesAt(added.position());
+                continue;
+            }
+            if (added.kind() == LocationKind.HOME) {
+                // Judged on this same tick (the refresh runs right after this pass), so a home point a player just
+                // placed either lights up or says why it does not, instead of looking dead until the next cadence.
+                homePointsRefreshPending = true;
                 continue;
             }
             if (added.kind() == LocationKind.OUTPUT) {
@@ -3911,8 +4418,28 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         stock.remove(rack);
     }
 
-    private RackProbe probe(AisleLayout current, RackPosition rack) {
+    /**
+     * Classifies one rack position, in three ways rather than two (ADR-033): the member there is this position's if it
+     * is aligned with it; it is <b>another position's</b> — {@link RackProbe#EMPTY} here — if it is aligned with one of
+     * the other branches of this same warehouse that also reach the block, which is what happens at a corner; and only
+     * a member aligned with none of them is {@link RackProbe#MISALIGNED}. Without the middle case a perfectly built
+     * corner rack would be reported misaligned at its non-owning position and could register twice. A warehouse that
+     * never bends has exactly one candidate per block, so the middle case never fires there.
+     * <p>
+     * <b>The order of the three questions is the rule, not a detail.</b> Nothing is written before ownership is
+     * decided, and only the lowest candidate of a block may write at all. Aligning first and asking afterwards made
+     * the probe destroy the very premise the ownership rule rests on — that each candidate of a block requires its own
+     * facing — because {@code alignToAisle} is exactly what changes that facing (M21 review fix).
+     */
+    private RackProbe probe(WarehouseLayout current, RackPosition rack) {
         BlockPos pos = current.rackPos(rack);
+        if (!current.isRackPosition(pos))
+            // The column this label names is an aisle block of another branch of this same warehouse - the rail just
+            // before a corner, and everything above it, which is where the crane's mast travels. A full scan walks
+            // every rack position of the network, so it reaches those few labels even though no player can ever be
+            // offered them any more; and the label of a branch that is gone lands on the dock block, whose whole
+            // sentinel argument is that every question about it gets the harmless answer (M21 review fix).
+            return RackProbe.EMPTY;
         if (!level.isLoaded(pos))
             return RackProbe.UNLOADED;
         BlockEntity blockEntity = level.getBlockEntity(pos);
@@ -3920,13 +4447,88 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return RackProbe.EMPTY;
         if (member.locationKind() == LocationKind.STORAGE && !(member instanceof StorageMember))
             return RackProbe.EMPTY; // a storage kind the controller cannot read
-        // A member whose block state depends on where the aisle is (the terminal's intake port) adapts it first, so
+        BranchLayout branch = current.branch(rack.branch());
+        if (member.isAlignedWith(branch, rack.side()))
+            return RackProbe.member(member.locationKind()); // already this position's: nothing is written
+        // Ownership is decided before anything is written. A block beside a corner is a rack position of two aisles
+        // at once and each of them wants its own facing there, so aligning first and asking afterwards let both of
+        // them write: the same terminal registered as an output on both aisles and its block state flipped twice
+        // every tick for ever - the M10 failure mode, reproduced inside a single warehouse (M21 review fix).
+        if (belongsToAnotherBranch(current, member, pos, rack))
+            return RackProbe.EMPTY;
+        if (!adaptsMembersAt(current, pos, rack))
+            // Another candidate of this same block is the one that may turn it - and the one that reports it. A
+            // block beside a corner that fits neither aisle is ONE badly turned block, so only its lowest candidate
+            // may call it misaligned: reporting it here as well stored two rack positions for it and made the
+            // goggles read "Misaligned blocks: 2" for a single interface (M21 review fix).
+            return RackProbe.EMPTY;
+        // A member whose block state depends on where the aisle is (the terminal's intake port) adapts it here, so
         // this probe already classifies the corrected state. It writes only on a real change, and only when this
         // controller owns the member's block state, so two aisles sharing a rack plane cannot fight over it
         // (WarehouseMember §doc, WarehouseRegistry#ownsMemberState, M10 review fix).
-        member.alignToAisle(worldPosition, current, rack.side());
-        return member.isAlignedWith(current, rack.side()) ? RackProbe.member(member.locationKind())
+        member.alignToAisle(worldPosition, branch, rack.side());
+        return member.isAlignedWith(branch, rack.side()) ? RackProbe.member(member.locationKind())
                 : RackProbe.MISALIGNED;
+    }
+
+    /**
+     * Whether {@code rack} is the one candidate of the block at {@code pos} that may turn a member towards its aisle:
+     * the <b>lowest</b> of them, which is the first this warehouse names for that block and therefore the same one on
+     * every pass. A member that fits no aisle of a corner is then adapted once by one aisle, instead of being pulled
+     * back and forth between two of them, and is <b>counted once</b>: the other candidates answer
+     * {@link RackProbe#EMPTY}, so one badly turned block is one entry in the misaligned set. A warehouse that never
+     * bends has exactly one candidate per block, so this is always true there and the probe does literally what it did
+     * before M21.
+     */
+    private static boolean adaptsMembersAt(WarehouseLayout current, BlockPos pos, RackPosition rack) {
+        List<RackPosition> candidates = current.candidates(pos);
+        return candidates.isEmpty() || candidates.getFirst().equals(rack);
+    }
+
+    /** Whether {@code member} is aligned with another branch of this warehouse that also reaches {@code pos}. */
+    private boolean belongsToAnotherBranch(WarehouseLayout warehouse, WarehouseMember member, BlockPos pos,
+                                           RackPosition rack) {
+        if (warehouse.branchCount() <= 1)
+            return false;
+        for (RackPosition candidate : warehouse.candidates(pos)) {
+            if (!candidate.equals(rack)
+                    && member.isAlignedWith(warehouse.branch(candidate.branch()), candidate.side()))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * The rack position the block at {@code pos} occupies in {@code warehouse}, decided the way the ownership rule
+     * decides it (ADR-033): a block beside a corner is laterally beside a straight rail of two aisles at once, and the
+     * member standing there picks which one it belongs to by the way it faces.
+     * <p>
+     * A warehouse that never bends offers at most one candidate per block, so this is literally what
+     * {@code BranchLayout#worldToLocal} answered before M21. Where there is a choice and nothing decides it — the
+     * block is empty and this controller knows nothing about either position — the lowest branch wins, which keeps the
+     * answer deterministic; the next probe of a member that really stands there corrects it.
+     */
+    private Optional<RackPosition> resolveRack(WarehouseLayout warehouse, BlockPos pos) {
+        List<RackPosition> candidates = warehouse.candidates(pos);
+        if (candidates.size() <= 1)
+            return candidates.isEmpty() ? Optional.empty() : Optional.of(candidates.getFirst());
+        if (level != null && level.isLoaded(pos) && level.getBlockEntity(pos) instanceof WarehouseMember member
+                && !((BlockEntity) member).isRemoved()) {
+            for (RackPosition candidate : candidates) {
+                if (member.isAlignedWith(warehouse.branch(candidate.branch()), candidate.side()))
+                    return Optional.of(candidate);
+            }
+        }
+        for (RackPosition candidate : candidates) {
+            if (membership.kindAt(candidate).isPresent() || membership.isMisaligned(candidate))
+                return Optional.of(candidate);
+        }
+        return Optional.of(candidates.getFirst());
+    }
+
+    /** {@link #resolveRack} against the warehouse as it is now; empty without a dock. */
+    private Optional<RackPosition> rackAt(BlockPos pos) {
+        return layout == null ? Optional.empty() : resolveRack(layout, pos);
     }
 
     private void onAisleLetterChanged(int index) {
@@ -3970,6 +4572,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (level instanceof ServerLevel) {
             unlinkDock();
             clearAllKeeperRuleStates(layout);
+            clearAllHomePointStates();
             clearAllProductionStops();
             WarehouseRegistry.unregister(level, worldPosition);
             // The owner of the tickets is gone, so the tickets go with it, in this tick. A ticket that outlives its
@@ -3995,6 +4598,22 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     // --- goggles -------------------------------------------------------------------------------------------------
 
+    /**
+     * How many aisles the goggle line names before it falls back to "and N more" (M21, ADR-033). A goggle tooltip is
+     * read at a glance and the address format allows 26 aisles; six letters and six numbers is about as much as one
+     * line carries, and {@code /wareworks chunks} and the controller's display board are where the rest belongs.
+     */
+    private static final int GOGGLE_AISLES_LISTED = 6;
+
+    /** One {@code "letter length"} entry per aisle, in aisle order, for {@link WareworksLang#networkAisles}. */
+    private static List<String> aisleEntries(NetworkGoggleInfo network) {
+        List<String> entries = new ArrayList<>(network.aisleCount());
+        for (int aisle = 0; aisle < network.aisleCount(); aisle++)
+            entries.add(network.letterOf(aisle).map(String::valueOf).orElse("?") + " "
+                    + network.aisleLengths().get(aisle));
+        return entries;
+    }
+
     /** A player looks at the controller through goggles (server): refresh the summary and sync a change (throttled). */
     @Override
     public void onGoggleObserved() {
@@ -4017,8 +4636,29 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 collectingPortCount(), membership.productionCount(),
                 membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
                 productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
-                chunkKeepReason, chunkKeepChunks,
+                chunkKeepReason, chunkKeepChunks, networkInfo(),
                 linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), dispatch.lastReason());
+    }
+
+    /**
+     * Server: what the goggles and the aisle display board should say about the shape of the rails (M21, issue #1,
+     * ADR-033), or nothing at all for a warehouse of one aisle whose rails simply end — which is every warehouse built
+     * before M21.
+     * <p>
+     * The shape is the <b>dock's</b> discovery, not the controller's own layout: the dock is what walks the rails, and
+     * it is the only place that knows where the walk stopped and why. Without a loaded dock there is nothing to say,
+     * and the status line already says that much.
+     * <p>
+     * Computed on demand from state both blocks already hold, so it is a handful of field reads and never a scan
+     * (ADR-026). The goggle tooltip reads the synced copy inside {@link ControllerGoggleSummary} instead, because it
+     * runs on the client.
+     */
+    public Optional<NetworkGoggleInfo> networkInfo() {
+        WarehouseLayout shown = layout;
+        if (shown == null)
+            return Optional.empty();
+        return linkedDockEntity().flatMap(StackerCraneBlockEntity::discoveredNetwork)
+                .flatMap(network -> NetworkGoggleInfo.of(network, shown.branchLetters()));
     }
 
     @Override
@@ -4039,7 +4679,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // Without an aisle there is nothing to count: every line below would read 0.
         if (shown.status() == ControllerStatus.NO_DOCK || shown.status() == ControllerStatus.DOCK_MISALIGNED)
             return true;
-        WareworksLang.aisleSize(shown.aisleLength(), shown.mastHeight()).forGoggles(tooltip, 1);
+        // The size of the warehouse. One aisle reads exactly as it always did; a warehouse that bends says how many
+        // rails and aisles it is made of instead, and lists them underneath (M21, issue #1, ADR-033).
+        Optional<NetworkGoggleInfo> network = shown.network();
+        if (network.isPresent() && network.get().aisleCount() > 1) {
+            NetworkGoggleInfo info = network.get();
+            WareworksLang.networkSize(info.rails(), info.aisleCount(), shown.mastHeight()).forGoggles(tooltip, 1);
+            WareworksLang.networkAisles(aisleEntries(info), GOGGLE_AISLES_LISTED).forGoggles(tooltip, 2);
+        } else {
+            WareworksLang.aisleSize(shown.aisleLength(), shown.mastHeight()).forGoggles(tooltip, 1);
+        }
+        // Where the rails were cut off short of what a player laid, and by what. Never merged into one message with
+        // the status above: a warehouse can be perfectly ready and still stop at a rail that branches.
+        network.filter(NetworkGoggleInfo::stopsShort)
+                .ifPresent(info -> WareworksLang.networkStop(dockPos().offset(info.stopDx(), 0, info.stopDz()),
+                        info.stop()).style(ChatFormatting.GOLD).forGoggles(tooltip, 1));
         WareworksLang.countLine(WareworksLang.GOGGLES_STORAGE_LOCATIONS, shown.storageLocations())
                 .forGoggles(tooltip, 1);
         if (shown.filteredLocations() > 0)
@@ -4139,6 +4793,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         }
         ControllerPersistence.writeLayout(tag, layout);
+        // Only a warehouse that really bends writes anything here, so a straight aisle saves the bytes it always did.
+        ControllerPersistence.writeNetwork(tag, layout, branchTable);
         ControllerPersistence.writeLocations(tag, membership, stock.readOnlyView(), registries);
         ControllerPersistence.writeRequests(tag, requests.requests(), worldPosition, registries);
         ControllerPersistence.writeProductionOrders(tag, productionOrders.all(), registries);
@@ -4154,6 +4810,43 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         ControllerPersistence.writeChunkKeep(tag, chunkKeepGaveUp, chunkKeepFingerprint);
     }
 
+    /**
+     * The warehouse a save describes: the aisle at the dock from {@code Layout} — the only thing a world built before
+     * M21 saved, and still the whole warehouse of every build that never bends — plus the further aisles and the
+     * pinned lines from {@code Network}, if there are any (ADR-033).
+     * <p>
+     * A {@code Network} that does not describe a valid warehouse is dropped rather than trusted: the rails are
+     * rediscovered on the first re-link anyway, so the worst a broken tag can cost is one straight aisle for a few
+     * ticks, and the records that are read next refer to positions that really exist.
+     */
+    private WarehouseLayout savedWarehouse(CompoundTag tag, Direction facing,
+                                           ControllerPersistence.SavedLayout saved) {
+        BlockPos dockPos = worldPosition.relative(facing);
+        NetworkGeometry single = NetworkGeometry.of(saved.geometry(), Headings.of(facing));
+        ControllerPersistence.SavedNetwork network = ControllerPersistence.readNetwork(tag);
+        branchTable.restore(network.lines());
+        if (network.branches().isEmpty())
+            return oneAisle(dockPos, facing, saved);
+        try {
+            List<BranchGeometry> branches = new ArrayList<>(network.branches().size() + 1);
+            branches.add(single.firstBranch());
+            branches.addAll(network.branches());
+            NetworkGeometry geometry = new NetworkGeometry(branches, saved.geometry().height());
+            return WarehouseLayout.of(dockPos, facing, geometry, Optional.of(aisleLetter()))
+                    .withBranchLetters(network.letters());
+        } catch (RuntimeException e) {
+            Wareworks.LOGGER.warn("Could not read the saved warehouse of the controller at {}; keeping its first aisle",
+                    worldPosition, e);
+            branchTable.clear();
+            return oneAisle(dockPos, facing, saved);
+        }
+    }
+
+    /** The warehouse a save that describes one straight aisle means: the warehouse of every build up to 0.5.0. */
+    private WarehouseLayout oneAisle(BlockPos dockPos, Direction facing, ControllerPersistence.SavedLayout saved) {
+        return WarehouseLayout.single(BranchLayout.of(dockPos, facing, saved.geometry()).withLetter(aisleLetter()));
+    }
+
     @Override
     protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         super.read(tag, registries, clientPacket);
@@ -4163,12 +4856,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         }
         Direction facing = facing();
-        // Records are aisle-local: a layout saved for another direction (e.g. a rotated structure) is dropped.
+        // Records are warehouse-local: a layout saved for another direction (e.g. a rotated structure) is dropped.
         layout = ControllerPersistence.readLayout(tag)
                 .filter(saved -> saved.facing() == facing)
-                .map(saved -> AisleLayout.of(worldPosition.relative(facing), facing, saved.geometry())
-                        .withLetter(aisleLetter()))
+                .map(saved -> savedWarehouse(tag, facing, saved))
                 .orElse(null);
+        if (layout == null)
+            branchTable.clear();
         status = statusOf(layout);
         clearAisleState();
         // M19: the give-up bound belongs to the work it refuses, so it is restored with that work and dropped whenever
@@ -4212,6 +4906,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
         relinkRequested = true;
         stockRulesRefreshPending = true;
+        homePointsRefreshPending = true;
         if (level instanceof ServerLevel && !isRemoved()) {
             // Data changed on a live block entity (e.g. /data merge): keep the registry in step.
             if (layout != null)

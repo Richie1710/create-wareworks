@@ -485,7 +485,7 @@ public final class RobustnessGameTests {
                             "the pause reason names the configuration");
                     helper.assertFalse(dock.canAcceptJob(), "a crane that cannot move accepts no job");
                     helper.assertTrue(dock.currentJob().isEmpty(), "no job was planned");
-                    helper.assertValueEqual(dock.craneState().pose(), StackerCraneBlockEntity.HOME_POSE, "nothing moved");
+                    helper.assertValueEqual(dock.craneState().pose(), dock.homePose(), "nothing moved");
                     helper.assertValueEqual(aisle.stationCount(INPUT, IRON), (long) STORED_IRON,
                             "the items stay in the input");
                 })

@@ -45,8 +45,12 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 #   rack plane LEFT  z = 3 with its inventories at z = 2,
 #   rack plane RIGHT z = 5 with its inventories at z = 6.
 # The interface and terminal close-ups use a smaller 7 x 6 x 7 stage (square 7 base plate) with the aisle at z = 3.
+# The corner scene (M21) uses the same square 9 plate with a second aisle at right angles: aisle A runs east at
+#   z = 3 over x = 1..6 and aisle B south at x = 6 over z = 3..8, with one rack plane beside each
+#   (dev.wareworks.client.ponder.scenes.PonderNetwork).
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
+    "warehouse/corner": (9, 7, 9),
     "warehouse/interface": (7, 6, 7),
     "warehouse/filters": (9, 7, 9),
     "warehouse/storing": (9, 7, 9),

@@ -86,6 +86,7 @@ public final class WareworksItemGameTests {
     private static final String LARGE_COGWHEEL = "large_cogwheel";
     private static final String NIXIE_TUBE = "nixie_tube";
     private static final String PRECISION_MECHANISM = "precision_mechanism";
+    private static final String ROSE_QUARTZ_LAMP = "rose_quartz_lamp";
     private static final String SHAFT = "shaft";
 
     /** A recipe the mod must ship: recipe id = item id, recipe type, result count and the exact ingredients. */
@@ -223,8 +224,12 @@ public final class WareworksItemGameTests {
         assertCrafts(helper, recipes, level, terminal, WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), ONE);
         assertCrafts(helper, recipes, level, rail, WareworksBlocks.WAREHOUSE_RAIL.asItem(), RAILS_PER_CRAFT);
         CraftingInput keeper = grid(3, 3, none, vanilla(COMPARATOR), none, tube, brass, tube, none, alloy, none);
+        // The home point is the cheapest member of all, because it holds nothing: andesite plus the lamp a player sees
+        // on it (M21, ADR-034).
+        CraftingInput homePoint = grid(3, 2, none, stack(ROSE_QUARTZ_LAMP), none, alloy, casing, alloy);
         assertCrafts(helper, recipes, level, production, WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(), ONE);
         assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
+        assertCrafts(helper, recipes, level, homePoint, WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(), ONE);
 
         // The crane is mechanical crafting. MechanicalCraftingRecipe#matches rejects every input that is not a
         // MechanicalCraftingInput, so the grid has to be built the way a crafter tower builds it.
@@ -286,7 +291,7 @@ public final class WareworksItemGameTests {
                 WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), WareworksBlocks.WAREHOUSE_INTERFACE.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
-                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem()),
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem()),
                 "creative tab order");
         helper.assertTrue(tab.getIconItem().is(WareworksBlocks.STACKER_CRANE.asItem()), "creative tab icon: " + tab.getIconItem());
         helper.succeed();
@@ -332,7 +337,10 @@ public final class WareworksItemGameTests {
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_STOCK_KEEPER, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.ofVanilla(COMPARATOR), IngredientSpec.of(ELECTRON_TUBE),
                                 IngredientSpec.of(BRASS_CASING), IngredientSpec.of(ELECTRON_TUBE),
-                                IngredientSpec.of(ANDESITE_ALLOY))));
+                                IngredientSpec.of(ANDESITE_ALLOY))),
+                new ExpectedRecipe(WareworksBlocks.WAREHOUSE_HOME_POINT, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(ROSE_QUARTZ_LAMP), IngredientSpec.of(ANDESITE_ALLOY),
+                                IngredientSpec.of(ANDESITE_CASING), IngredientSpec.of(ANDESITE_ALLOY))));
     }
 
     /** Asserts that the recipe's filled slots are exactly the expected ingredients, in any order and with duplicates. */

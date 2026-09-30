@@ -32,7 +32,20 @@ public enum LocationKind {
      * capability, is never the source or the target of a transport job and is no mechanical arm target. The only thing
      * a controller reads from it is its list of rules.
      */
-    KEEPER(false);
+    KEEPER(false),
+    /**
+     * A warehouse home point: the rack position a crane with nothing to do waits at (M21, issue #1, ADR-034).
+     * <p>
+     * Like a {@link #KEEPER} it is a member without a buffer — it holds no items, exposes no item capability, is never
+     * the source or the target of a transport job and is no mechanical arm target — and it is a member for the same
+     * reason: a player builds it into a rack beside the rails like every other station, and the controller finds it
+     * through the ordinary membership probe. The only thing read from it is <b>where it stands</b>.
+     * <p>
+     * <b>At most one per crane</b> ({@code docs/stacker-crane.md} §4.7): the first of a warehouse's home points in
+     * {@link dev.wareworks.core.address.RackPosition#ORDER} is the one the crane uses, and every further one is
+     * reported as having no effect rather than quietly ignored.
+     */
+    HOME(false);
 
     private final boolean facesAwayFromAisle;
 
@@ -52,8 +65,8 @@ public enum LocationKind {
      * Whether this kind is a <b>station</b>: a member with a buffer a crane fills or empties (input, output or
      * production station).
      * <p>
-     * Deliberately no longer "everything that is not storage": a {@link #KEEPER} is a member without any buffer, so a
-     * crane never has anything to do there (M15).
+     * Deliberately no longer "everything that is not storage": a {@link #KEEPER} and a {@link #HOME} point are members
+     * without any buffer, so a crane never has anything to transfer there (M15, M21).
      */
     public boolean isStation() {
         return this == INPUT || this == OUTPUT || this == PRODUCTION;

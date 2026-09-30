@@ -21,12 +21,15 @@ import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollVa
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.crane.MastHeightValueBox;
-import dev.wareworks.content.crane.RailScan;
+import dev.wareworks.content.crane.RailNetworkScan;
 import dev.wareworks.content.crane.StackerCraneBlock;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.core.warehouse.NetworkStop;
+import dev.wareworks.core.warehouse.RailGraph;
+import dev.wareworks.core.warehouse.RailNetwork;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
@@ -48,6 +51,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -134,7 +138,11 @@ public final class StackerCraneGameTests {
                 .thenSucceed();
     }
 
-    /** Gaps, rails across the aisle and other blocks stop the count; rotating the dock re-counts in the new direction. */
+    /**
+     * Gaps and other blocks stop the count, a closed rail does too, and the rail's axis does not: since M21 rails that
+     * touch connect whichever way they are turned, and the axis is only the picture of a rail with no neighbours
+     * (ADR-033). Rotating the dock re-counts in the new direction.
+     */
     @GameTest(template = AISLE_16X10X7)
     public static void craneRailGapAndAxis(GameTestHelper helper) {
         placeDock(helper, AISLE_DOCK, Direction.EAST);
@@ -147,7 +155,13 @@ public final class StackerCraneGameTests {
                     StackerCraneBlockEntity dock = dockAt(helper, AISLE_DOCK);
                     helper.setBlock(railPos(AISLE_DOCK, Direction.EAST, 4), rail(Direction.Axis.Z));
                     dock.refreshGeometry();
-                    helper.assertValueEqual(dock.aisleLength(), 3, "a rail across the aisle stops the count");
+                    helper.assertValueEqual(dock.aisleLength(), 8, "a rail across the aisle connects just the same");
+
+                    // Closing it is the one way to keep a rail out of a warehouse, and the one cure for a stray one.
+                    helper.setBlock(railPos(AISLE_DOCK, Direction.EAST, 4),
+                            rail(Direction.Axis.Z).setValue(WarehouseRailBlock.CLOSED, true));
+                    dock.refreshGeometry();
+                    helper.assertValueEqual(dock.aisleLength(), 3, "a closed rail stops the count");
 
                     helper.setBlock(railPos(AISLE_DOCK, Direction.EAST, 4), rail(Direction.Axis.X));
                     dock.refreshGeometry();
@@ -181,14 +195,13 @@ public final class StackerCraneGameTests {
                 .thenExecute(() -> {
                     ServerLevel level = helper.getLevel();
                     BlockPos dock = helper.absolutePos(RAIL_LINE_DOCK);
-                    helper.assertValueEqual(RailScan.scan(level, dock, Direction.EAST, SMALL_CAP),
-                            new RailScan(SMALL_CAP, false), "explicit scan limit");
-                    helper.assertValueEqual(RailScan.scan(level, dock, Direction.EAST, 0), new RailScan(0, false),
-                            "limit zero");
-                    helper.assertValueEqual(RailScan.scan(level, dock, Direction.EAST, AisleGeometry.MAX_LENGTH),
-                            new RailScan(placed, false), "uncapped scan finds every rail");
-                    helper.assertValueEqual(RailScan.scan(level, dock, Direction.WEST, SMALL_CAP),
-                            new RailScan(0, false), "no rails in the other direction");
+                    helper.assertValueEqual(scanLength(level, dock, Direction.EAST, SMALL_CAP), SMALL_CAP,
+                            "explicit scan limit");
+                    helper.assertValueEqual(scanLength(level, dock, Direction.EAST, 0), 0, "limit zero");
+                    helper.assertValueEqual(scanLength(level, dock, Direction.EAST, AisleGeometry.MAX_LENGTH), placed,
+                            "uncapped scan finds every rail");
+                    helper.assertValueEqual(scanLength(level, dock, Direction.WEST, SMALL_CAP), 0,
+                            "no rails in the other direction");
                 })
                 .thenSucceed();
     }
@@ -223,12 +236,26 @@ public final class StackerCraneGameTests {
                     int farX = dock.getX() > 0 ? dock.getX() - UNLOADED_OFFSET : dock.getX() + UNLOADED_OFFSET;
                     BlockPos farAway = new BlockPos(farX, dock.getY(), dock.getZ());
                     helper.assertFalse(helper.getLevel().isLoaded(farAway.east()), "test position must be unloaded");
-                    RailScan scan = RailScan.scan(helper.getLevel(), farAway, Direction.EAST, SMALL_CAP);
-                    helper.assertValueEqual(scan, new RailScan(0, true), "scan stops at an unloaded chunk");
-                    helper.assertValueEqual(scan.resolveLength(UNLOADED_PREVIOUS_LENGTH, WareworksConfig.maxAisleLength()),
+                    RailNetwork scan = RailNetworkScan.scan(helper.getLevel(), farAway, Direction.EAST,
+                            limits(SMALL_CAP));
+                    helper.assertValueEqual(scan.firstBranchLength(), 0, "scan stops at an unloaded chunk");
+                    helper.assertTrue(scan.reachedUnloadedChunk(), "the scan knows it is partial");
+                    helper.assertValueEqual(scan.stop(), NetworkStop.UNLOADED, "and says why it stopped");
+                    helper.assertValueEqual(
+                            scan.resolveFirstBranchLength(UNLOADED_PREVIOUS_LENGTH, WareworksConfig.maxAisleLength()),
                             UNLOADED_PREVIOUS_LENGTH, "known length kept behind an unloaded chunk");
                 })
                 .thenSucceed();
+    }
+
+    /** The rails of the dock's own aisle found by a discovery run bounded by {@code maxBranchLength}. */
+    private static int scanLength(ServerLevel level, BlockPos dock, Direction facing, int maxBranchLength) {
+        return RailNetworkScan.scan(level, dock, facing, limits(maxBranchLength)).firstBranchLength();
+    }
+
+    /** Discovery bounds for one straight aisle: room for every rail of the template, one branch, one level. */
+    private static RailGraph.Limits limits(int maxBranchLength) {
+        return new RailGraph.Limits(AisleGeometry.MAX_LENGTH, 1, maxBranchLength, 1);
     }
 
     /** The mast height clamps to 1..maxMastHeight and updates the geometry immediately. */
@@ -388,7 +415,7 @@ public final class StackerCraneGameTests {
         BlockPos dock = helper.absolutePos(CENTER);
         AisleGeometry geometry = AisleGeometry.of(LAYOUT_LENGTH, LAYOUT_HEIGHT);
         for (Direction facing : Direction.Plane.HORIZONTAL) {
-            AisleLayout layout = AisleLayout.of(dock, facing, geometry).withLetter(LAYOUT_LETTER);
+            BranchLayout layout = BranchLayout.of(dock, facing, geometry).withLetter(LAYOUT_LETTER);
             helper.assertValueEqual(layout.sideDirection(Side.LEFT), facing.getCounterClockWise(), "LEFT of " + facing);
             helper.assertValueEqual(layout.sideDirection(Side.RIGHT), facing.getClockWise(), "RIGHT of " + facing);
             AABB bounds = layout.bounds();
@@ -433,20 +460,20 @@ public final class StackerCraneGameTests {
         }
 
         // warehouse-system.md §1 diagram: aisle east, LEFT is north (z - 1), RIGHT is south (z + 1).
-        AisleLayout east = AisleLayout.of(dock, Direction.EAST, geometry);
+        BranchLayout east = BranchLayout.of(dock, Direction.EAST, geometry);
         helper.assertValueEqual(east.rackPos(2, 1, Side.LEFT), dock.offset(2, 1, -1), "east LEFT");
         helper.assertValueEqual(east.rackPos(2, 1, Side.RIGHT), dock.offset(2, 1, 1), "east RIGHT");
         helper.assertTrue(east.addressOf(east.rackPos(0, 0, Side.LEFT)).isEmpty(), "no letter, no address");
         helper.assertValueEqual(east.withLetter('A').addressOf(east.rackPos(LAYOUT_LENGTH, 2, Side.RIGHT))
                 .map(StorageAddress::format), Optional.of("A-03-05R"), "address format");
 
-        AisleLayout dockOnly = AisleLayout.of(dock, Direction.SOUTH, AisleGeometry.of(0, 1));
+        BranchLayout dockOnly = BranchLayout.of(dock, Direction.SOUTH, AisleGeometry.of(0, 1));
         for (RackPosition rack : dockOnly.geometry().rackPositions())
             helper.assertValueEqual(dockOnly.worldToLocal(dockOnly.rackPos(rack)), Optional.of(rack), "dock only");
         helper.assertTrue(dockOnly.worldToLocal(dockOnly.rackPos(1, 0, Side.LEFT)).isEmpty(), "no rails, no position 1");
 
         try {
-            AisleLayout.of(dock, Direction.UP, geometry);
+            BranchLayout.of(dock, Direction.UP, geometry);
             helper.fail("a vertical aisle direction must be rejected");
         } catch (IllegalArgumentException expected) {
             // rejected as it should be
@@ -549,8 +576,6 @@ public final class StackerCraneGameTests {
         BlockState rail = rail(Direction.Axis.X);
         helper.assertTrue(rail.is(BlockTags.MINEABLE_WITH_PICKAXE), "rail mineable with a pickaxe");
         helper.assertFalse(rail.hasBlockEntity(), "rail has no block entity");
-        helper.assertValueEqual(WareworksBlocks.WAREHOUSE_RAIL.get().getRotatedBlockState(rail, Direction.UP)
-                .getValue(WarehouseRailBlock.AXIS), Direction.Axis.Z, "wrench toggles the rail axis");
         helper.assertValueEqual(rail.rotate(Rotation.COUNTERCLOCKWISE_90).getValue(WarehouseRailBlock.AXIS),
                 Direction.Axis.Z, "structure rotation by 90 degrees");
         helper.assertValueEqual(rail.rotate(Rotation.CLOCKWISE_180).getValue(WarehouseRailBlock.AXIS),
@@ -559,6 +584,32 @@ public final class StackerCraneGameTests {
         helper.assertFalse(WarehouseRailBlock.isRailAlong(rail, Direction.Axis.Z), "not along Z");
         helper.assertFalse(WarehouseRailBlock.isRailAlong(Blocks.RAIL.defaultBlockState(), Direction.Axis.X),
                 "vanilla rails are no warehouse rails");
+
+        // M21: the connection flags are cosmetic, but a structure block turns them with the rest of the build, so a
+        // rotated or mirrored copy draws the same corner it was saved as.
+        BlockState corner = rail.setValue(WarehouseRailBlock.NORTH, true).setValue(WarehouseRailBlock.EAST, true);
+        BlockState turned = corner.rotate(Rotation.CLOCKWISE_90);
+        helper.assertTrue(turned.getValue(WarehouseRailBlock.EAST) && turned.getValue(WarehouseRailBlock.SOUTH),
+                "a corner turns with the structure");
+        helper.assertFalse(turned.getValue(WarehouseRailBlock.NORTH) || turned.getValue(WarehouseRailBlock.WEST),
+                "and leaves the other two sides free");
+        BlockState mirrored = corner.mirror(Mirror.LEFT_RIGHT);
+        helper.assertTrue(mirrored.getValue(WarehouseRailBlock.SOUTH) && mirrored.getValue(WarehouseRailBlock.EAST),
+                "and it mirrors too");
+
+        // Connectivity is plain adjacency, and only CLOSED takes a rail out of it (ADR-033).
+        helper.assertTrue(WarehouseRailBlock.isOpenRail(rail), "a placed rail is open");
+        BlockState closed = rail.setValue(WarehouseRailBlock.CLOSED, true);
+        helper.assertTrue(WarehouseRailBlock.isRail(closed), "a closed rail is still a rail");
+        helper.assertFalse(WarehouseRailBlock.isOpenRail(closed), "but no aisle block");
+        for (Direction side : Direction.Plane.HORIZONTAL) {
+            helper.assertTrue(WarehouseRailBlock.connectsTowards(rail, side), "an open rail connects " + side);
+            helper.assertFalse(WarehouseRailBlock.connectsTowards(closed, side), "a closed rail connects nowhere");
+            helper.assertValueEqual(WarehouseRailBlock.connectsTowards(dockState(Direction.NORTH), side),
+                    side == Direction.NORTH, "a dock connects only towards its facing (" + side + ")");
+            helper.assertFalse(WarehouseRailBlock.connectsTowards(Blocks.RAIL.defaultBlockState(), side),
+                    "vanilla rails connect to nothing");
+        }
         helper.succeed();
     }
 

@@ -24,13 +24,20 @@ import net.minecraft.util.Mth;
  * NBT form of a stacker crane's state ({@code docs/stacker-crane.md} §4-5, {@code docs/warehouse-system.md} §8 "Server
  * restart"):
  * <pre>
- * Crane: { Pose: {X: double, Y: double, Arm: double, Side: "L"|"R"}, Target: {...}, Phase: "TRAVEL_TO_TARGET",
+ * Crane: { Pose: {X: double, Y: double, Arm: double, Side: "L"|"R", B?: int, Yaw?: double}, Target: {...},
+ *          Phase: "TRAVEL_TO_TARGET",
  *          PhaseTicks: int, RetryTicks: int, Awaiting: bool, Interruption?: "TARGET_MISSING",
- *          Job?: { Id: UUID, Type: "STORE"|"RETRIEVE", Source: {X, Y, Side}, TargetLocation: {X, Y, Side},
+ *          Job?: { Id: UUID, Type: "STORE"|"RETRIEVE", Source: {X, Y, Side, B?}, TargetLocation: {X, Y, Side, B?},
  *                  TargetKind: "STORAGE"|"INPUT"|"OUTPUT", Item: &lt;ItemKey&gt;, Planned: int, Request?: UUID,
  *                  Picked: bool, PickedAmount: int, Delivered: int } }
  * CraneSync (client packets): { Pose, Target, Phase, Paused: bool }
  * </pre>
+ * A pose's aisle ({@code B}) and heading ({@code Yaw}, in quarter turns clockwise from north) are written <b>only
+ * when they are not the dock's own</b> (M21, ADR-033), so a warehouse of one straight aisle saves and syncs exactly
+ * the bytes it did before the fields existed. An absent {@code B} is the aisle at the dock and an absent {@code Yaw}
+ * is <b>that aisle's heading</b>, never north — a crane saved on an east-facing aisle before 0.6 must not spin a
+ * quarter turn on its first job after the update.
+ * <p>
  * The pause flag is not saved (it is recomputed every tick). Rack positions are aisle-local, so a crane moved without
  * rotation keeps its job. Writing never throws; reading never throws and treats the data as untrusted: positions are
  * clamped to the address limits, tick counters to {@value #MAX_SAVED_TICKS}, and an invalid job is dropped (its held
@@ -57,6 +64,10 @@ final class CranePersistence {
     private static final String Y = "Y";
     private static final String ARM = "Arm";
     private static final String SIDE = "Side";
+    /** Aisle of a pose, written only when it is not {@link RackPosition#FIRST_BRANCH}. */
+    private static final String BRANCH = "B";
+    /** Heading of a pose in quarter turns clockwise from north, written only when it is not the dock's own. */
+    private static final String YAW = "Yaw";
     private static final String ID = "Id";
     private static final String TYPE = "Type";
     private static final String SOURCE = "Source";
@@ -74,10 +85,11 @@ final class CranePersistence {
 
     // --- disk ----------------------------------------------------------------------------------------------------
 
-    static void writeState(CompoundTag tag, CraneState<ItemKey, RackPosition> state, HolderLookup.Provider registries) {
+    static void writeState(CompoundTag tag, CraneState<ItemKey, RackPosition> state, HolderLookup.Provider registries,
+            double restingYaw) {
         CompoundTag stateTag = new CompoundTag();
-        stateTag.put(POSE, writePose(state.pose()));
-        stateTag.put(TARGET, writePose(state.target()));
+        stateTag.put(POSE, writePose(state.pose(), restingYaw));
+        stateTag.put(TARGET, writePose(state.target(), restingYaw));
         stateTag.putString(PHASE, state.phase().name());
         stateTag.putInt(PHASE_TICKS, state.phaseTicks());
         stateTag.putInt(RETRY_TICKS, state.retryTicks());
@@ -93,13 +105,15 @@ final class CranePersistence {
         tag.put(STATE_TAG, stateTag);
     }
 
-    static CraneState<ItemKey, RackPosition> readState(CompoundTag tag, HolderLookup.Provider registries) {
+    static CraneState<ItemKey, RackPosition> readState(CompoundTag tag, HolderLookup.Provider registries,
+            double restingYaw) {
         if (!tag.contains(STATE_TAG, Tag.TAG_COMPOUND))
-            return CraneState.idle(StackerCraneBlockEntity.HOME_POSE);
+            return CraneState.idle(StackerCraneBlockEntity.HOME_POSE.withYaw(restingYaw));
         CompoundTag stateTag = tag.getCompound(STATE_TAG);
-        CranePose pose = readPose(stateTag.getCompound(POSE));
+        CranePose pose = readPose(stateTag.getCompound(POSE), restingYaw);
         try {
-            CranePose target = stateTag.contains(TARGET, Tag.TAG_COMPOUND) ? readPose(stateTag.getCompound(TARGET))
+            CranePose target = stateTag.contains(TARGET, Tag.TAG_COMPOUND)
+                    ? readPose(stateTag.getCompound(TARGET), restingYaw)
                     : pose.withArm(CranePose.RETRACTED);
             CranePhase phase = CranePhase.byName(stateTag.getString(PHASE)).orElse(CranePhase.IDLE);
             Optional<CraneInterruption> interruption = stateTag.contains(INTERRUPTION, Tag.TAG_STRING)
@@ -160,41 +174,60 @@ final class CranePersistence {
 
     // --- client sync ---------------------------------------------------------------------------------------------
 
-    static CompoundTag writeSync(CraneState<?, ?> state) {
+    static CompoundTag writeSync(CraneState<?, ?> state, double restingYaw) {
         CompoundTag tag = new CompoundTag();
-        tag.put(POSE, writePose(state.pose()));
-        tag.put(TARGET, writePose(state.target()));
+        tag.put(POSE, writePose(state.pose(), restingYaw));
+        tag.put(TARGET, writePose(state.target(), restingYaw));
         tag.putString(PHASE, state.phase().name());
         tag.putBoolean(PAUSED, state.paused());
         return tag;
     }
 
     /** A job-less state with the synced pose, target, phase and pause flag. Never throws. */
-    static <K, L> CraneState<K, L> readSync(CompoundTag tag) {
-        CranePose pose = readPose(tag.getCompound(POSE));
-        CranePose target = tag.contains(TARGET, Tag.TAG_COMPOUND) ? readPose(tag.getCompound(TARGET)) : pose;
+    static <K, L> CraneState<K, L> readSync(CompoundTag tag, double restingYaw) {
+        CranePose pose = readPose(tag.getCompound(POSE), restingYaw);
+        CranePose target = tag.contains(TARGET, Tag.TAG_COMPOUND) ? readPose(tag.getCompound(TARGET), restingYaw)
+                : pose;
         return new CraneState<>(pose, pose, target, CranePhase.byName(tag.getString(PHASE)).orElse(CranePhase.IDLE), 0, 0,
                 false, tag.getBoolean(PAUSED), Optional.empty(), Optional.empty());
     }
 
     // --- poses ---------------------------------------------------------------------------------------------------
 
-    static CompoundTag writePose(CranePose pose) {
+    /**
+     * NBT form of a pose. {@code B} and {@code Yaw} are omitted while they carry the values a warehouse of one
+     * straight aisle always has — the aisle at the dock and its own heading — so such a dock writes exactly the tag it
+     * wrote before M21.
+     *
+     * @param restingYaw the yaw of the aisle at the dock, i.e. what an absent {@code Yaw} means
+     */
+    static CompoundTag writePose(CranePose pose, double restingYaw) {
         CompoundTag tag = new CompoundTag();
         tag.putDouble(X, pose.x());
         tag.putDouble(Y, pose.y());
         tag.putDouble(ARM, pose.arm());
         tag.putString(SIDE, String.valueOf(pose.side().letter()));
+        if (pose.branch() != RackPosition.FIRST_BRANCH)
+            tag.putInt(BRANCH, pose.branch());
+        if (pose.yaw() != CranePose.normalizeYaw(restingYaw))
+            tag.putDouble(YAW, pose.yaw());
         return tag;
     }
 
-    /** A pose from untrusted data: non-finite values become 0, coordinates are clamped to the address limits. */
-    static CranePose readPose(CompoundTag tag) {
+    /**
+     * A pose from untrusted data: non-finite values become 0, coordinates are clamped to the address limits, an aisle
+     * outside the address format becomes the one at the dock and an absent or unreadable yaw becomes
+     * {@code restingYaw}. Never throws.
+     */
+    static CranePose readPose(CompoundTag tag, double restingYaw) {
         String sideText = tag.getString(SIDE);
         Side side = sideText.length() == 1 ? Side.fromLetter(sideText.charAt(0)).orElse(null) : null;
-        CranePose sanitized = CranePose.sanitized(tag.getDouble(X), tag.getDouble(Y), tag.getDouble(ARM), side);
-        return new CranePose(Mth.clamp(sanitized.x(), 0.0, AisleGeometry.MAX_LENGTH),
-                Mth.clamp(sanitized.y(), 0.0, AisleGeometry.MAX_HEIGHT - 1), sanitized.arm(), sanitized.side());
+        double yaw = tag.contains(YAW, Tag.TAG_DOUBLE) ? tag.getDouble(YAW) : restingYaw;
+        CranePose sanitized = CranePose.sanitized(tag.getInt(BRANCH), tag.getDouble(X), tag.getDouble(Y),
+                tag.getDouble(ARM), side, Double.isFinite(yaw) ? yaw : CranePose.DEFAULT_YAW);
+        return new CranePose(sanitized.branch(), Mth.clamp(sanitized.x(), 0.0, AisleGeometry.MAX_LENGTH),
+                Mth.clamp(sanitized.y(), 0.0, AisleGeometry.MAX_HEIGHT - 1), sanitized.arm(), sanitized.side(),
+                sanitized.yaw());
     }
 
     private static Optional<CraneInterruption> interruptionByName(String name) {

@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -23,6 +24,7 @@ import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.JobPlanner;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
@@ -34,9 +36,11 @@ import dev.wareworks.core.job.ReservationLedger;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
+import dev.wareworks.core.warehouse.RouteTable;
 import dev.wareworks.util.LogThrottle;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -113,6 +117,12 @@ final class CraneDispatch {
     @Nullable
     private NoJobReason lastReason;
     /**
+     * Whether the planning run being built skipped at least one rack because the crane cannot drive to it. Set while
+     * the input is built and read when the planner came back empty, so the goggles name the rails rather than the
+     * stock (M21, ADR-033).
+     */
+    private boolean unreachableSkipped;
+    /**
      * Rate limits for the storage-interop diagnostics. A one-shot latch was used before, which silenced every
      * <b>other</b> failing inventory of this aisle for the rest of the controller's life.
      */
@@ -137,6 +147,7 @@ final class CraneDispatch {
 
     /** The aisle is gone or replaced: no reservations, no planning state. */
     void reset() {
+        unreachableSkipped = false;
         ledger.clear();
         insertRefusals.clear();
         extractRefusals.clear();
@@ -153,7 +164,7 @@ final class CraneDispatch {
 
     // --- dispatch ------------------------------------------------------------------------------------------------
 
-    void tick(Level level, AisleLayout layout, long now) {
+    void tick(Level level, WarehouseLayout layout, long now) {
         if (now < nextDispatchTick)
             return;
         nextDispatchTick = now + Math.max(1, WareworksConfig.dispatchIntervalTicks());
@@ -163,6 +174,16 @@ final class CraneDispatch {
         adopt(dock.get().currentJob());
         if (!dock.get().canAcceptJob())
             return;
+        // The machine stands on rails this warehouse does not contain, so there is no candidate it could drive to and
+        // no plan worth building. Reported rather than papered over with the aisle at the dock: pretending it stood
+        // there made the planner rank a whole warehouse of candidates for a crane that is somewhere else, hand it a
+        // job, and have the crane's own location check abort that job on its very next tick — every dispatch interval,
+        // for as long as the rail stayed broken (M21 review fix, ADR-033). The crane puts itself back on the rails
+        // within a tick or two ({@code CraneExecution#recoverLostAisle}); until it has, this is the honest answer.
+        if (!isOnTheWarehouse(layout, dock.get().craneState().pose())) {
+            lastReason = NoJobReason.UNREACHABLE;
+            return;
+        }
         // The "warehouse full" back-off holds back storing only. Retrieves serve a waiting player, and supplies take
         // items *out* of storage for a production order, so both free space rather than needing it (ADR-024).
         boolean retrieveOnly = isBackingOff(now);
@@ -196,7 +217,11 @@ final class CraneDispatch {
         if (result.job().isEmpty()) {
             if (retrieveOnly)
                 return; // the back-off's planning result stays
-            lastReason = result.primaryReason().orElse(NoJobReason.NO_WORK);
+            // A rack the crane cannot drive to was skipped exactly like one in an unloaded chunk, so the planner's own
+            // answer would be about stock or filters — true of what was left, and useless to a player whose rails are
+            // broken. UNREACHABLE arms no back-off: it is a map lookup, not a candidate scan (M21, ADR-033).
+            lastReason = unreachableSkipped ? NoJobReason.UNREACHABLE
+                    : result.primaryReason().orElse(NoJobReason.NO_WORK);
             // Both mean "this input's items fit nowhere right now", and re-running the full candidate scan every
             // dispatch interval would cost the most in exactly the warehouse that produces them (ADR-021, §7.4).
             // NoJobReason.AT_MAXIMUM deliberately does not belong here (M15): a stock rule's maximum is answered by
@@ -270,7 +295,7 @@ final class CraneDispatch {
      *
      * @param collectSources the aisle's gated collecting ports, empty during a back-off
      */
-    private boolean hasWork(Level level, AisleLayout layout, List<RackPosition> collectSources) {
+    private boolean hasWork(Level level, WarehouseLayout layout, List<RackPosition> collectSources) {
         if (controller.openRequestCount() > 0 || !controller.supplyNeeds().isEmpty())
             return true;
         for (LocationRecord input : controller.inputStations()) {
@@ -282,13 +307,23 @@ final class CraneDispatch {
         return !collectSources.isEmpty();
     }
 
-    private PlannerInput.Builder<ItemKey, RackPosition> input(Level level, AisleLayout layout,
+    private PlannerInput.Builder<ItemKey, RackPosition> input(Level level, WarehouseLayout layout,
             StackerCraneBlockEntity dock, List<RackPosition> collectSources) {
         CranePose pose = dock.craneState().pose();
         long now = level.getGameTime();
+        int craneBranch = pose.branch();
+        double craneX = pose.x();
+        // The corners are derived once for the whole pass: every candidate asks two route questions, and a route
+        // question starts by walking the branch pairs for the blocks they share (M21 review fix).
+        RouteTable routes = layout.routes();
+        unreachableSkipped = false;
         return PlannerInput.builder(controller.stockIndex(), ledgerView)
-                .crane(pose.x(), pose.y())
+                .crane(craneBranch, craneX, pose.y())
                 .speeds(dock.currentSpeeds())
+                // What driving really costs on these rails: the blocks of the route plus one turn penalty per corner
+                // (M21, ADR-033). On a warehouse of one aisle every route is one leg with no turn, so this is literally
+                // the formula the planner always used.
+                .travel(travelCost(routes, dock.currentSpeeds()))
                 .transferTicks(Math.max(0, WareworksConfig.transferTicks()))
                 .carryLimit(InventoryGrabber::carryLimitFor)
                 .itemType(ItemKey::getItem)
@@ -298,7 +333,9 @@ final class CraneDispatch {
                 .inputs(positions(controller.inputStations()))
                 .outputs(rerouteOutputs())
                 .inputBuffers(rack -> inputBuffer(level, layout, rack))
-                .available(rack -> isLoaded(level, layout, rack))
+                // A rack on an aisle the crane cannot drive to is skipped exactly like one in an unloaded chunk, so no
+                // job is ever planned towards a place the machine cannot physically reach (ADR-033).
+                .available(rack -> canDriveTo(routes, craneBranch, craneX, rack) && isLoaded(level, layout, rack))
                 .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(controller.stockIndex(), ItemKey::getMaxStackSize))
                 // Store filters decide before the estimate and before any live call, so a location that may not take the
                 // item costs neither a live simulation nor a remembered refusal (ADR-021).
@@ -326,11 +363,63 @@ final class CraneDispatch {
                 .liveInsert((rack, key, amount) -> simulate(level, layout, rack, false, key, amount, now));
     }
 
+    /**
+     * Whether the machine really stands on an aisle of this warehouse. A pose naming an aisle the warehouse no longer
+     * has is not planned for at all ({@link NoJobReason#UNREACHABLE}); the crane puts itself back onto the aisle at
+     * the dock on one of its next ticks (M21 review fix, ADR-033).
+     */
+    private static boolean isOnTheWarehouse(WarehouseLayout layout, CranePose pose) {
+        return pose.branch() >= 0 && pose.branch() < layout.branchCount();
+    }
+
+    /**
+     * What the planner is told a trip costs: the route's blocks plus {@code crane.turnPenaltyBlocks} per quarter turn,
+     * in the same tick formula a straight aisle always used ({@link TravelTimeModel#travelAlongTicks}).
+     * <p>
+     * Two racks equally far away by number are therefore <b>not</b> equally far away when one of them is round a
+     * corner, which is physically honest and is what keeps the crane from criss-crossing a bent warehouse. A pair with
+     * no route at all answers {@link TravelTimeModel#UNAVAILABLE}; such a rack is already dropped by
+     * {@link PlannerInput#available()}, so that answer is the second of two independent refusals rather than the only
+     * one.
+     * <p>
+     * A pair on <b>one</b> aisle takes the old formula directly, without building a route at all: that is the whole of
+     * a warehouse that does not bend, and the planner asks this ten times per candidate.
+     */
+    private static PlannerInput.TravelCost travelCost(RouteTable routes, CraneSpeeds speeds) {
+        double penalty = WareworksConfig.turnPenaltyBlocks();
+        return (fromBranch, fromX, fromY, toBranch, toX, toY) -> {
+            if (fromBranch == toBranch)
+                return TravelTimeModel.travelTicks(speeds, fromX, fromY, toX, toY);
+            OptionalDouble blocks = routes.routeBlocks(fromBranch, fromX, toBranch, toX, penalty);
+            if (blocks.isEmpty())
+                return TravelTimeModel.UNAVAILABLE;
+            return TravelTimeModel.travelAlongTicks(speeds, blocks.getAsDouble(), fromY, toY);
+        };
+    }
+
+    /**
+     * Whether the crane standing at {@code (craneBranch, craneX)} can drive to a rack at all, remembering when it
+     * could not: a warehouse whose rails were cut has racks it still knows, addresses and lists, and a player who
+     * looks at the controller has to be told <b>that</b> rather than "not in stock"
+     * ({@link NoJobReason#UNREACHABLE}).
+     * <p>
+     * Asked from the crane's own <b>point</b> and not from its branch index, so that the controller and the machine
+     * mean the same thing by "it can get there" ({@link RouteTable#canDrive}, M21 review fix). A branch that a broken
+     * rail made shorter than the crane's position still exists and is still joined to its neighbours, so the
+     * branch-only question would plan a trip the machine then stands still on.
+     */
+    private boolean canDriveTo(RouteTable routes, int craneBranch, double craneX, RackPosition rack) {
+        if (routes.canDrive(craneBranch, craneX, rack.branch(), rack.x()))
+            return true;
+        unreachableSkipped = true;
+        return false;
+    }
+
     /** Open requests whose destination is an output station of this aisle, oldest first. */
-    private List<PlannerInput.OpenRequest<ItemKey, RackPosition>> openRequests(AisleLayout layout) {
+    private List<PlannerInput.OpenRequest<ItemKey, RackPosition>> openRequests(WarehouseLayout layout) {
         List<PlannerInput.OpenRequest<ItemKey, RackPosition>> result = new ArrayList<>();
         for (RetrievalRequest<ItemKey, BlockPos> request : controller.openRequests()) {
-            Optional<RackPosition> output = layout.worldToLocal(request.destination());
+            Optional<RackPosition> output = controller.rackOf(request.destination());
             if (output.isEmpty() || controller.kindAt(output.get()).orElse(null) != LocationKind.OUTPUT
                     || request.remaining() < 1)
                 continue;
@@ -374,7 +463,7 @@ final class CraneDispatch {
         return result;
     }
 
-    private static InventorySnapshot<ItemKey> inputBuffer(Level level, AisleLayout layout, RackPosition rack) {
+    private static InventorySnapshot<ItemKey> inputBuffer(Level level, WarehouseLayout layout, RackPosition rack) {
         BlockPos pos = layout.rackPos(rack);
         if (level.isLoaded(pos) && level.getBlockEntity(pos) instanceof WarehouseInputBlockEntity station
                 && !station.isRemoved())
@@ -383,24 +472,25 @@ final class CraneDispatch {
     }
 
     /** Whether a location (and for storage its inventory) is in a loaded chunk; the live calls check the rest. */
-    private boolean isLoaded(Level level, AisleLayout layout, RackPosition rack) {
+    private boolean isLoaded(Level level, WarehouseLayout layout, RackPosition rack) {
         BlockPos pos = layout.rackPos(rack);
         if (!level.isLoaded(pos))
             return false;
         return controller.kindAt(rack).orElse(null) != LocationKind.STORAGE
-                || level.isLoaded(pos.relative(layout.sideDirection(rack.side())));
+                || level.isLoaded(pos.relative(layout.sideDirection(rack)));
     }
 
     /**
      * One live simulation. A storage location that gives nothing (gone, no inventory, full, restricted, or failing) is
      * remembered as refusing {@code key} in that direction; an unloaded one is not.
      */
-    private int simulate(Level level, AisleLayout layout, RackPosition rack, boolean extract, ItemKey key, int amount,
+    private int simulate(Level level, WarehouseLayout layout, RackPosition rack, boolean extract, ItemKey key, int amount,
             long now) {
         Optional<LocationKind> kind = controller.kindAt(rack);
         if (kind.isEmpty() || amount < 1)
             return 0;
-        TransferContexts.Resolution resolution = TransferContexts.resolve(level, layout, rack, kind.get());
+        TransferContexts.Resolution resolution = TransferContexts.resolve(level, layout.branch(rack.branch()), rack,
+                kind.get());
         int result = 0;
         if (resolution.isAvailable()) {
             try {
@@ -492,9 +582,14 @@ final class CraneDispatch {
      *
      * @param failedTarget the target to exclude, or {@code null} for a hold retry
      */
-    Optional<RerouteTarget<RackPosition>> planReroute(Level level, AisleLayout layout, StackerCraneBlockEntity dock,
+    Optional<RerouteTarget<RackPosition>> planReroute(Level level, WarehouseLayout layout, StackerCraneBlockEntity dock,
             TransportJob<ItemKey, RackPosition> job, @Nullable RackPosition failedTarget, int amount) {
         if (amount < 1)
+            return Optional.empty();
+        // A machine on rails this warehouse does not contain can drive to nothing, so a reroute would only name a
+        // target it cannot reach and the whole cycle would start again on its next location check. Answering "none"
+        // puts it in HOLDING with its items, where the crane's own recovery picks it up (M21 review fix, ADR-033).
+        if (!isOnTheWarehouse(layout, dock.craneState().pose()))
             return Optional.empty();
         ledger.releaseJob(job.id());
         try {

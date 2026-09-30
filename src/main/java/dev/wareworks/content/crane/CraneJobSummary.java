@@ -41,6 +41,11 @@ public record CraneJobSummary(JobType type, Item item, int amount, RackPosition 
     private static final String X = "X";
     private static final String Y = "Y";
     private static final String SIDE = "Side";
+    /**
+     * Branch of a rack position, <b>written only when it is not</b> {@link RackPosition#FIRST_BRANCH} (M21, ADR-033).
+     * A warehouse with one aisle therefore sends and saves exactly the bytes it did before the field existed.
+     */
+    private static final String BRANCH = "B";
     private static final String TARGET_KIND = "TargetKind";
 
     public CraneJobSummary {
@@ -91,16 +96,25 @@ public record CraneJobSummary(JobType type, Item item, int amount, RackPosition 
                 LocationKind.byName(tag.getString(TARGET_KIND)).orElse(null)));
     }
 
-    /** NBT form of a rack position: {@code {X: int, Y: int, Side: "L"|"R"}}. */
+    /**
+     * NBT form of a rack position: {@code {X: int, Y: int, Side: "L"|"R", B?: int}}. {@code B} is the branch and is
+     * <b>omitted when it is</b> {@link RackPosition#FIRST_BRANCH}, so a one-aisle warehouse writes the same bytes it
+     * wrote before M21.
+     */
     static CompoundTag writeRack(RackPosition rack) {
         CompoundTag tag = new CompoundTag();
         tag.putInt(X, rack.x());
         tag.putInt(Y, rack.y());
         tag.putString(SIDE, String.valueOf(rack.side().letter()));
+        if (rack.branch() != RackPosition.FIRST_BRANCH)
+            tag.putInt(BRANCH, rack.branch());
         return tag;
     }
 
-    /** Reads a rack position written by {@link #writeRack}; empty unless it lies within the address limits. */
+    /**
+     * Reads a rack position written by {@link #writeRack}; empty unless it lies within the address limits. A missing
+     * {@code B} is {@link RackPosition#FIRST_BRANCH}, which is what every position written before M21 is.
+     */
     static Optional<RackPosition> readRack(CompoundTag tag) {
         if (!tag.contains(X, Tag.TAG_INT) || !tag.contains(Y, Tag.TAG_INT))
             return Optional.empty();
@@ -108,8 +122,10 @@ public record CraneJobSummary(JobType type, Item item, int amount, RackPosition 
         Optional<Side> side = sideText.length() == 1 ? Side.fromLetter(sideText.charAt(0)) : Optional.empty();
         int x = tag.getInt(X);
         int y = tag.getInt(Y);
-        if (side.isEmpty() || x < 0 || x > AisleGeometry.MAX_LENGTH || y < 0 || y >= AisleGeometry.MAX_HEIGHT)
+        int branch = tag.contains(BRANCH, Tag.TAG_INT) ? tag.getInt(BRANCH) : RackPosition.FIRST_BRANCH;
+        if (side.isEmpty() || x < 0 || x > AisleGeometry.MAX_LENGTH || y < 0 || y >= AisleGeometry.MAX_HEIGHT
+                || branch < RackPosition.FIRST_BRANCH || branch > RackPosition.MAX_BRANCH)
             return Optional.empty();
-        return Optional.of(new RackPosition(x, y, side.get()));
+        return Optional.of(new RackPosition(branch, x, y, side.get()));
     }
 }

@@ -27,7 +27,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -307,7 +307,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(dock.relative(AISLE.getOpposite()),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(TERMINAL), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
                 .setValue(WarehouseTerminalBlock.FACING, layout.sideDirection(TERMINAL.side()).getOpposite()));
         level.setBlockAndUpdate(layout.rackPos(INPUT), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
@@ -379,7 +379,7 @@ public final class DisplayVisualScenario implements VisualScenario {
     private static void attachLinks(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
 
         // The dock's north face: its top carries the crane's mast, and the rack position beside it is never visited.
         link(level, dock, Direction.NORTH, CRANE_BOARD.controllerPos(dock), WareworksDisplaySources.CRANE_STATUS);
@@ -702,8 +702,8 @@ public final class DisplayVisualScenario implements VisualScenario {
 
     // --- shared helpers ------------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static CreativeMotorBlockEntity motor(ServerLevel level, BlockPos dock) {

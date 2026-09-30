@@ -13,27 +13,31 @@ import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
 import dev.wareworks.config.WareworksConfig;
-import dev.wareworks.content.controller.AisleLayout;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.head.HandlingHead;
 import dev.wareworks.content.crane.head.TransferContext;
 import dev.wareworks.content.crane.head.TransferContexts;
 import dev.wareworks.content.item.ItemKey;
-import dev.wareworks.core.address.AisleGeometry;
+import dev.wareworks.core.address.BranchGeometry;
+import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.crane.CraneEffect;
 import dev.wareworks.core.crane.CraneEvent;
+import dev.wareworks.core.crane.CraneNetwork;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.crane.CraneStateMachine;
 import dev.wareworks.core.crane.CraneTimings;
+import dev.wareworks.core.crane.HomeReturn;
 import dev.wareworks.core.job.CraneKinematics;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.RerouteTarget;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.warehouse.LocationKind;
+import dev.wareworks.core.warehouse.RouteTable;
 import dev.wareworks.util.LogThrottle;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
@@ -46,7 +50,9 @@ import net.minecraft.world.level.Level;
  * <p>
  * <b>Per tick</b>: a crane with a job but without linked controller lets the controller behind the dock link it (at once
  * after loading, then every {@value #LOCATION_CHECK_INTERVAL_TICKS} ticks), so its reports are never dropped because it
- * ticked before that controller; resume a loaded state once; keep a resting crane inside a shrunken aisle; every
+ * ticked before that controller; resume a loaded state once; keep a resting crane on rails the warehouse really has
+ * ({@link #keepRestingCraneOnTheRails}: inside a shrunken aisle, and back on the aisle at the dock when its own aisle
+ * left the warehouse altogether); every
  * {@value #LOCATION_CHECK_INTERVAL_TICKS} ticks (and right after entering a travel phase or a geometry change) check that
  * the job's locations still exist (at most two lookups); derive the pause reason (no rotation, overstressed, a needed
  * chunk not loaded); apply the tick event and every event its effects produce in the same tick; publish changes.
@@ -90,11 +96,19 @@ final class CraneExecution {
     private CranePauseReason pauseReason = CranePauseReason.NONE;
     private boolean resumePending;
     private boolean syncRequested;
+    /**
+     * Ticks this crane has had nothing to do ({@link HomeReturn#countIdle}). Derived, never saved and never synced: a
+     * crane that has just loaded starts waiting from zero, which is the harmless direction — it waits a little longer
+     * before it goes home and never drives off in the tick a world opens.
+     */
+    private int idleTicks;
     private long nextLocationCheckTick = CHECK_NOW;
     private long nextMovingSyncTick = CHECK_NOW;
     private long nextControllerLookupTick = CHECK_NOW;
     /** Rate limit for contract violations: a second, different foreign inventory must still be reportable. */
     private final LogThrottle contractViolations = new LogThrottle();
+    /** Rate limit for "the aisle under the crane left the warehouse", which a player fixes by putting one rail back. */
+    private final LogThrottle lostAisles = new LogThrottle();
 
     CraneExecution(StackerCraneBlockEntity crane) {
         this.crane = Objects.requireNonNull(crane, "crane");
@@ -168,7 +182,7 @@ final class CraneExecution {
             resume(level);
         }
         CraneState<ItemKey, RackPosition> before = crane.craneState();
-        keepRestingTargetInAisle();
+        keepRestingCraneOnTheRails(level);
         if (crane.craneState().job().isPresent() && now >= nextLocationCheckTick) {
             nextLocationCheckTick = now + LOCATION_CHECK_INTERVAL_TICKS;
             checkJobLocations(level);
@@ -185,6 +199,7 @@ final class CraneExecution {
         boolean paused = reason != CranePauseReason.NONE;
         if (paused != crane.craneState().paused())
             apply(level, paused ? CraneEvent.paused() : CraneEvent.resumed());
+        returnHomeIfIdle();
         apply(level, CraneEvent.tick(speeds));
 
         CraneState<ItemKey, RackPosition> after = crane.craneState();
@@ -195,6 +210,65 @@ final class CraneExecution {
         if (after.isMoving() && now >= nextMovingSyncTick)
             syncRequested = true;
         publishIfRequested(level);
+    }
+
+    /**
+     * A crane that has had nothing to do for {@code crane.returnHomeIdleTicks} drives back to its home point — or, on a
+     * warehouse without one, to its dock ({@link HomeReturn}, M21, ADR-034, {@code docs/stacker-crane.md} §4.7).
+     * <p>
+     * <b>The whole return is one line of state: the resting target of {@link CranePhase#IDLE}.</b> Nothing else is
+     * added — no phase, no event, no job, no timer in the state machine — and that is what buys every property the
+     * feature has to have:
+     * <ul>
+     * <li><b>Interruptible at any tick, mid-turn included.</b> A crane driving home is idle, so it accepts a job in the
+     * tick that job is planned; entering {@code TRAVEL_TO_SOURCE} simply computes another target from the pose the
+     * machine really has, wherever in a quarter turn that is. The return can therefore never delay work by a single
+     * tick.</li>
+     * <li><b>It holds no chunk.</b> A return is not a {@code TransportJob}, so {@code ChunkKeepDecision} still sees a
+     * warehouse with nothing to do and keeps letting its chunks go ({@code chunkKeepWork}).</li>
+     * <li><b>A warehouse of one straight aisle never moves at all</b> ({@link HomeReturn#enabled()}), which is what
+     * every warehouse did before M21 and what a single-aisle GameTest pins.</li>
+     * </ul>
+     * A home point the machine cannot drive to is <b>reported, not obeyed</b>: the target goes back to where the crane
+     * stands, so it waits there rather than pushing against rails that are not connected, and the home point's own red
+     * lamp and goggle line say why. The pose is clamped to the rails the dock knows exactly as
+     * {@link #keepRestingCraneOnTheRails} would clamp it, so the two never fight over the same target.
+     */
+    private void returnHomeIfIdle() {
+        CraneState<ItemKey, RackPosition> state = crane.craneState();
+        boolean waiting = pauseReason == CranePauseReason.NONE
+                && HomeReturn.isWaiting(state.phase(), state.job().isPresent(), state.paused());
+        idleTicks = HomeReturn.countIdle(idleTicks, waiting);
+        if (!waiting)
+            return;
+        // The two cheapest questions first, because they are the ones that answer "nothing to do" for every warehouse
+        // that does not return its crane: a config read and a counter, with nothing built and nothing allocated. A
+        // warehouse of one straight aisle — every world built before M21 — leaves here on every tick.
+        if (WareworksConfig.returnHomeIdleTicks() <= HomeReturn.OFF || crane.aisleCount() <= 1)
+            return;
+        HomeReturn rule = crane.homeReturn();
+        if (!rule.returnsAfter(idleTicks))
+            return;
+        WarehouseLayout warehouse = crane.warehouse();
+        NetworkGeometry network = warehouse.network();
+        int homeBranch = rule.homeBranch();
+        if (homeBranch >= network.branchCount())
+            return; // the aisle it names is gone: the next geometry refresh gives this dock another home point
+        CranePose home = rule.parkPose(network.branch(homeBranch).heading()).orElseThrow();
+        BranchGeometry branch = network.branch(homeBranch);
+        home = home.withXY(Mth.clamp(home.x(), 0.0, branch.length()),
+                Mth.clamp(home.y(), 0.0, network.height() - 1.0));
+        // A machine already named on the aisle it has to reach always can, so the route question — which derives the
+        // network's corner blocks — is asked only for a trip that really crosses one ({@code RouteTable#canDrive} says
+        // the same, but it would build the table first, on every tick of a crane that is simply parked).
+        int from = state.pose().branch();
+        boolean canDrive = from == home.branch()
+                || warehouse.routes().canDrive(from, state.pose().x(), home.branch(), home.x());
+        CranePose wanted = canDrive ? home : state.pose().withArm(CranePose.RETRACTED);
+        if (state.target().equals(wanted))
+            return; // already there, or already on the way
+        crane.setCraneState(state.withTarget(wanted));
+        syncRequested = true;
     }
 
     /**
@@ -220,13 +294,18 @@ final class CraneExecution {
         crane.publishState();
     }
 
+    /**
+     * The state machine, rebuilt whenever the timings <b>or the rails</b> change: it plans its motion on the network
+     * the dock knows right now, so a crane follows a warehouse a player has just bent or straightened (ADR-033).
+     */
     private CraneStateMachine<ItemKey, RackPosition> machine() {
         CraneTimings timings = new CraneTimings(Math.max(CraneTimings.MIN_TICKS, WareworksConfig.transferTicks()),
                 Math.max(CraneTimings.MIN_TICKS, WareworksConfig.retryTicks()),
                 Math.max(CraneTimings.MIN_TICKS, WareworksConfig.holdRetryTicks()));
+        CraneNetwork network = crane.craneNetwork();
         CraneStateMachine<ItemKey, RackPosition> current = machine;
-        if (current == null || !current.timings().equals(timings)) {
-            current = new CraneStateMachine<>(Function.identity(), timings);
+        if (current == null || !current.timings().equals(timings) || !current.network().equals(network)) {
+            current = new CraneStateMachine<>(Function.identity(), timings, network);
             machine = current;
         }
         return current;
@@ -315,7 +394,7 @@ final class CraneExecution {
     private void performPick(Level level, CraneEffect.PerformPick<ItemKey, RackPosition> pick,
             Deque<CraneEvent<ItemKey, RackPosition>> events) {
         TransportJob<ItemKey, RackPosition> job = pick.job();
-        TransferContexts.Resolution source = TransferContexts.resolve(level, crane.layout(), pick.source(),
+        TransferContexts.Resolution source = TransferContexts.resolve(level, crane.warehouse(), pick.source(),
                 job.sourceKind());
         switch (source.status()) {
             case UNLOADED -> {
@@ -333,7 +412,7 @@ final class CraneExecution {
     private void performDrop(Level level, CraneEffect.PerformDrop<ItemKey, RackPosition> drop,
             Deque<CraneEvent<ItemKey, RackPosition>> events) {
         TransportJob<ItemKey, RackPosition> job = drop.job();
-        TransferContexts.Resolution resolution = TransferContexts.resolve(level, crane.layout(), drop.target(),
+        TransferContexts.Resolution resolution = TransferContexts.resolve(level, crane.warehouse(), drop.target(),
                 job.targetKind());
         switch (resolution.status()) {
             case UNLOADED -> {
@@ -422,26 +501,43 @@ final class CraneExecution {
 
     // --- observations --------------------------------------------------------------------------------------------
 
-    /** Before the pick the source and the target must exist, after it the target (M2 note (b)). */
+    /**
+     * Before the pick the source and the target must exist, after it the target (M2 note (b)) — and since M21 each of
+     * them must also still be somewhere the machine can <b>drive to</b> (ADR-033).
+     * <p>
+     * A rail broken behind the crane takes the route away, and a location with no route is reported {@code MISSING}
+     * into the ladder that already exists: before the pick the job is aborted, after it the held items are rerouted,
+     * and a crane that finds nowhere to put them waits in {@code HOLDING} with its items until a player puts the rail
+     * back. Nothing is dropped and nothing is lost.
+     * <p>
+     * <b>The question is asked from the crane's own point</b>, not from its branch index ({@link RouteTable#canDrive},
+     * M21 review fix). A branch that a broken rail made shorter than the crane's position still exists and is still
+     * joined to its neighbours, so a branch-only question answers "reachable" while {@code CraneMotion} finds no route
+     * and stands still: the machine froze in {@code TRAVEL_*} for ever, with nothing paused, nothing reported and the
+     * warehouse dead because a busy crane takes no further job.
+     */
     private void checkJobLocations(Level level) {
         CraneState<ItemKey, RackPosition> state = crane.craneState();
         Optional<TransportJob<ItemKey, RackPosition>> current = state.job();
         if (current.isEmpty())
             return;
         TransportJob<ItemKey, RackPosition> job = current.get();
-        AisleLayout layout = crane.layout();
+        WarehouseLayout warehouse = crane.warehouse();
+        RouteTable routes = warehouse.routes();
+        int from = state.pose().branch();
+        double fromX = state.pose().x();
         switch (state.phase()) {
             case TRAVEL_TO_SOURCE, EXTEND_SOURCE, PICK -> {
                 if (job.picked())
                     return;
-                if (status(level, layout, job.source(), job.sourceKind()) == TransferContexts.Status.MISSING)
+                if (isMissing(level, warehouse, routes, from, fromX, job.source(), job.sourceKind()))
                     apply(level, CraneEvent.sourceMissing());
-                else if (status(level, layout, job.target(), job.targetKind()) == TransferContexts.Status.MISSING)
+                else if (isMissing(level, warehouse, routes, from, fromX, job.target(), job.targetKind()))
                     apply(level, CraneEvent.targetMissing());
             }
             case TRAVEL_TO_TARGET, EXTEND_TARGET, WAITING_FOR_TARGET -> {
                 if (job.heldAmount() > 0
-                        && status(level, layout, job.target(), job.targetKind()) == TransferContexts.Status.MISSING)
+                        && isMissing(level, warehouse, routes, from, fromX, job.target(), job.targetKind()))
                     apply(level, CraneEvent.targetMissing());
             }
             default -> {
@@ -450,8 +546,15 @@ final class CraneExecution {
         }
     }
 
-    private static TransferContexts.Status status(Level level, AisleLayout layout, RackPosition rack, LocationKind kind) {
-        return TransferContexts.resolve(level, layout, rack, kind).status();
+    /**
+     * Whether a stop is gone, of the wrong kind, or on rails the machine standing at {@code (from, fromX)} can no
+     * longer drive to.
+     */
+    private static boolean isMissing(Level level, WarehouseLayout warehouse, RouteTable routes, int from, double fromX,
+            RackPosition rack, LocationKind kind) {
+        if (!routes.canDrive(from, fromX, rack.branch(), rack.x()))
+            return true;
+        return TransferContexts.resolve(level, warehouse, rack, kind).status() == TransferContexts.Status.MISSING;
     }
 
     /**
@@ -501,9 +604,12 @@ final class CraneExecution {
         Optional<TransportJob<ItemKey, RackPosition>> job = state.job();
         if (job.isEmpty())
             return true;
-        AisleLayout layout = crane.layout();
+        WarehouseLayout warehouse = crane.warehouse();
+        // The column under the crane is on the aisle the crane is named on, which is not the dock's own once it has
+        // turned a corner (ADR-033).
+        int branch = Math.min(state.pose().branch(), warehouse.branchCount() - 1);
         int column = Math.max(0, (int) Math.round(state.pose().x()));
-        if (!level.isLoaded(layout.aislePos(column)))
+        if (!level.isLoaded(warehouse.aislePos(branch, Math.min(column, warehouse.branch(branch).geometry().length()))))
             return false;
         RackPosition stop;
         boolean reachesBehindRack;
@@ -522,27 +628,75 @@ final class CraneExecution {
                 return true;
             }
         }
-        BlockPos pos = layout.rackPos(stop);
+        BlockPos pos = warehouse.rackPos(stop);
         return level.isLoaded(pos)
-                && (!reachesBehindRack || level.isLoaded(pos.relative(layout.sideDirection(stop.side()))));
+                && (!reachesBehindRack || level.isLoaded(pos.relative(warehouse.sideDirection(stop))));
     }
 
     /**
      * A crane that rests (idle, holding, rerouting) outside a shrunken aisle moves back into it
-     * ({@code docs/stacker-crane.md} §3: the crane clamps its targets). Job targets outside the aisle are reported as
-     * missing by the location check instead.
+     * ({@code docs/stacker-crane.md} §3: the crane clamps its targets), and one whose aisle left the warehouse
+     * altogether is put back onto the aisle at the dock ({@link #recoverLostAisle}). Job targets outside the aisle are
+     * reported as missing by the location check instead.
      */
-    private void keepRestingTargetInAisle() {
-        CraneState<ItemKey, RackPosition> state = crane.craneState();
-        CranePhase phase = state.phase();
+    private void keepRestingCraneOnTheRails(Level level) {
+        CranePhase phase = crane.craneState().phase();
         if (phase != CranePhase.IDLE && phase != CranePhase.HOLDING && phase != CranePhase.REROUTE)
             return;
-        AisleGeometry geometry = crane.geometry();
+        NetworkGeometry network = crane.networkGeometry();
+        recoverLostAisle(level, network);
+        CraneState<ItemKey, RackPosition> state = crane.craneState();
         CranePose target = state.target();
-        double x = Mth.clamp(target.x(), 0.0, geometry.length());
-        double y = Mth.clamp(target.y(), 0.0, geometry.height() - 1.0);
+        // The aisle the crane rests on, not the dock's own: clamping a crane parked round a corner against the first
+        // aisle's length would drive it somewhere it never was (ADR-033).
+        if (target.branch() >= network.branchCount())
+            return; // still not on this warehouse (no dock aisle to fall back to): the location check reports it
+        BranchGeometry branch = network.branch(target.branch());
+        double x = Mth.clamp(target.x(), 0.0, branch.length());
+        double y = Mth.clamp(target.y(), 0.0, network.height() - 1.0);
         if (x != target.x() || y != target.y())
             crane.setCraneState(state.withTarget(target.withXY(x, y)));
+    }
+
+    /**
+     * A resting crane whose aisle the warehouse no longer has goes back onto the aisle at the dock
+     * ({@code WarehouseLayout#parkedAtDock}, M21 review fix, ADR-033).
+     * <p>
+     * <b>Why it has to happen at all.</b> Nothing else in the mod ever writes a pose's branch, so a crane parked round
+     * a corner whose rail a player breaks keeps naming an aisle that is gone — and from there every route is empty and
+     * every job is planned, taken and aborted again a few ticks later, for ever, with no line anywhere saying why. The
+     * machine is <b>already drawn</b> on the aisle at the dock (a label of a branch that is gone names no line of
+     * blocks, so {@code WarehouseLayout#railOffset} falls back), so this moves nothing a player can see; it only makes
+     * the crane's state agree with the picture, and gives it rails it can drive on again.
+     * <p>
+     * A crane that holds items is recovered too, and deliberately: it then plans a reroute it can really drive and
+     * puts the items away, instead of standing in {@code HOLDING} with them until the rail comes back.
+     */
+    private void recoverLostAisle(Level level, NetworkGeometry network) {
+        CraneState<ItemKey, RackPosition> state = crane.craneState();
+        CranePose pose = state.pose();
+        CranePose target = state.target();
+        boolean poseLost = pose.branch() >= network.branchCount();
+        boolean targetLost = target.branch() >= network.branchCount();
+        if (!poseLost && !targetLost)
+            return;
+        // A warehouse always has the aisle at its dock, even when that aisle has no rails at all, so there is always
+        // somewhere legal to put the machine. Only a label that really names nothing is rewritten: a crane standing
+        // perfectly well on an aisle it still has must not be moved because its target vanished.
+        WarehouseLayout warehouse = crane.warehouse();
+        CraneState<ItemKey, RackPosition> next = state;
+        if (poseLost) {
+            CranePose parked = warehouse.parkedAtDock(pose);
+            next = next.withPoses(parked, parked);
+            if (lostAisles.tryLog(level.getGameTime()))
+                LOGGER.info("Stacker crane at {}: its aisle {} is no longer part of the warehouse, so the machine is "
+                        + "back on the aisle at the dock at position {}", crane.getBlockPos(), pose.branch(),
+                        parked.x());
+        }
+        if (targetLost)
+            next = next.withTarget(warehouse.parkedAtDock(target));
+        crane.setCraneState(next);
+        syncRequested = true;
     }
 
     /**

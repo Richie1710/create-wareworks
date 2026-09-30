@@ -4,6 +4,7 @@ import java.util.Objects;
 
 import com.simibubi.create.AllSoundEvents;
 
+import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneSoundCues;
@@ -68,6 +69,26 @@ final class CraneSounds {
     /** Like Create's elevator pulley arriving: an iron trapdoor closes. */
     private static final Voice TRAVEL_STOP =
             Voice.create(Anchor.CARRIAGE, AllSoundEvents.CONTRAPTION_DISASSEMBLE, 0.75F, 0.8F, 0.0F);
+    /**
+     * The whole machine swinging a quarter turn at a corner: a heavy iron trapdoor, deep and slow, at the chassis
+     * (M21, ADR-033).
+     * <p>
+     * It was Create's {@code COGS} rumble, which is the one sample a player will <b>never</b> hear it over: Create
+     * drones that very event continuously at volume 1.5 for every cogwheel, large cogwheel and gearbox within 16
+     * blocks ({@code SoundScapes#cogwheel}), so a 0.35 cue in a warehouse driven by a cogwheel is masked by its own
+     * drivetrain and reads as "Cogwheels rumble" in the subtitles either way (M21 review fix). Create's wrench sound
+     * is not used either — its subtitle says "Wrench used" — and neither is the travel-stop cue, which already means
+     * "arrived"; the iron trapdoor is its sibling ({@code CONTRAPTION_DISASSEMBLE} is an iron trapdoor closing), a
+     * quarter turn lower, so the swing and the stop belong to one machine without sounding the same.
+     */
+    private static final Voice TURN =
+            Voice.vanilla(Anchor.BASE, SoundEvents.IRON_TRAPDOOR_OPEN, 0.4F, 0.55F, 0.05F);
+    /**
+     * The same turn locking in, in the tick the machine squares up with its new aisle — three ticks after the rumble
+     * at the default speed and penalty: a metal step, deeper than a rail clack, so the swing has an end a player
+     * hears.
+     */
+    private static final Voice TURN_SETTLE = Voice.vanilla(Anchor.BASE, SoundEvents.METAL_STEP, 0.25F, 0.5F, 0.0F);
     /** Wheels over a rail joint: a quiet, low metal step. */
     private static final Voice RAIL_CLACK = Voice.vanilla(Anchor.BASE, SoundEvents.METAL_STEP, 0.2F, 0.6F, 0.15F);
     /** The hoist moving the carriage: a chain step. */
@@ -113,14 +134,16 @@ final class CraneSounds {
             return;
         Voice voice = voiceOf(sound.cue());
         float pitch = voice.pitch() + level.random.nextFloat() * voice.pitchSpread();
-        voice.emitter().play(level, position(crane, pose, voice.anchor()), (float) (voice.volume() * sound.volume()),
-                pitch);
+        Vec3 at = position(crane, pose, voice.anchor());
+        voice.emitter().play(level, at, (float) (voice.volume() * sound.volume()), pitch);
     }
 
     private static Voice voiceOf(CraneSoundCues.Cue cue) {
         return switch (cue) {
             case TRAVEL_START -> TRAVEL_START;
             case TRAVEL_STOP -> TRAVEL_STOP;
+            case TURN -> TURN;
+            case TURN_SETTLE -> TURN_SETTLE;
             case RAIL_CLACK -> RAIL_CLACK;
             case LIFT_CHAIN -> LIFT_CHAIN;
             case ARM_EXTEND -> ARM_EXTEND;
@@ -130,15 +153,23 @@ final class CraneSounds {
         };
     }
 
-    /** World position of {@code anchor} for the crane at {@code pose}: base on the rail, carriage deck, grabber at the arm tip. */
+    /**
+     * World position of {@code anchor} for the crane at {@code pose}: base on the rail, carriage deck, grabber at the
+     * arm tip.
+     * <p>
+     * Measured through the warehouse's own rails, not along the dock's aisle: once the crane has turned a corner its
+     * position runs down another line entirely, and a sound played at the dock's aisle would come from the wrong side
+     * of the room (ADR-033).
+     */
     private static Vec3 position(StackerCraneBlockEntity crane, CranePose pose, Anchor anchor) {
-        Direction facing = crane.facing();
-        Vec3 floor = Vec3.atBottomCenterOf(crane.getBlockPos()).add(Vec3.atLowerCornerOf(facing.getNormal()).scale(pose.x()));
+        WarehouseLayout warehouse = crane.warehouse();
+        Vec3 floor = Vec3.atBottomCenterOf(crane.getBlockPos()).add(warehouse.railOffset(pose.branch(), pose.x()));
         return switch (anchor) {
             case BASE -> floor.add(0.0, BASE_HEIGHT, 0.0);
             case CARRIAGE -> floor.add(0.0, pose.y() + CARRIAGE_HEIGHT, 0.0);
             case GRABBER -> floor.add(0.0, pose.y() + CARRIAGE_HEIGHT, 0.0)
-                    .add(Vec3.atLowerCornerOf(crane.layout().sideDirection(pose.side()).getNormal()).scale(pose.arm()));
+                    .add(Vec3.atLowerCornerOf(warehouse.sideDirection(pose.branch(), pose.side()).getNormal())
+                            .scale(pose.arm()));
         };
     }
 }

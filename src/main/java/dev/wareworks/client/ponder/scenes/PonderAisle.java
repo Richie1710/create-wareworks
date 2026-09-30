@@ -37,7 +37,7 @@ import net.minecraft.world.phys.Vec3;
  * {@code docs/warehouse-system.md} §1, in scene coordinates.
  * <p>
  * The aisle runs along <b>+X</b> ({@link Direction#EAST}), so {@link Side#LEFT} (counter-clockwise) is north / −Z and
- * {@link Side#RIGHT} (clockwise) is south / +Z, matching {@code AisleLayout#sideDirection}. Everything sits one block
+ * {@link Side#RIGHT} (clockwise) is south / +Z, matching {@code BranchLayout#sideDirection}. Everything sits one block
  * above the base plate ({@link #FLOOR_Y}).
  * <pre>
  *   z = aisleZ - 2   inventories LEFT  (barrels)

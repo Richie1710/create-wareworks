@@ -4,8 +4,9 @@
 
 Create: Wareworks is an addon for [Create](https://github.com/Creators-of-Create/Create) that adds physical, automated
 high-bay warehouses. Racks of chests, barrels and vaults line an aisle, and a kinetic **stacker crane** travels down it
-to store and retrieve items. Nothing is teleported: every item you put in or take out is carried by the crane, where you
-can watch it happen.
+to store and retrieve items. The rails may **turn corners**, so a warehouse can follow the shape of your base: the crane
+rolls onto the corner block, swings a quarter turn and drives on down the next aisle. Nothing is teleported: every item
+you put in or take out is carried by the crane, where you can watch it happen.
 
 **The machine is the feature.**
 
@@ -37,9 +38,14 @@ can watch it happen.
 * **Stacker Crane** (dock block): a kinetic machine on a rail aisle. Its crane (base with bogies, braced mast, lift
   carriage, telescopic arm, grabber, drive cog) is fully animated; travel, lift and arm speed follow the RPM. Create-like
   sounds for travel, rail joints, lift, arm, picking and dropping.
-* **Warehouse Rail**: lays out the aisle; its length is the straight rail line in front of the dock.
-* **Warehouse Controller**: sits behind the dock, gives the aisle its letter, finds storage locations and stations, keeps
-  a stock index and plans store and retrieve jobs. It never moves items itself.
+* **Warehouse Rail**: lays out the aisles. **Rails that touch connect**, so your warehouse is simply the run of rails in
+  front of the dock — and where two runs meet at right angles, the block they share becomes a **corner** the crane turns
+  at. Every straight run is one aisle with its own letter, and a rack standing in a corner belongs to the aisle its
+  interface faces away from. A **wrench closes a rail**, which is how you keep one out of the warehouse.
+* **Warehouse Controller**: sits behind the dock, letters every aisle of its warehouse (the first from its own value box,
+  each further one the next free letter), finds storage locations and stations, keeps a stock index and plans store and
+  retrieve jobs. It never moves items itself. Its goggles say how big the warehouse is, which aisles it has and — if the
+  rails stop short of what you laid — where and why.
 * **Warehouse Interface**: turns any inventory with an item capability (chests, barrels, Create vaults, modded storage)
   into an addressable storage location such as `A-03-07R`. Its filter slot decides what may be stored there, and a
   priority on the same slot decides which of the suitable locations fills first.
@@ -59,6 +65,11 @@ can watch it happen.
   at your own machines. Wareworks never crafts anything itself.
 * **Warehouse Stock Keeper**: holds the warehouse's stock rules — one item per row plus a **minimum**, a **maximum** and
   a **reserve**. It holds no items itself; a row's item is only a name, and nothing you click into it is used up.
+* **Warehouse Home Point**: says "wait here". Place it beside the rails where your next job usually starts and, on a
+  warehouse of more than one aisle, the crane drives back and waits in front of it once it has had nothing to do for a
+  while — and drops that trip the instant there is real work, even mid-corner. Without one the dock stays the crane's
+  home; on a single straight aisle the machine stands where its last job left it, as it always did. One per warehouse:
+  a second one lights up red and says so.
 
 **Mechanical Arms** can use the stations directly: the warehouse input only as a target to put items into, and the
 output, terminal and production station only as a source to take items from. Clicking a station again with the arm
@@ -77,8 +88,8 @@ carries an item and three numbers: a **minimum** the warehouse tries to keep (a 
 item, and the warehouse even orders it from your own machines), a **maximum** it stores at most, and a **reserve** it
 never hands to your automation. Details are in the **Stock rules** section below.
 
-Also included: goggle information on every block, Create-style item descriptions, a Ponder scene for every block,
-English and German translations, and recipes at mid-game Create tier.
+Also included: goggle information on every block, Create-style item descriptions, Ponder scenes for all of them but the
+newest (the home point has none yet), English and German translations, and recipes at mid-game Create tier.
 
 Items only ever move in the crane's grabber, and nothing is lost or duplicated when blocks break, chunks unload or the
 server restarts.
@@ -107,10 +118,13 @@ The build *is* the configuration; there is no setup screen.
 1. **Place the Stacker Crane dock** looking in the direction the aisle should run.
 2. **Power it from below.** The dock takes rotational force only through a shaft underneath (4 SU per RPM by default).
    Higher RPM means a faster crane.
-3. **Lay Warehouse Rails** in a straight line in front of the dock. Their number is the aisle length (up to 32 by
+3. **Lay Warehouse Rails** in a line in front of the dock. Their number is the aisle length (up to 32 by
    default). Scroll the **Mast Height** value box on the dock for the number of levels.
+   *You may turn a corner:* lay a second run at right angles to the first, and the block they share becomes a corner the
+   crane turns at. Rails that **split** (a T, a cross, a ring) are not supported yet — the warehouse then stops before the
+   branching rail and says so. Close a rail you want left out with a **wrench**.
 4. **Put the Warehouse Controller directly behind the dock**, facing it. Its **Aisle** value box sets the letter (A–Z)
-   that every address in this aisle starts with.
+   the aisle at the dock starts with; any further aisle gets the next free letter by itself.
 5. **Build the racks.** Put chests, barrels or vaults beside the aisle and a **Warehouse Interface** in front of each,
    brass port towards the inventory, plate towards the aisle. Clicking the side of an interface you already placed
    copies its facing, so a rack row goes up quickly.
@@ -120,17 +134,24 @@ The build *is* the configuration; there is no setup screen.
    amount, and give it a **redstone pulse**: the crane fetches the items and drops them into the output, where a funnel,
    chute or Mechanical Arm can pull them out. The same block is also the warehouse's **overflow** — hold right-click on
    it with a **wrench** to turn it around (see **The warehouse port**).
-8. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
+8. **If your rails bend, place a Warehouse Home Point** at a rack position where you want the crane to wait — beside the
+   terminal is the usual choice. Its plate faces you like every station, its lamp comes on once your crane really uses
+   it, and the crane drives back to it whenever it has had nothing to do for a few seconds. Skip this and the dock stays
+   its home; on a single straight aisle the machine stands where its last job left it, as it always did.
+9. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
-Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Every block has one: the crane and the
-rail share the overview, the controller shows storing and retrieving, the interface adds addressing and storage
-filters, the terminal and the production station have their own scenes (placing and requesting, and feeding a machine
-from the warehouse), the output has three more for its port directions — requesting, accepting and collecting, the last
-of which the production station shows as well, because it is how a machine's result comes home — and the stock keeper
-has three (what each of its three numbers governs, a warehouse that restocks itself, and the overflow a maximum makes
-necessary). A fourteenth scene, **Chains of Production Orders**, shows a whole chain being ordered and run, and belongs to
-the terminal and the production station alike, because a chain is planned by a click at one and run at the other.
+Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Nine of the ten blocks have one — the
+home point is the exception, it has no scene yet: the crane and the rail share the overview, the controller shows storing
+and retrieving, the interface adds addressing and storage filters, the terminal and the production station have their own
+scenes (placing and requesting, and feeding a machine from the warehouse), the output has three more for its port
+directions — requesting, accepting and collecting, the last of which the production station shows as well, because it is
+how a machine's result comes home — and the stock keeper has three (what each of its three numbers governs, a warehouse
+that restocks itself, and the overflow a maximum makes necessary). A fourteenth scene, **Chains of Production Orders**,
+shows a whole chain being ordered and run, and belongs to the terminal and the production station alike, because a chain
+is planned by a click at one and run at the other. The fifteenth, **Rails Around a Corner**, is the second scene of the
+rail and the crane: rails connecting where they touch, the block two runs share becoming a corner, the machine swinging
+a quarter turn on it, and the two racks that one corner block serves.
 
 ## Requesting items
 
@@ -356,24 +377,28 @@ Turn it on by raising `chunkLoading.maxTicketedAislesPerLevel` in `config/warewo
 * **Only while the aisle has work.** An aisle holds chunks while its crane has a job, a request is open or a production
   order is running (an automatic restock is one of those). The moment it is idle it lets go — after a short linger, so a
   burst of jobs cannot make it flap. It is never a permanent loader for a warehouse that is standing still.
-* **Only its own chunks.** The aisle box plus one block on every side: the controller, the dock, the rails, the racks,
-  the inventories behind them and the machine behind a collecting port. Usually 2 to 8 chunks.
-* **Three caps, and going over one costs nothing.** `maxTicketedAislesPerLevel` limits how many aisles of one dimension
-  may hold at once, `maxChunksPerAisle` how many chunks one aisle may hold, and `maxHoldTicks` how long a single hold may
-  last (1 hour by default) before the aisle lets go and waits for its work to really change. An aisle over a cap holds
-  **nothing at all** and behaves exactly as it did before: the crane pauses while its chunks are away and continues when
-  they come back. Its goggles say which cap stopped it, with both numbers — and lowering a cap under an aisle that is
-  already holding makes it let go, rather than leaving the hold above the number you just set.
+* **Only its own chunks.** Every aisle's box plus one block on every side, counted once where two aisles share a chunk:
+  the controller, the dock, the rails, the racks, the inventories behind them and the machine behind a collecting port.
+  Usually 2 to 8 chunks for one straight aisle, 10 to 12 for a warehouse with a corner in it.
+* **Three caps, and going over one costs nothing.** `maxTicketedAislesPerLevel` limits how many **warehouses** of one
+  dimension may hold at once, `maxChunksPerAisle` how many chunks one whole warehouse may hold (default 10), and
+  `maxHoldTicks` how long a single hold may last (1 hour by default) before it lets go and waits for its work to really
+  change. (The two keys keep their older names; the unit they count has been one whole warehouse since rails may bend.)
+  A warehouse over a cap holds **nothing at all** and behaves exactly as it did before: the crane pauses while its
+  chunks are away and continues when they come back. Its goggles say which cap stopped it, with both numbers — and
+  lowering a cap under a warehouse that is already holding makes it let go, rather than leaving the hold above the
+  number you just set.
 * **No crops, no mobs.** Held chunks tick blocks and block entities — the crane, your furnaces, funnels and belts — but
   not random ticks, mob spawning or inhabited time. This loads a warehouse, not a farm. (A forced chunk also lets its
   eight neighbours tick their blocks, exactly as vanilla `/forceload` does, so the loaded area is a little larger than
   the chunk count you are shown.)
 * **You can find every ticket.** `/wareworks chunks` (permission level 2, the same as `/forceload`) lists every holding
-  aisle of every dimension with its position, aisle letter, chunk count, reason and age, then the totals and, per
-  dimension, how many chunks any mod force-loads there with block tickets next to how many are force-loaded in total.
-  `/wareworks chunks release <x y z>` frees one aisle in the dimension you run it in — like every `/forceload`
-  subcommand — and `release all` frees every dimension, including the aisles that were queued behind a cap, so nothing at
-  all is left holding. You need this command: `/forceload query` cannot see a mod's tickets.
+  **warehouse** of every dimension with its position, its letter, chunk count, reason and age, then the totals and, per
+  dimension, how many chunks any mod force-loads there with block tickets next to how many are force-loaded in total. A
+  warehouse the per-warehouse cap refused gets a row of its own saying how many chunks it would have needed.
+  `/wareworks chunks release <x y z>` frees one warehouse in the dimension you run it in — like every `/forceload`
+  subcommand — and `release all` frees every dimension, including the warehouses that were queued behind a cap, so
+  nothing at all is left holding. You need this command: `/forceload query` cannot see a mod's tickets.
 * **Nothing survives its owner.** Break, replace or remove the warehouse controller and its chunks are released in the
   same tick. A hold does survive a restart on purpose, so a job that was running is still running afterwards — but only
   as a single chunk until the controller has confirmed it still has work, and a hold whose controller is gone is dropped

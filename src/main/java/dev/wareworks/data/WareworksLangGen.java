@@ -6,6 +6,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.ChunkKeepReason;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.crane.CranePauseReason;
+import dev.wareworks.content.station.HomePointStatus;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.port.PortRedstone;
@@ -17,6 +18,7 @@ import dev.wareworks.core.stock.StockRuleAdjustment;
 import dev.wareworks.core.stock.StockRulePause;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.TerminalSort;
+import dev.wareworks.core.warehouse.NetworkStop;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import dev.wareworks.util.WareworksLang;
 
@@ -47,11 +49,37 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_NO_INVENTORY), "No inventory attached");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STACKER_CRANE), "Stacker Crane:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_AISLE_SIZE), "Aisle: %1$s long, mast %2$s high");
+        // M21 (issue #1, ADR-033): the lines a warehouse that bends shows instead. One aisle keeps the line above.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_NETWORK_SIZE),
+                "Warehouse: %1$s rails, %2$s aisles, mast %3$s high");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_NETWORK_AISLES), "Aisles: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_NETWORK_AISLES_MORE), "Aisles: %1$s, and %2$s more");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_NETWORK_STOP), "Warehouse stops at %1$s: %2$s");
+        // One reason each, never merged into one message: a warehouse can be ready and still stop at a branching rail,
+        // and a player looking at the thing a message denies must never read a sentence that is false (the M5
+        // NO_DOCK / DOCK_MISALIGNED lesson). END is generated too, so no reason can ever resolve to a raw key.
+        for (NetworkStop stop : NetworkStop.values()) {
+            lang.accept(WareworksLang.key(WareworksLang.networkStopKey(stop)), switch (stop) {
+                case END -> "the rails end here";
+                case UNLOADED -> "the next rail is in a chunk that is not loaded";
+                case CLOSED -> "the next rail is closed with a wrench";
+                case SECOND_DOCK -> "another stacker crane dock stands here, and a dock is a wall";
+                case BRANCHED -> "the rails split here, which needs a later version";
+                case LOOPED -> "the rails lead back into themselves here";
+                case MAX_RAILS -> "the warehouse has as many rails as this server allows";
+                case MAX_BRANCHES -> "the warehouse has as many aisles as this server allows";
+                case MAX_LENGTH -> "this aisle is as long as this server allows";
+            });
+        }
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_ON_AISLE), "On aisle %1$s at position %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_NO_CONTROLLER), "No controller");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CONTROLLER_LINKED), "Controller linked");
         lang.accept(WareworksLang.key(WareworksLang.CRANE_MAST_HEIGHT), "Mast Height");
         lang.accept(WareworksLang.key(WareworksLang.CRANE_ROTATION_LOCKED),
                 "The stacker crane is busy: it can only be turned without a job and with an empty grabber");
+        lang.accept(WareworksLang.key(WareworksLang.RAIL_CLOSED),
+                "Rail closed: no warehouse runs through it any more");
+        lang.accept(WareworksLang.key(WareworksLang.RAIL_OPENED), "Rail opened: it joins the rails it touches again");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ADDRESS), "Address: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED), "Misaligned");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_HINT), "Turn the brass port away from the aisle");
@@ -77,11 +105,11 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING), "Chunk loading: %1$s chunks (%2$s)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_NONE), "Chunk loading: none (%1$s)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_AT_LIMIT),
-                "Chunk loading: none (server limit: %1$s aisles)");
+                "Chunk loading: none (server limit: %1$s warehouses)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_AT_COLLECT_LIMIT),
-                "Chunk loading: none (collecting limit: %1$s aisles)");
+                "Chunk loading: none (collecting limit: %1$s warehouses)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CHUNK_LOADING_TOO_MANY),
-                "Chunk loading: none (this aisle needs %1$s of %2$s chunks)");
+                "Chunk loading: none (this warehouse needs %1$s of %2$s chunks)");
         for (ChunkKeepReason reason : ChunkKeepReason.values()) {
             if (reason == ChunkKeepReason.NONE)
                 continue;
@@ -91,11 +119,11 @@ public final class WareworksLangGen {
                 case PRODUCTION_ORDERS -> "production orders";
                 case COLLECTING -> "collecting from a machine";
                 case RELEASING -> "idle, letting go";
-                case AT_LEVEL_LIMIT -> "as many aisles hold chunks as the server allows";
+                case AT_LEVEL_LIMIT -> "as many warehouses hold chunks as the server allows";
                 // Its own reason rather than AT_LEVEL_LIMIT: the collect opt-in is a second setting, and an aisle
                 // queued behind it would otherwise look byte-for-byte like an idle one (M19 review).
-                case AT_COLLECT_LIMIT -> "as many aisles collect with held chunks as the server allows";
-                case TOO_MANY_CHUNKS -> "this aisle needs more chunks than the server allows";
+                case AT_COLLECT_LIMIT -> "as many warehouses collect with held chunks as the server allows";
+                case TOO_MANY_CHUNKS -> "this warehouse needs more chunks than the server allows";
                 // Two things reach this state: the longest allowed hold running out, and an operator's
                 // "/wareworks chunks release". The line must be true of both, so it says what the aisle IS doing
                 // rather than guessing why; the cause is in the server log and in the command's own answer.
@@ -105,23 +133,28 @@ public final class WareworksLangGen {
         }
         lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_HEADER), "Chunks held in %1$s:");
         lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_ROW),
-                "  %1$s: aisle %2$s, %3$s chunk(s), %4$s, held for %5$s s");
+                "  %1$s: warehouse %2$s, %3$s chunk(s), %4$s, held for %5$s s");
         lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_ROW_UNCLAIMED),
                 "  %1$s: %2$s chunk(s) reinstated from the save, no warehouse controller has claimed them yet");
-        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_NONE), "No Wareworks aisle is holding any chunks");
+        // The other half of the answer: a warehouse that holds NOTHING because its footprint is over the per-warehouse
+        // cap, with the number it would need. "Needs 14" next to "the limit is 10" is the only form an operator can act
+        // on, and a warehouse that bends meets this cap without anybody having changed a setting (M21, ADR-033).
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_ROW_OVER_CAP),
+                "  %1$s: warehouse %2$s, holds nothing - this warehouse needs %3$s chunk(s) and the limit is %4$s");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_NONE), "No Wareworks warehouse is holding any chunks");
         lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_TOTAL),
-                "Wareworks holds %1$s chunk(s) in %2$s aisle(s) over %3$s dimension(s)");
+                "Wareworks holds %1$s chunk(s) in %2$s warehouse(s) over %3$s dimension(s)");
         // Two numbers, because the first one is NOT a total: Wareworks takes block tickets, so that is the number the
         // rows above are comparable with, while vanilla /forceload and entity tickets live in two other stores
         // entirely (M19 review).
         lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_RAW),
                 "  %1$s has %2$s chunk(s) force-loaded by block tickets (all mods), %3$s in total "
                         + "(entity tickets and /forceload included)");
-        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_RELEASED), "Released the chunks of the aisle at %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_RELEASED), "Released the chunks of the warehouse at %1$s");
         lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_NOT_HELD),
-                "No aisle at %1$s is holding chunks in %2$s");
+                "No warehouse at %1$s is holding chunks in %2$s");
         lang.accept(WareworksLang.key(WareworksLang.COMMAND_CHUNKS_RELEASED_ALL),
-                "Released the chunks of %1$s aisle(s) in %2$s dimension(s)");
+                "Released the chunks of %1$s warehouse(s) in %2$s dimension(s)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATIONS), "Inputs: %1$s, outputs: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_COUNT), "Misaligned blocks: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ITEM_TYPES), "Item types: %1$s");
@@ -165,6 +198,19 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STOCK_RULES), "Stock rules: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_BELOW_MINIMUM), "Below minimum: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_AT_MAXIMUM), "At maximum: %1$s");
+        // M21 (issue #1, ADR-034): the home point says what it is doing in one sentence, and every way it can fail to
+        // be used has its own — a player who placed a block and sees nothing happen must be able to read why.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_HOME_POINT), "Warehouse Home Point:");
+        for (HomePointStatus status : HomePointStatus.values()) {
+            lang.accept(WareworksLang.key(status.langKey()), switch (status) {
+                case NO_WAREHOUSE -> "Not part of a warehouse";
+                case SERVING -> "The stacker crane waits here";
+                case SECOND -> "Without effect: this warehouse already has a home point";
+                case UNREACHABLE -> "Without effect: the crane cannot drive here";
+                case SINGLE_AISLE -> "Without effect: on one aisle the crane waits where it is";
+                case SWITCHED_OFF -> "Without effect: this server switched returning home off";
+            });
+        }
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_STOCK_KEEPER), "Warehouse Stock Keeper:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_RULES), "Rules: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_KEEPER_NO_RULES), "No rules set");
@@ -294,6 +340,7 @@ public final class WareworksLangGen {
                 case PRODUCTION_FULL -> "a production station cannot take more ingredients";
                 case NOT_IN_STOCK -> "a requested item is not in stock";
                 case LOCATION_UNAVAILABLE -> "an output is not reachable";
+                case UNREACHABLE -> "the crane cannot drive to the aisle these items belong on";
                 case BUDGET_EXHAUSTED -> "still searching";
                 case COLLECT_SOURCE_EMPTY -> "a machine hands out nothing its port may fetch";
                 case NO_WORK -> "nothing to do";
@@ -494,6 +541,8 @@ public final class WareworksLangGen {
                 "Ports: %1$s accepting, %2$s collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS_COLLECTING), "Ports: %1$s collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS), "Chunks: %1$s held");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES), "Aisles: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES_CUT), "Aisles: %1$s (cut short)");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No aisle");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");
@@ -693,38 +742,68 @@ public final class WareworksLangGen {
                 "Shows its _address_, how many _rules_ it holds and how many of them are _below their minimum_, _at "
                         + "their maximum_, _down to their reserve_ or _paused_ after a lost batch.");
 
+        tooltip(lang, "block.wareworks.warehouse_home_point",
+                "Marks where the _stacker crane_ waits when it has nothing to do. Put it beside the _rails_ where the "
+                        + "next job usually starts — next to your _terminal_, next to an _input_ — and the machine "
+                        + "comes back here instead of standing wherever its last job ended.",
+                "When placed",
+                "The _plate_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle, like every "
+                        + "other station. It holds _no items_ and the crane never stops here for one.",
+                "When the crane has nothing to do",
+                "After a short wait the crane drives back and waits in front of this block. The trip is _interrupted_ "
+                        + "by the next job the moment there is one, even in the middle of a _corner_, so it never "
+                        + "costs you anything — and it holds _no chunks_ loaded.",
+                "When the warehouse is one straight aisle",
+                "Nothing happens: on a single aisle the crane stays exactly where it is, which is what it always did. "
+                        + "A home point earns its keep the moment your warehouse _bends_.",
+                "When there is more than one",
+                "A warehouse has _one crane_, so it has _one home_. Any further home point lights up _red_ and says "
+                        + "so; the same happens to one the crane cannot _drive to_, for instance because a rail "
+                        + "between them is broken or _closed_. Break the home point and the _dock_ is home again.",
+                "When looked at with Goggles",
+                "Shows its _address_ and whether the crane really waits here — and if it does not, _why_ not.");
+
         tooltip(lang, "block.wareworks.warehouse_controller",
-                "Manages one warehouse _aisle_: it gives the aisle its _letter_, finds its _storage locations_ and "
+                "Manages one _warehouse_: it gives every _aisle_ of it a _letter_, finds its _storage locations_ and "
                         + "_stations_, keeps _count_ of the stored items and _plans_ the _stacker crane's_ jobs. It never "
                         + "moves items itself.",
                 "When placed",
                 "Place it directly _behind_ a _stacker crane_ while looking at the crane; the _display_ faces you.",
                 "When using the value panel",
-                "Hold _Right-Click_ on the _value panel_ to set the _aisle letter_ used in addresses such as _A-03-07R_.",
+                "Hold _Right-Click_ on the _value panel_ to set the letter of the _first aisle_, used in addresses such "
+                        + "as _A-03-07R_; every further aisle takes the _next free_ letter.",
                 "When looked at with Goggles",
-                "Shows the _status_, the _aisle size_, the number of _storage locations_, _stations_ and "
-                        + "_misaligned_ blocks, the _stored items_, the _crane's job_ and the last _planning result_.");
+                "Shows the _status_, the _size_ of the warehouse and its _aisles_, where the rails _stop_ and why, the "
+                        + "number of _storage locations_, _stations_ and _misaligned_ blocks, the _stored items_, the "
+                        + "_crane's job_ and the last _planning result_.");
 
         tooltip(lang, "block.wareworks.stacker_crane",
-                "The _dock_ of a _stacker crane_. The crane travels along the _aisle_ of _warehouse rails_ in front of "
-                        + "it and _stores_ and _retrieves_ items for the _warehouse controller_ behind it.",
+                "The _dock_ of a _stacker crane_. The crane travels the _warehouse rails_ in front of it — around "
+                        + "_corners_ as well — and _stores_ and _retrieves_ items for the _warehouse controller_ behind "
+                        + "it.",
                 "When placed",
-                "The _aisle_ runs in the direction you look. Connect a _shaft_ to the _bottom_; shafts and cogs at "
+                "The _first aisle_ runs in the direction you look. Connect a _shaft_ to the _bottom_; shafts and cogs at "
                         + "the sides do not connect. A _wrench_ turns it only while the crane is _idle_ and _empty_.",
                 "When powered by rotation",
-                "Carries out the controller's _jobs_. Faster _rotation_ moves the crane faster; without rotation or when "
-                        + "_overstressed_ it _pauses_ where it is and continues later.",
+                "Carries out the controller's _jobs_. On a _corner_ the whole machine swings a _quarter turn_ and drives "
+                        + "on. Faster _rotation_ moves the crane faster; without rotation or when _overstressed_ it "
+                        + "_pauses_ where it is and continues later.",
                 "When using the value panel",
                 "Hold _Right-Click_ on the _value panel_ to set the _mast height_: how many _levels_ the crane reaches.",
                 "When looked at with Goggles",
-                "Shows the _aisle length_, the _mast height_, whether a _controller_ is linked, the current _job_ and "
-                        + "the _held items_.");
+                "Shows the _size_ of the warehouse, the _mast height_, which _aisle_ the machine is on, whether a "
+                        + "_controller_ is linked, the current _job_ and the _held items_.");
 
         tooltip(lang, "block.wareworks.warehouse_rail",
-                "Lays out the _aisle_ of a _stacker crane_. The aisle is as long as the _straight line_ of rails in "
-                        + "front of the crane's _dock_.",
+                "Lays out the _aisles_ of a _stacker crane_. Rails that _touch_ connect, so all the rails in front of "
+                        + "the crane's _dock_ are its warehouse — and where two of them meet at _right angles_, the "
+                        + "crane _turns the corner_.",
                 "When placed",
-                "Runs in the direction you look. A _gap_, another block or a rail _across_ the aisle ends the aisle.");
+                "Runs in the direction you look. A _gap_ or another block ends the rails; the _picture_ of a corner or "
+                        + "a junction follows the rails around it.",
+                "When using a Wrench",
+                "_Closes_ the rail and opens it again. A _closed_ rail belongs to no warehouse, which keeps two "
+                        + "warehouses whose rails touch apart and sends a _stray_ rail away again.");
     }
 
     /** Create item description: summary plus condition/behaviour pairs ({@code .tooltip.conditionN/behaviourN}). */

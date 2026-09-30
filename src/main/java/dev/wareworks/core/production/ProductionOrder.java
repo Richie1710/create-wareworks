@@ -522,6 +522,22 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     }
 
     /**
+     * The same order under another name for the <b>same</b> production station (M21, ADR-033): the warehouse was
+     * rebuilt and the station's rack position is called something else now.
+     * <p>
+     * Nothing else about the order changes — not its ingredients, not what was already delivered, not its deadline and
+     * not its place in a plan — because nothing about it did: a remap renames labels, it never moves a machine or an
+     * item. An order whose station really is gone is cancelled instead, never re-pointed.
+     */
+    public ProductionOrder<K, L> atStation(L newStation) {
+        Objects.requireNonNull(newStation, "newStation");
+        if (newStation.equals(station))
+            return this;
+        return new ProductionOrder<>(id, newStation, result, resultAmount, lines, state, deadlineTick, produced,
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
+    }
+
+    /**
      * This order without its backing request (the request was served, cancelled or lost). The promise goes with it:
      * there is nobody left to give anything back to, so the order simply runs on and its result lands in stock.
      */

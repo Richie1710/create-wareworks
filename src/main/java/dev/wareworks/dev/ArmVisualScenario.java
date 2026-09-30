@@ -48,7 +48,7 @@ import com.tterrag.registrate.util.entry.BlockEntry;
 import dev.engine_room.flywheel.lib.transform.PoseTransformStack;
 import dev.engine_room.flywheel.lib.transform.TransformStack;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
@@ -1499,7 +1499,7 @@ public final class ArmVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(dock.offset(CONTROLLER),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         requireRack(layout, dock, INPUT_A_RACK, INPUT_A);
         requireRack(layout, dock, OUTPUT_RACK, OUTPUT);
         requireRack(layout, dock, TERMINAL_RACK, TERMINAL);
@@ -1610,12 +1610,12 @@ public final class ArmVisualScenario implements VisualScenario {
         throw new VisualTestException("no crafter pointing makes a crafter facing " + facing + " target " + target);
     }
 
-    private static void requireRack(AisleLayout layout, BlockPos dock, RackPosition rack, BlockPos offset) {
+    private static void requireRack(BranchLayout layout, BlockPos dock, RackPosition rack, BlockPos offset) {
         if (!layout.rackPos(rack).equals(dock.offset(offset)))
             throw new VisualTestException("offset " + offset + " is not rack position " + rack);
     }
 
-    private static Direction towardsAisle(AisleLayout layout, RackPosition rack) {
+    private static Direction towardsAisle(BranchLayout layout, RackPosition rack) {
         return layout.sideDirection(rack.side()).getOpposite();
     }
 
@@ -1776,8 +1776,8 @@ public final class ArmVisualScenario implements VisualScenario {
         return context.origin().offset(offset);
     }
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static WarehouseControllerBlockEntity controller(ServerLevel level, VisualContext context) {

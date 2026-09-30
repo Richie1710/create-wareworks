@@ -15,7 +15,7 @@ import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -218,7 +218,7 @@ public final class FiltersVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(dock.relative(AISLE.getOpposite()),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(INPUT), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
                 .setValue(WarehouseInputBlock.FACING, layout.sideDirection(INPUT.side()).getOpposite()));
 
@@ -259,7 +259,7 @@ public final class FiltersVisualScenario implements VisualScenario {
     /** Sets a plain item filter on the dedicated locations, exactly as a right-click with that item would. */
     private static void setFilters(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (Rack rack : ROW) {
             if (rack.dedicatedTo().isEmpty())
                 continue;
@@ -302,7 +302,7 @@ public final class FiltersVisualScenario implements VisualScenario {
      */
     private static void assertPartition(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (Rack rack : ROW) {
             BlockPos chest = chestPos(layout, rack.position());
             Item expected = rack.expectedContent();
@@ -379,7 +379,7 @@ public final class FiltersVisualScenario implements VisualScenario {
         ClientLevel level = context.minecraft().level;
         if (level == null)
             return 0;
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         int filtered = 0;
         for (Rack rack : ROW) {
             if (level.getBlockEntity(layout.rackPos(rack.position())) instanceof WarehouseInterfaceBlockEntity storage
@@ -400,17 +400,17 @@ public final class FiltersVisualScenario implements VisualScenario {
         return ROW.getFirst().expectedContent();
     }
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     /** The inventory behind a storage location: one block further away from the aisle than its interface. */
-    private static BlockPos chestPos(AisleLayout layout, RackPosition rack) {
+    private static BlockPos chestPos(BranchLayout layout, RackPosition rack) {
         return layout.rackPos(rack).relative(layout.sideDirection(rack.side()));
     }
 
     /** Beside the output, one block further out than the station itself, standing on the superflat floor. */
-    private static BlockPos leverPos(AisleLayout layout) {
+    private static BlockPos leverPos(BranchLayout layout) {
         return layout.rackPos(OUTPUT).relative(layout.sideDirection(OUTPUT.side()));
     }
 
@@ -434,7 +434,7 @@ public final class FiltersVisualScenario implements VisualScenario {
         return controller;
     }
 
-    private static WarehouseInterfaceBlockEntity interfaceAt(ServerLevel level, AisleLayout layout, RackPosition rack) {
+    private static WarehouseInterfaceBlockEntity interfaceAt(ServerLevel level, BranchLayout layout, RackPosition rack) {
         WarehouseInterfaceBlockEntity storage = WareworksBlockEntityTypes.WAREHOUSE_INTERFACE.getNullable(level,
                 layout.rackPos(rack));
         if (storage == null)

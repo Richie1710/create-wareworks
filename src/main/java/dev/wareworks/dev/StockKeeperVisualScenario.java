@@ -10,7 +10,7 @@ import java.util.Optional;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 
 import dev.wareworks.client.gui.WarehouseStockKeeperScreen;
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -205,7 +205,7 @@ public final class StockKeeperVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(dock.relative(AISLE.getOpposite()),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(KEEPER), WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                 .setValue(WarehouseStockKeeperBlock.FACING, layout.sideDirection(KEEPER.side()).getOpposite()));
 
@@ -294,8 +294,8 @@ public final class StockKeeperVisualScenario implements VisualScenario {
         LOGGER.info(PREFIX + "keeper: opened the screen with {} rules", keeper.rules().ruleCount());
     }
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static WarehouseStockKeeperBlockEntity keeper(ServerLevel level, BlockPos dock) {

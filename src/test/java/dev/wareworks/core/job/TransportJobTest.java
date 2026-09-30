@@ -38,6 +38,32 @@ class TransportJobTest {
         assertEquals(Optional.empty(), TransportJob.retrieve(JOB, "chest", "out", ORE, 8, null).requestId());
     }
 
+    /**
+     * A warehouse rebuilt under a working crane renames the two places its job names, and nothing else: the same job,
+     * the same items, the same request, the same progress (M21 review fix, ADR-033).
+     */
+    @Test
+    void relabellingMovesOnlyTheTwoNames() {
+        TransportJob<String, String> job = TransportJob.retrieve(JOB, "chest", "out", ORE, 32, REQUEST)
+                .withPicked(20).plusDelivered(5);
+        TransportJob<String, String> moved = job.relabelled("chest-b", "out-b");
+        assertEquals("chest-b", moved.source());
+        assertEquals("out-b", moved.target());
+        assertEquals(job.id(), moved.id());
+        assertEquals(job.type(), moved.type());
+        assertEquals(job.targetKind(), moved.targetKind());
+        assertEquals(job.key(), moved.key());
+        assertEquals(job.plannedAmount(), moved.plannedAmount());
+        assertEquals(job.requestId(), moved.requestId());
+        assertTrue(moved.picked());
+        assertEquals(job.pickedAmount(), moved.pickedAmount());
+        assertEquals(job.deliveredAmount(), moved.deliveredAmount());
+        assertEquals(job.heldAmount(), moved.heldAmount());
+        assertSame(job, job.relabelled("chest", "out"), "a rebuild that moved neither place changes nothing");
+        assertThrows(NullPointerException.class, () -> job.relabelled(null, "out"));
+        assertThrows(NullPointerException.class, () -> job.relabelled("chest", null));
+    }
+
     @Test
     void progressIsTrackedByCopies() {
         TransportJob<String, String> job = TransportJob.retrieve(JOB, "chest", "out", ORE, 32, REQUEST);

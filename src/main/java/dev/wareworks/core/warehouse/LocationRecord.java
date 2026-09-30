@@ -10,7 +10,7 @@ import dev.wareworks.core.address.Side;
  * The rack position is the location id: it is aisle-local, so it survives restarts and never depends on world
  * coordinates.
  *
- * @param position aisle-local rack position (x, y, side)
+ * @param position aisle-local rack position (branch, x, y, side)
  * @param kind     storage location or station
  */
 public record LocationRecord(RackPosition position, LocationKind kind) {
@@ -21,6 +21,10 @@ public record LocationRecord(RackPosition position, LocationKind kind) {
 
     public static LocationRecord of(RackPosition position, LocationKind kind) {
         return new LocationRecord(position, kind);
+    }
+
+    public int branch() {
+        return position.branch();
     }
 
     public int x() {

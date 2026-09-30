@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -13,8 +14,11 @@ import org.jetbrains.annotations.Nullable;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.AisleGeometry;
+import dev.wareworks.core.address.BranchGeometry;
+import dev.wareworks.core.address.Heading;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.production.ProductionOrder;
@@ -38,7 +42,9 @@ import net.minecraft.util.Mth;
 /**
  * NBT form of a warehouse controller's persistent state ({@code docs/warehouse-system.md} §3.3):
  * <pre>
- * Layout:     { Facing: "east", Length: int, Height: int }            (absent without dock)
+ * Layout:     { Facing: "east", Length: int, Height: int }            (absent without dock; the branch at the dock)
+ * Network:    { Branches: [ { D: int[2] origin offset from the dock, H: "south", L: int, C: "B" } ],
+ *               Lines:    [ { A: 0|1, F: int, D: int[2], C: "B" } ] }  (absent while the warehouse is one aisle)
  * Locations:  [ { X: int, Y: int, Side: "L"|"R", Kind: "STORAGE"|"INPUT"|"OUTPUT",
  *                 Stock: [ { Item: &lt;ItemKey&gt;, Count: long } ] } ]    (Stock only for STORAGE)
  * Misaligned: int[] (x, y, side ordinal) per position
@@ -59,6 +65,17 @@ import net.minecraft.util.Mth;
  */
 final class ControllerPersistence {
     static final String LAYOUT_TAG = "Layout";
+    /**
+     * The rail network beyond the branch at the dock (M21, ADR-033), <b>written only while the warehouse really has
+     * more than one aisle</b>. Everything a warehouse of one aisle is stays in {@link #LAYOUT_TAG} exactly as it was,
+     * so a world saved on 0.5.0 loads, and saves again, byte for byte.
+     * <p>
+     * Origins are offsets from the <b>dock</b>, which is always the block in front of the controller, so they are
+     * relative like the request destinations are and a structure moved without rotation keeps its addresses. The
+     * links where two aisles meet are <b>derived</b> from the branch list and never saved, so a save can never
+     * contradict the rails that are there.
+     */
+    static final String NETWORK_TAG = "Network";
     static final String LOCATIONS_TAG = "Locations";
     static final String MISALIGNED_TAG = "Misaligned";
     static final String REQUESTS_TAG = "Requests";
@@ -84,7 +101,7 @@ final class ControllerPersistence {
     private static final String PRODUCED = "Produced";
     private static final String STOCK_SEEN = "StockSeen";
     private static final String PROMISED = "Promised";
-    private static final String LINES = "Lines";
+    private static final String LINE_LIST = "Lines";
     private static final String REQUIRED = "Required";
     private static final String DELIVERED = "Delivered";
     private static final String REQUEST = "Request";
@@ -108,16 +125,59 @@ final class ControllerPersistence {
     private static final String X = "X";
     private static final String Y = "Y";
     private static final String SIDE = "Side";
+    /**
+     * Branch of a rack position, <b>written only when it is not</b> {@link RackPosition#FIRST_BRANCH} (M21, ADR-033),
+     * so a warehouse with one aisle — every warehouse up to 0.5.0 — saves exactly the bytes it did before the field
+     * existed, and an absent {@code B} reads as branch 0.
+     */
+    private static final String BRANCH = "B";
     private static final String KIND = "Kind";
     private static final String STOCK = "Stock";
     private static final String ITEM = "Item";
     private static final String COUNT = "Count";
     /** Ints per misaligned position in the flat array: x, y, side ordinal. */
     private static final int INTS_PER_POSITION = 3;
+    /**
+     * Branches of the misaligned positions, one int per entry of {@link #MISALIGNED_TAG} and in the same order. A
+     * <b>parallel</b> array rather than a fourth int per entry, and written only when at least one branch is not
+     * {@link RackPosition#FIRST_BRANCH}: that keeps {@link #MISALIGNED_TAG} itself byte-identical on a one-aisle
+     * warehouse, and an array of the wrong length is ignored rather than shifting every position by one.
+     */
+    private static final String MISALIGNED_BRANCHES_TAG = "MisalignedBranches";
     private static final Side[] SIDES = Side.values();
+
+    private static final String BRANCHES = "Branches";
+    private static final String LINES = "Lines";
+    private static final String ORIGIN = "D";
+    private static final String HEADING = "H";
+    private static final String BRANCH_LENGTH = "L";
+    private static final String LETTER = "C";
+    private static final String LINE_AXIS = "A";
+    private static final String LINE_FIXED = "F";
+    /** Ints of a branch origin offset: dx, dz (every branch lies at the dock's own level). */
+    private static final int ORIGIN_INTS = 2;
 
     /** Saved aisle direction and size; the dock position is always in front of the controller. */
     record SavedLayout(Direction facing, AisleGeometry geometry) {
+    }
+
+    /**
+     * The saved shape of a warehouse beyond its first aisle: the further branches in index order (the first one is
+     * {@link SavedLayout}) and the lines the aisle letters are pinned to ({@link BranchTable}).
+     */
+    record SavedNetwork(List<BranchGeometry> branches, List<Optional<Character>> letters,
+                        List<Map.Entry<Long, BranchTable.Entry>> lines) {
+        static final SavedNetwork NONE = new SavedNetwork(List.of(), List.of(), List.of());
+
+        SavedNetwork {
+            branches = List.copyOf(Objects.requireNonNull(branches, "branches"));
+            letters = List.copyOf(Objects.requireNonNull(letters, "letters"));
+            lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
+        }
+
+        boolean isEmpty() {
+            return branches.isEmpty() && lines.isEmpty();
+        }
     }
 
     /** Saved membership and per-location stock counts (positive counts only). */
@@ -139,7 +199,13 @@ final class ControllerPersistence {
     private ControllerPersistence() {
     }
 
-    static void writeLayout(CompoundTag tag, @Nullable AisleLayout layout) {
+    /**
+     * Writes the branch at the dock, in exactly the three fields a warehouse has always written: its direction, the
+     * number of rails of its first aisle and the mast height. A warehouse that bends writes the rest into
+     * {@link #NETWORK_TAG}, so this tag means the same thing it always did and an older version reading a newer save
+     * still finds the straight aisle.
+     */
+    static void writeLayout(CompoundTag tag, @Nullable WarehouseLayout layout) {
         if (layout == null)
             return;
         CompoundTag layoutTag = new CompoundTag();
@@ -147,6 +213,97 @@ final class ControllerPersistence {
         layoutTag.putInt(LENGTH, layout.geometry().length());
         layoutTag.putInt(HEIGHT, layout.geometry().height());
         tag.put(LAYOUT_TAG, layoutTag);
+    }
+
+    /**
+     * Writes the branches beyond the first one and the pinned lines — and <b>nothing at all</b> while the warehouse is
+     * a single straight aisle with no line pinned, which is every warehouse built up to 0.5.0.
+     */
+    static void writeNetwork(CompoundTag tag, @Nullable WarehouseLayout layout, BranchTable table) {
+        if (layout == null)
+            return;
+        List<Map.Entry<Long, BranchTable.Entry>> lines = table.entries();
+        if (layout.branchCount() <= 1 && lines.isEmpty())
+            return;
+        ListTag branches = new ListTag();
+        for (int i = RackPosition.FIRST_BRANCH + 1; i < layout.branchCount(); i++) {
+            BranchGeometry branch = layout.network().branch(i);
+            CompoundTag entry = new CompoundTag();
+            entry.putIntArray(ORIGIN, new int[] { branch.originDx(), branch.originDz() });
+            entry.putString(HEADING, branch.heading().name());
+            entry.putInt(BRANCH_LENGTH, branch.length());
+            layout.branch(i).letter().ifPresent(letter -> entry.putString(LETTER, String.valueOf(letter)));
+            branches.add(entry);
+        }
+        ListTag lineList = new ListTag();
+        for (Map.Entry<Long, BranchTable.Entry> line : lines) {
+            CompoundTag entry = new CompoundTag();
+            entry.putInt(LINE_AXIS, (int) (line.getKey() >> 32));
+            entry.putInt(LINE_FIXED, (int) (long) line.getKey());
+            entry.putIntArray(ORIGIN, new int[] { line.getValue().originDx(), line.getValue().originDz() });
+            entry.putString(LETTER, String.valueOf(line.getValue().letter()));
+            lineList.add(entry);
+        }
+        CompoundTag network = new CompoundTag();
+        network.put(BRANCHES, branches);
+        network.put(LINE_LIST, lineList);
+        tag.put(NETWORK_TAG, network);
+    }
+
+    /**
+     * Reads the further branches and the pinned lines; an absent, malformed or over-long entry is skipped, so a
+     * warehouse always ends up with a valid network — at worst the single aisle {@link #readLayout} describes.
+     */
+    static SavedNetwork readNetwork(CompoundTag tag) {
+        if (!tag.contains(NETWORK_TAG, Tag.TAG_COMPOUND))
+            return SavedNetwork.NONE;
+        CompoundTag network = tag.getCompound(NETWORK_TAG);
+        List<BranchGeometry> branches = new ArrayList<>();
+        List<Optional<Character>> letters = new ArrayList<>();
+        letters.add(Optional.empty()); // the branch at the dock takes the controller's own value box
+        ListTag list = network.getList(BRANCHES, Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size(); i++) {
+            if (branches.size() + 1 >= StorageAddress.AISLE_COUNT)
+                break;
+            CompoundTag entry = list.getCompound(i);
+            int[] origin = entry.getIntArray(ORIGIN);
+            Heading heading = headingOf(entry.getString(HEADING));
+            int length = entry.getInt(BRANCH_LENGTH);
+            if (origin.length != ORIGIN_INTS || heading == null || length < 0 || length > AisleGeometry.MAX_LENGTH) {
+                Wareworks.LOGGER.warn("Skipping an unreadable warehouse aisle in a saved network");
+                break; // the branches after it would carry the wrong indices, so the network stops here
+            }
+            branches.add(new BranchGeometry(branches.size() + 1, origin[0], origin[1], heading, length));
+            letters.add(letterOf(entry.getString(LETTER)));
+        }
+        List<Map.Entry<Long, BranchTable.Entry>> lines = new ArrayList<>();
+        ListTag lineList = network.getList(LINE_LIST, Tag.TAG_COMPOUND);
+        for (int i = 0; i < lineList.size() && lines.size() < BranchTable.MAX_ENTRIES; i++) {
+            CompoundTag entry = lineList.getCompound(i);
+            int[] origin = entry.getIntArray(ORIGIN);
+            Optional<Character> letter = letterOf(entry.getString(LETTER));
+            int axis = entry.getInt(LINE_AXIS);
+            if (origin.length != ORIGIN_INTS || letter.isEmpty() || axis < 0 || axis > 1)
+                continue;
+            long key = ((long) axis << 32) | (entry.getInt(LINE_FIXED) & 0xFFFFFFFFL);
+            lines.add(Map.entry(key, new BranchTable.Entry(letter.get(), origin[0], origin[1])));
+        }
+        return new SavedNetwork(branches, letters.subList(0, branches.size() + 1), lines);
+    }
+
+    @Nullable
+    private static Heading headingOf(String name) {
+        for (Heading heading : Heading.values()) {
+            if (heading.name().equals(name))
+                return heading;
+        }
+        return null;
+    }
+
+    private static Optional<Character> letterOf(String text) {
+        if (text.length() != 1 || !StorageAddress.isValidAisle(text.charAt(0)))
+            return Optional.empty();
+        return Optional.of(text.charAt(0));
     }
 
     static Optional<SavedLayout> readLayout(CompoundTag tag) {
@@ -175,13 +332,19 @@ final class ControllerPersistence {
 
         List<RackPosition> misaligned = List.copyOf(membership.misalignedPositions());
         int[] packed = new int[misaligned.size() * INTS_PER_POSITION];
+        int[] branches = new int[misaligned.size()];
+        boolean anyBranch = false;
         for (int i = 0; i < misaligned.size(); i++) {
             RackPosition position = misaligned.get(i);
             packed[i * INTS_PER_POSITION] = position.x();
             packed[i * INTS_PER_POSITION + 1] = position.y();
             packed[i * INTS_PER_POSITION + 2] = position.side().ordinal();
+            branches[i] = position.branch();
+            anyBranch |= position.branch() != RackPosition.FIRST_BRANCH;
         }
         tag.putIntArray(MISALIGNED_TAG, packed);
+        if (anyBranch)
+            tag.putIntArray(MISALIGNED_BRANCHES_TAG, branches);
     }
 
     private static CompoundTag writeRecord(LocationRecord record, StockView<ItemKey, RackPosition> stock,
@@ -190,6 +353,8 @@ final class ControllerPersistence {
         entry.putInt(X, record.x());
         entry.putInt(Y, record.y());
         entry.putString(SIDE, String.valueOf(record.side().letter()));
+        if (record.branch() != RackPosition.FIRST_BRANCH)
+            entry.putInt(BRANCH, record.branch());
         entry.putString(KIND, record.kind().name());
         if (record.kind() != LocationKind.STORAGE)
             return entry;
@@ -229,10 +394,15 @@ final class ControllerPersistence {
 
         List<RackPosition> misaligned = new ArrayList<>();
         int[] packed = tag.getIntArray(MISALIGNED_TAG);
+        int[] branches = tag.getIntArray(MISALIGNED_BRANCHES_TAG);
+        // A branch array that does not line up with the positions is ignored, so a truncated save loses the branches
+        // rather than attaching them to the wrong positions; the next probe restores them.
+        boolean useBranches = branches.length == packed.length / INTS_PER_POSITION;
         for (int i = 0; i + INTS_PER_POSITION <= packed.length; i += INTS_PER_POSITION) {
             int sideOrdinal = packed[i + 2];
+            int branch = useBranches ? branches[i / INTS_PER_POSITION] : RackPosition.FIRST_BRANCH;
             if (sideOrdinal >= 0 && sideOrdinal < SIDES.length)
-                rackPosition(packed[i], packed[i + 1], SIDES[sideOrdinal]).ifPresent(misaligned::add);
+                rackPosition(branch, packed[i], packed[i + 1], SIDES[sideOrdinal]).ifPresent(misaligned::add);
         }
         return new SavedLocations(records, misaligned, stock);
     }
@@ -288,7 +458,7 @@ final class ControllerPersistence {
     /**
      * NBT form of the production orders ({@code docs/warehouse-system.md} §3.5):
      * <pre>
-     * ProductionOrders: [ { Id: UUID, Station: {X, Y, Side}, Result: &lt;ItemKey&gt;, ResultAmount: int,
+     * ProductionOrders: [ { Id: UUID, Station: {X, Y, Side, B?}, Result: &lt;ItemKey&gt;, ResultAmount: int,
      *                       State: "WAITING_FOR_RESULT", Produced: long, StockSeen: long, Request?: UUID,
      *                       Promised: long, Restock?: boolean, Parent?: UUID,
      *                       Lines: [ { Id: UUID, Item: &lt;ItemKey&gt;, Required: int, Delivered: int } ] } ]
@@ -553,12 +723,17 @@ final class ControllerPersistence {
         return new SavedChunkKeep(true, chunkKeep.getLong(WORK));
     }
 
-    /** NBT form of a rack position: {@code {X: int, Y: int, Side: "L"|"R"}}. */
+    /**
+     * NBT form of a rack position: {@code {X: int, Y: int, Side: "L"|"R", B?: int}}. {@code B} is the branch and is
+     * <b>omitted when it is</b> {@link RackPosition#FIRST_BRANCH}.
+     */
     private static CompoundTag writeRack(RackPosition rack) {
         CompoundTag tag = new CompoundTag();
         tag.putInt(X, rack.x());
         tag.putInt(Y, rack.y());
         tag.putString(SIDE, String.valueOf(rack.side().letter()));
+        if (rack.branch() != RackPosition.FIRST_BRANCH)
+            tag.putInt(BRANCH, rack.branch());
         return tag;
     }
 
@@ -568,7 +743,7 @@ final class ControllerPersistence {
             return Optional.empty();
         String sideText = tag.getString(SIDE);
         Optional<Side> side = sideText.length() == 1 ? Side.fromLetter(sideText.charAt(0)) : Optional.empty();
-        return side.flatMap(value -> rackPosition(tag.getInt(X), tag.getInt(Y), value));
+        return side.flatMap(value -> rackPosition(branchOf(tag), tag.getInt(X), tag.getInt(Y), value));
     }
 
     private static Optional<LocationRecord> readRecord(CompoundTag entry) {
@@ -579,14 +754,20 @@ final class ControllerPersistence {
         Optional<LocationKind> kind = LocationKind.byName(entry.getString(KIND));
         if (side.isEmpty() || kind.isEmpty())
             return Optional.empty();
-        return rackPosition(entry.getInt(X), entry.getInt(Y), side.get())
+        return rackPosition(branchOf(entry), entry.getInt(X), entry.getInt(Y), side.get())
                 .map(position -> new LocationRecord(position, kind.get()));
     }
 
-    private static Optional<RackPosition> rackPosition(int x, int y, Side side) {
-        if (x < 0 || x > AisleGeometry.MAX_LENGTH || y < 0 || y >= AisleGeometry.MAX_HEIGHT)
+    /** The saved branch of a rack position; an absent {@code B} is {@link RackPosition#FIRST_BRANCH}. */
+    private static int branchOf(CompoundTag tag) {
+        return tag.contains(BRANCH, Tag.TAG_INT) ? tag.getInt(BRANCH) : RackPosition.FIRST_BRANCH;
+    }
+
+    private static Optional<RackPosition> rackPosition(int branch, int x, int y, Side side) {
+        if (x < 0 || x > AisleGeometry.MAX_LENGTH || y < 0 || y >= AisleGeometry.MAX_HEIGHT
+                || branch < RackPosition.FIRST_BRANCH || branch > RackPosition.MAX_BRANCH)
             return Optional.empty();
-        return Optional.of(new RackPosition(x, y, side));
+        return Optional.of(new RackPosition(branch, x, y, side));
     }
 
     private static Map<ItemKey, Long> readStock(ListTag items, HolderLookup.Provider registries) {

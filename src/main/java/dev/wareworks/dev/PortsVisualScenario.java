@@ -24,7 +24,7 @@ import com.simibubi.create.content.logistics.funnel.BeltFunnelBlock;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerGoggleSummary;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
@@ -649,7 +649,7 @@ public final class PortsVisualScenario implements VisualScenario {
         StringBuilder status = new StringBuilder();
         ClientLevel level = context.minecraft().level;
         if (level != null) {
-            AisleLayout layout = layout(context.origin());
+            BranchLayout layout = layout(context.origin());
             for (Port port : PORTS) {
                 BlockPos pos = layout.rackPos(port.position());
                 status.append(status.isEmpty() ? "ports=" : ",").append(port.id()).append(':');
@@ -698,7 +698,7 @@ public final class PortsVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(controllerPos(dock),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(KEEPER), WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                 .setValue(WarehouseStockKeeperBlock.FACING, inward(layout, KEEPER)));
         level.setBlockAndUpdate(layout.rackPos(INPUT), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
@@ -716,7 +716,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * side by side merge into one inventory of two rack positions, and a shared-inventory alias would make every
      * assertion of this scenario about the wrong thing.
      */
-    private static void buildStorage(ServerLevel level, AisleLayout layout) {
+    private static void buildStorage(ServerLevel level, BranchLayout layout) {
         Direction outward = layout.sideDirection(Side.RIGHT);
         for (int x : STORAGE_X) {
             BlockPos rack = layout.rackPos(RackPosition.of(x, 0, Side.RIGHT));
@@ -735,7 +735,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * a funnel, a chute, a hopper or a Mechanical Arm are what a player has, and a hopper is the one that needs no
      * kinetic power and no filter.
      */
-    private static void buildPorts(ServerLevel level, AisleLayout layout) {
+    private static void buildPorts(ServerLevel level, BranchLayout layout) {
         Direction outward = layout.sideDirection(PORT_SIDE);
         for (Port port : PORTS) {
             BlockPos pos = layout.rackPos(port.position());
@@ -759,7 +759,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * belt funnel is only perpendicular (and so only takes items off) when its facing axis differs from the belt's
      * movement axis, and it hands its items to the block at {@code facing.getOpposite()}.
      */
-    private static void buildLane(ServerLevel level, AisleLayout layout, Port port, String what) {
+    private static void buildLane(ServerLevel level, BranchLayout layout, Port port, String what) {
         BlockPos start = lanePos(layout, port, 0);
         BlockPos end = lanePos(layout, port, port.laneLength() - 1);
         belt(level, start, end, what);
@@ -780,7 +780,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * chest onto the belt one stack at a time, from above, with exactly the call a chute or a brass funnel over the tail
      * makes ({@code AbstractChuteBlock}).
      */
-    private static void buildFeedBelt(ServerLevel level, AisleLayout layout) {
+    private static void buildFeedBelt(ServerLevel level, BranchLayout layout) {
         BlockPos start = feedBeltStart(layout);
         BlockPos end = feedBeltEnd(layout);
         belt(level, start, end, "the feed belt");
@@ -790,7 +790,7 @@ public final class PortsVisualScenario implements VisualScenario {
     }
 
     /** The lane behind the general overflow: a belt carrying the surplus out of the warehouse. */
-    private static void buildOverflowLane(ServerLevel level, AisleLayout layout) {
+    private static void buildOverflowLane(ServerLevel level, BranchLayout layout) {
         buildLane(level, layout, OVERFLOW_PORT, "the overflow belt");
     }
 
@@ -801,7 +801,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * fed, not a chest filling up. The press stands before the funnel in the belt's own direction, so nothing can reach
      * the barrel unpressed.
      */
-    private static void buildMachine(ServerLevel level, AisleLayout layout) {
+    private static void buildMachine(ServerLevel level, BranchLayout layout) {
         buildLane(level, layout, MACHINE_PORT, "the machine belt");
         BlockPos press = pressPos(layout);
         // HORIZONTAL_FACING *is* the press's rotation axis (MechanicalPressBlock#getRotationAxis), so its motor stands
@@ -842,7 +842,7 @@ public final class PortsVisualScenario implements VisualScenario {
     /** Which way a belt carries follows the sign of its rotation, so every belt is read back and reversed if wrong. */
     private static void aimBelts(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         aimBelt(level, feedBeltStart(layout), feedBeltStart(layout).relative(AISLE), feedDirection(layout),
                 "the feed belt");
         aimBelt(level, lanePos(layout, OVERFLOW_PORT, 0),
@@ -864,7 +864,7 @@ public final class PortsVisualScenario implements VisualScenario {
 
     private static boolean beltsAimed(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         return beltMovement(level, feedBeltStart(layout)) == feedDirection(layout)
                 && beltMovement(level, lanePos(layout, OVERFLOW_PORT, 0)) == laneDirection(layout)
                 && beltMovement(level, lanePos(layout, MACHINE_PORT, 0)) == laneDirection(layout);
@@ -929,7 +929,7 @@ public final class PortsVisualScenario implements VisualScenario {
     /** Sets rank, redstone behaviour and filter of every port, exactly as its two value boxes would. */
     private static void configurePorts(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (Port port : PORTS) {
             WarehouseOutputBlockEntity be = portAt(level, layout, port);
             if (port.rank() != PortSettings.REQUEST_RANK && !be.setPortRank(port.rank()))
@@ -960,7 +960,7 @@ public final class PortsVisualScenario implements VisualScenario {
      */
     private static void placeLevers(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (Port port : PORTS) {
             if (port == OVERFLOW_PORT)
                 continue;
@@ -1006,7 +1006,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertInitialState(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         for (Port port : PORTS) {
             WarehouseOutputBlockEntity be = portAt(level, layout, port);
@@ -1040,7 +1040,7 @@ public final class PortsVisualScenario implements VisualScenario {
     /** Starts a feed phase: the items go into the feed chest, and the census expectation grows by them. */
     private void startFeed(MinecraftServer server, VisualContext context, Item item, int amount) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         feeding = item;
         idlePolls = 0;
         insertAll(level, feedChestPos(layout), new ItemStack(item, amount));
@@ -1056,7 +1056,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private boolean fedAndSettled(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         feedBelt(level, layout);
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
         if (crane == null)
@@ -1073,7 +1073,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * Moves one stack from the feed chest onto the belt's tail, from above, whenever that segment is free — the call a
      * chute or a brass funnel over the tail makes.
      */
-    private static void feedBelt(ServerLevel level, AisleLayout layout) {
+    private static void feedBelt(ServerLevel level, BranchLayout layout) {
         IItemHandler chest = handlerAt(level, feedChestPos(layout));
         BlockPos start = feedBeltStart(layout);
         DirectBeltInputBehaviour belt = BlockEntityBehaviour.get(level, start, DirectBeltInputBehaviour.TYPE);
@@ -1098,7 +1098,7 @@ public final class PortsVisualScenario implements VisualScenario {
     /** The surplus really rides the overflow belt, so the frozen shot of it is a picture of something happening. */
     private boolean surplusOnTheBelt(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         feedBelt(level, layout);
         return beltItems(level, lanePos(layout, OVERFLOW_PORT, 0)) >= ITEMS_ON_THE_BELT;
     }
@@ -1106,7 +1106,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertOverflowTookTheSurplus(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long stored = controller.countOf(IRON_KEY);
         long handedOver = portAt(level, layout, OVERFLOW_PORT).exportedItems();
@@ -1131,7 +1131,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertLeverStoppedIt(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long handedOver = portAt(level, layout, OVERFLOW_PORT).exportedItems();
         long waiting = input(level, layout).bufferedItems().count(IRON_KEY);
@@ -1149,7 +1149,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertFilteredOverflowSorted(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long storedCobble = controller.countOf(COBBLE_KEY);
         long handedOver = portAt(level, layout, FILTERED_PORT).exportedItems();
@@ -1173,7 +1173,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertDiversionTookEverything(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long handedOver = portAt(level, layout, DIVERSION_PORT).exportedItems();
         long expectedHandover = GOLD_DIVERTED + IRON_JAMMED;
@@ -1196,7 +1196,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertStoresAgain(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long stored = controller.countOf(GOLD_KEY);
         long handedOver = portAt(level, layout, DIVERSION_PORT).exportedItems();
@@ -1211,14 +1211,14 @@ public final class PortsVisualScenario implements VisualScenario {
 
     private static boolean pulseDelivered(MinecraftServer server, VisualContext context, int expectedTotal) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         return itemsBehind(level, layout, PULSE_PORT, DIAMOND) >= expectedTotal;
     }
 
     private void assertPulsesHandedOut(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long handedOut = itemsBehind(level, layout, PULSE_PORT, DIAMOND);
         long inStock = controller.countOf(DIAMOND_KEY);
@@ -1245,7 +1245,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertRaisedMaximumStores(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long stored = controller.countOf(IRON_KEY);
         if (stored != IRON_TO_THE_MACHINE)
@@ -1285,7 +1285,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private boolean machineSupplied(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         measureSheetsAndRequests(server, context);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
@@ -1299,7 +1299,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private int measureSheetsAndRequests(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         int open = controller(level, dock).requestsFor(layout.rackPos(MACHINE_PORT.position())).size();
         maxOpenRequests = Math.max(maxOpenRequests, open);
         if (open > 1)
@@ -1311,7 +1311,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private boolean pressFinished(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
         if (crane == null)
             throw new VisualTestException("the dock of the aisle is missing");
@@ -1325,7 +1325,7 @@ public final class PortsVisualScenario implements VisualScenario {
     private void assertMachineWasFed(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         WarehouseControllerBlockEntity controller = controller(level, dock);
         long handedToTheMachine = ironBeforeTheMachine - controller.countOf(IRON_KEY);
         int pressed = sheets(level, layout);
@@ -1381,7 +1381,7 @@ public final class PortsVisualScenario implements VisualScenario {
      */
     private static void setLever(MinecraftServer server, VisualContext context, Port port, boolean powered) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         BlockPos pos = leverPos(layout, port);
         BlockState state = level.getBlockState(pos);
         if (!state.is(Blocks.LEVER))
@@ -1402,7 +1402,7 @@ public final class PortsVisualScenario implements VisualScenario {
     /** Phase 2: the lever the first row did without, placed and switched on. */
     private static void switchOverflowLever(MinecraftServer server, VisualContext context, boolean powered) {
         ServerLevel level = server.overworld();
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         BlockPos pos = leverPos(layout, OVERFLOW_PORT);
         if (!level.getBlockState(pos).is(Blocks.LEVER))
             placeLever(level, pos);
@@ -1416,7 +1416,7 @@ public final class PortsVisualScenario implements VisualScenario {
         ClientLevel level = context.minecraft().level;
         if (level == null)
             return false;
-        AisleLayout layout = layout(context.origin());
+        BranchLayout layout = layout(context.origin());
         for (Port port : PORTS) {
             BlockPos pos = layout.rackPos(port.position());
             if (!(level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity be))
@@ -1593,8 +1593,8 @@ public final class PortsVisualScenario implements VisualScenario {
 
     // --- geometry ----------------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static BlockPos controllerPos(BlockPos dock) {
@@ -1602,22 +1602,22 @@ public final class PortsVisualScenario implements VisualScenario {
     }
 
     /** Which way a station on {@code rack} faces to look into the aisle. */
-    private static Direction inward(AisleLayout layout, RackPosition rack) {
+    private static Direction inward(BranchLayout layout, RackPosition rack) {
         return layout.sideDirection(rack.side()).getOpposite();
     }
 
     /** The hopper that drains a port: directly below it, facing out of the rack wall. */
-    private static BlockPos drainPos(AisleLayout layout, Port port) {
+    private static BlockPos drainPos(BranchLayout layout, Port port) {
         return layout.rackPos(RackPosition.of(port.x(), 0, PORT_SIDE));
     }
 
     /** Position {@code step} of the lane behind a port, counted from the block the drain pushes into. */
-    private static BlockPos lanePos(AisleLayout layout, Port port, int step) {
+    private static BlockPos lanePos(BranchLayout layout, Port port, int step) {
         return drainPos(layout, port).relative(layout.sideDirection(PORT_SIDE), step + 1);
     }
 
     /** Which way a lane behind the port row carries: away from the aisle. */
-    private static Direction laneDirection(AisleLayout layout) {
+    private static Direction laneDirection(BranchLayout layout) {
         return layout.sideDirection(PORT_SIDE);
     }
 
@@ -1629,36 +1629,36 @@ public final class PortsVisualScenario implements VisualScenario {
      * The far side on purpose: the near side of every lane is where the cameras of the ports before it stand, and a
      * barrel there is a block a flying player cannot fly through.
      */
-    private static BlockPos laneBarrelPos(AisleLayout layout, Port port) {
+    private static BlockPos laneBarrelPos(BranchLayout layout, Port port) {
         return lanePos(layout, port, port.laneLength() - 1).above().relative(AISLE);
     }
 
     /** The lever of a port: on top of it, orthogonally adjacent, clear of both the aisle opening and the back plate. */
-    private static BlockPos leverPos(AisleLayout layout, Port port) {
+    private static BlockPos leverPos(BranchLayout layout, Port port) {
         return layout.rackPos(port.position()).above();
     }
 
     /** The Mechanical Press: two blocks above the machine lane, which is where Create looks for a belt to press on. */
-    private static BlockPos pressPos(AisleLayout layout) {
+    private static BlockPos pressPos(BranchLayout layout) {
         return lanePos(layout, MACHINE_PORT, PRESS_OFFSET).above(2);
     }
 
     /** The feed belt's tail, {@value #FEED_BELT} blocks out along the warehouse's rack side. */
-    private static BlockPos feedBeltStart(AisleLayout layout) {
+    private static BlockPos feedBeltStart(BranchLayout layout) {
         return layout.rackPos(INPUT).relative(layout.sideDirection(INPUT.side()), FEED_BELT);
     }
 
     /** The feed belt's last block, right in front of the warehouse input. */
-    private static BlockPos feedBeltEnd(AisleLayout layout) {
+    private static BlockPos feedBeltEnd(BranchLayout layout) {
         return layout.rackPos(INPUT).relative(layout.sideDirection(INPUT.side()));
     }
 
-    private static BlockPos feedChestPos(AisleLayout layout) {
+    private static BlockPos feedChestPos(BranchLayout layout) {
         return feedBeltStart(layout).above();
     }
 
     /** Which way the feed belt must carry: from its tail towards the warehouse input. */
-    private static Direction feedDirection(AisleLayout layout) {
+    private static Direction feedDirection(BranchLayout layout) {
         return layout.sideDirection(INPUT.side()).getOpposite();
     }
 
@@ -1706,7 +1706,7 @@ public final class PortsVisualScenario implements VisualScenario {
         return keeper;
     }
 
-    private static WarehouseInputBlockEntity input(ServerLevel level, AisleLayout layout) {
+    private static WarehouseInputBlockEntity input(ServerLevel level, BranchLayout layout) {
         WarehouseInputBlockEntity input = WareworksBlockEntityTypes.WAREHOUSE_INPUT.getNullable(level,
                 layout.rackPos(INPUT));
         if (input == null)
@@ -1714,7 +1714,7 @@ public final class PortsVisualScenario implements VisualScenario {
         return input;
     }
 
-    private static WarehouseOutputBlockEntity portAt(ServerLevel level, AisleLayout layout, Port port) {
+    private static WarehouseOutputBlockEntity portAt(ServerLevel level, BranchLayout layout, Port port) {
         WarehouseOutputBlockEntity be = WareworksBlockEntityTypes.WAREHOUSE_OUTPUT.getNullable(level,
                 layout.rackPos(port.position()));
         if (be == null)
@@ -1734,7 +1734,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * drains it and the whole lane behind it. A sum, because a hopper moves one item every eight ticks and an
      * assertion must not depend on how far it has got.
      */
-    private static long itemsBehind(ServerLevel level, AisleLayout layout, Port port, Item item) {
+    private static long itemsBehind(ServerLevel level, BranchLayout layout, Port port, Item item) {
         long total = portAt(level, layout, port).bufferedItems().count(ItemKey.of(item));
         total += countAt(level, drainPos(layout, port), item);
         for (BlockPos pos : receiverPositions(layout, port)) {
@@ -1749,7 +1749,7 @@ public final class PortsVisualScenario implements VisualScenario {
      * its lane and the barrel the funnel at the end fills. A sum over all of them, because a hopper moves one item every
      * eight ticks and no assertion may depend on how far it has got.
      */
-    private static List<BlockPos> receiverPositions(AisleLayout layout, Port port) {
+    private static List<BlockPos> receiverPositions(BranchLayout layout, Port port) {
         if (port.laneLength() == 0)
             return List.of(lanePos(layout, port, 0));
         List<BlockPos> positions = new ArrayList<>(port.laneLength() + 1);
@@ -1760,7 +1760,7 @@ public final class PortsVisualScenario implements VisualScenario {
     }
 
     /** Iron sheets anywhere behind the machine port: on its belt, or queued up against the stop at the lane's end. */
-    private static int sheets(ServerLevel level, AisleLayout layout) {
+    private static int sheets(ServerLevel level, BranchLayout layout) {
         return (int) itemsBehind(level, layout, MACHINE_PORT, sheet());
     }
 

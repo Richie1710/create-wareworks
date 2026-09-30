@@ -12,6 +12,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.StackerCraneBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
@@ -27,7 +28,7 @@ import net.minecraft.world.level.material.MapColor;
  * <p>
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
- * controller, interface, input, output, terminal, production station, stock keeper
+ * controller, interface, input, output, terminal, production station, stock keeper, home point
  * (GameTest {@code creativetaborderandicon}). Recipes are hand-written JSON in
  * {@code data/wareworks/recipe/} (GameTest {@code recipesloaded}). This class must only be initialised through
  * {@link #register()}, which {@code Wareworks} calls after {@code registerEventListeners}; otherwise Registrate silently
@@ -62,15 +63,17 @@ public final class WareworksBlocks {
                     .register();
 
     /**
-     * Warehouse rail ({@code docs/warehouse-system.md} §1). No block entity; horizontal axis blockstate over the
-     * hand-made {@code models/block/warehouse_rail/block.json} (authored along the Z axis). Drops itself.
+     * Warehouse rail ({@code docs/warehouse-system.md} §1, ADR-033). No block entity; a variant blockstate over the six
+     * hand-made models in {@code models/block/warehouse_rail/} (authored along the Z axis, and on the north and east
+     * sides for the junctions), picked by the rail's derived connection flags
+     * ({@code WareworksBlockStateGen#railBlockProvider}). Drops itself.
      */
     public static final BlockEntry<WarehouseRailBlock> WAREHOUSE_RAIL =
             REGISTRATE.block("warehouse_rail", WarehouseRailBlock::new)
                     .initialProperties(SharedProperties::softMetal)
                     .properties(p -> p.mapColor(MapColor.METAL).sound(SoundType.METAL).noOcclusion())
                     .transform(TagGen.pickaxeOnly())
-                    .blockstate(BlockStateGen.horizontalAxisBlockProvider(true))
+                    .blockstate(WareworksBlockStateGen.railBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();
@@ -216,6 +219,28 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .blockstate(WareworksBlockStateGen.stockKeeperBlockProvider())
+                    .item()
+                    .transform(ModelGen.customItemModel("_", "block"))
+                    .register();
+
+    /**
+     * Warehouse home point ({@code docs/stacker-crane.md} §4.7, M21, issue #1, ADR-034). The rack position a stacker
+     * crane with nothing to do waits at: a player places it beside the rails where the next job usually starts, and the
+     * crane parks in front of it instead of standing wherever its last job left it. Without one the dock stays home.
+     * <p>
+     * Its own blockstate ({@link WareworksBlockStateGen#homePointBlockProvider()}) over the hand-made
+     * {@code models/block/warehouse_home_point/block.json} and its two lamp twins (authored with the aisle side facing
+     * north); the item model uses the dark block model. It holds no items, so there is nothing to drop but itself, and
+     * it does not conduct redstone, like the other members that sit in a rack row.
+     */
+    public static final BlockEntry<WarehouseHomePointBlock> WAREHOUSE_HOME_POINT =
+            REGISTRATE.block("warehouse_home_point", WarehouseHomePointBlock::new)
+                    .initialProperties(SharedProperties::softMetal)
+                    .properties(p -> p.mapColor(MapColor.COLOR_LIGHT_GRAY).sound(SoundType.NETHERITE_BLOCK)
+                            .isRedstoneConductor((state, level, pos) -> false))
+                    .transform(TagGen.pickaxeOnly())
+                    .transform(WareworksTags.relocationProtected())
+                    .blockstate(WareworksBlockStateGen.homePointBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();

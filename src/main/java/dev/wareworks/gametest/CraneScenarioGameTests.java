@@ -311,7 +311,7 @@ public final class CraneScenarioGameTests {
                 .thenExecute(() -> {
                     for (TimedStore store : stores) {
                         StackerCraneBlockEntity dock = store.aisle.dock();
-                        helper.assertValueEqual(dock.craneState().pose(), StackerCraneBlockEntity.HOME_POSE, "parked");
+                        helper.assertValueEqual(dock.craneState().pose(), dock.homePose(), "parked");
                         store.modelTicks = TravelTimeModel.tripTicks(dock.currentSpeeds(), WareworksConfig.transferTicks(),
                                 0, 0, INPUT.x(), INPUT.y(), store.target.x(), store.target.y());
                         store.aisle.insertAll(store.aisle.handlerAt(store.aisle.rackPos(INPUT)), IRON.toStack(STORED_IRON));
@@ -380,7 +380,7 @@ public final class CraneScenarioGameTests {
                     StackerCraneBlockEntity dock = aisle.dock();
                     helper.assertTrue(jobs.isEmpty(), "no job while the warehouse is full: " + jobs);
                     helper.assertTrue(backedOff[0], "the controller backs off after warehouse full");
-                    helper.assertValueEqual(dock.craneState().pose(), StackerCraneBlockEntity.HOME_POSE, "crane parked");
+                    helper.assertValueEqual(dock.craneState().pose(), dock.homePose(), "crane parked");
                     helper.assertValueEqual(aisle.stationCount(INPUT, IRON), (long) STORED_IRON, "input keeps its items");
                     helper.assertValueEqual(aisle.controller().lastPlanReason(), Optional.of(NoJobReason.WAREHOUSE_FULL),
                             "still full");

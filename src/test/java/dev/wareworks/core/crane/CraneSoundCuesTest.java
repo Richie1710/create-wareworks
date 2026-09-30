@@ -1,8 +1,10 @@
 package dev.wareworks.core.crane;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -10,15 +12,28 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import dev.wareworks.core.address.BranchGeometry;
+import dev.wareworks.core.address.Heading;
+import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CraneSoundCues.Cue;
 import dev.wareworks.core.crane.CraneSoundCues.Sound;
 import dev.wareworks.core.job.CraneSpeeds;
+import dev.wareworks.core.job.TravelTimeModel;
+import dev.wareworks.core.warehouse.CraneRoute;
+import dev.wareworks.core.warehouse.RouteModel;
 
 class CraneSoundCuesTest {
     private static final CraneSpeeds FAST = new CraneSpeeds(0.5, 0.5, 0.5);
     private static final CraneSpeeds SLOW = new CraneSpeeds(0.05, 0.05, 0.05);
     private static final long START_TICK = 1000;
+    /** An L: 8 rails east from the dock, then 5 south from the corner block, which is A-8 and B-0 (M21). */
+    private static final NetworkGeometry CORNER = new NetworkGeometry(List.of(
+            BranchGeometry.first(Heading.EAST, 8),
+            new BranchGeometry(1, 8, 0, Heading.SOUTH, 5)), 6);
+    /** A quarter turn costs one block of travel, so it takes two ticks at {@link #FAST}. */
+    private static final double PENALTY = TravelTimeModel.DEFAULT_TURN_PENALTY_BLOCKS;
+    private static final int MAX_TICKS = 10_000;
 
     private final CraneSoundCues cues = new CraneSoundCues();
 
@@ -36,12 +51,52 @@ class CraneSoundCuesTest {
         }
     }
 
+    /**
+     * One tick-by-tick run through the corner of {@link #CORNER}, with the route recomputed every tick as the dock
+     * does it; returns what the machine did and what it sounded like, per tick.
+     */
+    private List<Tick> driveRoute(long firstTick, CranePose start, CranePose target, CraneSpeeds speeds) {
+        List<Tick> ticks = new ArrayList<>();
+        CranePose pose = start;
+        long tick = firstTick;
+        while (!CraneMotion.isAt(pose, target)) {
+            CraneRoute route = RouteModel.route(CORNER, pose.branch(), pose.x(), target.branch(), target.x())
+                    .orElseThrow();
+            CranePose next = CraneMotion.step(pose, target, speeds, route, PENALTY);
+            ticks.add(new Tick(pose, next, cuesOf(cues.motion(tick++, pose, next, target, speeds, false))));
+            if (next.equals(pose) || ticks.size() > MAX_TICKS)
+                return fail("target not reached: " + pose + " → " + target);
+            pose = next;
+        }
+        return ticks;
+    }
+
+    /** What one tick did to the machine, and what it played. */
+    private record Tick(CranePose before, CranePose after, List<Cue> cues) {
+        boolean yawed() {
+            return CranePose.yawDelta(before.yaw(), after.yaw()) != 0.0;
+        }
+    }
+
     private static List<Cue> cuesOf(List<Sound> sounds) {
         return sounds.stream().map(Sound::cue).toList();
     }
 
     private static long count(List<List<Cue>> perTick, Cue cue) {
         return perTick.stream().flatMap(List::stream).filter(cue::equals).count();
+    }
+
+    private static long heard(List<Tick> ticks, Cue cue) {
+        return ticks.stream().flatMap(tick -> tick.cues().stream()).filter(cue::equals).count();
+    }
+
+    /** The first tick that played {@code cue}; fails if none did. */
+    private static int indexOf(List<Tick> ticks, Cue cue) {
+        for (int tick = 0; tick < ticks.size(); tick++) {
+            if (ticks.get(tick).cues().contains(cue))
+                return tick;
+        }
+        return fail("no tick played " + cue);
     }
 
     @Test
@@ -122,6 +177,93 @@ class CraneSoundCuesTest {
         assertEquals(0, count(perTick, Cue.RAIL_CLACK), "no travel along the aisle");
         List<List<Cue>> down = travel(START_TICK + 1000, CranePose.at(0, 2, Side.LEFT), CranePose.at(0, 0, Side.LEFT), speeds);
         assertEquals(4, count(down, Cue.LIFT_CHAIN), "the same going down");
+    }
+
+    // --- corners (M21, ADR-033) -----------------------------------------------------------------------------------
+
+    /**
+     * A corner is heard as one swing with two ends: the cogwheel rumble in the tick the machine starts turning, the
+     * clack in the tick it squares up with the aisle it turned onto — and nothing in between, however many ticks the
+     * quarter takes.
+     */
+    @Test
+    void aTurnRumblesWhenItStartsAndClacksWhenItSquaresUp() {
+        List<Tick> ticks = driveRoute(START_TICK, CranePose.at(0, 0.0, 0.0, Side.LEFT, Heading.EAST),
+                CranePose.at(1, 3.0, 0.0, Side.LEFT, Heading.SOUTH), FAST);
+        assertEquals(1, heard(ticks, Cue.TURN));
+        assertEquals(1, heard(ticks, Cue.TURN_SETTLE));
+        int rumble = indexOf(ticks, Cue.TURN);
+        int settle = indexOf(ticks, Cue.TURN_SETTLE);
+        assertTrue(ticks.get(rumble).yawed(), "the rumble is in a tick the machine really swings");
+        assertFalse(ticks.get(rumble).after().isAligned(), "a quarter takes two ticks at this speed");
+        assertTrue(settle > rumble, "the clack ends the swing it started");
+        assertTrue(ticks.get(settle).after().isAligned(), "the machine stands square when it clacks");
+        for (int tick = rumble; tick <= settle; tick++)
+            assertTrue(ticks.get(tick).yawed(), "the swing runs from the rumble to the clack");
+        // One trip, one start and one stop, both still exactly once although it stopped rolling in between.
+        assertEquals(1, heard(ticks, Cue.TRAVEL_START));
+        assertEquals(1, heard(ticks, Cue.TRAVEL_STOP));
+    }
+
+    /** No wheel crosses a rail joint while the machine swings on the spot, or while it is renamed onto the next aisle. */
+    @Test
+    void theRailsAreSilentWhileTheMachineSwingsAndWhileItIsHandedOver() {
+        List<Tick> ticks = driveRoute(START_TICK, CranePose.at(0, 0.0, 0.0, Side.LEFT, Heading.EAST),
+                CranePose.at(1, 5.0, 0.0, Side.LEFT, Heading.SOUTH), FAST);
+        boolean sawHandOver = false;
+        for (Tick tick : ticks) {
+            if (tick.yawed())
+                assertFalse(tick.cues().contains(Cue.RAIL_CLACK), "clack while swinging: " + tick);
+            if (tick.before().branch() != tick.after().branch()) {
+                sawHandOver = true;
+                assertFalse(tick.cues().contains(Cue.RAIL_CLACK),
+                        "a rename jumps x by a whole aisle and must not be read as joints: " + tick);
+            }
+        }
+        assertTrue(sawHandOver, "the trip really crosses the corner");
+        assertTrue(heard(ticks, Cue.RAIL_CLACK) > 0, "the straight stretches do clack");
+    }
+
+    /** A quarter that takes many ticks is still one rumble and one clack, not a noise per tick. */
+    @Test
+    void aSlowTurnIsNotHeardOncePerTick() {
+        List<Tick> ticks = driveRoute(START_TICK, CranePose.at(0, 7.0, 0.0, Side.LEFT, Heading.EAST),
+                CranePose.at(1, 1.0, 0.0, Side.LEFT, Heading.SOUTH), SLOW);
+        long swinging = ticks.stream().filter(Tick::yawed).count();
+        assertTrue(swinging >= CraneSoundCues.TURN_MIN_INTERVAL_TICKS * 2L,
+                "a quarter at " + SLOW.vx() + " blocks per tick takes " + swinging + " ticks");
+        assertEquals(1, heard(ticks, Cue.TURN));
+        assertEquals(1, heard(ticks, Cue.TURN_SETTLE));
+    }
+
+    /** A turn whose rumble the rate limit swallowed settles silently: the pair is never split. */
+    @Test
+    void aRateLimitedTurnMakesNoLoneClack() {
+        CranePose east = CranePose.at(1, 2.0, 0.0, Side.LEFT, Heading.EAST);
+        CranePose south = east.facing(Heading.SOUTH);
+        CranePose west = east.facing(Heading.WEST);
+        // Far away, so nothing in this test arrives and the travel cues stay out of the way.
+        CranePose away = CranePose.at(1, 9.0, 0.0, Side.LEFT, Heading.SOUTH);
+        assertEquals(List.of(Cue.TURN, Cue.TURN_SETTLE, Cue.TRAVEL_START),
+                cuesOf(cues.motion(START_TICK, east, south, away, FAST, false)), "a turn that snaps in one tick");
+        // Another quarter within the interval: no rumble, and therefore no clack either.
+        assertEquals(List.of(), cuesOf(cues.motion(START_TICK + 1, south, west, away, FAST, false)));
+        // Long enough afterwards the next corner is heard again, both voices.
+        assertEquals(List.of(Cue.TURN, Cue.TURN_SETTLE), cuesOf(
+                cues.motion(START_TICK + CraneSoundCues.TURN_MIN_INTERVAL_TICKS, west, south, away, FAST, false)));
+    }
+
+    /** The stop cue waits for the yaw: a machine standing on its target block that still has to swing has not arrived. */
+    @Test
+    void travelStopsOnlyOnceTheMachineStandsSquare() {
+        CranePose target = CranePose.at(1, 0.0, 0.0, Side.LEFT, Heading.SOUTH);
+        CranePose onTheCorner = CranePose.at(1, 0.0, 0.0, Side.LEFT, Heading.EAST);
+        CranePose halfTurned = onTheCorner.withYaw(1.5);
+        assertEquals(List.of(Cue.TURN, Cue.TRAVEL_START),
+                cuesOf(cues.motion(START_TICK, onTheCorner, halfTurned, target, FAST, false)),
+                "standing on the target block, still a quarter away from it");
+        assertEquals(List.of(Cue.TURN_SETTLE, Cue.TRAVEL_STOP),
+                cuesOf(cues.motion(START_TICK + 1, halfTurned, target, target, FAST, false)));
     }
 
     @Test

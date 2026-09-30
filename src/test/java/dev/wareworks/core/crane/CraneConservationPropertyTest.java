@@ -208,8 +208,8 @@ class CraneConservationPropertyTest {
                         case OUTPUT -> pick(OUTPUTS);
                         // The generator above only ever picks storage, input or output: a supply job's reroute goes
                         // back into storage (ADR-024), so a production station is never a reroute target here, and a
-                        // stock keeper holds no items at all (M15).
-                        case PRODUCTION, KEEPER ->
+                        // stock keeper (M15) and a home point (M21) hold no items at all.
+                        case PRODUCTION, KEEPER, HOME ->
                                 throw new IllegalStateException("no reroute to a " + kind);
                     };
                     rerouted++;

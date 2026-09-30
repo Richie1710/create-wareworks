@@ -1,18 +1,233 @@
 {
   "variants": {
-    "axis=x,waterlogged=false": {
+    "axis=x,closed=false,east=false,north=false,south=false,west=false": {
       "model": "wareworks:block/warehouse_rail/block",
       "y": 90
     },
-    "axis=x,waterlogged=true": {
+    "axis=x,closed=false,east=false,north=false,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/end",
+      "y": 270
+    },
+    "axis=x,closed=false,east=false,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/end",
+      "y": 180
+    },
+    "axis=x,closed=false,east=false,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/corner",
+      "y": 180
+    },
+    "axis=x,closed=false,east=false,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/end"
+    },
+    "axis=x,closed=false,east=false,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/corner",
+      "y": 270
+    },
+    "axis=x,closed=false,east=false,north=true,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/block"
+    },
+    "axis=x,closed=false,east=false,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/tee",
+      "y": 180
+    },
+    "axis=x,closed=false,east=true,north=false,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/end",
+      "y": 90
+    },
+    "axis=x,closed=false,east=true,north=false,south=false,west=true": {
       "model": "wareworks:block/warehouse_rail/block",
       "y": 90
     },
-    "axis=z,waterlogged=false": {
+    "axis=x,closed=false,east=true,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/corner",
+      "y": 90
+    },
+    "axis=x,closed=false,east=true,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/tee",
+      "y": 90
+    },
+    "axis=x,closed=false,east=true,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/corner"
+    },
+    "axis=x,closed=false,east=true,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/tee",
+      "y": 270
+    },
+    "axis=x,closed=false,east=true,north=true,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/tee"
+    },
+    "axis=x,closed=false,east=true,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/cross"
+    },
+    "axis=x,closed=true,east=false,north=false,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=false,north=false,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=false,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=false,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=false,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=false,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=false,north=true,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=false,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=false,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=false,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=true,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=x,closed=true,east=true,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed",
+      "y": 90
+    },
+    "axis=z,closed=false,east=false,north=false,south=false,west=false": {
       "model": "wareworks:block/warehouse_rail/block"
     },
-    "axis=z,waterlogged=true": {
+    "axis=z,closed=false,east=false,north=false,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/end",
+      "y": 270
+    },
+    "axis=z,closed=false,east=false,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/end",
+      "y": 180
+    },
+    "axis=z,closed=false,east=false,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/corner",
+      "y": 180
+    },
+    "axis=z,closed=false,east=false,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/end"
+    },
+    "axis=z,closed=false,east=false,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/corner",
+      "y": 270
+    },
+    "axis=z,closed=false,east=false,north=true,south=true,west=false": {
       "model": "wareworks:block/warehouse_rail/block"
+    },
+    "axis=z,closed=false,east=false,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/tee",
+      "y": 180
+    },
+    "axis=z,closed=false,east=true,north=false,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/end",
+      "y": 90
+    },
+    "axis=z,closed=false,east=true,north=false,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/block",
+      "y": 90
+    },
+    "axis=z,closed=false,east=true,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/corner",
+      "y": 90
+    },
+    "axis=z,closed=false,east=true,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/tee",
+      "y": 90
+    },
+    "axis=z,closed=false,east=true,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/corner"
+    },
+    "axis=z,closed=false,east=true,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/tee",
+      "y": 270
+    },
+    "axis=z,closed=false,east=true,north=true,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/tee"
+    },
+    "axis=z,closed=false,east=true,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/cross"
+    },
+    "axis=z,closed=true,east=false,north=false,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=false,north=false,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=false,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=false,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=false,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=false,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=false,north=true,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=false,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=false,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=false,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=false,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=false,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=true,south=false,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=true,south=false,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=true,south=true,west=false": {
+      "model": "wareworks:block/warehouse_rail/closed"
+    },
+    "axis=z,closed=true,east=true,north=true,south=true,west=true": {
+      "model": "wareworks:block/warehouse_rail/closed"
     }
   }
 }

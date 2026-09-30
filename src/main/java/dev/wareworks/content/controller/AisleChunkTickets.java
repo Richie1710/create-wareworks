@@ -94,6 +94,9 @@ public final class AisleChunkTickets {
      * periodic re-check at all ({@code WarehouseControllerBlockEntity.CHUNK_KEEP_RECHECK_TICKS}). Reaching that needs
      * more than {@value} aisles refused at the same time in one dimension; each of them still works exactly as it did
      * before M19 ({@link #wakeRefused} keeps the set free of dead entries, so the limit cannot silently fill up).
+     * <p>
+     * The same bound is used for {@link #OVER_CAP}, whose entries are pruned by {@link #overCapEntries} for the same
+     * reason.
      */
     private static final int MAX_REMEMBERED_REFUSALS = 64;
     /**
@@ -112,6 +115,16 @@ public final class AisleChunkTickets {
     private static final WorldAttached<Map<BlockPos, Holder>> HOLDERS = new WorldAttached<>(level -> new LinkedHashMap<>());
     /** Controllers of a level that wanted to hold and were refused by the level cap, so a freed slot can wake them. */
     private static final WorldAttached<Set<BlockPos>> REFUSED = new WorldAttached<>(level -> new LinkedHashSet<>());
+    /**
+     * Controllers of a level whose warehouse wants to hold and needs more chunks than {@code maxChunksPerAisle} allows,
+     * with the number it would need (M21, ADR-033). Nothing another aisle does can free this one, so these are
+     * <b>not</b> woken like {@link #REFUSED} — they are remembered for one reason only: so that
+     * {@code /wareworks chunks} can name the number, which is the one thing an operator can act on. Before M21 the
+     * shortfall was reachable only by walking up to the controller with goggles on, and a warehouse that bends is
+     * exactly the one an operator will not have expected to be over the cap.
+     */
+    private static final WorldAttached<Map<BlockPos, Integer>> OVER_CAP =
+            new WorldAttached<>(level -> new LinkedHashMap<>());
     /** Reinstated seeds waiting for their controller to claim them; empty except for the first seconds after a load. */
     private static final List<Seed> SEEDS = new ArrayList<>();
     /** Levels that are going down: their block entities must not release, or the save would lose the holds. */
@@ -151,6 +164,16 @@ public final class AisleChunkTickets {
 
     /** One holding aisle, for {@code /wareworks chunks}. */
     public record Entry(BlockPos owner, int chunks, ChunkKeepReason reason, long heldTicks, boolean unclaimed) {
+    }
+
+    /**
+     * One warehouse that holds nothing because its footprint is over {@code maxChunksPerAisle}, for
+     * {@code /wareworks chunks}.
+     *
+     * @param owner  the warehouse controller
+     * @param needed how many chunks its whole footprint would need
+     */
+    public record OverCapEntry(BlockPos owner, int needed) {
     }
 
     /**
@@ -243,8 +266,8 @@ public final class AisleChunkTickets {
 
     // Both events are posted for CLIENT levels too, on the render thread: ClientLevel's constructor posts Load, and
     // Minecraft#setLevel / #clearLevel / #disconnect post Unload while the integrated server is still ticking. Nothing
-    // in this class is thread safe (a WeakHashMap-backed set, two WorldAttached maps whose get() puts on a miss, a plain
-    // ArrayList), so a client level must never reach it - the same guard WarehouseRegistry has at every entry point.
+    // in this class is thread safe (a WeakHashMap-backed set, three WorldAttached maps whose get() puts on a miss, a
+    // plain ArrayList), so a client level must never reach it - the same guard WarehouseRegistry has at every entry point.
     private static void onLevelLoad(LevelEvent.Load event) {
         if (!(event.getLevel() instanceof ServerLevel))
             return;
@@ -258,6 +281,7 @@ public final class AisleChunkTickets {
         UNLOADING.add(level);
         HOLDERS.get(level).clear();
         REFUSED.get(level).clear();
+        OVER_CAP.get(level).clear();
         SEEDS.removeIf(seed -> seed.level() == level);
     }
 
@@ -325,6 +349,7 @@ public final class AisleChunkTickets {
         Map<BlockPos, Holder> holders = HOLDERS.get(level);
         holders.clear();
         REFUSED.get(level).clear();
+        OVER_CAP.get(level).clear();
         SEEDS.removeIf(seed -> seed.level() == level);
         if (tickets.isEmpty())
             return;
@@ -518,6 +543,27 @@ public final class AisleChunkTickets {
     /** The controller at {@code owner} no longer wants to hold. */
     static void forget(ServerLevel level, BlockPos owner) {
         REFUSED.get(level).remove(owner);
+        OVER_CAP.get(level).remove(owner);
+    }
+
+    /**
+     * Remembers that the warehouse at {@code owner} wants to hold and its footprint is over the per-warehouse cap.
+     * Bounded exactly like {@link #REFUSED}: past the limit the shortfall is still on the controller's own goggles,
+     * only not in the listing.
+     */
+    static void overCap(ServerLevel level, BlockPos owner, int needed) {
+        Map<BlockPos, Integer> overCap = OVER_CAP.get(level);
+        if (overCap.size() < MAX_REMEMBERED_REFUSALS || overCap.containsKey(owner))
+            overCap.put(owner.immutable(), needed);
+    }
+
+    /**
+     * The warehouse at {@code owner} is not over the per-warehouse cap (any more). Called on <b>every</b> decision that
+     * is not {@link ChunkKeepReason#TOO_MANY_CHUNKS}, including the ones that hold: a limit raised under a warehouse
+     * that then holds its chunks must not leave a stale row in {@code /wareworks chunks} saying it holds nothing.
+     */
+    static void notOverCap(ServerLevel level, BlockPos owner) {
+        OVER_CAP.get(level).remove(owner);
     }
 
     /** A slot came free: every controller that was refused re-decides on its next tick, instead of at some poll. */
@@ -595,6 +641,30 @@ public final class AisleChunkTickets {
             Holder holder = entry.getValue();
             entries.add(new Entry(entry.getKey(), holder.held.size(), holder.reason,
                     Math.max(0L, now - holder.heldSince), holder.seed));
+        }
+        return entries;
+    }
+
+    /**
+     * Every warehouse of {@code level} that holds nothing because its footprint is over {@code maxChunksPerAisle},
+     * with the number of chunks it would need (M21, ADR-033).
+     * <p>
+     * Pruned while it is read, exactly as {@link #wakeRefused} prunes the refusal set: an entry whose controller has
+     * gone, been replaced or had its chunk unloaded is dropped instead of filling the bounded map until the level
+     * unloads. {@code isLoaded} is asked first, so listing never loads (or generates) a chunk.
+     */
+    public static List<OverCapEntry> overCapEntries(ServerLevel level) {
+        Map<BlockPos, Integer> overCap = OVER_CAP.get(level);
+        List<OverCapEntry> entries = new ArrayList<>(overCap.size());
+        for (Map.Entry<BlockPos, Integer> entry : List.copyOf(overCap.entrySet())) {
+            BlockPos owner = entry.getKey();
+            if (!level.isLoaded(owner)
+                    || !(level.getBlockEntity(owner) instanceof WarehouseControllerBlockEntity controller)
+                    || controller.isRemoved()) {
+                overCap.remove(owner);
+                continue;
+            }
+            entries.add(new OverCapEntry(owner, entry.getValue()));
         }
         return entries;
     }

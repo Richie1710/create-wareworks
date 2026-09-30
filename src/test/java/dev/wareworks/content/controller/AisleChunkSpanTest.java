@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
  * {@link AisleChunkSpan}: the chunk footprint of an aisle (M19, issue #10, ADR-031).
  * <p>
  * The two things that would be silent bugs in the world are pinned here: that the <b>controller</b> at aisle-local
- * {@code x = -1} is inside the set — it is the ticket owner, and it lies outside {@code AisleLayout#bounds()} — and that
+ * {@code x = -1} is inside the set — it is the ticket owner, and it lies outside {@code BranchLayout#bounds()} — and that
  * lateral {@code ±2} is, which is where the inventories behind the rack positions and the machine behind a collecting port
  * live. The worst-case counts are pinned too, because the default of {@code chunkLoading.maxChunksPerAisle} is derived
  * from them.

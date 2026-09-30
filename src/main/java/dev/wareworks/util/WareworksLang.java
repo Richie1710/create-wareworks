@@ -10,9 +10,11 @@ import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.warehouse.LocationKind;
+import dev.wareworks.core.warehouse.NetworkStop;
 import net.createmod.catnip.lang.LangBuilder;
 import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.item.Item;
@@ -30,6 +32,11 @@ import net.minecraft.world.item.Item;
  * which is where Create calls {@code addToGoggleTooltip}.
  */
 public final class WareworksLang {
+    /**
+     * What separates one aisle from the next in a list of them ({@link #networkAisles}): a spaced middle dot, which
+     * needs no translation and cannot be mistaken for part of a number.
+     */
+    public static final String AISLE_SEPARATOR = " · ";
     /** {@code "%1$s x%2$s"}: item name and amount. */
     public static final String GOGGLES_ITEM_COUNT = "gui.goggles.item_count";
     /** {@code "Empty"}. */
@@ -70,29 +77,31 @@ public final class WareworksLang {
     public static final String GOGGLES_CHUNK_LOADING = "gui.goggles.chunk_loading";
     /** {@code "Chunk loading: none (%1$s)"}: why an aisle with work holds nothing (M19). */
     public static final String GOGGLES_CHUNK_LOADING_NONE = "gui.goggles.chunk_loading_none";
-    /** {@code "Chunk loading: none (server limit: %1$s aisles)"}: the level cap is reached (M19). */
+    /** {@code "Chunk loading: none (server limit: %1$s warehouses)"}: the level cap is reached (M19). */
     public static final String GOGGLES_CHUNK_LOADING_AT_LIMIT = "gui.goggles.chunk_loading_at_limit";
-    /** {@code "Chunk loading: none (collecting limit: %1$s aisles)"}: the collect opt-in's own cap is reached (M19). */
+    /** {@code "Chunk loading: none (collecting limit: %1$s warehouses)"}: the collect opt-in's own cap is reached (M19). */
     public static final String GOGGLES_CHUNK_LOADING_AT_COLLECT_LIMIT = "gui.goggles.chunk_loading_at_collect_limit";
-    /** {@code "Chunk loading: none (this aisle needs %1$s of %2$s chunks)"}: over the per-aisle cap (M19). */
+    /** {@code "Chunk loading: none (this warehouse needs %1$s of %2$s chunks)"}: over the per-warehouse cap (M19). */
     public static final String GOGGLES_CHUNK_LOADING_TOO_MANY = "gui.goggles.chunk_loading_too_many";
     /** Header of {@code /wareworks chunks} for one dimension. */
     public static final String COMMAND_CHUNKS_HEADER = "command.chunks.header";
-    /** One holding aisle in {@code /wareworks chunks}. */
+    /** One holding warehouse in {@code /wareworks chunks}. */
     public static final String COMMAND_CHUNKS_ROW = "command.chunks.row";
-    /** An aisle whose reinstated hold no controller has claimed yet. */
+    /** A warehouse whose reinstated hold no controller has claimed yet. */
     public static final String COMMAND_CHUNKS_ROW_UNCLAIMED = "command.chunks.row_unclaimed";
-    /** No aisle of the server holds anything. */
+    /** One warehouse that holds nothing because its footprint is over {@code maxChunksPerAisle} (M21). */
+    public static final String COMMAND_CHUNKS_ROW_OVER_CAP = "command.chunks.row_over_cap";
+    /** No warehouse of the server holds anything. */
     public static final String COMMAND_CHUNKS_NONE = "command.chunks.none";
     /** Totals of {@code /wareworks chunks} over the whole server. */
     public static final String COMMAND_CHUNKS_TOTAL = "command.chunks.total";
     /** The dimension's block-ticket count (any mod) next to its whole force-loaded count. */
     public static final String COMMAND_CHUNKS_RAW = "command.chunks.raw";
-    /** One aisle was released by command. */
+    /** One warehouse was released by command. */
     public static final String COMMAND_CHUNKS_RELEASED = "command.chunks.released";
     /** Nothing was held at the given position in the dimension the command looked in. */
     public static final String COMMAND_CHUNKS_NOT_HELD = "command.chunks.not_held";
-    /** Every aisle of every dimension was released by command. */
+    /** Every warehouse of every dimension was released by command. */
     public static final String COMMAND_CHUNKS_RELEASED_ALL = "command.chunks.released_all";
     /** {@code "Stored Items"}: label of the warehouse interface's store filter slot. */
     public static final String INTERFACE_STORE_FILTER = "interface.store_filter";
@@ -136,6 +145,21 @@ public final class WareworksLang {
     public static final String GOGGLES_STACKER_CRANE = "gui.goggles.stacker_crane";
     /** {@code "Aisle: %1$s long, mast %2$s high"}: aisle length and mast height. */
     public static final String GOGGLES_AISLE_SIZE = "gui.goggles.aisle_size";
+    /**
+     * {@code "Warehouse: %1$s rails, %2$s aisles, mast %3$s high"}: the size of a warehouse that bends (M21, ADR-033).
+     * A warehouse of one aisle keeps showing {@link #GOGGLES_AISLE_SIZE} instead, word for word as before.
+     */
+    public static final String GOGGLES_NETWORK_SIZE = "gui.goggles.network_size";
+    /** {@code "Aisles: %1$s"}: the letter and length of each aisle of a warehouse that bends. */
+    public static final String GOGGLES_NETWORK_AISLES = "gui.goggles.network_aisles";
+    /** {@code "Aisles: %1$s, and %2$s more"}: the same, for a warehouse with more aisles than a tooltip should list. */
+    public static final String GOGGLES_NETWORK_AISLES_MORE = "gui.goggles.network_aisles_more";
+    /** {@code "Warehouse stops at %1$s: %2$s"}: where the rails were cut off, and which reason did it. */
+    public static final String GOGGLES_NETWORK_STOP = "gui.goggles.network_stop";
+    /** Prefix of the one reason per {@link NetworkStop}, e.g. {@code gui.goggles.network_stop.branched}. */
+    public static final String GOGGLES_NETWORK_STOP_REASON = "gui.goggles.network_stop.";
+    /** {@code "On aisle %1$s at position %2$s"}: where the machine of a warehouse that bends is standing. */
+    public static final String GOGGLES_CRANE_ON_AISLE = "gui.goggles.crane_on_aisle";
     /** {@code "No controller"}. */
     public static final String GOGGLES_NO_CONTROLLER = "gui.goggles.no_controller";
     /** {@code "Controller linked"}. */
@@ -144,6 +168,10 @@ public final class WareworksLang {
     public static final String CRANE_MAST_HEIGHT = "crane.mast_height";
     /** Action bar text when a wrench cannot turn a busy stacker crane dock. */
     public static final String CRANE_ROTATION_LOCKED = "crane.rotation_locked";
+    /** Action bar text after a wrench closed a warehouse rail. */
+    public static final String RAIL_CLOSED = "rail.closed";
+    /** Action bar text after a wrench opened a warehouse rail again. */
+    public static final String RAIL_OPENED = "rail.opened";
     /** {@code "Open requests: %1$s"}: open retrieval requests of a controller. */
     public static final String GOGGLES_OPEN_REQUESTS = "gui.goggles.open_requests";
     /** {@code "Warehouse Input:"}: goggle header of a warehouse input. */
@@ -223,6 +251,12 @@ public final class WareworksLang {
     public static final String GOGGLES_RULES_BELOW_MINIMUM = "gui.goggles.rules_below_minimum";
     /** {@code "At maximum: %1$s"}: governing rules of the aisle that stop their item from being stored. */
     public static final String GOGGLES_RULES_AT_MAXIMUM = "gui.goggles.rules_at_maximum";
+
+    /**
+     * {@code "Warehouse Home Point:"}: goggle header of a warehouse home point (M21, ADR-034). The sentence below it
+     * is the one of its {@code HomePointStatus}, whose own {@code langKey()} names it.
+     */
+    public static final String GOGGLES_WAREHOUSE_HOME_POINT = "gui.goggles.warehouse_home_point";
 
     /** {@code "Warehouse Stock Keeper:"}: goggle header of a warehouse stock keeper (M15). */
     public static final String GOGGLES_WAREHOUSE_STOCK_KEEPER = "gui.goggles.warehouse_stock_keeper";
@@ -633,6 +667,13 @@ public final class WareworksLang {
     public static final String DISPLAY_AISLE_LINE_PORTS_COLLECTING = "display_source.aisle.line_ports_collecting";
     /** {@code "Chunks: %1$s held"}: the aisle is holding its own chunks loaded (M19, issue #10). */
     public static final String DISPLAY_AISLE_LINE_CHUNKS = "display_source.aisle.line_chunks";
+    /** {@code "Aisles: %1$s"}: the letters of a warehouse that bends (M21, issue #1). */
+    public static final String DISPLAY_AISLE_LINE_AISLES = "display_source.aisle.line_aisles";
+    /**
+     * {@code "Aisles: %1$s (cut short)"}: the same, while the discovery stopped short of what the player laid. The
+     * reason takes a sentence, which is why the board only marks it and the controller's goggles name it.
+     */
+    public static final String DISPLAY_AISLE_LINE_AISLES_CUT = "display_source.aisle.line_aisles_cut";
     /** {@code "No aisle"}: the source block belongs to no loaded aisle. */
     public static final String DISPLAY_AISLE_NO_AISLE = "display_source.aisle.no_aisle";
     /**
@@ -711,6 +752,11 @@ public final class WareworksLang {
         return GOGGLES_NO_JOB_REASON_PREFIX + reason.name().toLowerCase(Locale.ROOT);
     }
 
+    /** Relative lang key of a discovery stop reason, e.g. {@code gui.goggles.network_stop.branched}. */
+    public static String networkStopKey(NetworkStop stop) {
+        return GOGGLES_NETWORK_STOP_REASON + stop.name().toLowerCase(Locale.ROOT);
+    }
+
     /** "Status: phase" with the phase highlighted. */
     public static LangBuilder craneStatus(CranePhase phase) {
         return translate(GOGGLES_CRANE_STATUS, translate(cranePhaseKey(phase)).style(ChatFormatting.WHITE))
@@ -774,19 +820,19 @@ public final class WareworksLang {
                 .style(ChatFormatting.GOLD);
     }
 
-    /** "Chunk loading: none (server limit: 4 aisles)" (M19). */
+    /** "Chunk loading: none (server limit: 4 warehouses)" (M19, M21). */
     public static LangBuilder chunkLoadingAtLimit(int maxAisles) {
         return translate(GOGGLES_CHUNK_LOADING_AT_LIMIT, number(maxAisles).style(ChatFormatting.WHITE))
                 .style(ChatFormatting.GOLD);
     }
 
-    /** "Chunk loading: none (collecting limit: 1 aisles)" (M19). */
+    /** "Chunk loading: none (collecting limit: 1 warehouses)" (M19, M21). */
     public static LangBuilder chunkLoadingAtCollectLimit(int maxAisles) {
         return translate(GOGGLES_CHUNK_LOADING_AT_COLLECT_LIMIT, number(maxAisles).style(ChatFormatting.WHITE))
                 .style(ChatFormatting.GOLD);
     }
 
-    /** "Chunk loading: none (this aisle needs 12 of 8 chunks)" (M19). */
+    /** "Chunk loading: none (this warehouse needs 12 of 10 chunks)" (M19, M21). */
     public static LangBuilder chunkLoadingTooMany(int needed, int allowed) {
         return translate(GOGGLES_CHUNK_LOADING_TOO_MANY, number(needed).style(ChatFormatting.WHITE),
                 number(allowed).style(ChatFormatting.WHITE)).style(ChatFormatting.GOLD);
@@ -848,6 +894,47 @@ public final class WareworksLang {
     public static LangBuilder aisleSize(int length, int mastHeight) {
         return translate(GOGGLES_AISLE_SIZE, number(length).style(ChatFormatting.GOLD),
                 number(mastHeight).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
+    }
+
+    /** "Warehouse: N rails, M aisles, mast H high" with every number highlighted (M21, ADR-033). */
+    public static LangBuilder networkSize(int rails, int aisles, int mastHeight) {
+        return translate(GOGGLES_NETWORK_SIZE, number(rails).style(ChatFormatting.GOLD),
+                number(aisles).style(ChatFormatting.GOLD), number(mastHeight).style(ChatFormatting.GOLD))
+                .style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Aisles: A 16 · B 12 · C 13", or "Aisles: A 16 · B 12, and 4 more" once the list is longer than {@code listed}.
+     * <p>
+     * The list itself is built rather than translated: it is aisle letters and rail counts, which read the same in
+     * every language, and one key per possible aisle count would be unmaintainable. The separator is the middle dot
+     * every Wareworks surface already uses between two numbers of one line.
+     *
+     * @param entries one "letter length" entry per aisle, in aisle order
+     * @param listed  how many of them the line may name
+     */
+    public static LangBuilder networkAisles(List<String> entries, int listed) {
+        int shown = Math.min(entries.size(), Math.max(1, listed));
+        String list = String.join(AISLE_SEPARATOR, entries.subList(0, shown));
+        if (shown == entries.size())
+            return translate(GOGGLES_NETWORK_AISLES, text(list).style(ChatFormatting.GOLD))
+                    .style(ChatFormatting.GRAY);
+        return translate(GOGGLES_NETWORK_AISLES_MORE, text(list).style(ChatFormatting.GOLD),
+                number(entries.size() - shown).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
+    }
+
+    /** "Warehouse stops at x y z: &lt;reason&gt;", the line that says where a player has to go and look. */
+    public static LangBuilder networkStop(BlockPos stopped, NetworkStop stop) {
+        return translate(GOGGLES_NETWORK_STOP,
+                text(stopped.getX() + " " + stopped.getY() + " " + stopped.getZ()).style(ChatFormatting.GOLD),
+                translate(networkStopKey(stop)).style(ChatFormatting.GOLD))
+                .style(ChatFormatting.GRAY);
+    }
+
+    /** "On aisle B at position 7" with both highlighted: where the machine is standing on a warehouse that bends. */
+    public static LangBuilder craneOnAisle(char letter, int position) {
+        return translate(GOGGLES_CRANE_ON_AISLE, text(String.valueOf(letter)).style(ChatFormatting.GOLD),
+                number(position).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
     }
 
     /** "Address: A-03-07R" with the address highlighted. */

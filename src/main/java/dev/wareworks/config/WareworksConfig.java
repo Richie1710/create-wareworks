@@ -4,6 +4,8 @@ import org.apache.commons.lang3.tuple.Pair;
 
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
+import dev.wareworks.core.crane.HomeReturn;
+import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.stock.RestockLimits;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -21,6 +23,13 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * needs into plain parameters.
  */
 public final class WareworksConfig {
+    /**
+     * Default of {@code crane.returnHomeIdleTicks}: ten seconds without work before a crane of a warehouse with more
+     * than one aisle drives home (M21, ADR-034). Long enough that a warehouse working through a queue never sends its
+     * crane away between two jobs, short enough that a player who walks up to their terminal finds the machine there.
+     */
+    public static final int DEFAULT_RETURN_HOME_IDLE_TICKS = 200;
+
     public static final Server SERVER;
     public static final ModConfigSpec SERVER_SPEC;
 
@@ -80,6 +89,14 @@ public final class WareworksConfig {
         return get(SERVER.geometryRefreshTicks);
     }
 
+    public static int maxNetworkRails() {
+        return get(SERVER.maxNetworkRails);
+    }
+
+    public static int maxBranches() {
+        return get(SERVER.maxBranches);
+    }
+
     // --- crane ---------------------------------------------------------------------------------------------------
 
     public static double stressImpact() {
@@ -100,6 +117,23 @@ public final class WareworksConfig {
 
     public static double maxBlocksPerTick() {
         return get(SERVER.maxBlocksPerTick);
+    }
+
+    /**
+     * Blocks of travel one quarter turn at a corner costs the crane (M21, ADR-033). The turn therefore runs off the
+     * same rotational source and scales with RPM exactly as driving does; 0 turns in a single tick.
+     */
+    public static double turnPenaltyBlocks() {
+        return get(SERVER.turnPenaltyBlocks);
+    }
+
+    /**
+     * Ticks a crane waits for work before it drives back to its home point, or to its dock when the warehouse has none
+     * (M21, ADR-034, {@code docs/stacker-crane.md} §4.7). {@link HomeReturn#OFF} switches it off; a warehouse of one
+     * straight aisle never returns whatever this says.
+     */
+    public static int returnHomeIdleTicks() {
+        return get(SERVER.returnHomeIdleTicks);
     }
 
     public static int transferTicks() {
@@ -281,7 +315,12 @@ public final class WareworksConfig {
         return maxTicketedAislesPerLevel() > 0;
     }
 
-    /** How many chunks one aisle may hold; an aisle that needs more holds <b>nothing</b> (never a partial hold). */
+    /**
+     * How many chunks one <b>warehouse</b> may hold over all its aisles together; a warehouse that needs more holds
+     * <b>nothing</b> (never a partial hold) and names the number it would need (M19, ADR-031; ADR-033 for the network).
+     * <p>
+     * The key keeps its M19 name on purpose: renaming a config key silently resets every server that had set it.
+     */
     public static int maxChunksPerAisle() {
         return get(SERVER.maxChunksPerAisle);
     }
@@ -310,12 +349,16 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxAisleLength;
         public final ModConfigSpec.IntValue maxMastHeight;
         public final ModConfigSpec.IntValue geometryRefreshTicks;
+        public final ModConfigSpec.IntValue maxNetworkRails;
+        public final ModConfigSpec.IntValue maxBranches;
 
         public final ModConfigSpec.DoubleValue stressImpact;
         public final ModConfigSpec.DoubleValue travelBlocksPerTickPerRpm;
         public final ModConfigSpec.DoubleValue liftBlocksPerTickPerRpm;
         public final ModConfigSpec.DoubleValue armExtendPerTickPerRpm;
         public final ModConfigSpec.DoubleValue maxBlocksPerTick;
+        public final ModConfigSpec.DoubleValue turnPenaltyBlocks;
+        public final ModConfigSpec.IntValue returnHomeIdleTicks;
         public final ModConfigSpec.IntValue transferTicks;
         public final ModConfigSpec.IntValue grabberStacks;
         public final ModConfigSpec.IntValue grabberMaxItems;
@@ -358,7 +401,7 @@ public final class WareworksConfig {
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
             maxAisleLength = builder
-                    .comment("Maximum number of consecutive warehouse rails counted as one aisle.",
+                    .comment("Maximum number of warehouse rails in one straight aisle of a warehouse.",
                             "Clients draw the moving crane only while the dock's chunk is within their render distance,",
                             "so a player at the far end of a long aisle needs a render distance that reaches the dock.")
                     .defineInRange("maxAisleLength", 32, 1, 128);
@@ -368,6 +411,19 @@ public final class WareworksConfig {
             geometryRefreshTicks = builder
                     .comment("[in Ticks] How often a stacker crane re-counts the rails of its aisle.")
                     .defineInRange("geometryRefreshTicks", 40, 1, 1200);
+            maxNetworkRails = builder
+                    .comment("Maximum number of warehouse rails in one connected warehouse, over all of its aisles.",
+                            "Rails that touch connect, so this is what bounds the cost of one discovery run.",
+                            "Rails beyond it are not part of the warehouse; the dock reports where it stopped.")
+                    .defineInRange("maxNetworkRails", 256, 16, 1024);
+            maxBranches = builder
+                    .comment("Maximum number of straight aisles in one connected warehouse.",
+                            "The ceiling is 26 because every aisle needs an address letter A-Z.",
+                            "Set it to 1 to keep every warehouse the single straight aisle it was before version 0.6:",
+                            "discovery then follows the dock's facing and reads nothing beside it, so no rail next to",
+                            "an aisle can join it or shorten it. A rail laid across the aisle line still connects",
+                            "whichever way it is turned - closing it with a wrench is what keeps a rail out.")
+                    .defineInRange("maxBranches", 16, 1, 26);
             builder.pop();
 
             builder.comment("Stacker crane").push("crane");
@@ -386,6 +442,26 @@ public final class WareworksConfig {
             maxBlocksPerTick = builder
                     .comment("[in Blocks per Tick] Hard speed cap for each crane axis.")
                     .defineInRange("maxBlocksPerTick", 1.0, 0.01, 4.0);
+            turnPenaltyBlocks = builder
+                    .comment("[in Blocks] What one quarter turn at a corner costs the crane, measured in blocks of "
+                            + "travel.",
+                            "The turn runs off the same shaft as driving, so it also scales with RPM: at the default "
+                                    + "travel speed a turn takes 3 ticks at 128 RPM and 12 at 32 RPM.",
+                            "The job planner counts turns with this number too, so a rack round a corner ranks behind "
+                                    + "an equally distant one on the aisle the crane is already on.",
+                            "0 is a turn in a single tick.")
+                    .defineInRange("turnPenaltyBlocks", TravelTimeModel.DEFAULT_TURN_PENALTY_BLOCKS,
+                            TravelTimeModel.MIN_TURN_PENALTY_BLOCKS, TravelTimeModel.MAX_TURN_PENALTY_BLOCKS);
+            returnHomeIdleTicks = builder
+                    .comment("[in Ticks] How long a stacker crane waits for work before it drives back to its home "
+                            + "point - or, without one, to its dock.",
+                            "Only a warehouse with MORE THAN ONE aisle sends its crane home: on a single straight "
+                                    + "aisle the crane stays exactly where its last job left it, which is what it "
+                                    + "always did.",
+                            "The trip home is no job: it is interrupted by the next real job in the tick that job "
+                                    + "arrives, and it never holds a chunk loaded.",
+                            "0 switches returning home off everywhere.")
+                    .defineInRange("returnHomeIdleTicks", DEFAULT_RETURN_HOME_IDLE_TICKS, HomeReturn.OFF, 72000);
             transferTicks = builder
                     .comment("[in Ticks] Duration of one pick or drop.")
                     .defineInRange("transferTicks", 10, 1, 200);
@@ -594,17 +670,30 @@ public final class WareworksConfig {
                                     + "RUNNING collection going; it cannot start one.")
                     .defineInRange("maxTicketedAislesPerLevel", 0, 0, 64);
             maxChunksPerAisle = builder
-                    .comment("How many chunks ONE aisle may hold. An aisle whose footprint needs more holds NOTHING "
-                            + "(never a partial hold) and says so when looked at through goggles. Lowering this under "
-                            + "an aisle that is ALREADY holding makes it let go, and extending an aisle past this "
-                            + "while it holds does the same: the number is a bound on the hold, not only on taking it.",
-                            "The footprint is the aisle box plus one block on every horizontal side, which covers the "
-                                    + "controller, the dock, the rails, every rack position, the inventories behind "
-                                    + "them and the machine behind a collecting port.",
-                            "Worst case by aisle length: 8 chunks at aisle.maxAisleLength = 32 (the default), 12 at "
-                                    + "64, 20 at 128. The default below is exactly the worst case of the default "
-                                    + "length cap, so raising aisle.maxAisleLength means raising this too.")
-                    .defineInRange("maxChunksPerAisle", 8, 1, 64);
+                    .comment("How many chunks ONE warehouse may hold, over all of its aisles together. A warehouse "
+                            + "whose footprint needs more holds NOTHING (never a partial hold) and says so when "
+                            + "looked at through goggles and in /wareworks chunks, both naming the number it would "
+                            + "need. Lowering this under a warehouse that is ALREADY holding makes it let go, and "
+                            + "building a warehouse past this while it holds does the same: the number is a bound on "
+                            + "the hold, not only on taking it.",
+                            "The footprint is each aisle's box plus one block on every horizontal side, counted once "
+                                    + "where aisles share a chunk. It covers the controller, the dock, the rails, "
+                                    + "every rack position, the inventories behind them and the machine behind a "
+                                    + "collecting port.",
+                            "Worst case by shape, all at the default aisle.maxAisleLength = 32: ONE straight aisle "
+                                    + "needs 8 chunks (12 at a length cap of 64, 20 at 128). A warehouse that BENDS "
+                                    + "needs more than that, because a corner turns one long rectangle into two "
+                                    + "shorter ones at right angles: an L of 32 + 16 rails needs 10, an L of two full "
+                                    + "32-rail aisles needs 12, a U of three needs 16, and the widest warehouse "
+                                    + "aisle.maxNetworkRails = 256 allows needs 36 - the same 36 a single 256-rail "
+                                    + "aisle would need if the length cap let you build one.",
+                            "So this number no longer follows from aisle.maxAisleLength alone, and the default 10 is "
+                                    + "deliberately NOT the worst case any more, the way 8 was while a warehouse was "
+                                    + "always one straight aisle: it covers every straight aisle of the default "
+                                    + "length cap and a first corner, and a bigger warehouse has to raise it. That is "
+                                    + "a chunk-loading budget, not a build limit - a warehouse over this number works "
+                                    + "exactly as it always did, it only does not hold its own chunks.")
+                    .defineInRange("maxChunksPerAisle", 10, 1, 64);
             releaseDelayTicks = builder
                     .comment("[in Ticks] How long a holding aisle waits after its last work before it lets its chunks "
                             + "go.",

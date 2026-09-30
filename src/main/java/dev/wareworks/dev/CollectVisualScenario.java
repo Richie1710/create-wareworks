@@ -15,7 +15,7 @@ import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 
-import dev.wareworks.content.controller.AisleLayout;
+import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -284,7 +284,7 @@ public final class CollectVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(dock.relative(AISLE.getOpposite()), WareworksBlocks.WAREHOUSE_CONTROLLER
                 .getDefaultState().setValue(WarehouseControllerBlock.FACING, AISLE));
 
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         // The rack wall: the items the crane fetches end up here, in plain sight of the "stored" camera.
         Direction storageOutward = layout.sideDirection(Side.LEFT);
         for (int x = STORAGE_FIRST_POSITION; x <= STORAGE_LAST_POSITION; x++) {
@@ -555,8 +555,8 @@ public final class CollectVisualScenario implements VisualScenario {
 
     // --- helpers -----------------------------------------------------------------------------------------------------
 
-    private static AisleLayout layout(BlockPos dock) {
-        return AisleLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
+    private static BranchLayout layout(BlockPos dock) {
+        return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
     private static BlockPos controllerPos(BlockPos dock) {
@@ -565,7 +565,7 @@ public final class CollectVisualScenario implements VisualScenario {
 
     /** The inventory a collecting port reaches into: the block behind it, i.e. away from the aisle. */
     private static BlockPos machinePos(BlockPos dock) {
-        AisleLayout layout = layout(dock);
+        BranchLayout layout = layout(dock);
         return layout.rackPos(PORT).relative(layout.sideDirection(PORT.side()));
     }
 

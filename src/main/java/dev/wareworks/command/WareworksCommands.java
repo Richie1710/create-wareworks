@@ -6,6 +6,7 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.util.WareworksLang;
@@ -31,7 +32,13 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * how long it has been holding, then the totals, and per dimension two numbers: how many chunks are force-loaded there by
  * <b>block tickets</b> of any mod — the number directly comparable with the rows above, so a discrepancy is what a leak
  * looks like — and how many are force-loaded in total, entity tickets and vanilla {@code /forceload} included. A
- * dimension where the mod holds nothing is listed too as soon as anything is force-loaded in it.</li>
+ * dimension where the mod holds nothing is listed too as soon as anything is force-loaded in it.
+ * <p>
+ * Under the same header it also lists every warehouse that holds <b>nothing</b> because its footprint is over
+ * {@code chunkLoading.maxChunksPerAisle}, with the number of chunks it would need and the limit that stopped it (M21,
+ * ADR-033). A warehouse that bends covers more chunk columns than the straight aisle it grew out of, so this is the
+ * cap an operator meets without having changed a setting — and before M21 the only way to find it was to walk up to
+ * the controller wearing goggles.</li>
  * <li>{@code /wareworks chunks release <x y z>} acts on the <b>sender's</b> dimension, exactly as every subcommand of
  * vanilla {@code /forceload} does, and its answer names that dimension. {@code release all} acts on <b>all</b> of them,
  * so the scope of the word matches the scope of the listing.</li>
@@ -78,14 +85,16 @@ public final class WareworksCommands {
         int totalChunks = 0;
         int totalAisles = 0;
         int dimensions = 0;
+        int limit = WareworksConfig.maxChunksPerAisle();
         for (ServerLevel level : source.getServer().getAllLevels()) {
             List<AisleChunkTickets.Entry> entries = AisleChunkTickets.entries(level);
+            List<AisleChunkTickets.OverCapEntry> overCap = AisleChunkTickets.overCapEntries(level);
             int blockTickets = AisleChunkTickets.rawBlockForcedChunkCount(level);
             int forced = AisleChunkTickets.forcedChunkCount(level);
             // A dimension where the mod holds nothing but something else does still gets its numbers: "we hold nothing
             // here and NeoForge tracks four block tickets" is precisely what a leak looks like, and leaving the line out
             // in exactly that state hid it from the check the operator is told to make (M19 review).
-            if (entries.isEmpty() && forced == 0)
+            if (entries.isEmpty() && overCap.isEmpty() && forced == 0)
                 continue;
             if (!entries.isEmpty())
                 dimensions++;
@@ -96,11 +105,19 @@ public final class WareworksCommands {
                 totalAisles++;
                 source.sendSuccess(() -> row(level, entry), false);
             }
+            // The warehouses that hold NOTHING because they are over the per-warehouse cap, each naming the number it
+            // would need (M21, ADR-033). They are listed under the same header as the holders on purpose: an operator
+            // reading this command is asking "what is Wareworks doing with my chunks", and "this warehouse wanted 14
+            // and your limit is 10" is the other half of that answer. A warehouse that bends is the one that meets
+            // this cap without anybody having changed a setting.
+            for (AisleChunkTickets.OverCapEntry entry : overCap)
+                source.sendSuccess(() -> overCapRow(level, entry, limit), false);
             source.sendSuccess(() -> WareworksLang.translateDirect(WareworksLang.COMMAND_CHUNKS_RAW,
                     level.dimension().location().toString(), WareworksLang.number(blockTickets),
                     WareworksLang.number(forced)), false);
         }
         if (totalAisles == 0) {
+            // Still says "nothing is held", because nothing is - the over-cap rows above have just said why.
             source.sendSuccess(() -> WareworksLang.translateDirect(WareworksLang.COMMAND_CHUNKS_NONE), false);
             return 0;
         }
@@ -126,6 +143,21 @@ public final class WareworksCommands {
                 WareworksLang.number(entry.chunks()),
                 WareworksLang.translateDirect(entry.reason().langKey()),
                 WareworksLang.number(entry.heldTicks() / 20));
+    }
+
+    /**
+     * One warehouse that is over {@code chunkLoading.maxChunksPerAisle}: it holds nothing, and the row names the number
+     * it would need next to the limit that stopped it (M21, ADR-033).
+     * <p>
+     * {@link AisleChunkTickets#overCapEntries} has already checked that the controller is loaded and still there, so the
+     * letter lookup cannot fail and cannot load a chunk.
+     */
+    private static net.minecraft.network.chat.Component overCapRow(ServerLevel level,
+            AisleChunkTickets.OverCapEntry entry, int limit) {
+        String letter = level.getBlockEntity(entry.owner()) instanceof WarehouseControllerBlockEntity controller
+                ? String.valueOf(controller.aisleLetter()) : "?";
+        return WareworksLang.translateDirect(WareworksLang.COMMAND_CHUNKS_ROW_OVER_CAP, format(entry.owner()), letter,
+                WareworksLang.number(entry.needed()), WareworksLang.number(limit));
     }
 
     /**
