@@ -64,10 +64,9 @@ public final class WareworksLangGen {
                 case UNLOADED -> "the next rail is in a chunk that is not loaded";
                 case CLOSED -> "the next rail is closed with a wrench";
                 case SECOND_DOCK -> "another stacker crane dock stands here, and a dock is a wall";
-                case BRANCHED -> "the rails split here, which needs a later version";
-                case LOOPED -> "the rails lead back into themselves here";
                 case MAX_RAILS -> "the warehouse has as many rails as this server allows";
                 case MAX_BRANCHES -> "the warehouse has as many aisles as this server allows";
+                case MAX_JUNCTIONS -> "the warehouse has as many junctions as this server allows";
                 case MAX_LENGTH -> "this aisle is as long as this server allows";
             });
         }
@@ -82,6 +81,8 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.RAIL_OPENED), "Rail opened: it joins the rails it touches again");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ADDRESS), "Address: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED), "Misaligned");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_UNREACHABLE_AISLE),
+                "The crane cannot reach this aisle");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_HINT), "Turn the brass port away from the aisle");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_FILTER), "Filter: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_FILTER_NONE), "Accepts everything");
@@ -91,7 +92,7 @@ public final class WareworksLangGen {
                 "Without effect: another interface counts this inventory");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_PRIORITY), "Priority: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_CONTROLLER), "Warehouse Controller:");
-        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_AISLE_LETTER), "Aisle %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_LETTER), "Warehouse %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_NO_DOCK), "No stacker crane in front");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_DOCK_MISALIGNED),
@@ -339,7 +340,7 @@ public final class WareworksLangGen {
                 case OUTPUT_FULL -> "an output is full";
                 case PRODUCTION_FULL -> "a production station cannot take more ingredients";
                 case NOT_IN_STOCK -> "a requested item is not in stock";
-                case LOCATION_UNAVAILABLE -> "an output is not reachable";
+                case LOCATION_UNAVAILABLE -> "an output station is not loaded or no longer there";
                 case UNREACHABLE -> "the crane cannot drive to the aisle these items belong on";
                 case BUDGET_EXHAUSTED -> "still searching";
                 case COLLECT_SOURCE_EMPTY -> "a machine hands out nothing its port may fetch";
@@ -355,13 +356,13 @@ public final class WareworksLangGen {
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_ONLY_IN_STOCK), "Showing only what is available");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SHOW_ALL), "Showing everything the aisle holds");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SHOW_ALL), "Showing everything the warehouse holds");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_AMOUNT_HINT),
                 "Click an item for this amount, Shift for a stack, Ctrl for everything, Alt to skip the question");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_EMPTY), "The aisle holds nothing");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_EMPTY), "The warehouse holds nothing");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NO_MATCH), "No item matches the search");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LOADING), "Reading the stock...");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NO_AISLE), "Not part of an aisle");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NO_AISLE), "Not part of a warehouse");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRANE), "Crane: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NO_CRANE), "No stacker crane");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_WAITING), "Waiting for %1$s, delivered %2$s");
@@ -439,7 +440,7 @@ public final class WareworksLangGen {
             lang.accept(WareworksLang.key(WareworksLang.keeperStatusKey(status)), switch (status) {
                 case NO_ITEM -> "No item set";
                 case NO_WAREHOUSE -> "Not part of a warehouse";
-                case INERT -> "Without effect: this aisle already applies its limit of rules";
+                case INERT -> "Without effect: this warehouse already applies its limit of rules";
                 case SHADOWED -> "Without effect: an earlier rule already governs this item";
                 case NO_LIMITS -> "No limit set yet";
                 case BELOW_MINIMUM -> "Below the minimum";
@@ -525,11 +526,11 @@ public final class WareworksLangGen {
         // Display Link sources (M14). The four names must stay in step with the registry paths in
         // WareworksDisplaySources: Create builds a source name as "wareworks.display_source.<path>". The line texts are
         // deliberately short, because a row of four nixie tubes shows eight characters.
-        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_AISLE_SUMMARY), "Aisle Summary");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_AISLE_SUMMARY), "Warehouse Summary");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_STOCK_LIST), "Stock List");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_FILTERED_STOCK), "Stock of the Filtered Item");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_STATUS), "Crane Status");
-        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLE), "Aisle %1$s: %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLE), "Warehouse %1$s: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS), "Locations: %1$s / %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES), "Item types: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEMS), "Items: %1$s");
@@ -543,7 +544,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS), "Chunks: %1$s held");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES), "Aisles: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES_CUT), "Aisles: %1$s (cut short)");
-        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No aisle");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No warehouse");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_DOCK_MISALIGNED), "Crane turned");
@@ -561,7 +562,7 @@ public final class WareworksLangGen {
 
         for (RequestRejection rejection : RequestRejection.values()) {
             lang.accept(WareworksLang.key(rejection.langKey()), switch (rejection) {
-                case NO_CONTROLLER -> "not part of an aisle with a controller";
+                case NO_CONTROLLER -> "not part of a warehouse with a controller";
                 case NO_FILTER -> "no item in the filter slot";
                 case NOT_IN_STOCK -> "not in stock";
                 case QUEUE_FULL -> "too many open requests";
@@ -668,7 +669,8 @@ public final class WareworksLangGen {
                 "The _wrench_ turns the _screen_ to the next face, never onto the _arm port_: the crane keeps loading "
                         + "the terminal from the _aisle_ while you put the screen where you stand.",
                 "When requesting items",
-                "The screen lists everything the _aisle_ holds with the amount that is still _available_. Every request "
+                "The screen lists everything the _warehouse_ holds with the amount that is still _available_. Every "
+                        + "request "
                         + "is a normal _retrieval job_: the crane brings the items here, just like a request from a "
                         + "_warehouse output_.",
                 "When ordering something made of something else",
@@ -695,7 +697,8 @@ public final class WareworksLangGen {
                         + "reserves the _ingredients_, the crane delivers them here, and the _product_ returns to the "
                         + "warehouse through a _warehouse input_ like any other item.",
                 "When an ingredient is missing",
-                "If another _pattern_ of the same aisle makes that ingredient, the whole _chain_ is planned the moment "
+                "If another _pattern_ of the same warehouse makes that ingredient, the whole _chain_ is planned the "
+                        + "moment "
                         + "you click: _one order per step_, each at the station holding its pattern, and every "
                         + "_intermediate_ travels through a real _storage location_. A step that is waiting for an "
                         + "earlier one is handed _nothing_ at all. If something is really missing, the click is "
@@ -712,8 +715,8 @@ public final class WareworksLangGen {
                         + "says how many products are held and what they cost.");
 
         tooltip(lang, "block.wareworks.warehouse_stock_keeper",
-                "Holds the _stock rules_ of a warehouse _aisle_: one _item_ per row plus a _minimum_, a _maximum_ and "
-                        + "a _reserve_. The three numbers govern three different directions, and an aisle may hold "
+                "Holds the _stock rules_ of a whole _warehouse_: one _item_ per row plus a _minimum_, a _maximum_ and "
+                        + "a _reserve_. The three numbers govern three different directions, and a warehouse may hold "
                         + "several keepers.",
                 "When placed",
                 "The _panel_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle, like every "
@@ -726,7 +729,8 @@ public final class WareworksLangGen {
                 "The warehouse _tries to keep_ this many. While it holds fewer, the comparator on this block calls for "
                         + "the item, so a _farm_ or a hand-built line runs exactly as long as it is needed.",
                 "Minimum: the warehouse restocks",
-                "If a _warehouse production_ of the same aisle has a _pattern_ for the item, the warehouse _orders it "
+                "If a _warehouse production_ of the same warehouse has a _pattern_ for the item, the warehouse _orders "
+                        + "it "
                         + "by itself_ while it is below the minimum — never spending what a _reserve_ protects. If a "
                         + "machine _swallows_ a batch and nothing comes back, that rule _stops ordering_ and waits for "
                         + "you: open it and click the rule's _mark_, or _Sneak-Right-Click_ the _warehouse production_ "
@@ -779,15 +783,16 @@ public final class WareworksLangGen {
 
         tooltip(lang, "block.wareworks.stacker_crane",
                 "The _dock_ of a _stacker crane_. The crane travels the _warehouse rails_ in front of it — around "
-                        + "_corners_ as well — and _stores_ and _retrieves_ items for the _warehouse controller_ behind "
-                        + "it.",
+                        + "_corners_ and through _junctions_ as well — and _stores_ and _retrieves_ items for the "
+                        + "_warehouse controller_ behind it.",
                 "When placed",
                 "The _first aisle_ runs in the direction you look. Connect a _shaft_ to the _bottom_; shafts and cogs at "
                         + "the sides do not connect. A _wrench_ turns it only while the crane is _idle_ and _empty_.",
                 "When powered by rotation",
-                "Carries out the controller's _jobs_. On a _corner_ the whole machine swings a _quarter turn_ and drives "
-                        + "on. Faster _rotation_ moves the crane faster; without rotation or when _overstressed_ it "
-                        + "_pauses_ where it is and continues later.",
+                "Carries out the controller's _jobs_. On a _corner_ or a _junction_ the whole machine swings a "
+                        + "_quarter turn_ and drives on, and where the rails offer more than one way it takes the "
+                        + "_cheapest_ one. Faster _rotation_ moves the crane faster; without rotation or when "
+                        + "_overstressed_ it _pauses_ where it is and continues later.",
                 "When using the value panel",
                 "Hold _Right-Click_ on the _value panel_ to set the _mast height_: how many _levels_ the crane reaches.",
                 "When looked at with Goggles",
@@ -796,11 +801,13 @@ public final class WareworksLangGen {
 
         tooltip(lang, "block.wareworks.warehouse_rail",
                 "Lays out the _aisles_ of a _stacker crane_. Rails that _touch_ connect, so all the rails in front of "
-                        + "the crane's _dock_ are its warehouse — and where two of them meet at _right angles_, the "
-                        + "crane _turns the corner_.",
+                        + "the crane's _dock_ are its warehouse: it may _bend_ round corners, _split_ into side aisles "
+                        + "and even close into a _ring_, and the crane drives all of it.",
                 "When placed",
                 "Runs in the direction you look. A _gap_ or another block ends the rails; the _picture_ of a corner or "
-                        + "a junction follows the rails around it.",
+                        + "a junction follows the rails around it. Every straight _run_ of rails is one _aisle_ and "
+                        + "keeps _one letter_, however many corners and junctions it passes through; a rail that "
+                        + "leaves a run sideways starts the _next_ aisle, counted outwards from its _junction_.",
                 "When using a Wrench",
                 "_Closes_ the rail and opens it again. A _closed_ rail belongs to no warehouse, which keeps two "
                         + "warehouses whose rails touch apart and sends a _stray_ rail away again.");

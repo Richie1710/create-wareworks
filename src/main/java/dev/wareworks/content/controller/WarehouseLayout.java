@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.BranchGeometry;
@@ -16,7 +17,6 @@ import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.CraneNetwork;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.warehouse.CraneRoute;
-import dev.wareworks.core.warehouse.RouteModel;
 import dev.wareworks.core.warehouse.RouteTable;
 import dev.wareworks.util.Headings;
 import net.minecraft.core.BlockPos;
@@ -37,23 +37,72 @@ import net.minecraft.world.phys.Vec3;
  * a storage interface faces away from its branch, a station faces towards it, and because each candidate has a
  * distinct aisle block beside it, each requires a <b>distinct facing</b>. Exactly zero or one can therefore be
  * satisfied — the rule is total, and there are no dead corners.
+ * <p>
+ * <b>It owns its route table.</b> A layout is a value — it is compared by value and replaced only when the warehouse
+ * really differs — so it has exactly the lifetime of the shape it maps, which makes it the right owner of everything
+ * derived from that shape: {@link #routes()} derives the {@link RouteTable} on first use and keeps it for the life of
+ * the layout (M22 review fix, ADR-035). That is why this is a class rather than a record: nothing about the warehouse
+ * is cached globally any more.
  */
-public record WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeometry network,
-                              List<BranchLayout> branches) {
-    public WarehouseLayout {
-        dock = Objects.requireNonNull(dock, "dock").immutable();
-        Objects.requireNonNull(dockFacing, "dockFacing");
-        Objects.requireNonNull(network, "network");
-        branches = List.copyOf(Objects.requireNonNull(branches, "branches"));
-        if (branches.size() != network.branchCount())
-            throw new IllegalArgumentException("one layout per branch: " + branches.size() + " for "
+public final class WarehouseLayout {
+    private final BlockPos dock;
+    private final Direction dockFacing;
+    private final NetworkGeometry network;
+    private final List<BranchLayout> branches;
+
+    /** Derived on first use and kept for the life of this layout, i.e. for the life of this shape ({@link #routes}). */
+    private volatile RouteTable routes;
+
+    public WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeometry network,
+            List<BranchLayout> branches) {
+        this(dock, dockFacing, network, branches, null);
+    }
+
+    /**
+     * The same warehouse with a {@link RouteTable} it may adopt instead of deriving one: a layout that differs only in
+     * its aisle letters describes the very same rails, and reusing the table keeps a re-lettering from throwing away
+     * route costs that cannot have changed.
+     *
+     * @param derived a table of exactly {@code network}, or {@code null} to derive one on first use
+     */
+    private WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeometry network,
+            List<BranchLayout> branches, RouteTable derived) {
+        this.dock = Objects.requireNonNull(dock, "dock").immutable();
+        this.dockFacing = Objects.requireNonNull(dockFacing, "dockFacing");
+        this.network = Objects.requireNonNull(network, "network");
+        this.branches = List.copyOf(Objects.requireNonNull(branches, "branches"));
+        if (this.branches.size() != network.branchCount())
+            throw new IllegalArgumentException("one layout per branch: " + this.branches.size() + " for "
                     + network.branchCount());
-        for (int i = 0; i < branches.size(); i++) {
-            if (branches.get(i).branch() != i)
-                throw new IllegalArgumentException("branch " + i + " carries index " + branches.get(i).branch());
+        for (int i = 0; i < this.branches.size(); i++) {
+            if (this.branches.get(i).branch() != i)
+                throw new IllegalArgumentException("branch " + i + " carries index "
+                        + this.branches.get(i).branch());
         }
-        if (!branches.getFirst().dock().equals(dock))
-            throw new IllegalArgumentException("the first branch starts at the dock: " + branches.getFirst().dock());
+        if (!this.branches.getFirst().dock().equals(this.dock))
+            throw new IllegalArgumentException("the first branch starts at the dock: "
+                    + this.branches.getFirst().dock());
+        this.routes = derived != null && derived.network().equals(network) ? derived : null;
+    }
+
+    /** The dock block of this warehouse: position 0 of the aisle at it. */
+    public BlockPos dock() {
+        return dock;
+    }
+
+    /** The dock's facing, i.e. the heading of the branch at the dock. */
+    public Direction dockFacing() {
+        return dockFacing;
+    }
+
+    /** The size and shape of this warehouse's rails, in dock-relative offsets. */
+    public NetworkGeometry network() {
+        return network;
+    }
+
+    /** The world mapping of every branch, in branch order. */
+    public List<BranchLayout> branches() {
+        return branches;
     }
 
     /** The warehouse a single aisle is: one branch, at the dock, running along the dock's facing. */
@@ -121,7 +170,7 @@ public record WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeomet
             return this;
         List<BranchLayout> relettered = new ArrayList<>(branches);
         relettered.set(RackPosition.FIRST_BRANCH, firstBranch().withLetter(aisleLetter));
-        return new WarehouseLayout(dock, dockFacing, network, relettered);
+        return new WarehouseLayout(dock, dockFacing, network, relettered, routes);
     }
 
     /** The same warehouse with the letters of the branches beyond the first one replaced, in branch order. */
@@ -133,7 +182,7 @@ public record WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeomet
             Optional<Character> letter = i < letters.size() ? letters.get(i) : Optional.empty();
             lettered.add(i == RackPosition.FIRST_BRANCH || letter.isEmpty() ? branch : branch.withLetter(letter.get()));
         }
-        return new WarehouseLayout(dock, dockFacing, network, lettered);
+        return new WarehouseLayout(dock, dockFacing, network, lettered, routes);
     }
 
     /**
@@ -262,7 +311,7 @@ public record WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeomet
     }
 
     /**
-     * Whether the rails join two aisles at all ({@link RouteModel#reachable}). Since the crane turns corners (M21,
+     * Whether the rails join two aisles at all ({@link RouteTable#reachable}). Since the crane turns corners (M21,
      * ADR-033), every aisle of one connected warehouse answers true; a branch the warehouse no longer has answers
      * false.
      * <p>
@@ -272,16 +321,27 @@ public record WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeomet
      * whether a job may be planned or kept asks {@link #canDriveTo} instead (M21 review fix).
      */
     public boolean reachable(int fromBranch, int toBranch) {
-        return RouteModel.reachable(network, fromBranch, toBranch);
+        return routes().reachable(fromBranch, toBranch);
     }
 
     /**
      * The route a crane at {@code (fromBranch, fromX)} drives to {@code (toBranch, toX)}, or empty when the rails do
      * not join them. Derived from the live network on every call and never stored, so a crane cannot hold a route to
-     * rails a player has taken away ({@link RouteModel}).
+     * rails a player has taken away ({@link RouteTable}, {@link dev.wareworks.core.warehouse.RouteCosts}).
      */
     public Optional<CraneRoute> route(int fromBranch, double fromX, int toBranch, double toX) {
-        return RouteModel.route(network, fromBranch, fromX, toBranch, toX);
+        return route(fromBranch, fromX, toBranch, toX, WareworksConfig.turnPenaltyBlocks());
+    }
+
+    /**
+     * The same route at an explicit turn price. Where the rails split there is more than one way and which one is
+     * cheapest depends on what a quarter turn is worth, so the warehouse asks at the <b>server's own</b>
+     * {@code crane.turnPenaltyBlocks} ({@link #route}) and can never mean a different way there than the crane drives
+     * (M22, ADR-035). On a warehouse that does not split there is exactly one route, so the price cannot change it.
+     */
+    public Optional<CraneRoute> route(int fromBranch, double fromX, int toBranch, double toX,
+            double turnPenaltyBlocks) {
+        return routes().route(fromBranch, fromX, toBranch, toX, turnPenaltyBlocks);
     }
 
     /**
@@ -295,18 +355,32 @@ public record WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeomet
     }
 
     /**
-     * This warehouse's rails with their corner blocks already derived ({@link RouteTable}). A caller that asks one
-     * route question can use {@link #route} and {@link #canDriveTo}; a caller that ranks a whole warehouse of
-     * candidates builds this once and asks it, which is what keeps a planning pass from deriving the same handful of
-     * corners once per rack.
+     * This warehouse's rails with their junction blocks and route costs derived ({@link RouteTable}), <b>held for the
+     * life of this layout</b>.
+     * <p>
+     * A layout is replaced only when the warehouse really differs, so this is derived once per shape and read for every
+     * route question after that: a planning pass that ranks a whole warehouse of candidates, the crane's own tick, a
+     * home point's lamp and a member's goggles all read one table and one set of single-source passes. Every route
+     * method here goes through it, so nothing about these rails is derived per question (M22 review fix).
+     * <p>
+     * Derived lazily rather than in the constructor: every periodic re-link check builds a layout to compare with the
+     * one in hand, and a warehouse that has not changed must not pay for its links to find that out.
      */
     public RouteTable routes() {
-        return RouteTable.of(network);
+        RouteTable known = routes;
+        if (known == null)
+            // Two threads may derive it at once; a table is a pure function of an immutable shape, so both are the
+            // same answer and the loser's copy is simply dropped.
+            routes = known = RouteTable.of(network);
+        return known;
     }
 
-    /** The rails this warehouse's crane drives on, with {@code turnPenaltyBlocks} as the price of a quarter turn. */
+    /**
+     * The rails this warehouse's crane drives on, with {@code turnPenaltyBlocks} as the price of a quarter turn, built
+     * on <b>this</b> layout's table: the machine and the controller that planned its job read the same derived rows.
+     */
     public CraneNetwork craneNetwork(double turnPenaltyBlocks) {
-        return CraneNetwork.of(network, turnPenaltyBlocks);
+        return CraneNetwork.of(routes(), turnPenaltyBlocks);
     }
 
     /**
@@ -457,5 +531,32 @@ public record WarehouseLayout(BlockPos dock, Direction dockFacing, NetworkGeomet
         for (int i = 1; i < branches.size(); i++)
             bounds = bounds.minmax(branches.get(i).bounds());
         return bounds;
+    }
+
+    /**
+     * By value, over the dock, its facing, the shape and the branch mappings — exactly what this answered as a record.
+     * The derived {@link #routes() route table} is deliberately not part of it: it is a function of the shape, so two
+     * warehouses that describe the same rails are the same warehouse whether or not either has costed them yet.
+     * <p>
+     * The controller leans on this: every periodic re-link check builds a layout and changes nothing when it equals
+     * the one in hand, which is also what keeps the derived table alive.
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        return o instanceof WarehouseLayout other && dock.equals(other.dock) && dockFacing == other.dockFacing
+                && network.equals(other.network) && branches.equals(other.branches);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(dock, dockFacing, network, branches);
+    }
+
+    @Override
+    public String toString() {
+        return "WarehouseLayout[dock=" + dock + ", dockFacing=" + dockFacing + ", network=" + network
+                + ", branches=" + branches + "]";
     }
 }

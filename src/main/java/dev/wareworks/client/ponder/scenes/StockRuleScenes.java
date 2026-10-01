@@ -426,7 +426,7 @@ public final class StockRuleScenes {
         scene.overlay().showOutline(PonderPalette.RED, "short", util.select().position(keeper), TEXT_TICKS);
         scene.overlay().showOutline(PonderPalette.GREEN, "pattern", util.select().position(station), TEXT_TICKS);
         scene.overlay().showText(TEXT_TICKS)
-                .text("This aisle holds fewer than a rule's minimum, and a station here has a pattern for the item")
+                .text("The warehouse holds fewer than a rule's minimum, and a station here has a pattern for it")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(keeper, FRONT));

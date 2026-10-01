@@ -240,7 +240,7 @@ public final class TerminalScenes {
         scene.idle(TEXT_IDLE);
 
         scene.overlay().showText(TEXT_TICKS)
-                .text("It lists everything the aisle holds, and the search box finds an item by name")
+                .text("It lists everything the warehouse holds, and the search box finds an item by name")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(terminal, SCREEN));

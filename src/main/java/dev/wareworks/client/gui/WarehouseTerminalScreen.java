@@ -856,7 +856,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         int y = topPos;
         graphics.drawString(font, title, x + TerminalMenuLayout.MARGIN, y + TITLE_Y, COLOR_HEADER, false);
         Component aisle = status.hasAisle()
-                ? WareworksLang.translateDirect(WareworksLang.GOGGLES_AISLE_LETTER, String.valueOf(status.aisleLetter()))
+                ? WareworksLang.translateDirect(WareworksLang.GOGGLES_WAREHOUSE_LETTER, String.valueOf(status.aisleLetter()))
                 : WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE);
         graphics.drawString(font, aisle, x + TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - font.width(aisle),
                 y + TITLE_Y, COLOR_DIM, false);

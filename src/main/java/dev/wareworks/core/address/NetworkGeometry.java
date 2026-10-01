@@ -84,23 +84,34 @@ public record NetworkGeometry(List<BranchGeometry> branches, int height) impleme
     }
 
     /**
-     * This network cut back to a branch at the dock that is confirmed to be only {@code confirmedLength} rails long:
-     * that branch truncated at its far end, and <b>nothing else</b>.
+     * This network with the branch at the dock confirmed to be only {@code confirmedLength} rails long: that branch
+     * truncated at its far end, and <b>every other branch exactly as it was</b>, at its own index.
      * <p>
-     * A network is a chain ({@link dev.wareworks.core.warehouse.RailGraph}), and every branch of a chain starts at the
-     * far end of the one before it — the corner block belongs to both. So the block a shorter first branch gives up is
-     * the very block the second branch begins at: the chain is cut there and everything beyond it is no longer this
-     * warehouse. Dropping a <b>suffix</b> of the chain renumbers nothing, which is why this is allowed where adopting
-     * a shorter scan would not be.
+     * This is what an incomplete scan falls back to, so it may only act on the evidence there is. A loaded block at
+     * the far end of the aisle at the dock disproves that aisle's length and says nothing whatever about the others, so
+     * nothing else is touched: truncating at a far end renumbers nothing ({@link BranchGeometry#withLength}), and
+     * keeping every other branch at its own index renumbers nothing either, which is the constraint this whole
+     * fallback exists to respect.
      * <p>
-     * Truncating at the far end never renumbers either ({@link BranchGeometry#withLength}), and a length that is not
-     * shorter answers {@code this}: this shrinks a warehouse, it never grows one.
+     * <b>Why it does not drop the rest (M22 review fix).</b> Until M22 it kept branch 0 alone and deleted the siblings,
+     * on the argument that a network is a chain and every branch of a chain starts at the far end of the one before it,
+     * so a shorter first branch cuts the chain and the rest is a suffix. M22 made that false: the rails may split, so a
+     * comb's teeth hang off positions the shortened main run still has, and deleting them took a player's chests out of
+     * the address space — cancelling their production orders for good — because of one lateral read in an unloaded
+     * chunk. A tooth the shorter main run really does disconnect keeps its addresses and its stock and falls into its
+     * own part of the rails, where {@link dev.wareworks.core.warehouse.RouteCosts#componentOf} finds it and the member's
+     * own goggles say the crane cannot reach it. That is the same answer a configured maximum already gives
+     * ({@link dev.wareworks.core.warehouse.RailGraph.Limits}), and it is the honest one.
+     * <p>
+     * A length that is not shorter answers {@code this}: this shrinks a warehouse, it never grows one.
      */
-    public NetworkGeometry truncatedToFirstBranchLength(int confirmedLength) {
+    public NetworkGeometry withFirstBranchLength(int confirmedLength) {
         BranchGeometry first = firstBranch();
         if (confirmedLength >= first.length())
             return this;
-        return new NetworkGeometry(List.of(first.withLength(Math.max(0, confirmedLength))), height);
+        List<BranchGeometry> shortened = new ArrayList<>(branches);
+        shortened.set(RackPosition.FIRST_BRANCH, first.withLength(Math.max(0, confirmedLength)));
+        return new NetworkGeometry(shortened, height);
     }
 
     @Override

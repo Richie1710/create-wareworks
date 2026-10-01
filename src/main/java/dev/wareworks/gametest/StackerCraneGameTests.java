@@ -255,7 +255,7 @@ public final class StackerCraneGameTests {
 
     /** Discovery bounds for one straight aisle: room for every rail of the template, one branch, one level. */
     private static RailGraph.Limits limits(int maxBranchLength) {
-        return new RailGraph.Limits(AisleGeometry.MAX_LENGTH, 1, maxBranchLength, 1);
+        return new RailGraph.Limits(AisleGeometry.MAX_LENGTH, 1, 0, maxBranchLength, 1);
     }
 
     /** The mast height clamps to 1..maxMastHeight and updates the geometry immediately. */

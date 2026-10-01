@@ -664,8 +664,8 @@ public final class DisplayLinkGameTests {
                                 "sign line " + line + " is the flattened component");
                     // The generated English of WareworksLangGen, frozen into the sign: not the reading player's
                     // language, and not the raw lang key either.
-                    helper.assertValueEqual(sign.getFrontText().getMessage(0, false).getString(), "Aisle A: Ready",
-                            "a sign carries the server's English text");
+                    helper.assertValueEqual(sign.getFrontText().getMessage(0, false).getString(),
+                            "Warehouse A: Ready", "a sign carries the server's English text");
                 })
                 .thenSucceed();
     }

@@ -300,8 +300,15 @@ public final class WarehouseRegistry {
     }
 
     private static AisleAssignment assignment(MemberScan scan) {
-        if (scan.aligned() != null)
-            return AisleAssignment.assigned(scan.aligned().address());
+        AlignedMember aligned = scan.aligned();
+        if (aligned != null) {
+            // An aisle the rails no longer join to the crane says so on its members' own goggles (M22, issue #2):
+            // the member really is this location of this aisle and keeps its stock, but nothing is planned towards it,
+            // and a player standing at it has to be told THAT rather than reading an address that looks fine.
+            return aligned.controller().craneCanReach(aligned.rack())
+                    ? AisleAssignment.assigned(aligned.address())
+                    : AisleAssignment.unreachable(aligned.address());
+        }
         return scan.misaligned() ? AisleAssignment.MISALIGNED : AisleAssignment.NONE;
     }
 

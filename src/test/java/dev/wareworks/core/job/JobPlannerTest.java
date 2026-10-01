@@ -2262,4 +2262,206 @@ class JobPlannerTest {
             int held) {
         return planner.plan(base.collectBuffers(location -> slots(0, key, held)).build()).job().orElseThrow().job();
     }
+
+    // --- the cost of one pass (M22, issue #2) -------------------------------------------------------------------------
+
+    /**
+     * Whether a location can be used is the most expensive question the planner asks about one — the content layer
+     * answers it with a route search from the crane's own point plus a chunk lookup — and it is asked over every
+     * storage location per <b>(input station x item type)</b>. Nothing can change it while one pass ranks, so it is
+     * asked of the world <b>once per location per pass</b> ({@link LocationAvailability}).
+     * <p>
+     * The assertion is the promise itself rather than a number: no location is ever asked about twice in one pass.
+     * Before this it was asked six times about every chest in exactly this setup.
+     */
+    @Test
+    void onePassAsksTheWorldAboutEveryLocationAtMostOnce() {
+        List<RackPosition> chests = new ArrayList<>();
+        for (int x = 2; x <= 9; x++) {
+            RackPosition chest = rack(x, 0, Side.LEFT);
+            chests.add(chest);
+            stock.update(chest, slots(27));
+            live.insertable.put(chest, STACK);
+        }
+        List<RackPosition> asked = new ArrayList<>();
+        // Two input stations, three item types each: the shape that made the old walk pay six times per chest.
+        PlanResult<String, RackPosition> result = planner.plan(input()
+                .storageLocations(chests)
+                .inputs(List.of(IN_A, IN_B))
+                .inputBuffers(location -> slots(0, IRON, 4, DIAMOND, 4, SHULKER, 4))
+                .available(location -> {
+                    asked.add(location);
+                    return true;
+                })
+                .build());
+
+        assertTrue(result.hasJob(), "the pass really did plan a job over those chests");
+        assertEquals(new HashSet<>(asked).size(), asked.size(),
+                "no location was asked about twice: " + asked);
+        assertTrue(asked.containsAll(chests), "and every chest was asked about once");
+    }
+
+    /**
+     * Filtering the storage list by availability must not reorder what is left: the planner's last ranking key is a
+     * location's index in {@link PlannerInput#storageLocations()}, so two candidates that are equal in every other key
+     * still go to the earlier one in that list — with or without an unavailable location in front of it.
+     */
+    @Test
+    void anUnavailableLocationDoesNotReorderTheOnesBehindIt() {
+        RackPosition unreachable = rack(2, 0, Side.LEFT);
+        RackPosition first = rack(3, 0, Side.LEFT);
+        RackPosition second = rack(3, 0, Side.RIGHT);
+        for (RackPosition chest : List.of(unreachable, first, second)) {
+            stock.update(chest, slots(27));
+            live.insertable.put(chest, STACK);
+        }
+        // first and second are the same distance from the crane and equal in every other key, so only the order of
+        // the list can decide - and the unavailable location in front of them must not change it.
+        PlanResult<String, RackPosition> result = planner.plan(input()
+                .storageLocations(List.of(unreachable, first, second))
+                .available(location -> !location.equals(unreachable))
+                .inputs(List.of(IN_A)).inputBuffers(location -> slots(0, IRON, 8)).build());
+        assertEquals(first, result.job().orElseThrow().job().target());
+
+        PlanResult<String, RackPosition> withoutIt = planner.plan(input()
+                .storageLocations(List.of(first, second))
+                .inputs(List.of(IN_A)).inputBuffers(location -> slots(0, IRON, 8)).build());
+        assertEquals(first, withoutIt.job().orElseThrow().job().target(), "and the same one wins without it");
+    }
+
+    /**
+     * <b>The measurement</b> of the second M22 scaling item, in the shape that pays for it: a warehouse of 64 storage
+     * locations whose chests are all dedicated to something else, with four input stations holding three item types
+     * each. Every one of the twelve (station x item type) combinations ranks the whole warehouse, so this is the
+     * dispatch run the candidate work is really about — and the one {@code fullBackoffTicks} exists to protect.
+     * <p>
+     * Both numbers are asserted exactly, because a measurement nobody can read is a claim:
+     * <ul>
+     * <li><b>before</b> {@link LocationAvailability#questions()} = 4 + 12 · 64 = <b>772</b> questions put to the
+     * world — four about the stations and the whole list once per combination;</li>
+     * <li><b>after</b> {@link LocationAvailability#probes()} = 64 + 4 = <b>68</b>, one per location, and
+     * {@link LocationAvailability#listWalks()} = <b>1</b>: the candidate list is derived once for the run however many
+     * item types it ranks.</li>
+     * </ul>
+     * That is 11.4 times less of the most expensive question in the planner, and — the part that matters for a
+     * warehouse that splits — a number that no longer grows with the item types an input holds.
+     */
+    @Test
+    void theWorkOfOneDispatchRunDoesNotGrowWithTheItemTypesItRanks() {
+        List<RackPosition> chests = new ArrayList<>();
+        for (int level = 0; level < 4; level++) {
+            for (int x = 2; x <= 17; x++) {
+                RackPosition chest = rack(x, level, Side.LEFT);
+                chests.add(chest);
+                stock.update(chest, slots(27));
+                live.insertable.put(chest, STACK);
+                // Dedicated to an item no station holds, so every combination ranks the whole list and none succeeds:
+                // a REJECTED filter costs no live call, so the live budget cannot cut the walk short (ADR-021).
+                filter(chest, "something else");
+            }
+        }
+        List<RackPosition> stations = List.of(IN_A, IN_B, IN_C, rack(0, 3, Side.RIGHT));
+        PlannerInput<String, RackPosition> pass = input()
+                .storageLocations(chests)
+                .inputs(stations)
+                .inputBuffers(location -> slots(0, IRON, 4, DIAMOND, 4, SHULKER, 4))
+                .build();
+
+        PlanResult<String, RackPosition> result = planner.plan(pass);
+
+        assertFalse(result.hasJob(), "nothing fits anywhere, which is why every combination ranks the whole warehouse");
+        assertEquals(Optional.of(NoJobReason.NO_MATCHING_FILTER), result.primaryReason());
+        LocationAvailability<RackPosition> asked = pass.available();
+        assertEquals(1, asked.listWalks(), "the candidate list is derived once per dispatch run");
+        assertEquals(chests.size() + stations.size(), asked.probes(),
+                "and the world is asked once per location: " + asked);
+        assertEquals(stations.size() + stations.size() * 3 * chests.size(), asked.questions(),
+                "what the same run asked the world before M22: " + asked);
+        assertEquals(0, live.insertCalls.size(), "no live call was spent on a rejected candidate");
+    }
+
+    /**
+     * The same measurement for the ordinary run — one input station, one item type, a job planned: the list is still
+     * derived once and every location asked about once, so the pass that <b>succeeds</b> pays nothing for the cache
+     * either.
+     */
+    @Test
+    void aPassThatPlansAJobAsksAboutEachLocationOnce() {
+        List<RackPosition> chests = new ArrayList<>();
+        for (int x = 2; x <= 9; x++) {
+            RackPosition chest = rack(x, 0, Side.LEFT);
+            chests.add(chest);
+            stock.update(chest, slots(27));
+            live.insertable.put(chest, STACK);
+        }
+        PlannerInput<String, RackPosition> pass = input()
+                .storageLocations(chests)
+                .inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, IRON, 8))
+                .build();
+
+        assertTrue(planner.plan(pass).hasJob());
+
+        LocationAvailability<RackPosition> asked = pass.available();
+        assertEquals(1, asked.listWalks(), "one list for the run");
+        assertEquals(chests.size() + 1, asked.probes(), "one question per chest and one about the station: " + asked);
+    }
+
+    /**
+     * The other half of the cache, and the one the list walk alone does not cover: a <b>retrieve</b> stage walks the
+     * locations that hold the item (a different list, one question per candidate) and the <b>store</b> stage that runs
+     * after it in the same pass then ranks the same chests again. The world is asked about each of them once for the
+     * whole pass, not once per stage.
+     * <p>
+     * Measured: eight chests, one open request nothing can be extracted for and one input station whose items fit
+     * nowhere — <b>18</b> questions, <b>10</b> probes.
+     */
+    @Test
+    void aRetrieveAndAStoreInOnePassShareWhatTheWorldSaid() {
+        List<RackPosition> chests = new ArrayList<>();
+        for (int x = 2; x <= 9; x++) {
+            RackPosition chest = rack(x, 0, Side.LEFT);
+            chests.add(chest);
+            stock.update(chest, slots(27, IRON, 8));
+        }
+        live.insertable.put(OUT_A, STACK); // the output takes items; nothing can be extracted for the request
+        PlannerInput<String, RackPosition> pass = input()
+                .storageLocations(chests)
+                .requests(List.of(request(id(1), IRON, 8, OUT_A)))
+                .inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, DIAMOND, 8))
+                .build();
+
+        assertFalse(planner.plan(pass).hasJob(), "both stages ran and neither could plan");
+
+        LocationAvailability<RackPosition> asked = pass.available();
+        assertEquals(chests.size() + 2, asked.probes(),
+                "each chest once, plus the output and the input station: " + asked);
+        assertEquals(2 * chests.size() + 2, asked.questions(),
+                "both stages needed an answer about every chest: " + asked);
+    }
+
+    /**
+     * <b>One pass, one cache.</b> Availability is kept for the length of a planning pass because nothing can change it
+     * while the planner ranks — which stops being true the moment the pass is over. A builder that is kept and built a
+     * second time must therefore ask the world again, or a controller planning twice would plan the second job on what
+     * the world looked like before the first one.
+     */
+    @Test
+    void aSecondPassBuiltFromTheSameBuilderAsksTheWorldAgain() {
+        RackPosition chest = rack(3, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        boolean[] reachable = {false};
+        PlannerInput.Builder<String, RackPosition> builder = input()
+                .storageLocations(List.of(chest))
+                .inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, IRON, 8))
+                .available(location -> location.equals(IN_A) || reachable[0]);
+
+        assertFalse(planner.plan(builder.build()).hasJob(), "the chest cannot be driven to yet");
+        reachable[0] = true;
+
+        assertTrue(planner.plan(builder.build()).hasJob(), "the next pass sees the rails that were laid in between");
+    }
 }

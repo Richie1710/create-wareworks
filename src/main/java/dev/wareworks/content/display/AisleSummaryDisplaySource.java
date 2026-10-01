@@ -18,8 +18,17 @@ import dev.wareworks.util.WareworksLang;
 import net.minecraft.network.chat.MutableComponent;
 
 /**
- * Display Link source "Aisle Summary" ({@code docs/warehouse-system.md} §10): the aisle letter and status, the counted
- * inventories in use, the item types and the total stock of one aisle.
+ * Display Link source "Warehouse Summary" ({@code docs/warehouse-system.md} §10): the warehouse's letter and status,
+ * the counted inventories in use, the item types and its total stock — <b>four lines on every warehouse</b> — and below
+ * them, only when there is something to say, the aisles it is made of, its ports, its stock rules, its stopped products
+ * and its held chunks. Every one of those is below the four, because a four-tube board shows four rows and
+ * {@link WarehouseDisplays#limit} drops the tail: an optional line above them would cost a player a number they asked
+ * for.
+ * <p>
+ * It speaks for the <b>whole warehouse</b>, not for one of its aisles — one controller owns every aisle of its rail
+ * network and keeps one stock index for all of them (ADR-033) — which is why its first line and its name say
+ * "Warehouse A" where they said "Aisle A" before M22. The registry path stays {@code aisle_summary}, because renaming
+ * it would silently unbind every Display Link a player has already pointed at a controller.
  * <p>
  * Bound to the warehouse controller and the warehouse terminal, so a display can stand at the controller itself or at
  * the terminal players walk to. Everything comes from state the controller already maintains — the membership counts and
@@ -44,14 +53,6 @@ public class AisleSummaryDisplaySource extends DisplaySource {
         if (status == ControllerStatus.NO_DOCK || status == ControllerStatus.DOCK_MISALIGNED)
             return WarehouseDisplays.limit(lines, stats);
 
-        // Which aisles the warehouse is made of (M21, issue #1, ADR-033), and only for one that really bends: a
-        // display has few rows, and on a straight aisle this line would repeat the letter the line above already
-        // carries. A discovery that stopped short of what a player laid is marked rather than explained — the reason
-        // takes a sentence, and the controller's goggles and the log are where a sentence belongs.
-        controller.networkInfo().filter(network -> network.aisleCount() > 1).ifPresent(network -> lines.add(
-                WareworksLang.translateDirect(network.stopsShort() ? WareworksLang.DISPLAY_AISLE_LINE_AISLES_CUT
-                        : WareworksLang.DISPLAY_AISLE_LINE_AISLES, aisleLetters(network))));
-
         StockView<ItemKey, RackPosition> stock = controller.stockIndex();
         // Both numbers must be drawn from the same population, or the line could never read full: an alias of a shared
         // inventory (two interfaces on one double chest) is indexed with empty counts and is therefore never occupied.
@@ -62,6 +63,22 @@ public class AisleSummaryDisplaySource extends DisplaySource {
                 WareworksLang.number(stock.distinctKeys())));
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEMS,
                 WareworksLang.number(stock.totalItems())));
+        // Which aisles the warehouse is made of (M21, issue #1, ADR-033), for one that really bends or splits: on a
+        // straight aisle this line would only repeat the letter the first line already carries. A discovery that
+        // stopped short of what a player laid is marked rather than explained — the reason takes a sentence, and the
+        // controller's goggles and the log are where a sentence belongs; that mark is why a *one*-aisle warehouse gets
+        // the line too as soon as it stops short (M22, issue #2), because every reason that is left is a maximum, a
+        // chunk that is not loaded or a second dock, and all of them cut a straight aisle as easily as a comb.
+        //
+        // It sits here, below the three core numbers and above the other optional lines, for the reason every optional
+        // line in this method sits below them: the four core lines are what a four-tube board shows, WarehouseDisplays
+        // drops the tail, and a line inserted above them pushes "Items: N" — a number a player asked for — off the
+        // board. It used to be inserted second, which cost a bending warehouse its item count all along and, once the
+        // mark widened the gate, a perfectly straight one that had merely run into a maximum (M22 review fix).
+        controller.networkInfo().filter(network -> network.aisleCount() > 1 || network.stopsShort())
+                .ifPresent(network -> lines.add(
+                        WareworksLang.translateDirect(network.stopsShort() ? WareworksLang.DISPLAY_AISLE_LINE_AISLES_CUT
+                                : WareworksLang.DISPLAY_AISLE_LINE_AISLES, aisleLetters(network))));
         // Only for an aisle that really has an accepting warehouse port (M17, issue #12), by the same rule the stock
         // rule lines below follow: a display has few rows, and "Ports: 0 accepting" would push a number a player asked
         // for off a four-tube board. It is the count the controller's goggles show, so both surfaces agree, and it is

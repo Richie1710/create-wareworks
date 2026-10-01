@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to it, stops, swings the whole machine a quarter turn with a deep rumble and a metal clack, and rolls on down the next
   aisle — still lifting on the way. A warehouse can follow the shape of your base instead of forcing a straight hall
   through it, and goods from every aisle reach one block
+- **And they may split.** A T-junction, a cross, a ring, a comb of side aisles off one main run — lay the rails and it
+  is one warehouse. The crane turns at every junction, a straight run through a junction stays **one** aisle with one
+  letter however many aisles cross it, and goods from every aisle of the shape reach the **one** block you put your
+  output station on. One controller, one terminal, one stock list, one address space
+- **The warehouse works out the cheapest way there, and the crane drives that one.** With junctions there is more than
+  one route from A to B, so the planner measures them in blocks driven **plus** quarter turns and takes the cheapest —
+  round a ring it will take the short way round even when the long way has fewer corners, or the other way about if you
+  have made turns expensive (`crane.turnPenaltyBlocks`). The same number decides the plan and the drive, so the machine
+  can never take a route nobody costed, and the same warehouse always plans the same job
+- **An aisle your crane cannot get to says so on its own blocks.** If a server limit cuts the rails that joined an aisle
+  to the rest, its racks keep their addresses and their stock, their goggles read "The crane cannot reach this aisle" in
+  gold, and the controller answers "cannot be reached" instead of inventing a job for it. Raise the number and the next
+  scan joins it again, with every address and every item exactly as it was
 - **Every straight run of rails is an aisle with its own letter**, and one controller letters the lot: the aisle at the
   dock takes the letter from the controller's own value box, each further one the next free letter. Addresses do not
   change — `A-03-07R` still means aisle A, level 3, position 7, right side. The letters and the position numbers are
@@ -48,18 +61,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rolling onto it and swinging a quarter turn, items carried from one aisle into the next, the corner block's **two**
   racks served — one on each aisle, told apart by the way the interface faces — the address that names the aisle, and the
   Wrench that closes a rail
+- **And a Ponder scene for rails that split**, the third one on those same two blocks: "Rails That Split" builds a main
+  run with two side aisles leaving the **middle** of it, names the block three rails meet at as a junction belonging to
+  both aisles, outlines the whole run as **one** aisle through both junctions and each side aisle as its own letter,
+  then runs the machine — straight over one junction, round the bend at another — until an item from **every** aisle has
+  arrived at the one output beside the dock. It ends on the two racks beside a junction that lie next to both aisles at
+  once, with the address each of them really has
 - **The controller's goggles describe the whole warehouse.** A warehouse that bends reads "Warehouse: 41 rails, 3 aisles,
   mast 6 high" and lists them underneath ("Aisles: A 16 · B 12 · C 13", at most six before "and N more"). A warehouse of
   one aisle reads exactly as it always did
-- **And they say where the rails stop, and why.** "Warehouse stops at 148 64 -37: the rails split here, which needs a
-  later version" — one sentence per reason (a split, a loop, a second dock, a chunk that is not loaded, and each of
-  the three server limits), never merged into one message, and naming the block you have to walk to. It is
-  the line that answers "why is half of what I built not in my warehouse"
+- **And they say where the rails stop, and why.** "Warehouse stops at 148 64 -37: another stacker crane dock stands
+  here, and a dock is a wall" — one sentence per reason (a second dock, a rail closed with a wrench, a chunk that is
+  not loaded, and each of the four server limits, every one of which names the number to raise), never merged into one
+  message, and naming the block you have to walk to. It is the line that answers "why is half of what I built not in my
+  warehouse"
 - **The dock says which aisle its machine is on**: "On aisle B at position 7", beside the size of the network. Only for a
   warehouse that bends, where the position alone would not say where the machine is
-- **The Aisle Summary display source lists the aisles** of a warehouse that bends ("Aisles: A B C"), and marks it "(cut
-  short)" while the rails stop short of what you laid — the board says that something is wrong, the controller's goggles
-  say what
+- **The Warehouse Summary display source lists the aisles** of a warehouse that bends ("Aisles: A B C"), and marks it
+  "(cut short)" whenever the rails stop short of what you laid — on a single straight aisle too — so the board says that
+  something is wrong and the controller's goggles say what. It is the source that used to be called "Aisle Summary"
+- **Two new server settings, both bounding what a big warehouse costs to run.** `aisle.maxJunctions` (default 32) caps
+  the junctions of one warehouse, because junctions are what a route search is priced in — an aisle over the cap is not
+  part of the warehouse and the controller says so, and **0 keeps every warehouse the single aisle at its dock** without
+  switching the rest of the version off. `controller.snapshotCycleTicks` (default 10 minutes) bounds how long the
+  controller may take to re-read every storage location once; it reads as many per interval as it takes to meet that,
+  capped by `controller.maxSnapshotsPerTick`. At the defaults a warehouse of up to about 1200 locations reads exactly
+  one location per interval, which is what every earlier version did
 
 ### Changed
 
@@ -82,10 +109,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   travel time (`crane.turnPenaltyBlocks`, default one block's worth, and it scales with RPM like everything else the crane
   does), and the job planner counts it. So a bent warehouse is measurably slower per trip than the same number of racks in
   one straight hall — physically honest, and worth knowing before you build a very long one
-- **Branching rails are not supported yet.** A T-junction, a cross or a ring stops the warehouse **before** the branching
-  rail: the rails beyond it are simply not part of it, everything up to it keeps working exactly as before, and the
-  controller's goggles name the block where it stopped and why. You are never left with nothing, and never with the straight
-  aisle you had taken away. Splits are the next milestone
+- **A rail that used to stop your warehouse now grows it — the second thing to read before loading an old world.** A
+  T-junction, a cross or a ring used to stop the warehouse before the branching rail; all of it is now part of the
+  warehouse. So a world where something you built was cut off there will find it **joined**, with new aisles under new
+  letters and new addresses. Nothing is lost and nothing moves: the positions are simply new, and the `aisle.maxBranches
+  = 1` or `aisle.maxJunctions = 0` setting, or one wrench click on a rail, is still the way to say no
+- **A comb with one crane is slow, and you want to know that before you build one.** One crane serves the whole
+  warehouse, so it drives out and back along every side aisle in turn and two trips can never overlap. The planner's
+  travel key will prefer a rack on the aisle the machine is already on, and prefer near aisles to far ones, but it
+  cannot make a far aisle cheap: a comb of five long teeth has the throughput of one crane, not of five. Several cranes
+  on one warehouse is the next milestone, and this is why
+- **A big warehouse notices a chest you emptied by hand as quickly as a small one does.** Nothing reports a change like
+  that, so the controller finds it by re-reading storage locations in turn — and it used to read exactly one every half
+  second whatever the size, so coming round to all of them took longer the more you built: about nine minutes for a
+  full single aisle, 40 for 4800 locations, over two hours for the largest warehouse the settings allow. It now reads as
+  many per turn as it takes to come round within `controller.snapshotCycleTicks` (ten minutes by default, and 0 switches
+  the scaling off): 4800 locations come round in ten minutes instead of 40, and the biggest possible warehouse in 34
+  minutes instead of 2.3 hours. **A warehouse of up to about 1200 locations reads exactly one location per turn, which is
+  precisely what every earlier version did** — that is every warehouse at the default aisle limits. If you raised
+  `aisle.maxAisleLength` or `aisle.maxMastHeight`, your warehouse may be bigger than that already, and it will now read
+  up to `controller.maxSnapshotsPerTick` locations per turn instead of one; `controller.snapshotCycleTicks = 0` keeps
+  the old cadence exactly
+- **And it spends less time working out what to do.** Before every job the controller ranks every storage
+  location for every item type waiting at every input, and the most expensive question in that ranking — "can the
+  crane use this location right now", which now includes a route over the junctions — is asked **once per location per
+  planning pass** instead of once per location per item type, with the list of usable locations worked out once as
+  well. Measured on a 64-location warehouse with four inputs holding three item types each: **68** questions put to
+  the world where there used to be 772, and the number no longer grows with the item types an input holds. What the
+  planner *decides* is unchanged — the ranking order is identical, which its tests pin
+- **An aisle is renumbered when the rails grow past its origin, and your addresses follow.** An aisle is numbered from
+  the end nearer the dock, so extending it at its **far** end still changes nothing. Laying rails at its **near** end
+  now makes it longer there instead of refusing to follow, and then every position on it moves along by that much —
+  carried through the world blocks, so each chest keeps its filter, its priority, its stock and its reservations, and
+  open production orders keep pointing at the same machines. A sign you wrote by hand is the one thing that goes stale
 - **Optional chunk loading is now measured per warehouse, and its default cap rose from 8 to 10 chunks.** A corner turns one
   long rectangle into two shorter ones at right angles, so a warehouse that bends needs more chunks than any single aisle of
   the same length ever could: a straight aisle of 32 rails needs 8, an L of 32 + 16 needs 10, an L of two full aisles 12.
@@ -95,9 +151,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The lines say **warehouse** where they used to count aisles — the goggle line for each of the two server limits, and
   every row and total of `/wareworks chunks` — because one holder is one controller and every aisle it owns
 - The item descriptions of the Warehouse Rail, the Stacker Crane and the Warehouse Controller now say what all of them
-  do since rails may bend: rails lay out **aisles** and turn corners where they meet at right angles, the machine drives
-  round them, and one controller gives **every** aisle of its warehouse a letter — the first one from its own value
-  panel, each further one the next free letter
+  do since rails may bend and split: rails lay out **aisles** that may bend, split into side aisles and close into a
+  ring, every straight run of them keeps **one letter** however many junctions it passes through, the machine turns at
+  a corner or a junction and takes the cheapest way where the rails offer more than one, and one controller gives
+  **every** aisle of its warehouse a letter — the first one from its own value panel, each further one the next free
+  letter
+- **The screens that speak for the whole warehouse now say "warehouse" instead of "aisle".** Before rails could bend,
+  an aisle *was* the warehouse and every one of these lines was true; on a comb of four aisles they were not. So the
+  controller's goggles and the terminal's screen head their warehouse "Warehouse A" rather than "Aisle A" — the letter
+  is still the one your controller's value panel sets, and it is still the letter the first aisle carries — the
+  terminal says "The warehouse holds nothing" and "Showing everything the warehouse holds", a stock keeper's rule that
+  is over the limit says "this warehouse already applies its limit of rules", and a request from a block with no
+  controller is refused with "not part of a warehouse with a controller". And because "the crane cannot drive to the
+  aisle these items belong on" is a real answer now, the older one that read "an output is not reachable" says what it
+  always meant instead: "an output station is not loaded or no longer there". The addresses, the aisle list and the
+  dock's "On aisle B at position 7" still say **aisle**, because those really do name one. The two lines a block that
+  belongs to no warehouse at all shows went with the warehouse ones, because they are drawn in the very slot that
+  otherwise names it: a terminal says "Not part of a warehouse" and a Warehouse Summary display "No warehouse"
+- **The German text calls the machine by one name.** It is "Regalbediengerät" in every line now; a handful still said
+  "Kran", among them three captions of the "Collecting" Ponder scene
 
 ## [0.5.0-alpha] - 2026-09-28
 

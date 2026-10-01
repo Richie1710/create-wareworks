@@ -86,7 +86,7 @@ public final class CraneScenes {
         scene.world().showSection(aisle.rails(util), Direction.DOWN);
         scene.idle(FADE_IDLE + 5);
         scene.overlay().showText(TEXT_TICKS)
-                .text("The aisle is the straight line of Warehouse Rails in front of the dock")
+                .text("An aisle is one straight run of Warehouse Rails; a warehouse may have several")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().topOf(midRail));

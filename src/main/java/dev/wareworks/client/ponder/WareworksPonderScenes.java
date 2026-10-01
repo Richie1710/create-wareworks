@@ -35,7 +35,8 @@ import net.minecraft.resources.ResourceLocation;
  * <table>
  *   <caption>Scenes per component</caption>
  *   <tr><th>Component</th><th>Scenes</th></tr>
- *   <tr><td>stacker_crane, warehouse_rail</td><td>stacker_crane/overview, warehouse/corner</td></tr>
+ *   <tr><td>stacker_crane, warehouse_rail</td><td>stacker_crane/overview, warehouse/corner,
+ *       warehouse/junction</td></tr>
  *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_input</td><td>warehouse/storing</td></tr>
@@ -131,6 +132,13 @@ public final class WareworksPonderScenes {
         // player who picked up either one finds it.
         scenes.forComponents(WareworksBlocks.WAREHOUSE_RAIL, WareworksBlocks.STACKER_CRANE)
                 .addStoryBoard("warehouse/corner", NetworkScenes::corner,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
+
+        // Rails that split (M22, issue #2, ADR-035), and after the corner for the same reason the corner comes after
+        // the overview: a player meets "what a stacker crane is", then "the rails may bend", then "and they may
+        // split". It belongs to the same two components, because it is the same two blocks that make it happen.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_RAIL, WareworksBlocks.STACKER_CRANE)
+                .addStoryBoard("warehouse/junction", NetworkScenes::junction,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
     }
 }

@@ -588,27 +588,27 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
 > *feels*, and anything in German — the run is English only. Under each check, **Automated** says what the run proves,
 > **By eye** what is left for a person.
 
-93. Open the Display Link screen on each Wareworks block. The **controller** and the **terminal** offer **"Aisle
-    Summary"** and **"Stock List"**, in that order and with "Aisle Summary" preselected; the **output** and the
+93. Open the Display Link screen on each Wareworks block. The **controller** and the **terminal** offer **"Warehouse
+    Summary"** and **"Stock List"**, in that order and with "Warehouse Summary" preselected; the **output** and the
     **interface** offer **"Stock of the Filtered Item"**; the **crane dock** offers **"Crane Status"**. On the
     **rail**, the **input** and the **production station** the link offers nothing at all. Restart the game once and
     open the controller's screen again: the two entries are still in the same order. On a **German client** the four
-    read "Gangübersicht", "Bestandsliste", "Bestand des gefilterten Gegenstands" and "Status des Regalbediengeräts",
-    and a board on the controller reads "Gang A: Bereit", "Plätze: …", "Gegenstandsarten: …", "Gegenstände: …" — with
-    the crane broken, "Gang A: Kein Regalbediengerät" (the mod uses no short form for that block).
+    read "Lagerübersicht", "Bestandsliste", "Bestand des gefilterten Gegenstands" and "Status des Regalbediengeräts",
+    and a board on the controller reads "Lager A: Bereit", "Plätze: …", "Gegenstandsarten: …", "Gegenstände: …" — with
+    the crane broken, "Lager A: Kein Regalbediengerät" (the mod uses no short form for that block).
 
     **Automated** (GameTest `displaysourcesregistered`): the four ids resolve in Create's registry, each name uses the
     generated lang key, and `DisplaySource.getAll` returns exactly the expected list, in the expected order, for all
     nine blocks it lists (every Wareworks block except the home point, which has no display source and no ticker). The screen itself is never opened by a test. **By eye:** that the screen really lists them that way
     and that nothing is cut off in German, plus the preselection after a restart.
-94. Point a link on the **controller** at a display board (or a row of nixie tubes) with "Aisle Summary". Within about
-    five seconds it reads `Aisle A: Ready`, `Locations: 3 / 30`, `Item types: 3`, `Items: 176`. Put on goggles and look
+94. Point a link on the **controller** at a display board (or a row of nixie tubes) with "Warehouse Summary". Within about
+    five seconds it reads `Warehouse A: Ready`, `Locations: 3 / 30`, `Item types: 3`, `Items: 176`. Put on goggles and look
     at the controller: the same numbers. Store something and watch the board pick the change up on its own. Break the
-    crane dock: the board falls back to the single line `Aisle A: No crane`.
+    crane dock: the board falls back to the single line `Warehouse A: No crane`.
 
     **Automated** (`display`): all four lines compared string by string against the controller's letter, status,
     `occupiedLocations`/`countedStorageLocationCount`, `distinctKeys` and `totalItems`, at rest and again after the
-    aisle grew (176 → 312 → 400 items). The `No crane` and `No aisle` cases are GameTests (`aislesummarydegraded`,
+    aisle grew (176 → 312 → 400 items). The `No crane` and `No warehouse` cases are GameTests (`aislesummarydegraded`,
     `sourcesoutsideaisle`), and `aislesummarysharedinventory` pins that two interfaces on one double chest count as
     one inventory in the second number. **By eye:** whether four lines on a 6 × 2 board are legible from the aisle,
     and whether a five-second refresh feels right.
@@ -640,14 +640,16 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
     holding and paused states. **By eye:** whether a one-second refresh keeps up with the crane well enough to be worth
     watching, and that the board does not look like it is stuttering.
 98. **Targets and their limits.** Write the aisle summary onto a **sign** and onto a **lectern** on a *dedicated*
-    server, and read both with a **German client**: the lectern is in German, the sign is in English (`Aisle A: Ready`
+    server, and read both with a **German client**: the lectern is in German, the sign is in English (`Warehouse A: Ready`
     …), because a sign stores plain text and the server flattens the line in its own language — Create's own sources
     behave the same, and a board, a nixie row or a lectern is the target to use. Then point a link on a terminal that
-    belongs to **no aisle** at a board: it reads `No aisle`.
+    belongs to **no warehouse** at a board: it reads `No warehouse` (it said `No aisle` until the M22 review fix — it
+    is drawn in the slot that otherwise names the warehouse).
 
     **Automated** (GameTest `displaylinkonsign`, and the small board of the `display` scenario): the sign's four lines
-    are the flattened components cut to the sign's line width, line 0 being the English `Aisle A: Ready`, and the
-    stray terminal's board reads exactly the `No aisle` line. **By eye:** that a German client really sees the sign in
+    are the flattened components cut to the sign's line width, line 0 being the English `Warehouse A: Ready`, and the
+    stray terminal's board reads exactly the `No warehouse` line — and that the longer wording still fits the board.
+    **By eye:** that a German client really sees the sign in
     English and the lectern in German, so the note in `warehouse-system.md` §10.2 is worded honestly.
 
 ## R. Stock rules (M15)
@@ -982,7 +984,7 @@ settings, **read** the result and **believe** what the warehouse did.
 
     With goggles: the port's own lines ("Port: overflow (-1)", "Accepts: Any item", "Handed over: 24", "Redstone: Unless
     powered", "Active" / "Waiting for a signal") and the controller's "Accepting ports: 2". Put a **Display Link** on the
-    controller with the **Aisle Summary** source: the row "Ports: 2 accepting" must appear, and must be *absent* on an
+    controller with the **Warehouse Summary** source: the row "Ports: 2 accepting" must appear, and must be *absent* on an
     aisle whose outputs all request. And while the crane carries items into a port, its goggles and a **Crane Status**
     display must say **"Handing over"**, never "Storing".
 
@@ -1100,7 +1102,7 @@ whether a person can **find** the direction, **read** what the port is doing and
     no rank. With goggles the port must show "Port: collects into the warehouse", "Collects: <item>" or "Any item",
     "Ready: N", "Collected: N" and its redstone line — plus, while the warehouse refuses the items, the gold "Not
     fetched: <reason>" line and no such line once it is being served again — the controller
-    "Collecting ports: N", and a **Display Link** with the **Aisle Summary** source the row "Ports: 1 accepting, 1
+    "Collecting ports: N", and a **Display Link** with the **Warehouse Summary** source the row "Ports: 1 accepting, 1
     collecting" (each half only while it is above 0). While the crane carries a collected load, its goggles and a
     **Crane Status** display must say **"Collecting"**, never "Storing". Copy the port with a Create **clipboard** onto
     the next one — the direction must travel with the rest of the policy — then save, reload and check that everything
@@ -1416,17 +1418,34 @@ says "an L", build a run of six rails out of the dock and a second run of six at
     any more — this changed, so a player who used the old behaviour has to be told by the block rather than by the
     changelog.
 
-154. **A T is a shorter warehouse, not a broken one.** With a working L, lay one extra rail so that the corner becomes a
-    T-junction. The warehouse must keep working up to the branching rail; the controller's goggles must say where it stops
-    and that a split needs a later version, and the coordinates they name must be **the block you just made into a
-    junction** — walk to them and check. Break the extra rail again and the warehouse must come back whole with the same
-    addresses. Judge the sentence as a player: does it tell you what to do, or does it read like an internal error?
+154. **A T joins the warehouse — rewritten for M22, because this is the one behaviour change of that milestone.** With a
+    working L, lay one extra rail so that the corner becomes a T-junction: on the **far side of the corner block**, in
+    line with the second run. Until M22 the warehouse stopped **before** that rail and the goggles said a split needed a
+    later version; now the rails join, the stop line disappears, and the second aisle simply becomes **longer** — it grew
+    past its origin, so its positions really are renumbered while it keeps its letter. Check all of that as a player:
+    every chest keeps its contents, its filter and its priority (walk to one and read its goggles — the address is new,
+    the chest is the same), the size line and the aisle list grow with it, and breaking the extra rail again puts every
+    address back exactly as it was. Then lay a rail **sideways out of the middle** of a run instead: that one starts the
+    **next** aisle with the next free letter, counted outwards from its junction. Is it obvious which of the two things
+    you just did, before you read the letters?
+
+    **Automated** (`WarehouseNetworkGameTests#networkbranchgrowsatbothends`, `RailNetworkGameTests#networkfollowsatee`,
+    `WarehouseCombGameTests#anaisleaddedandremovedunderarunningjob`): both growth directions, the remap of every record
+    through its world position, the letters, and a rail laid and taken away **under a running job** with an item census
+    on every tick. **By eye:** whether the renumbering surprises a player in a bad way — check 165 is the same experiment
+    on a warehouse really in use.
 
 155. **The network lines on the goggles, and whether they fit.** On a warehouse of **three** aisles, read the controller's
     goggles: the size line, the aisle list with a letter and a length each, and — if anything is cut short — the stop line.
     Check that nothing overflows its tooltip or wraps badly at **GUI scale 1 and 4**, and that a warehouse of **one** aisle
     still reads exactly as it always did (no network line at all). Then build seven aisles and confirm the list says "and N
     more" rather than running off the screen. Same on the dock: "On aisle B at position 7" under the size line.
+    Finally run a **single straight** aisle into a lowered `aisle.maxNetworkRails`: the stop line must appear on the
+    goggles, and a **Warehouse Summary** display on that controller must carry its "(cut short)" mark — since M22 that
+    mark reaches a one-aisle warehouse too, because every stop that is left can cut a straight aisle as easily as a comb.
+    Read that mark on a target with **five or more rows** (a lectern, or two nixie rows): the aisle line sits **below**
+    the four numbers, so a four-tube board shows the numbers and drops the mark rather than the other way round. Check
+    that too — on a four-row target the last line must still be "Items: N", never the aisle list (M22 review fix).
 
 156. **The Ponder scene, watched once through as a new player.** `/ponder wareworks:warehouse_rail`, paged to the **corner**
     scene (the second one). Watch it start to finish without skipping. Does it teach, in order, that rails connect wherever
@@ -1438,14 +1457,19 @@ says "an L", build a run of six rails out of the dock and a second run of six at
 
 157. **German, everywhere this feature speaks.** Restart with a German client and read every surface of this section: the
     item descriptions of rail, dock and controller (Shift tooltips), the wrench message, the goggle lines on controller and
-    dock, the aisle list, the stop sentence for each reason you can provoke (a split, a second dock, a rail cap you lower
-    in the config — a rail you closed with the wrench is a deliberate end and deliberately gets no sentence), the aisle
+    dock, the aisle list, the stop sentence for each reason you can provoke (a second dock, a rail cap or — since M22 — a
+    junction cap you lower in the config; a split is no longer one of them, and a rail you closed with the wrench is a
+    deliberate end and deliberately gets no sentence), the aisle
     display line, the `/wareworks chunks` over-cap row, and the whole Ponder scene. Nothing may show a raw key, run out of
-    its box or be cut off, at **GUI scale 1 and 4**.
+    its box or be cut off, at **GUI scale 1 and 4**. The machine is **"Regalbediengerät"** in every one of them — the
+    unreachable-aisle line and the collecting-port Ponder captions said "Kran" until the M22 review fix, and that word is
+    now nowhere in `de_de.json`, so the longer name has to fit every box it reaches (the Ponder captions are where to look
+    first).
 
     **Automated for this section:** `RailNetworkGameTests`, `RackBranchGameTests`, `WarehouseNetworkGameTests` and
-    `CraneCornerGameTests` prove the world behaviour (connections and the wrench, discovery around a bend and its refusal at
-    a T, the corner block's two racks, pinned letters and origins, the remap, the goggle lines through the synced tag, a
+    `CraneCornerGameTests` prove the world behaviour (connections and the wrench, discovery around a bend — and since M22 a
+    tee, a cross and a ring followed as ordinary networks, with `WarehouseCombGameTests` for the comb — the corner block's
+    two racks, pinned letters and origins, the remap, the goggle lines through the synced tag, a
     real job round a corner, a rail broken behind the machine, a save in mid-turn); `CraneModelLayoutTest` and
     `WarehouseRailModelTest` pin the chassis sweep and the rail models to the pixel; the `corner` visual scenario
     photographs the bend and every stage of a quarter turn and counts the turn sound over a real cogwheel drivetrain; the
@@ -1521,3 +1545,68 @@ you get tired of waiting, and put it back before judging check 160.
     (`./gradlew runVisualTest -Pwareworks.visualTest=home`) photographs the block, both lamp states, the trip and the
     English goggle tooltip. None of that can judge whether the crossed stop reads at distance, whether "Warteplatz" is
     the right word, or whether a machine that comes to meet you feels right — which is what 158 to 163 are for.
+
+## Z. One warehouse, many aisles (M22, issue #2)
+
+164. **Build a comb and watch it work for ten minutes.** One main run out of the dock, three or four side aisles hanging
+    off it with a rack wall down each, one input and one output beside the dock. Everything below is automated; what is
+    not is whether this is a **warehouse you want to use**. Does the machine look like it knows where it is going, or
+    does it look like it is dithering at the junctions? Does it feel unbearably slow once you have four teeth — and if
+    so, is that the honest "one crane cannot be in two places" or does it look like a bug? Would you build the warehouse
+    this way again, or does the shape fight you?
+
+    The answer decides whether several cranes on one warehouse is the next milestone or merely the next feature, so
+    note the throughput that made it feel wrong.
+
+165. **Lay a junction into a warehouse you already use, and read what it tells you.** On a warehouse with stock and open
+    requests, run rails across an aisle so the two meet. Then: do the new addresses on the controller's goggles make
+    sense at a glance? Can you tell which letter a rack at the junction belongs to **without reading the wiki** — the
+    rule is still "point the interface away from the aisle it belongs to", but at a T there are two aisles beside the
+    same block. Is a ring legible at all, or does the aisle list read as nonsense? Then lower `aisle.maxAisleLength`
+    below the main run you built — that is the one maximum that can leave an aisle behind, because `maxBranches` and
+    `maxJunctions` drop whole aisles out of the warehouse instead — and read the gold **"The crane cannot reach this
+    aisle"** on a rack of the cut-off aisle and the stop line on the controller: do the two together tell you which
+    number to raise, at **GUI scale 1 and 4** and in **German** ("Der Kran kann diesen Gang nicht erreichen")?
+
+    One wording in particular, found while shooting the `comb` scenario and **changed** in the sweep that followed it:
+    the controller's goggles and the terminal's header used to say **"Aisle A"** over a stock list covering A, B, C and
+    D, which was the name of the whole warehouse until M21 and is the name of its **first** aisle now. They say
+    **"Warehouse A"** since M22, and so does the first line of the warehouse summary display. Read all three on your
+    comb and say whether that is the right word: does "Warehouse A" read as the warehouse's name, or does the letter
+    now look like it belongs to nothing in particular? The German is "Lager A". The lines that really do name one
+    aisle were left alone on purpose — an address, the dock's "On aisle B at position 7" and the controller's aisle
+    list — so check that the two kinds of line are still easy to tell apart.
+
+    **Automated for this section:** `RailGraphTest` and `RouteCostsTest` prove the decomposition and the route search
+    without a world (a tee, a cross, both ways round a ring at four turn prices, a comb, the caps, two identical builds
+    answering identically, and M21's own chain walk as an oracle over every chain shape);
+    `RailNetworkGameTests#networkfollowsatee` and `#networkfollowsacrossandaring` prove discovery and ownership in a
+    real world; `WarehouseCombGameTests` proves a comb stored down and emptied out of every aisle into one block, a rack
+    beside a tee joining the aisle it faces, a ring where the crane drives the way the planner costed, an aisle a cap
+    cut loose and reported, and an aisle appearing and disappearing under a running job — each with an item census on
+    every tick. And `./gradlew runVisualTest -Pwareworks.visualTest=comb` photographs the whole shape in a running
+    game — a main run with three side aisles, the machine turning off at a junction and driving straight over one, the
+    rack at a junction being served, both halves of the mirror pair with the address each really has, the controller's
+    aisle list, one terminal for the whole comb, a retrieval across two turns, and both failure states with what the
+    player is told — so **look at those shots before building anything by hand**; they are what 164 and 165 are a
+    second opinion on. None of it can judge whether a comb is a warehouse a player enjoys, or whether an address at a
+    junction is guessable, which is what 164 and 165 are for.
+
+166. **Watch "Rails That Split" the way a player meets it, and say whether it teaches.** Hold **W** over a Warehouse
+    Rail (or a Stacker Crane) and scroll to the **third** scene. Watch it once at normal speed without scrubbing, in
+    **English and in German**, and answer three questions. Did you understand, without being told anywhere else, that
+    a straight run keeps **one** letter through a junction while the side run gets the next one? Is every caption gone
+    before the next one appears, and is each one on screen long enough to read in German, where the sentences are
+    longer? And at the very end: can you see **which way each of the two outlined racks faces** well enough for "a
+    rack belongs to the aisle it faces away from" to land — the blue one shows its framed plate towards the run, the
+    red one its brass port away from aisle C, and that difference is the whole beat.
+
+    Two things the scene deliberately does not show, so do not look for them: a **ring** (nine blocks of base plate
+    have no room for one, and "the machine takes the cheaper way round" is a claim about numbers rather than a
+    picture), and an aisle the crane cannot reach. Both are proved in `WarehouseCombGameTests` instead.
+
+    **Automated for this check:** `./gradlew runVisualTest -Pwareworks.visualTest=ponder` compiles every storyboard
+    against a real `PonderLevel` and shoots each scene at 20, 60 and 90 % of its length, so a missing schematic, an
+    out-of-bounds `setBlock`, a raw lang key or a lost registration fails the run; `PonderNetwork#requireTwinOf` makes
+    the storyboard refuse to compile if either outlined rack ever stopped being a rack of both aisles. What no run can
+    judge is pacing and whether the lesson lands, which is what this check is for.

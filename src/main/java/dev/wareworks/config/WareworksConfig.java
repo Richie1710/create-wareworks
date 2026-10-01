@@ -97,6 +97,16 @@ public final class WareworksConfig {
         return get(SERVER.maxBranches);
     }
 
+    /**
+     * Aisle blocks two aisles of one warehouse may share (M22, issue #2, ADR-035). A junction is what a route search
+     * is priced in — every junction costs at most two nodes and one single-source pass — so this is the key that
+     * bounds the cost of planning on a warehouse that splits, and an aisle that would push the count over it is left
+     * out and reported.
+     */
+    public static int maxJunctions() {
+        return get(SERVER.maxJunctions);
+    }
+
     // --- crane ---------------------------------------------------------------------------------------------------
 
     public static double stressImpact() {
@@ -187,6 +197,16 @@ public final class WareworksConfig {
 
     public static int snapshotIntervalTicks() {
         return get(SERVER.snapshotIntervalTicks);
+    }
+
+    /**
+     * Ticks the round robin may take to come round to every storage location once (M22). The locations read per
+     * interval are scaled to meet it ({@link dev.wareworks.core.warehouse.SnapshotCadence}), so a warehouse of many
+     * aisles notices a chest a player
+     * emptied by hand in bounded time instead of in time proportional to its size; 0 switches the scaling off.
+     */
+    public static int snapshotCycleTicks() {
+        return get(SERVER.snapshotCycleTicks);
     }
 
     public static int dispatchIntervalTicks() {
@@ -351,6 +371,7 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue geometryRefreshTicks;
         public final ModConfigSpec.IntValue maxNetworkRails;
         public final ModConfigSpec.IntValue maxBranches;
+        public final ModConfigSpec.IntValue maxJunctions;
 
         public final ModConfigSpec.DoubleValue stressImpact;
         public final ModConfigSpec.DoubleValue travelBlocksPerTickPerRpm;
@@ -373,6 +394,7 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue stockKeeperRows;
 
         public final ModConfigSpec.IntValue snapshotIntervalTicks;
+        public final ModConfigSpec.IntValue snapshotCycleTicks;
         public final ModConfigSpec.IntValue dispatchIntervalTicks;
         public final ModConfigSpec.IntValue retryTicks;
         public final ModConfigSpec.IntValue holdRetryTicks;
@@ -419,11 +441,22 @@ public final class WareworksConfig {
             maxBranches = builder
                     .comment("Maximum number of straight aisles in one connected warehouse.",
                             "The ceiling is 26 because every aisle needs an address letter A-Z.",
-                            "Set it to 1 to keep every warehouse the single straight aisle it was before version 0.6:",
+                            "Set it to 1 to keep every warehouse the single straight aisle it was up to 0.5.0-alpha:",
                             "discovery then follows the dock's facing and reads nothing beside it, so no rail next to",
                             "an aisle can join it or shorten it. A rail laid across the aisle line still connects",
                             "whichever way it is turned - closing it with a wrench is what keeps a rail out.")
                     .defineInRange("maxBranches", 16, 1, 26);
+            maxJunctions = builder
+                    .comment("Maximum number of junctions in one connected warehouse: aisle blocks that two aisles "
+                            + "share, i.e. every corner, tee and crossing.",
+                            "Junctions are the only places a crane can change aisle, so this is what the route search "
+                                    + "costs: at the default 32 a fully explored warehouse is about 260 000 integer "
+                                    + "operations, and at the ceiling of 128 about 17 million - paid once per change "
+                                    + "to the rails and spread over every planning pass until the next one.",
+                            "An aisle that would push the count over it is not part of the warehouse; the dock reports "
+                                    + "where it stopped. Set it to 0 to keep every warehouse the single aisle at its "
+                                    + "dock without switching the rest of this version off.")
+                    .defineInRange("maxJunctions", 32, 0, 128);
             builder.pop();
 
             builder.comment("Stacker crane").push("crane");
@@ -532,8 +565,24 @@ public final class WareworksConfig {
 
             builder.comment("Warehouse controller").push("controller");
             snapshotIntervalTicks = builder
-                    .comment("[in Ticks] Round-robin reconciliation: one storage location is re-read per interval.")
+                    .comment("[in Ticks] Round-robin reconciliation: how often the controller re-reads storage "
+                            + "locations it has heard nothing about.")
                     .defineInRange("snapshotIntervalTicks", 10, 1, 1200);
+            snapshotCycleTicks = builder
+                    .comment("[in Ticks] How long the round robin above may take to come round to every storage "
+                            + "location once.",
+                            "The number of locations read per interval is scaled to meet it, so the CYCLE time is "
+                                    + "bounded by the warehouse size instead of the other way round: a warehouse of "
+                                    + "many aisles no longer takes proportionally longer to notice a chest a player "
+                                    + "emptied by hand.",
+                            "At the default it reads one location per interval up to about 1200 locations - which is "
+                                    + "every warehouse at the default aisle limits, and exactly what every version up "
+                                    + "to 0.5.0-alpha did. A bigger warehouse, which needs a raised maxAisleLength or "
+                                    + "maxMastHeight, reads more: each turn reads at most maxSnapshotsPerTick "
+                                    + "locations, the same ceiling the change queue has, so a controller never reads "
+                                    + "more than twice that many inventories in the one tick a turn falls on.",
+                            "0 switches the scaling off and reads one location per interval, whatever the size.")
+                    .defineInRange("snapshotCycleTicks", 12000, 0, 432000);
             dispatchIntervalTicks = builder
                     .comment("[in Ticks] How often the controller plans jobs.")
                     .defineInRange("dispatchIntervalTicks", 5, 1, 200);

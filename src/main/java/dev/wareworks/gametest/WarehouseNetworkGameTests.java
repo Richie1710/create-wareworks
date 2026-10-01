@@ -432,9 +432,10 @@ public final class WarehouseNetworkGameTests {
      * <ul>
      * <li><b>At the far end</b> nothing is renumbered and nothing is forgotten — an aisle counts from the end nearer
      * the dock, so every address it had still means the same chest.</li>
-     * <li><b>At the near end</b> the rails split, which this version cannot follow: the warehouse becomes the shorter
-     * one it can follow, the positions beyond leave normally with their items, and opening the wrench on the extra
-     * rail puts everything back under the same letters.</li>
+     * <li><b>At the near end</b> the rails split, which since M22 (issue #2) is an ordinary warehouse: the aisle grows
+     * <b>past its origin</b>, so it really is renumbered, and that is the case the remap exists for. It keeps its
+     * letter, every record is carried through its world position, nothing is forgotten and no item moves — and taking
+     * the rail away again puts every address back exactly as it was.</li>
      * </ul>
      */
     @GameTest(template = AISLE_PAIR_16X10X13, timeoutTicks = LONG_TIMEOUT_TICKS)
@@ -480,33 +481,48 @@ public final class WarehouseNetworkGameTests {
                 })
                 .thenExecute(() -> {
                     // A rail at the near end of the second aisle, i.e. on the other side of the corner: three rails
-                    // now meet in one block, which step one cannot follow.
+                    // now meet in one block. Since M22 that is an ordinary warehouse - and the aisle grew PAST its
+                    // origin, which is the one build action that really renumbers it.
                     helper.setBlock(CORNER.north(1), WarehouseRailBlock.along(Direction.Axis.Z));
                     dock(helper).refreshGeometry();
                     controller(helper).relinkNow();
                 })
                 .thenExecuteAfter(SETTLE_TICKS, () -> {
                     WarehouseControllerBlockEntity controller = controller(helper);
-                    helper.assertValueEqual(warehouse(helper).branchCount(), 1,
-                            "the warehouse stops before the block where the rails split");
-                    helper.assertValueEqual(warehouse(helper).geometry().length(), FIRST_RAILS - 1,
-                            "one rail short of it");
-                    helper.assertValueEqual(controller.countOf(IRON), 0L,
-                            "the second aisle's rack left the warehouse");
+                    WarehouseLayout warehouse = warehouse(helper);
+                    helper.assertValueEqual(warehouse.branchCount(), 2, "the warehouse still has both its aisles");
+                    helper.assertValueEqual(warehouse.geometry().length(), FIRST_RAILS,
+                            "the aisle at the dock runs through the junction, in one piece");
+                    helper.assertValueEqual(warehouse.branch(1).origin(), helper.absolutePos(CORNER.north(1)),
+                            "the second aisle begins at its new near end");
+                    helper.assertValueEqual(warehouse.branch(1).geometry().length(), SECOND_RAILS + 2,
+                            "and is two rails longer than it was built");
+                    helper.assertValueEqual(warehouse.branch(1).letter(), Optional.of('B'),
+                            "under the letter it always had");
+                    helper.assertValueEqual(controller.countOf(IRON), 6L,
+                            "its rack was carried through its world position, stock and all");
                     helper.assertValueEqual(countIn(helper, SECOND_AISLE_CHEST, Items.IRON_INGOT), 6,
                             "with every item still in its chest");
                     helper.assertValueEqual(controller.countOf(LOG), 4L, "the first aisle keeps its own stock");
+                    // The renumber is real and is the point: the same chest now answers to one position further along.
+                    helper.assertValueEqual(controller.addressOf(helper.absolutePos(SECOND_AISLE_RACK))
+                            .map(StorageAddress::format).isPresent(), true, "and it still has an address");
+                    helper.assertFalse(controller.addressOf(helper.absolutePos(SECOND_AISLE_RACK))
+                            .map(StorageAddress::format).equals(Optional.of(address.get())),
+                            "one position further along, because the aisle grew past its origin");
                     ItemCensus.assertEquals(helper, conserved, "after the rails split");
                 })
                 .thenExecute(() -> {
-                    // The one-click cure: close the rail that made the junction, and the warehouse is whole again.
+                    // Taking that rail away again puts every address back where it was.
                     helper.setBlock(CORNER.north(1), Blocks.AIR);
                     dock(helper).refreshGeometry();
                     controller(helper).relinkNow();
                 })
                 .thenExecuteAfter(SETTLE_TICKS, () -> {
                     WarehouseLayout warehouse = warehouse(helper);
-                    helper.assertValueEqual(warehouse.branchCount(), 2, "the second aisle is back");
+                    helper.assertValueEqual(warehouse.branchCount(), 2, "the second aisle is the one it was");
+                    helper.assertValueEqual(warehouse.branch(1).origin(), helper.absolutePos(CORNER),
+                            "numbered from the corner again");
                     helper.assertValueEqual(warehouse.branch(1).letter(), Optional.of('B'),
                             "under the letter it always had");
                     helper.assertValueEqual(controller(helper).addressOf(helper.absolutePos(SECOND_AISLE_RACK))

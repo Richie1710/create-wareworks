@@ -77,7 +77,10 @@ import dev.wareworks.core.inventory.StockView;
  * @param inputCursor          index into the <b>arrival</b> round robin — {@code inputs} followed by
  *                             {@code collectSources} as one virtual list — where the walk starts (taken modulo the
  *                             combined size)
- * @param available            whether a location can be used now (loaded, present); unavailable ones are skipped
+ * @param available            whether a location can be used now (loaded, present, and the crane can drive to it);
+ *                             unavailable ones are skipped. The builder wraps what it is given in a
+ *                             {@link LocationAvailability}, so the world is asked <b>once per location per pass</b>
+ *                             however many item types the pass ranks it for (M22)
  * @param insertEstimate       upper-bound estimate of what a storage location accepts, for pre-filtering
  * @param liveExtract          simulated extraction from a storage location
  * @param liveInsert           simulated insertion into any location
@@ -125,7 +128,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         ReservationView<K, L> reservations, List<OpenRequest<K, L>> requests, List<SupplyNeed<K, L>> supplies,
         List<L> storageLocations, List<L> inputs, List<L> outputs, List<L> ports, List<L> collectSources,
         Function<? super L, InventorySnapshot<K>> collectBuffers,
-        Function<? super L, InventorySnapshot<K>> inputBuffers, int inputCursor, Predicate<? super L> available,
+        Function<? super L, InventorySnapshot<K>> inputBuffers, int inputCursor, LocationAvailability<L> available,
         JobPlanner.InsertEstimate<K, L> insertEstimate, JobPlanner.LiveExtract<K, L> liveExtract,
         JobPlanner.LiveInsert<K, L> liveInsert, BiPredicate<? super L, ? super K> insertRefused,
         BiPredicate<? super L, ? super K> extractRefused,
@@ -500,7 +503,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     travel != null ? travel : TravelCost.straight(speeds), transferTicks, carryLimit, itemType, stock,
                     reservations,
                     requests, supplies, storageLocations, inputs, outputs, ports, collectSources, collectBuffers,
-                    inputBuffers, inputCursor, available,
+                    inputBuffers, inputCursor, LocationAvailability.of(available),
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter, storePriority,
                     portRank, storeHeadroom, liveSimulationBudget);
         }

@@ -26,7 +26,9 @@ import dev.wareworks.core.address.Heading;
  */
 class RailGraphTest {
     private static final int HEIGHT = 4;
-    private static final RailGraph.Limits LIMITS = new RailGraph.Limits(64, 26, 32, HEIGHT);
+    /** More junctions than any shape here has, so {@code aisle.maxJunctions} is never what a test is about. */
+    private static final int MANY_JUNCTIONS = 64;
+    private static final RailGraph.Limits LIMITS = new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 32, HEIGHT);
 
     @Test
     void followsAStraightAisle() {
@@ -118,46 +120,159 @@ class RailGraphTest {
                 "but a complete one is authoritative");
     }
 
+    /**
+     * A T (M22, issue #2): the rails split and <b>all</b> of them are one warehouse. The run keeps its one letter
+     * because two collinear touching rails are always the same branch, and the aisle crossing it is one aisle on both
+     * sides of the run, numbered from the end nearer the dock.
+     */
     @Test
-    void refusesToEnterABranchingRailAndNamesIt() {
+    void followsATeeAsTwoAisles() {
         // A T at (3, 0): the run east, and a spur north and south out of it.
         RailNetwork network = fixture().railsEast(1, 5).rail(3, 1).rail(3, -1).scan(Heading.EAST, LIMITS);
-        assertEquals(1, network.branchCount());
-        assertEquals(2, network.firstBranchLength(), "the chain stops one rail short of the junction");
-        assertEquals(NetworkStop.BRANCHED, network.stop());
-        assertEquals(3, network.stopDx(), "and names the rail that splits");
-        assertEquals(0, network.stopDz());
+        assertEquals(2, network.branchCount());
+        assertEquals(5, network.firstBranchLength(), "the run goes straight through the junction, in one piece");
+        assertEquals(new BranchGeometry(0, 0, 0, Heading.EAST, 5), network.geometry().branch(0));
+        assertEquals(new BranchGeometry(1, 3, -1, Heading.SOUTH, 2), network.geometry().branch(1),
+                "and the crossing aisle is one aisle, from the end nearer the dock");
+        assertEquals(List.of(new BranchLink(0, 3, 1, 1)), network.geometry().links(),
+                "they share the junction block, which has a legal name on both");
+        assertEquals(7, network.rails(), "every rail belongs to an aisle, and the junction is counted once");
+        assertEquals(NetworkStop.END, network.stop(), "nothing is refused any more");
+        assertTrue(network.isComplete());
     }
 
+    /**
+     * A ring. The shape M21 reported as "the rails lead back into themselves" is a warehouse whose aisles meet twice,
+     * so there are two ways round and {@link RouteCosts} decides which one a job drives.
+     */
     @Test
-    void refusesARingAtTheFirstRailThatSplits() {
-        // A ring of eight rails whose near corner touches the dock: (1,0) then has three connections.
+    void followsARingAsOneWarehouse() {
+        // A ring of eight rails whose near corner touches the dock.
         Fixture ring = fixture().railsEast(1, 3).railsSouth(3, 1, 2).rail(2, 2).rail(1, 2).rail(1, 1);
         RailNetwork network = ring.scan(Heading.EAST, LIMITS);
-        assertEquals(NetworkStop.BRANCHED, network.stop(), "a loop always has a rail with three connections");
-        assertTrue(network.branchCount() >= 1, "and what is left is still a warehouse");
-        assertTrue(network.geometry().rackPositionCount() > 0);
+        assertEquals(NetworkStop.END, network.stop(), "a ring is a warehouse, not a refusal");
+        assertTrue(network.isComplete());
+        assertEquals(4, network.branchCount(), "four straight runs");
+        assertEquals(8, network.rails(), "every rail of the ring, each counted once");
+        assertEquals(4, network.geometry().links().size(), "meeting at four junctions");
+        // Two ways round, and both of them really exist: the planner picks by cost, never by which it found first.
+        RouteCosts costs = RouteCosts.of(network.geometry(), 0.0);
+        assertTrue(costs.reachable(0, 2), "the far side of the ring is reachable");
+        assertEquals(costs.componentOf(0), costs.componentOf(2),
+                "and it is the same warehouse as the aisle at the dock");
+    }
+
+    /**
+     * A cross. Four rails meet, and the two aisles through that block are still <b>two</b> aisles: one per axis, each
+     * in one piece, because a maximal straight run is what a branch is.
+     */
+    @Test
+    void followsACrossAsTwoAisles() {
+        RailNetwork network = fixture().railsEast(1, 4).rail(2, 1).rail(2, -1).scan(Heading.EAST, LIMITS);
+        assertEquals(2, network.branchCount());
+        assertEquals(new BranchGeometry(0, 0, 0, Heading.EAST, 4), network.geometry().branch(0));
+        assertEquals(new BranchGeometry(1, 2, -1, Heading.SOUTH, 2), network.geometry().branch(1));
+        assertEquals(List.of(new BranchLink(0, 2, 1, 1)), network.geometry().links());
+        assertEquals(NetworkStop.END, network.stop());
+    }
+
+    /**
+     * A comb — one main run with three side aisles — is the second tested shape of M22 beside the L, and the one the
+     * milestone exists for: goods from every side aisle reach one block. The main run keeps <b>one</b> letter however
+     * many teeth hang off it, and each tooth is numbered from the junction outwards, so extending a tooth renumbers
+     * nothing.
+     */
+    @Test
+    void followsACombWithOneLetterForItsMainRun() {
+        Fixture comb = fixture().railsEast(1, 12);
+        for (int tooth : new int[] { 3, 7, 11 })
+            comb.railsSouth(tooth, 1, 3);
+        RailNetwork network = comb.scan(Heading.EAST, LIMITS);
+        assertEquals(NetworkStop.END, network.stop());
+        assertEquals(4, network.branchCount(), "the main run and one aisle per tooth");
+        assertEquals(new BranchGeometry(0, 0, 0, Heading.EAST, 12), network.geometry().branch(0),
+                "the main run is one aisle with one letter");
+        assertEquals(new BranchGeometry(1, 3, 0, Heading.SOUTH, 3), network.geometry().branch(1));
+        assertEquals(new BranchGeometry(2, 7, 0, Heading.SOUTH, 3), network.geometry().branch(2),
+                "the teeth come in the order the rails reach them from the dock");
+        assertEquals(new BranchGeometry(3, 11, 0, Heading.SOUTH, 3), network.geometry().branch(3));
+        assertEquals(List.of(new BranchLink(0, 3, 1, 0), new BranchLink(0, 7, 2, 0), new BranchLink(0, 11, 3, 0)),
+                network.geometry().links(), "each tooth joins the run at its own junction");
+        assertEquals(21, network.rails(), "twelve on the run and three per tooth, the junctions counted once");
     }
 
     @Test
     void keepsAValidNetworkAtEveryCap() {
         Fixture fixture = fixture().railsEast(1, 6).railsSouth(6, 1, 4);
 
-        RailNetwork rails = fixture.scan(Heading.EAST, new RailGraph.Limits(3, 26, 32, HEIGHT));
+        RailNetwork rails = fixture.scan(Heading.EAST, new RailGraph.Limits(3, 26, MANY_JUNCTIONS, 32, HEIGHT));
         assertEquals(3, rails.rails(), "the walk stops at the rail cap");
         assertEquals(NetworkStop.MAX_RAILS, rails.stop());
         assertEquals(1, rails.branchCount());
 
-        RailNetwork branches = fixture.scan(Heading.EAST, new RailGraph.Limits(64, 1, 32, HEIGHT));
+        RailNetwork branches = fixture.scan(Heading.EAST, new RailGraph.Limits(64, 1, MANY_JUNCTIONS, 32, HEIGHT));
         assertEquals(1, branches.branchCount(), "maxBranches = 1 is the off switch: one straight aisle");
         assertEquals(6, branches.firstBranchLength(), "and the aisle it used to be is untouched");
         assertEquals(NetworkStop.END, branches.stop(), "which simply ends where its rails do, as it did in 0.5.0");
 
-        RailNetwork length = fixture.scan(Heading.EAST, new RailGraph.Limits(64, 26, 4, HEIGHT));
-        assertEquals(1, length.branchCount(), "a truncated branch takes the branches behind it with it");
+        RailNetwork length = fixture.scan(Heading.EAST, new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 4, HEIGHT));
         assertEquals(4, length.firstBranchLength(), "truncated at its far end, so nothing is renumbered");
         assertEquals(NetworkStop.MAX_LENGTH, length.stop());
         assertEquals(5, length.stopDx(), "naming the first rail that is left out");
+        // Since M22 the aisle beyond the cut is KEPT rather than deleted (issue #2): the cut took away the junction it
+        // joined the warehouse at, so it is an aisle the crane cannot reach - which the warehouse reports and the
+        // planner refuses jobs towards. Dropping it would take a player's chests out of the address space because a
+        // number in a config file is too small.
+        assertEquals(2, length.branchCount(), "the aisle beyond the cut is still part of the warehouse");
+        RouteCosts costs = RouteCosts.of(length.geometry(), 0.0);
+        assertFalse(costs.reachable(0, 1), "but the crane cannot get to it any more");
+        assertTrue(costs.costBlocks(0, 0.0, 1, 0.0).isEmpty(), "so no trip there has a cost");
+        RailNetwork raised = fixture.scan(Heading.EAST, new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 6, HEIGHT));
+        assertEquals(6, raised.firstBranchLength(), "and raising the number brings the junction back");
+        assertTrue(RouteCosts.of(raised.geometry(), 0.0).reachable(0, 1), "which joins the aisle again");
+    }
+
+    /**
+     * {@code aisle.maxJunctions} is the bound on what a route search costs, so it is the one cap that counts
+     * <b>junctions</b> rather than rails or aisles. A comb over it keeps the teeth it can afford, in the deterministic
+     * branch order, and names the key to raise.
+     */
+    @Test
+    void keepsTheNearTeethOfACombAtTheJunctionCap() {
+        Fixture comb = fixture().railsEast(1, 12);
+        for (int tooth : new int[] { 3, 7, 11 })
+            comb.railsSouth(tooth, 1, 3);
+
+        RailNetwork two = comb.scan(Heading.EAST, new RailGraph.Limits(64, 26, 2, 32, HEIGHT));
+        assertEquals(3, two.branchCount(), "the main run and the two teeth nearest the dock");
+        assertEquals(NetworkStop.MAX_JUNCTIONS, two.stop());
+        assertEquals(11, two.stopDx(), "naming the tooth that was left out");
+        assertEquals(1, two.stopDz());
+
+        RailNetwork none = comb.scan(Heading.EAST, new RailGraph.Limits(64, 26, 0, 32, HEIGHT));
+        assertEquals(1, none.branchCount(), "0 keeps the aisle at the dock and nothing that joins it");
+        assertEquals(12, none.firstBranchLength(), "which is the whole main run");
+        assertEquals(NetworkStop.MAX_JUNCTIONS, none.stop());
+    }
+
+    /**
+     * {@code aisle.maxBranches} keeps a <b>prefix</b> of the branch order, and a prefix is still a connected
+     * warehouse: a tooth is reached through the run, whose nearest block is one step closer to the dock, so a
+     * connector always sorts before what it connects.
+     */
+    @Test
+    void keepsAConnectedPrefixAtTheAisleCap() {
+        Fixture comb = fixture().railsEast(1, 12);
+        for (int tooth : new int[] { 3, 7, 11 })
+            comb.railsSouth(tooth, 1, 3);
+
+        RailNetwork capped = comb.scan(Heading.EAST, new RailGraph.Limits(64, 3, MANY_JUNCTIONS, 32, HEIGHT));
+        assertEquals(3, capped.branchCount());
+        assertEquals(NetworkStop.MAX_BRANCHES, capped.stop());
+        assertEquals(11, capped.stopDx(), "naming the first rail of the aisle that was left out");
+        RouteCosts costs = RouteCosts.of(capped.geometry(), 0.0);
+        for (int branch = 1; branch < capped.branchCount(); branch++)
+            assertTrue(costs.reachable(0, branch), "every aisle it kept is reachable (" + branch + ")");
     }
 
     /**
@@ -169,14 +284,20 @@ class RailGraphTest {
     void aCapStopsTheWalkRatherThanTheResult() {
         Fixture line = fixture().railsEast(1, 60);
         int[] reads = new int[1];
-        RailNetwork network = line.scanCounting(Heading.EAST, new RailGraph.Limits(64, 26, 4, HEIGHT), reads);
-        assertEquals(4, network.firstBranchLength());
-        assertEquals(NetworkStop.MAX_LENGTH, network.stop());
-        assertTrue(reads[0] < 40, "the walk read " + reads[0] + " positions for a warehouse of four rails");
+        // aisle.maxNetworkRails is the key this is bounded in, and the only one that CAN bound it: since M22 the scan
+        // is a flood, so which straight run a block belongs to - and therefore whether aisle.maxAisleLength bites - is
+        // not known until the whole network has been taken. The flood stops at the rail cap, before the block itself.
+        RailNetwork network = line.scanCounting(Heading.EAST, new RailGraph.Limits(8, 26, MANY_JUNCTIONS, 32, HEIGHT),
+                reads);
+        assertEquals(8, network.firstBranchLength());
+        assertEquals(NetworkStop.MAX_RAILS, network.stop());
+        assertTrue(reads[0] < 40, "the scan read " + reads[0] + " positions for a warehouse of eight rails");
+        assertEquals(4, line.scan(Heading.EAST, new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 4, HEIGHT))
+                .firstBranchLength(), "and the length cap still truncates the result at its far end");
 
         Fixture bend = fixture().railsEast(1, 4).railsSouth(4, 1, 40);
         reads[0] = 0;
-        RailNetwork oneBranch = bend.scanCounting(Heading.EAST, new RailGraph.Limits(64, 1, 32, HEIGHT), reads);
+        RailNetwork oneBranch = bend.scanCounting(Heading.EAST, new RailGraph.Limits(64, 1, MANY_JUNCTIONS, 32, HEIGHT), reads);
         assertEquals(4, oneBranch.firstBranchLength(), "the aisle at the dock, and nothing round the bend");
         assertEquals(NetworkStop.END, oneBranch.stop());
         assertTrue(reads[0] <= 5, "the off switch read " + reads[0] + " positions for an aisle of four rails");
@@ -190,7 +311,7 @@ class RailGraphTest {
      */
     @Test
     void theOffSwitchReadsNothingBesideTheAisleLine() {
-        RailGraph.Limits off = new RailGraph.Limits(64, 1, 32, HEIGHT);
+        RailGraph.Limits off = new RailGraph.Limits(64, 1, MANY_JUNCTIONS, 32, HEIGHT);
         Fixture stray = fixture().railsEast(1, 8).rail(2, 1);
         RailNetwork network = stray.scan(Heading.EAST, off);
         assertEquals(8, network.firstBranchLength(), "a rail beside the aisle is a rack position, not a junction");
@@ -201,22 +322,32 @@ class RailGraphTest {
         assertEquals(8, beside.firstBranchLength());
         assertTrue(beside.isComplete(), "and an unloaded block beside it was never even looked at");
 
-        // With corners on, the same stray rail really is a junction the chain may not enter - that is the one stated
-        // behaviour change of this milestone, and closing the rail is its cure.
-        assertEquals(NetworkStop.BRANCHED, stray.scan(Heading.EAST, LIMITS).stop());
+        // With corners on, the same stray rail is a one-block side aisle of the warehouse - the stated behaviour
+        // change of M21, and since M22 it no longer stops the aisle it hangs off either. Closing it is still the cure.
+        RailNetwork joined = stray.scan(Heading.EAST, LIMITS);
+        assertEquals(NetworkStop.END, joined.stop());
+        assertEquals(8, joined.firstBranchLength(), "the aisle runs past the stray rail, not up to it");
+        assertEquals(2, joined.branchCount(), "which has joined as an aisle of one rail");
+        assertEquals(new BranchGeometry(1, 2, 0, Heading.SOUTH, 1), joined.geometry().branch(1));
     }
 
     /**
-     * An unloaded block <b>beside</b> an aisle says the network may be larger (a rail there would be a turn), but it
-     * can never make that aisle longer — so the dock's own length stays authoritative and a warehouse whose rack plane
-     * falls outside the loaded area can still shrink. Reading one flag for both questions froze such an aisle's length
-     * for ever (M21 review fix).
+     * An unloaded block <b>beside</b> an aisle says the network may be larger (a rail there would be another aisle),
+     * but it can never make that aisle longer — so the dock's own length stays authoritative and a warehouse whose
+     * rack plane falls outside the loaded area can still shrink. Reading one flag for both questions froze such an
+     * aisle's length for ever (M21 review fix).
+     * <p>
+     * Since M22 the scan floods rather than following a chain, so such a block is a place the <b>network</b> could
+     * continue and is named as the stop — which is what {@code isComplete} already said about it. The two flags are
+     * unchanged, and they are what the length rule reads.
      */
     @Test
     void anUnloadedBlockBesideAnAisleNeverFreezesItsLength() {
         RailNetwork beside = fixture().railsEast(1, 4).unloaded(2, 1).scan(Heading.EAST, LIMITS);
         assertEquals(4, beside.firstBranchLength());
-        assertEquals(NetworkStop.END, beside.stop(), "the rails end where they end");
+        assertEquals(NetworkStop.UNLOADED, beside.stop(), "a block an aisle could start at is named");
+        assertEquals(2, beside.stopDx());
+        assertEquals(1, beside.stopDz());
         assertTrue(beside.reachedUnloadedChunk(), "the network as a whole may still be larger");
         assertFalse(beside.isComplete());
         assertFalse(beside.firstBranchIncomplete(), "but the aisle at the dock was seen to its end");

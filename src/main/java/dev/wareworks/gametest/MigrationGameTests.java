@@ -1,20 +1,35 @@
 package dev.wareworks.gametest;
 
 import static dev.wareworks.gametest.WareworksGameTests.AISLE_16X10X7;
+import static dev.wareworks.gametest.WareworksGameTests.AISLE_PAIR_16X10X13;
 import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
+import static dev.wareworks.gametest.WareworksGameTests.FLOOR_Y;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.simibubi.create.AllBlocks;
+import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
+import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
+import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
+
 import dev.wareworks.Wareworks;
+import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.Heading;
 import dev.wareworks.core.address.RackPosition;
@@ -29,7 +44,10 @@ import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
+import dev.wareworks.core.warehouse.NetworkStop;
+import dev.wareworks.core.warehouse.RailNetwork;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
+import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
@@ -42,8 +60,12 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
+import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
+import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 /**
  * The migration gate of M21 (issue #1, ADR-033): a world saved before rails could bend opens as the warehouse it was.
@@ -164,6 +186,33 @@ public final class MigrationGameTests {
     private static final RackPosition INPUT = new RackPosition(1, 0, Side.RIGHT);
     private static final RackPosition TARGET = new RackPosition(8, 0, Side.LEFT);
     private static final int STORED_IRON = 32;
+
+    // --- the M22 gate: a world whose rails branch (geometry on AISLE_PAIR_16X10X13) ------------------------------
+
+    /** The aisle line of the branching world, with room for racks north of it and side aisles south of it. */
+    private static final int GROWTH_Z = 2;
+    private static final BlockPos GROWTH_CONTROLLER = new BlockPos(0, BASE_Y, GROWTH_Z);
+    private static final BlockPos GROWTH_DOCK = new BlockPos(1, BASE_Y, GROWTH_Z);
+    private static final BlockPos GROWTH_MOTOR = new BlockPos(1, FLOOR_Y, GROWTH_Z);
+    /** Rails the warehouse had on M21: the run up to the block the rails split at, which M21 refused to walk into. */
+    private static final int M21_RAILS = 3;
+    /** Rails the whole run really has, which only M22 walks. */
+    private static final int MAIN_RAILS = 12;
+    /** Offsets along the run the side aisles leave it at, and how many rails each of them has. */
+    private static final int[] GROWTH_TEETH = { 4, 8, 12 };
+    private static final int TOOTH_RAILS = 3;
+    /** The two racks the M21 warehouse already had, north of the run: positions 2 and 3 on its left. */
+    private static final RackPosition GROWTH_IRON_RACK = new RackPosition(2, 0, Side.LEFT);
+    private static final RackPosition GROWTH_GOLD_RACK = new RackPosition(3, 0, Side.LEFT);
+    private static final String GROWTH_IRON_ADDRESS = "A-01-02L";
+    private static final String GROWTH_GOLD_ADDRESS = "A-01-03L";
+    private static final int GROWTH_IRON = 24;
+    private static final int GROWTH_GOLD = 12;
+    /** The rack on the far side aisle, which only a warehouse that may split ever reaches. */
+    private static final int GROWTH_DIAMONDS = 16;
+    private static final ItemKey GOLD = ItemKey.of(new ItemStack(Items.GOLD_INGOT));
+    private static final ItemKey DIAMOND = ItemKey.of(new ItemStack(Items.DIAMOND));
+    private static final int GROWTH_TIMEOUT_TICKS = 2400;
 
     private MigrationGameTests() {
     }
@@ -336,6 +385,191 @@ public final class MigrationGameTests {
                 .thenSucceed();
     }
 
+    // --- the M22 gate: a world whose rails branch -----------------------------------------------------------------
+
+    /**
+     * The migration gate of M22 (issue #2): a world whose rails <b>branch</b> was a warehouse that stopped at the
+     * block they split at, and on this version it <b>grows</b> — while every record it saved keeps its address and its
+     * stock, and not one item moves.
+     * <p>
+     * The save it starts from is a real one, written by this very code: a warehouse of the run up to the junction,
+     * which is exactly what a player's world held on M21, because M21 refused to walk into a block three rails meet at
+     * and recorded the run before it. Such a save carries <b>no</b> {@code Network}, no {@code MisalignedBranches} and
+     * no aisle index on any record — the same shape the real pre-M21 bytes of
+     * {@link #migrationloadstherealpre06save} have, and the shape the save format still has, because M22 added no key
+     * to it. The tag is asserted to have that shape, read back into a detached controller (the load half), and then
+     * loaded into the <b>live</b> controller of a world whose rails really do branch, which is what opening that world
+     * on this version does.
+     * <p>
+     * What changes for such a world is one thing and it is the one the changelog promises: the side aisles join, each
+     * with a letter of its own, their racks become storage locations, and the aisle at the dock keeps its letter, its
+     * position numbers and therefore every address a player ever wrote down. With {@code aisle.maxBranches = 1} the
+     * same world stays the one straight aisle it was.
+     */
+    @GameTest(template = AISLE_PAIR_16X10X13, timeoutTicks = GROWTH_TIMEOUT_TICKS)
+    public static void migrationbranchingworldgrowsandkeepsitsstock(GameTestHelper helper) {
+        buildM21Warehouse(helper);
+        AtomicReference<CompoundTag> saved = new AtomicReference<>();
+        Map<ItemKey, Long> conserved = new HashMap<>();
+        boolean branching = WareworksConfig.maxBranches() > 1 && WareworksConfig.maxJunctions() > 0;
+        int grownAisles = branching ? GROWTH_TEETH.length + 1 : 1;
+        int grownStorage = branching ? 3 : 2;
+
+        helper.startSequence()
+                // 1. The warehouse as M21 knew it: one aisle, the run up to the junction, two stocked racks.
+                .thenWaitUntil(() -> {
+                    WarehouseControllerBlockEntity live = controllerAt(helper, GROWTH_CONTROLLER);
+                    helper.assertValueEqual(live.status(), ControllerStatus.READY, "the M21 warehouse is ready");
+                    helper.assertValueEqual(live.storageLocations().size(), 2, "with both racks it had");
+                    helper.assertValueEqual(live.countOf(IRON), (long) GROWTH_IRON, "its iron indexed");
+                    helper.assertValueEqual(live.countOf(GOLD), (long) GROWTH_GOLD, "and its gold");
+                })
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity live = controllerAt(helper, GROWTH_CONTROLLER);
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag tag = live.saveWithoutMetadata(registries);
+                    // The save of a world whose rails branched on M21 is the shape 0.5.0 wrote: M21 stopped at the
+                    // junction, so the warehouse it saved was one aisle and carries none of the network's own fields.
+                    helper.assertFalse(tag.contains("Network"), "the M21 save of it holds no network");
+                    helper.assertFalse(tag.contains("MisalignedBranches"), "and no branch array");
+                    helper.assertValueEqual(occurrences(tag, "B"), 0, "and no aisle index anywhere in it");
+                    saved.set(tag);
+
+                    // It loads: a controller reading those bytes has the records, the stock and the addresses back.
+                    WarehouseControllerBlockEntity loaded = freshController(helper, live);
+                    loaded.loadWithComponents(tag, registries);
+                    helper.assertValueEqual(loaded.status(), ControllerStatus.READY, "it loads as a working warehouse");
+                    helper.assertValueEqual(loaded.layout(), live.layout(),
+                            "over exactly the rails M21 gave it, which are the ones standing there");
+                    helper.assertValueEqual(loaded.layout().map(layout -> layout.geometry().length()),
+                            Optional.of(M21_RAILS), "the run up to the junction and no further");
+                    helper.assertValueEqual(loaded.storageLocations().size(), 2, "with both racks");
+                    helper.assertValueEqual(loaded.countOf(IRON), (long) GROWTH_IRON, "the same iron");
+                    helper.assertValueEqual(loaded.countOf(GOLD), (long) GROWTH_GOLD, "the same gold");
+                    helper.assertValueEqual(addressOf(helper, loaded, GROWTH_IRON_RACK), GROWTH_IRON_ADDRESS,
+                            "the iron still at " + GROWTH_IRON_ADDRESS);
+                    helper.assertValueEqual(addressOf(helper, loaded, GROWTH_GOLD_RACK), GROWTH_GOLD_ADDRESS,
+                            "and the gold still at " + GROWTH_GOLD_ADDRESS);
+                })
+                // 2. The rails the M21 warehouse stopped at, and everything beyond them.
+                .thenExecute(() -> {
+                    buildTheRest(helper);
+                    conserved.putAll(ItemCensus.take(helper));
+                })
+                .thenWaitUntil(() -> {
+                    // The dock walks the whole run in either configuration - a straight run through a junction is one
+                    // aisle for the pre-network walk too - so this is what says the rescan has happened at all.
+                    helper.assertValueEqual(networkAt(helper, GROWTH_DOCK).firstBranchLength(), MAIN_RAILS,
+                            "the dock walked the rails that are really there");
+                    WarehouseLayout grown = warehouseAt(helper, GROWTH_CONTROLLER);
+                    helper.assertValueEqual(grown.branchCount(), grownAisles, "the warehouse grew by its side aisles");
+                    helper.assertValueEqual(controllerAt(helper, GROWTH_CONTROLLER).storageLocations().size(),
+                            grownStorage, "and the rack on the far one joined");
+                })
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity live = controllerAt(helper, GROWTH_CONTROLLER);
+                    RailNetwork network = networkAt(helper, GROWTH_DOCK);
+                    helper.assertValueEqual(network.stop(), NetworkStop.END,
+                            "the rails simply end: nothing about them is refused any more");
+                    helper.assertValueEqual(network.firstBranchLength(), MAIN_RAILS,
+                            "the whole run is one aisle, through every junction");
+                    // Nothing was lost and nothing renumbered: the two records of the M21 save are where they were.
+                    helper.assertValueEqual(live.countOf(IRON), (long) GROWTH_IRON, "the iron is still there");
+                    helper.assertValueEqual(live.countOf(GOLD), (long) GROWTH_GOLD, "and the gold");
+                    helper.assertValueEqual(live.stockIndex().countAt(IRON, GROWTH_IRON_RACK), (long) GROWTH_IRON,
+                            "at the very rack it was in");
+                    helper.assertValueEqual(addressOf(helper, live, GROWTH_IRON_RACK), GROWTH_IRON_ADDRESS,
+                            "with the address it always had");
+                    helper.assertValueEqual(addressOf(helper, live, GROWTH_GOLD_RACK), GROWTH_GOLD_ADDRESS,
+                            "and so is the gold's");
+                    helper.assertValueEqual(live.aisleLetter(), 'A', "the aisle at the dock keeps its letter");
+                    WarehouseLayout grown = warehouseAt(helper, GROWTH_CONTROLLER);
+                    Set<Character> letters = new TreeSet<>();
+                    for (int branch = 0; branch < grown.branchCount(); branch++)
+                        grown.branch(branch).letter().ifPresent(letters::add);
+                    helper.assertValueEqual(letters.size(), grownAisles, "one letter per aisle");
+                    for (int branch = 1; branch < grown.branchCount(); branch++)
+                        helper.assertTrue(grown.routes().reachable(0, branch),
+                                "and every new aisle is joined to it (" + branch + ")");
+                    if (branching)
+                        helper.assertValueEqual(live.countOf(DIAMOND), (long) GROWTH_DIAMONDS,
+                                "the stock of the aisle it grew into is counted too");
+                    else
+                        helper.assertValueEqual(live.countOf(DIAMOND), 0L,
+                                "with the off switch on, the side aisle is no part of the warehouse");
+                    ItemCensus.assertEquals(helper, conserved, "while the warehouse grew");
+                })
+                // 3. And now the literal migration: the M21 bytes loaded into the live controller of that world.
+                .thenExecute(() -> controllerAt(helper, GROWTH_CONTROLLER)
+                        .loadWithComponents(saved.get(), helper.getLevel().registryAccess()))
+                .thenWaitUntil(() -> {
+                    WarehouseControllerBlockEntity live = controllerAt(helper, GROWTH_CONTROLLER);
+                    helper.assertValueEqual(live.warehouse().map(WarehouseLayout::branchCount),
+                            Optional.of(grownAisles), "the saved warehouse grows the moment it is opened here");
+                    helper.assertValueEqual(live.storageLocations().size(), grownStorage,
+                            "with every rack of it");
+                    helper.assertValueEqual(live.countOf(IRON), (long) GROWTH_IRON, "the saved iron");
+                    helper.assertValueEqual(live.countOf(GOLD), (long) GROWTH_GOLD, "the saved gold");
+                    helper.assertValueEqual(addressOf(helper, live, GROWTH_IRON_RACK), GROWTH_IRON_ADDRESS,
+                            "at the address the save gave it");
+                })
+                .thenExecute(() -> ItemCensus.assertEquals(helper, conserved, "after the saved world was opened"))
+                .thenSucceed();
+    }
+
+    /** The warehouse as M21 left it: motor, dock, controller, the run up to the junction and two stocked racks. */
+    private static void buildM21Warehouse(GameTestHelper helper) {
+        helper.setBlock(GROWTH_MOTOR, AllBlocks.CREATIVE_MOTOR.getDefaultState()
+                .setValue(CreativeMotorBlock.FACING, Direction.UP));
+        helper.setBlock(GROWTH_DOCK, WareworksBlocks.STACKER_CRANE.getDefaultState()
+                .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, Direction.EAST));
+        helper.setBlock(GROWTH_CONTROLLER, WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState()
+                .setValue(WarehouseControllerBlock.FACING, Direction.EAST));
+        CreativeMotorBlockEntity motor = com.simibubi.create.AllBlockEntityTypes.MOTOR
+                .getNullable(helper.getLevel(), helper.absolutePos(GROWTH_MOTOR));
+        if (motor == null) {
+            helper.fail("missing creative motor", GROWTH_MOTOR);
+            return;
+        }
+        motor.generatedSpeed.setValue(TEST_RPM);
+        for (int x = 1; x <= M21_RAILS; x++)
+            helper.setBlock(GROWTH_DOCK.offset(x, 0, 0), WarehouseRailBlock.along(Direction.Axis.X));
+        // Two racks north of the run, their interfaces facing away from it, with a chest behind each.
+        placeRack(helper, GROWTH_DOCK.offset(2, 0, -1), GROWTH_DOCK.offset(2, 0, -2), Direction.NORTH,
+                new ItemStack(Items.IRON_INGOT, GROWTH_IRON));
+        placeRack(helper, GROWTH_DOCK.offset(3, 0, -1), GROWTH_DOCK.offset(3, 0, -2), Direction.NORTH,
+                new ItemStack(Items.GOLD_INGOT, GROWTH_GOLD));
+    }
+
+    /** The junction M21 stopped at, the rest of the run, three side aisles and a stocked rack on the last of them. */
+    private static void buildTheRest(GameTestHelper helper) {
+        for (int x = M21_RAILS + 1; x <= MAIN_RAILS; x++)
+            helper.setBlock(GROWTH_DOCK.offset(x, 0, 0), WarehouseRailBlock.along(Direction.Axis.X));
+        for (int tooth : GROWTH_TEETH) {
+            for (int z = 1; z <= TOOTH_RAILS; z++)
+                helper.setBlock(GROWTH_DOCK.offset(tooth, 0, z), WarehouseRailBlock.along(Direction.Axis.Z));
+        }
+        int last = GROWTH_TEETH[GROWTH_TEETH.length - 1];
+        placeRack(helper, GROWTH_DOCK.offset(last + 1, 0, TOOTH_RAILS), GROWTH_DOCK.offset(last + 2, 0, TOOTH_RAILS),
+                Direction.EAST, new ItemStack(Items.DIAMOND, GROWTH_DIAMONDS));
+    }
+
+    /** A chest with {@code contents} behind an interface facing {@code away} from the rails it belongs to. */
+    private static void placeRack(GameTestHelper helper, BlockPos rack, BlockPos chest, Direction away,
+            ItemStack... contents) {
+        helper.setBlock(chest, Blocks.CHEST);
+        IItemHandler handler = helper.getLevel().getCapability(Capabilities.ItemHandler.BLOCK,
+                helper.absolutePos(chest), null);
+        if (handler == null) {
+            helper.fail("no item handler", chest);
+            return;
+        }
+        for (ItemStack stack : contents)
+            ItemHandlerHelper.insertItem(handler, stack.copy(), false);
+        helper.setBlock(rack, WareworksBlocks.WAREHOUSE_INTERFACE.getDefaultState()
+                .setValue(WarehouseInterfaceBlock.FACING, away));
+    }
+
     // --- helpers --------------------------------------------------------------------------------------------------
 
     /** The controller tag of the pre-M21 showcase world, rebuilt from its own bytes and tag types. */
@@ -474,13 +708,39 @@ public final class MigrationGameTests {
     }
 
     private static WarehouseControllerBlockEntity controller(GameTestHelper helper) {
+        return controllerAt(helper, CONTROLLER);
+    }
+
+    private static WarehouseControllerBlockEntity controllerAt(GameTestHelper helper, BlockPos pos) {
         WarehouseControllerBlockEntity be = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER
-                .getNullable(helper.getLevel(), helper.absolutePos(CONTROLLER));
+                .getNullable(helper.getLevel(), helper.absolutePos(pos));
         if (be == null) {
-            helper.fail("missing warehouse controller", CONTROLLER);
+            helper.fail("missing warehouse controller", pos);
             throw new AssertionError("unreachable");
         }
         return be;
+    }
+
+    /** The warehouse the controller at {@code pos} maps, which a ready controller always has. */
+    private static WarehouseLayout warehouseAt(GameTestHelper helper, BlockPos pos) {
+        WarehouseLayout layout = controllerAt(helper, pos).warehouse().orElse(null);
+        if (layout == null) {
+            helper.fail("the controller maps no warehouse", pos);
+            throw new AssertionError("unreachable");
+        }
+        return layout;
+    }
+
+    /** What the dock at {@code pos} last discovered: where the warehouse stops and why. */
+    private static RailNetwork networkAt(GameTestHelper helper, BlockPos pos) {
+        StackerCraneBlockEntity dock = WareworksBlockEntityTypes.STACKER_CRANE
+                .getNullable(helper.getLevel(), helper.absolutePos(pos));
+        RailNetwork network = dock == null ? null : dock.discoveredNetwork().orElse(null);
+        if (network == null) {
+            helper.fail("the dock recorded no network", pos);
+            throw new AssertionError("unreachable");
+        }
+        return network;
     }
 
     private static WarehouseControllerBlockEntity freshController(GameTestHelper helper,

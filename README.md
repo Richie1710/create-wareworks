@@ -4,9 +4,10 @@
 
 Create: Wareworks is an addon for [Create](https://github.com/Creators-of-Create/Create) that adds physical, automated
 high-bay warehouses. Racks of chests, barrels and vaults line an aisle, and a kinetic **stacker crane** travels down it
-to store and retrieve items. The rails may **turn corners**, so a warehouse can follow the shape of your base: the crane
-rolls onto the corner block, swings a quarter turn and drives on down the next aisle. Nothing is teleported: every item
-you put in or take out is carried by the crane, where you can watch it happen.
+to store and retrieve items. The rails may **turn corners and split**, so a warehouse can follow the shape of your base
+and reach into every room of it: the crane rolls onto the shared block, swings a quarter turn and drives on down the
+next aisle, and goods from every aisle of the shape come back to the one block you collect them at. Nothing is
+teleported: every item you put in or take out is carried by the crane, where you can watch it happen.
 
 **The machine is the feature.**
 
@@ -38,10 +39,11 @@ you put in or take out is carried by the crane, where you can watch it happen.
 * **Stacker Crane** (dock block): a kinetic machine on a rail aisle. Its crane (base with bogies, braced mast, lift
   carriage, telescopic arm, grabber, drive cog) is fully animated; travel, lift and arm speed follow the RPM. Create-like
   sounds for travel, rail joints, lift, arm, picking and dropping.
-* **Warehouse Rail**: lays out the aisles. **Rails that touch connect**, so your warehouse is simply the run of rails in
-  front of the dock — and where two runs meet at right angles, the block they share becomes a **corner** the crane turns
-  at. Every straight run is one aisle with its own letter, and a rack standing in a corner belongs to the aisle its
-  interface faces away from. A **wrench closes a rail**, which is how you keep one out of the warehouse.
+* **Warehouse Rail**: lays out the aisles. **Rails that touch connect**, so your warehouse is simply all the rails in
+  front of the dock — it may bend round corners, **split** into side aisles and even close into a **ring**, and the
+  block two runs share is a corner or a junction the crane turns at. Every straight run is **one** aisle with one
+  letter, however many junctions it passes through, and a rack standing beside a corner or a junction belongs to the
+  aisle its interface faces away from. A **wrench closes a rail**, which is how you keep one out of the warehouse.
 * **Warehouse Controller**: sits behind the dock, letters every aisle of its warehouse (the first from its own value box,
   each further one the next free letter), finds storage locations and stations, keeps a stock index and plans store and
   retrieve jobs. It never moves items itself. Its goggles say how big the warehouse is, which aisles it has and — if the
@@ -57,8 +59,8 @@ you put in or take out is carried by the crane, where you can watch it happen.
   **collects**: the crane reaches through the port into the inventory behind it and fetches a machine's result into
   storage, so no belt has to lead back to the aisle. Funnels, chutes, hoppers and Mechanical Arms take the items out of a
   requesting or accepting port either way. Details in the **The warehouse port** section below.
-* **Warehouse Terminal**: a searchable screen showing the aisle's whole stock; click an item and the crane delivers it
-  into the terminal.
+* **Warehouse Terminal**: a searchable screen showing the whole warehouse's stock; click an item and the crane
+  delivers it into the terminal.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
@@ -76,8 +78,8 @@ output, terminal and production station only as a source to take items from. Cli
 does not switch that. The warehouse interface, controller, crane dock and rails are not arm targets.
 
 **Stock displays** work through Create's **Display Link**, so you build them with the display blocks you already know.
-Put a link on the controller or the terminal for an **aisle summary** (letter, status, storage locations in use, item
-types, items) or a **stock list** of the most stocked item types; on a warehouse output or interface for the aisle's
+Put a link on the controller or the terminal for a **warehouse summary** (letter, status, aisles, storage locations in
+use, item types, items) or a **stock list** of the most stocked item types; on a warehouse output or interface for the
 **stock of the item in its filter slot**; and on the crane dock for the **crane's status** — what it is doing, what it
 carries and which address it is heading for. Nixie tubes, display boards and lecterns show the text in your own
 language. A sign accepts it too, but it keeps whatever language the server writes it in — English on a dedicated
@@ -120,9 +122,10 @@ The build *is* the configuration; there is no setup screen.
    Higher RPM means a faster crane.
 3. **Lay Warehouse Rails** in a line in front of the dock. Their number is the aisle length (up to 32 by
    default). Scroll the **Mast Height** value box on the dock for the number of levels.
-   *You may turn a corner:* lay a second run at right angles to the first, and the block they share becomes a corner the
-   crane turns at. Rails that **split** (a T, a cross, a ring) are not supported yet — the warehouse then stops before the
-   branching rail and says so. Close a rail you want left out with a **wrench**.
+   *You may bend and split:* lay a second run at right angles to the first and the block they share becomes a corner
+   the crane turns at; a rail leaving a run **sideways** makes a junction and starts the next aisle. A T, a cross, a
+   comb of side aisles and even a ring are all **one** warehouse, and every straight run keeps **one** letter however
+   many junctions it passes through. Close a rail you want left out with a **wrench**.
 4. **Put the Warehouse Controller directly behind the dock**, facing it. Its **Aisle** value box sets the letter (A–Z)
    the aisle at the dock starts with; any further aisle gets the next free letter by itself.
 5. **Build the racks.** Put chests, barrels or vaults beside the aisle and a **Warehouse Interface** in front of each,
@@ -151,7 +154,11 @@ that restocks itself, and the overflow a maximum makes necessary). A fourteenth 
 shows a whole chain being ordered and run, and belongs to the terminal and the production station alike, because a chain
 is planned by a click at one and run at the other. The fifteenth, **Rails Around a Corner**, is the second scene of the
 rail and the crane: rails connecting where they touch, the block two runs share becoming a corner, the machine swinging
-a quarter turn on it, and the two racks that one corner block serves.
+a quarter turn on it, and the two racks that one corner block serves. The sixteenth, **Rails That Split**, is their
+third: side aisles leaving one run in the middle of it, the junction block that belongs to both aisles, the one letter
+a straight run keeps through every junction, the machine driving straight over one junction and round the bend at
+another, goods from all three aisles arriving at the one output beside the dock, and the two racks beside a junction
+that only their facing tells apart.
 
 ## Requesting items
 

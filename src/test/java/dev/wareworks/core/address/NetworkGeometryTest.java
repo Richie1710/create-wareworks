@@ -107,27 +107,57 @@ class NetworkGeometryTest {
 
     /**
      * What a controller keeps when a discovery run was partial but the dock's own aisle is confirmed shorter than the
-     * warehouse it knows. Every branch of a chain begins at the far end of the one before it, so the block a shorter
-     * first branch gives up is the block the second branch starts at: the chain is cut there, and dropping a suffix of
-     * it renumbers nothing. Keeping the old length instead let a crane drive over rails a player had broken (M21
-     * review fix).
+     * warehouse it knows: <b>that aisle shorter, and every other aisle exactly as it was</b>. Keeping the old length
+     * instead let a crane drive over rails a player had broken (M21 review fix); keeping only the first aisle deleted
+     * a comb's teeth because of one lateral read in an unloaded chunk (M22 review fix).
      */
     @Test
-    void aShorterFirstBranchCutsTheChainBehindIt() {
-        assertEquals(NetworkGeometry.single(Heading.EAST, 2, HEIGHT), CORNER.truncatedToFirstBranchLength(2),
-                "the first aisle alone, over the rails that are really there");
-        assertEquals(NetworkGeometry.single(Heading.EAST, 0, HEIGHT), CORNER.truncatedToFirstBranchLength(0),
-                "a warehouse whose rails are all gone is the dock block and nothing else");
-        assertEquals(NetworkGeometry.single(Heading.EAST, 0, HEIGHT), CORNER.truncatedToFirstBranchLength(-3),
+    void aShorterFirstBranchShortensThatAisleAndNothingElse() {
+        assertEquals(new NetworkGeometry(List.of(
+                new BranchGeometry(0, 0, 0, Heading.EAST, 2),
+                new BranchGeometry(1, 4, 0, Heading.SOUTH, 3)), HEIGHT),
+                CORNER.withFirstBranchLength(2),
+                "the aisle at the dock over the rails that are really there, the other one untouched");
+        assertEquals(2, CORNER.withFirstBranchLength(0).branchCount(),
+                "even a warehouse whose first aisle is all gone keeps the aisles it says nothing about");
+        assertEquals(0, CORNER.withFirstBranchLength(-3).firstBranch().length(),
                 "and a length below zero is no exception a caller has to handle");
 
-        assertSame(CORNER, CORNER.truncatedToFirstBranchLength(4), "the length it already has changes nothing");
-        assertSame(CORNER, CORNER.truncatedToFirstBranchLength(9),
-                "and this only ever shrinks a warehouse: a longer aisle is not evidence of more branches");
+        assertSame(CORNER, CORNER.withFirstBranchLength(4), "the length it already has changes nothing");
+        assertSame(CORNER, CORNER.withFirstBranchLength(9),
+                "and this only ever shrinks an aisle: a longer one is not evidence of anything else");
         NetworkGeometry straight = NetworkGeometry.single(Heading.NORTH, LENGTH, HEIGHT);
-        assertEquals(NetworkGeometry.single(Heading.NORTH, 1, HEIGHT), straight.truncatedToFirstBranchLength(1),
+        assertEquals(NetworkGeometry.single(Heading.NORTH, 1, HEIGHT), straight.withFirstBranchLength(1),
                 "one aisle keeps its heading and its height and simply gets shorter");
-        assertEquals(HEIGHT, CORNER.truncatedToFirstBranchLength(1).height(), "the mast is not touched");
+        assertEquals(HEIGHT, CORNER.withFirstBranchLength(1).height(), "the mast is not touched");
+    }
+
+    /**
+     * The case the old rule got wrong: a comb whose main run is confirmed shorter keeps every tooth, at its own index,
+     * with its own origin — so no address of a block a player never touched changes. The teeth the shorter run really
+     * disconnects are a <b>reachability</b> answer, not a deletion: they are no longer joined to the aisle at the dock,
+     * which is what the crane, the planner and a member's goggles read ({@code RouteCosts#componentOf}).
+     */
+    @Test
+    void aShorterMainRunKeepsTheTeethOfAComb() {
+        NetworkGeometry comb = new NetworkGeometry(List.of(
+                new BranchGeometry(0, 0, 0, Heading.EAST, 12),
+                new BranchGeometry(1, 3, 0, Heading.SOUTH, 8),
+                new BranchGeometry(2, 7, 0, Heading.SOUTH, 8),
+                new BranchGeometry(3, 11, 0, Heading.SOUTH, 8)), HEIGHT);
+
+        NetworkGeometry shorter = comb.withFirstBranchLength(8);
+        assertEquals(4, shorter.branchCount(), "nothing is dropped and nothing renumbers");
+        assertEquals(8, shorter.firstBranch().length(), "only the aisle a loaded block disproved got shorter");
+        for (int branch = 1; branch < comb.branchCount(); branch++)
+            assertEquals(comb.branch(branch), shorter.branch(branch), "tooth " + branch + " is untouched");
+        // Every position of every tooth is still a position of the warehouse, so no record is forgotten.
+        for (RackPosition rack : comb.rackPositions()) {
+            if (rack.branch() != 0 || rack.x() <= 8)
+                assertTrue(shorter.contains(rack), rack + " is still a position of the warehouse");
+        }
+        // The tooth beyond the shortened run no longer shares a block with it, which is the reachability answer.
+        assertEquals(2, shorter.links().size(), "the teeth at 3 and 7 still meet the main run; the one at 11 does not");
     }
 
     private static NetworkGeometry tooManyBranches(int count) {

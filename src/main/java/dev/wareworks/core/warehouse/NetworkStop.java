@@ -6,6 +6,10 @@ package dev.wareworks.core.warehouse;
  * A scan always yields a <b>valid, possibly shorter</b> network — never none — so every reason but {@link #END} names
  * something a player can see and fix, and it is reported rather than silently swallowed. {@link #name()} is the stable
  * sync and log name.
+ * <p>
+ * <b>Since M22 the rails may split and may close on themselves</b> (issue #2), so the two reasons that only ever said
+ * "this version cannot follow that shape" are gone: a T, a cross and a ring are ordinary networks. What is left is a
+ * real end, something a player built in the way, or a configured maximum — and every maximum names the key to raise.
  */
 public enum NetworkStop {
     /** The rails simply end there: nothing is wrong. */
@@ -16,17 +20,15 @@ public enum NetworkStop {
     CLOSED,
     /** Another stacker crane dock stands there. It is a wall, so both warehouses keep working. */
     SECOND_DOCK,
-    /** The rails split there. Step one of M21 follows a chain only, so the rails beyond are not part of this network. */
-    BRANCHED,
-    /**
-     * The rails lead back onto a block the scan already took. Cannot normally happen — the first block of a ring has
-     * three connections and is reported as {@link #BRANCHED} — and exists so that a walk can never run for ever.
-     */
-    LOOPED,
     /** The network reached the configured maximum number of aisle blocks ({@code aisle.maxNetworkRails}). */
     MAX_RAILS,
-    /** The network reached the configured maximum number of branches ({@code aisle.maxBranches}). */
+    /** The network reached the configured maximum number of aisles ({@code aisle.maxBranches}). */
     MAX_BRANCHES,
+    /**
+     * The network reached the configured maximum number of junctions ({@code aisle.maxJunctions}) — the aisle blocks
+     * two aisles share, which is what a route search is priced in (M22, issue #2, {@link RouteCosts}).
+     */
+    MAX_JUNCTIONS,
     /** A branch reached the configured maximum aisle length ({@code aisle.maxAisleLength}). */
     MAX_LENGTH;
 

@@ -50,11 +50,11 @@ class NetworkGoggleInfoTest {
 
     @Test
     void aStraightWarehouseThatStopsShortDoesSaySo() {
-        // The case the record exists for: a T laid on a straight aisle. Nothing bends, and the player still has to be
-        // told where the warehouse stops and why.
-        Optional<NetworkGoggleInfo> info = NetworkGoggleInfo.of(straight(16, NetworkStop.BRANCHED), "A");
+        // The case the record exists for: a straight aisle that ran into one of the server's maxima. Nothing bends,
+        // and the player still has to be told where the warehouse stops and which number to raise.
+        Optional<NetworkGoggleInfo> info = NetworkGoggleInfo.of(straight(16, NetworkStop.MAX_JUNCTIONS), "A");
         assertTrue(info.isPresent());
-        assertEquals(NetworkStop.BRANCHED, info.get().stop());
+        assertEquals(NetworkStop.MAX_JUNCTIONS, info.get().stop());
         assertTrue(info.get().stopsShort());
         assertEquals(1, info.get().aisleCount());
     }

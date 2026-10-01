@@ -53,6 +53,11 @@ public final class WareworksLang {
     public static final String GOGGLES_ADDRESS = "gui.goggles.address";
     /** {@code "Misaligned"}: a member at a rack position with the wrong facing. */
     public static final String GOGGLES_MISALIGNED = "gui.goggles.misaligned";
+    /**
+     * {@code "The crane cannot reach this aisle"}: a member aligned at a rack position of an aisle the rails no longer
+     * join to the crane (M22, issue #2). It keeps its address and its stock; nothing is planned towards it.
+     */
+    public static final String GOGGLES_UNREACHABLE_AISLE = "gui.goggles.unreachable_aisle";
     /** Hint under {@link #GOGGLES_MISALIGNED} for warehouse interfaces. */
     public static final String GOGGLES_MISALIGNED_HINT = "gui.goggles.misaligned_hint";
     /** {@code "Filter: %1$s"}: the store filter of a storage location. */
@@ -113,8 +118,16 @@ public final class WareworksLang {
     public static final String INTERFACE_STORE_PRIORITY_TIP = "interface.store_priority_tip";
     /** {@code "Warehouse Controller:"}: goggle header of a warehouse controller. */
     public static final String GOGGLES_WAREHOUSE_CONTROLLER = "gui.goggles.warehouse_controller";
-    /** {@code "Aisle %1$s"}: the controller's aisle letter. */
-    public static final String GOGGLES_AISLE_LETTER = "gui.goggles.aisle_letter";
+    /**
+     * {@code "Warehouse %1$s"}: the letter of a whole warehouse, which is the letter of its <b>first</b> aisle — the
+     * one the controller's value panel sets, and the one {@code /wareworks chunks} names a warehouse by.
+     * <p>
+     * Since M21 a warehouse is a set of aisles with a letter each (ADR-033), so the surfaces that speak for the
+     * <b>whole</b> warehouse — the controller's goggles, the terminal's screen, the warehouse summary display — say
+     * "Warehouse A" where they used to say "Aisle A". The lines that really do name one aisle still say
+     * "aisle": a storage address, the dock's {@link #GOGGLES_CRANE_ON_AISLE} line and the controller's aisle list.
+     */
+    public static final String GOGGLES_WAREHOUSE_LETTER = "gui.goggles.warehouse_letter";
     /** Controller status {@code READY}. */
     public static final String GOGGLES_STATUS_READY = "gui.goggles.controller_status.ready";
     /** Controller status {@code NO_DOCK}. */
@@ -156,7 +169,7 @@ public final class WareworksLang {
     public static final String GOGGLES_NETWORK_AISLES_MORE = "gui.goggles.network_aisles_more";
     /** {@code "Warehouse stops at %1$s: %2$s"}: where the rails were cut off, and which reason did it. */
     public static final String GOGGLES_NETWORK_STOP = "gui.goggles.network_stop";
-    /** Prefix of the one reason per {@link NetworkStop}, e.g. {@code gui.goggles.network_stop.branched}. */
+    /** Prefix of the one reason per {@link NetworkStop}, e.g. {@code gui.goggles.network_stop.max_junctions}. */
     public static final String GOGGLES_NETWORK_STOP_REASON = "gui.goggles.network_stop.";
     /** {@code "On aisle %1$s at position %2$s"}: where the machine of a warehouse that bends is standing. */
     public static final String GOGGLES_CRANE_ON_AISLE = "gui.goggles.crane_on_aisle";
@@ -465,7 +478,12 @@ public final class WareworksLang {
     public static final String TERMINAL_NO_MATCH = "gui.terminal.no_match";
     /** Shown until the server's first stock payload arrives. */
     public static final String TERMINAL_LOADING = "gui.terminal.loading";
-    /** {@code "Not part of an aisle"}: the terminal is misaligned, outside an aisle or has no loaded controller. */
+    /**
+     * {@code "Not part of a warehouse"}: the terminal is misaligned, outside a warehouse or has no loaded
+     * controller. It is drawn in the very slot that otherwise reads {@link #GOGGLES_WAREHOUSE_LETTER}
+     * "Warehouse A", so it speaks of the warehouse as that line does (M22 review fix); the key keeps its path,
+     * because only the text changed.
+     */
     public static final String TERMINAL_NO_AISLE = "gui.terminal.no_aisle";
     /** {@code "Crane: %1$s"}: the crane's phase or pause reason in the terminal's status line. */
     public static final String TERMINAL_CRANE = "gui.terminal.crane";
@@ -674,7 +692,11 @@ public final class WareworksLang {
      * reason takes a sentence, which is why the board only marks it and the controller's goggles name it.
      */
     public static final String DISPLAY_AISLE_LINE_AISLES_CUT = "display_source.aisle.line_aisles_cut";
-    /** {@code "No aisle"}: the source block belongs to no loaded aisle. */
+    /**
+     * {@code "No warehouse"}: the source block belongs to no loaded warehouse, and this is then the whole output
+     * of the Warehouse Summary source — which is why it speaks of a warehouse like every other line of it
+     * (M22 review fix). The key keeps its path, because only the text changed.
+     */
     public static final String DISPLAY_AISLE_NO_AISLE = "display_source.aisle.no_aisle";
     /**
      * Controller status {@code READY}, short. The display statuses are deliberately shorter than their goggle
@@ -752,7 +774,7 @@ public final class WareworksLang {
         return GOGGLES_NO_JOB_REASON_PREFIX + reason.name().toLowerCase(Locale.ROOT);
     }
 
-    /** Relative lang key of a discovery stop reason, e.g. {@code gui.goggles.network_stop.branched}. */
+    /** Relative lang key of a discovery stop reason, e.g. {@code gui.goggles.network_stop.max_junctions}. */
     public static String networkStopKey(NetworkStop stop) {
         return GOGGLES_NETWORK_STOP_REASON + stop.name().toLowerCase(Locale.ROOT);
     }
@@ -942,9 +964,9 @@ public final class WareworksLang {
         return translate(GOGGLES_ADDRESS, text(address).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
     }
 
-    /** "Aisle X" with the letter highlighted. */
-    public static LangBuilder aisleLetter(char letter) {
-        return translate(GOGGLES_AISLE_LETTER, text(String.valueOf(letter)).style(ChatFormatting.GOLD))
+    /** "Warehouse X" with the letter highlighted ({@link #GOGGLES_WAREHOUSE_LETTER}). */
+    public static LangBuilder warehouseLetter(char letter) {
+        return translate(GOGGLES_WAREHOUSE_LETTER, text(String.valueOf(letter)).style(ChatFormatting.GOLD))
                 .style(ChatFormatting.GRAY);
     }
 

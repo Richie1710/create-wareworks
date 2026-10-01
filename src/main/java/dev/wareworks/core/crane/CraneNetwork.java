@@ -64,17 +64,31 @@ public interface CraneNetwork {
         return headingOf(branch).map(CranePose::yawOf).orElse(fallback);
     }
 
-    /** The network a discovered {@link NetworkGeometry} describes, with the configured turn penalty. */
+    /**
+     * The network a discovered {@link NetworkGeometry} describes, with the configured turn penalty, costing the shape
+     * on the spot. A caller that already holds the shape's {@link RouteTable} — the warehouse's own — hands that over
+     * instead ({@link #of(RouteTable, double)}), so the controller and the crane read one set of derived rows.
+     */
     static CraneNetwork of(NetworkGeometry geometry, double turnPenaltyBlocks) {
-        return new Discovered(RouteTable.of(geometry), turnPenaltyBlocks);
+        return of(RouteTable.of(geometry), turnPenaltyBlocks);
+    }
+
+    /** The network a {@link RouteTable} its owner already holds describes, at {@code turnPenaltyBlocks} per turn. */
+    static CraneNetwork of(RouteTable routes, double turnPenaltyBlocks) {
+        Objects.requireNonNull(routes, "routes");
+        routes.costs(turnPenaltyBlocks);
+        return new Discovered(routes, turnPenaltyBlocks);
     }
 
     /**
-     * A network backed by a discovered geometry. Routes are recomputed on every call: a chain has exactly one route
-     * between any two of its points, so this is a walk over at most 26 branches and not a search ({@link RouteModel}).
+     * A network backed by a discovered geometry. Routes are recomputed on every call, because the rails may have
+     * changed under the machine since the last one; what they <b>cost</b> is derived once per shape and turn price and
+     * then read ({@link RouteTable}, {@link RouteModel}), because a machine asks for its route on every tick it moves
+     * and the costs cannot change without the shape changing.
      * <p>
-     * The shape's corner blocks are derived <b>once</b>, when the network is handed over ({@link RouteTable}), because
-     * a machine asks for its route on every tick it moves and the corners cannot change without the shape changing.
+     * The table carries <b>this</b> network's turn price, so the route the machine drives is the one the controller
+     * costed when it planned the job: on rails that split, which way round is cheapest depends on what a quarter turn
+     * is worth, and the two must never disagree about it.
      *
      * @param routes            the branches the dock discovered, with their links
      * @param turnPenaltyBlocks {@code crane.turnPenaltyBlocks}
@@ -100,9 +114,14 @@ public interface CraneNetwork {
             return Optional.of(geometry.branch(branch).heading());
         }
 
+        /**
+         * The cheapest route at <b>this</b> network's turn price, so the route the machine drives is the one the
+         * controller costed when it planned the job: where the rails split, which way round is cheapest depends on
+         * what a quarter turn is worth, and the two must never disagree about it.
+         */
         @Override
         public Optional<CraneRoute> route(int fromBranch, double fromX, int toBranch, double toX) {
-            return routes.route(fromBranch, fromX, toBranch, toX);
+            return routes.route(fromBranch, fromX, toBranch, toX, turnPenaltyBlocks);
         }
 
         @Override

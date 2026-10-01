@@ -438,7 +438,9 @@ public final class CornerVisualScenario implements VisualScenario {
                 MomentView.following(OVER, CornerVisualScenario::overView), MomentView.fixed(INSIDE));
 
         if (pass == VisualPass.FLYWHEEL) {
-            script.server("corner: put another stream into the feed chest", this::fillFeedChest);
+            script.server("corner: put another stream into the feed chest", this::fillFeedChest)
+                    .serverUntil("corner: wait until a job sets off across the corner",
+                            this::crossingJobSetOff, MOMENT_TIMEOUT_TICKS);
             controllerGoggleShot(script);
         }
         script.serverUntil("corner: wait until every item is stored and the crane is idle", this::allStored,
@@ -780,6 +782,29 @@ public final class CornerVisualScenario implements VisualScenario {
         for (MomentView view : views)
             script.camera(view.label(), view.view()).shot(label + "-" + view.label());
         script.freeze(false);
+    }
+
+    /**
+     * One poll of the wait before the controller's goggle shot: keep the belt fed, as a moment's own poll does, and
+     * hold until a job has just <b>set off</b> across the corner — items in the head, still on the aisle at the dock,
+     * target on another one. The shot that follows needs that line to be there when Create's tooltip has faded in,
+     * which takes about two seconds, and the start of such a job leaves the whole drive round the bend ahead of it.
+     * <p>
+     * Before this wait the shot took whatever job happened to be in flight when the last moment ended, and
+     * <b>nothing fed the belt</b> between the two: {@link #feedBelt} and {@link #keepTheWarehouseBusy} run only inside
+     * a moment's poll, so a warehouse that had caught up stayed idle and the shot's 300-tick sync wait ran out. That
+     * race finally lost in the M22 Definition-of-Done run, where this scenario failed once and passed on the re-run.
+     */
+    private boolean crossingJobSetOff(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        feedBelt(level, dock);
+        StackerCraneBlockEntity crane = dock(level, dock);
+        keepTheWarehouseBusy(level, dock, crane);
+        CraneState<ItemKey, RackPosition> state = crane.craneState();
+        return state.phase() == CranePhase.TRAVEL_TO_TARGET && crane.goggleInfo().heldCount() > 0
+                && state.pose().branch() == RackPosition.FIRST_BRANCH
+                && state.target().branch() != RackPosition.FIRST_BRANCH;
     }
 
     /**

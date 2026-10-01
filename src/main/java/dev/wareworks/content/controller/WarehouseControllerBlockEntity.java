@@ -97,6 +97,7 @@ import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.MembershipChanges;
 import dev.wareworks.core.warehouse.RackProbe;
 import dev.wareworks.core.warehouse.RailNetwork;
+import dev.wareworks.core.warehouse.SnapshotCadence;
 import dev.wareworks.util.GoggleObservers;
 import dev.wareworks.util.Headings;
 import dev.wareworks.util.LogThrottle;
@@ -139,8 +140,10 @@ import net.minecraft.world.level.block.state.BlockState;
  * <b>Stock.</b> A {@link StockIndex} over the storage locations, updated incrementally. Locations wait in a
  * {@link SnapshotQueue} and at most {@code maxSnapshotsPerTick} of them are read per tick: urgently when they join or
  * when their interface reports a content change ({@link WarehouseRegistry#contentChanged}), in the background when
- * their counts were restored from a save. On top, one storage location per {@code snapshotIntervalTicks} is re-read
- * round robin (inventories that change silently), and {@link #refreshLocation} re-reads one on demand (after every crane
+ * their counts were restored from a save. On top, every {@code snapshotIntervalTicks} as many storage locations are
+ * re-read round robin as {@link SnapshotCadence} asks for (inventories that change silently) — one up to about 1200
+ * locations, which is every warehouse at the default aisle limits, and at most {@code maxSnapshotsPerTick} above that,
+ * read directly rather than through the queue — and {@link #refreshLocation} re-reads one on demand (after every crane
  * transfer). Locations that read the same inventory (a double chest or a vault behind several interfaces, identified with
  * Create's {@link InventoryIdentifier}) are counted once, by one canonical location ({@link SharedInventories}).
  * <p>
@@ -156,8 +159,11 @@ import net.minecraft.world.level.block.state.BlockState;
  * the request's output count) and the stock index of touched storage locations. Reservations are derived from the
  * crane's job, so a new or reloaded controller adopts the job of the crane in front of it.
  * <p>
- * <b>Per tick (server)</b>: at most a re-link check, the dirty probes, the bounded snapshot queue, one round-robin
- * snapshot and a dispatch attempt; nothing else.
+ * <b>Per tick (server)</b>: at most a re-link check, the dirty probes, the bounded snapshot queue, the round-robin
+ * snapshots {@link SnapshotCadence} asks for and a dispatch attempt; nothing else. The two snapshot budgets are
+ * separate, so in the one tick per interval the round robin falls on, a warehouse of more than about 1200 locations may
+ * read up to <b>twice</b> {@code maxSnapshotsPerTick} inventories — which is why that ceiling is the change queue's own
+ * budget rather than a number of its own (M22).
  * <p>
  * <b>Persistence.</b> Layout, records, per-location stock counts and requests are saved ({@link ControllerPersistence});
  * the index is rebuilt from the counts on load, the membership is verified by a full scan on the first tick, the
@@ -2840,12 +2846,28 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * Whether this warehouse's crane can really drive to {@code rack} — the question a member's goggles ask about the
+     * aisle it stands on (M22, issue #2, {@link AisleAssignment.State#UNREACHABLE}).
+     * <p>
+     * A warehouse with no layout at all answers yes: it has nothing to say about reachability, and answering no would
+     * paint every member of an unloaded warehouse gold. Asked from the crane's own point through the same
+     * {@link dev.wareworks.core.warehouse.RouteTable#canDrive} the planner and the machine use, so a block, a plan and
+     * a crane can never mean three different things by "it can get there".
+     */
+    public boolean craneCanReach(RackPosition rack) {
+        Objects.requireNonNull(rack, "rack");
+        WarehouseLayout current = layout;
+        return current == null || craneCanDriveTo(current, rack);
+    }
+
+    /**
      * Whether the crane could drive from where it stands to {@code rack} — the very question {@code CraneMotion}
      * answers, asked through {@link dev.wareworks.core.warehouse.RouteTable#canDrive} so that the lamp on the block and
      * the machine can never mean two different things by "it can get there".
      * <p>
      * A dock whose chunk is away is asked from position 0 of the aisle at the dock instead, which is where its crane
-     * parks: an unload must not turn a working home point red.
+     * parks: an unload must not turn a working home point red. The same default catches a crane named on an aisle this
+     * warehouse no longer has, which is the {@code pose.branch() < current.branchCount()} guard below.
      */
     private boolean craneCanDriveTo(WarehouseLayout current, RackPosition rack) {
         int from = RackPosition.FIRST_BRANCH;
@@ -3648,7 +3670,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
         if (now >= nextSnapshotTick) {
             nextSnapshotTick = now + WareworksConfig.snapshotIntervalTicks();
-            nextRoundRobinLocation().ifPresent(this::refreshLocation);
+            // As many locations as it takes to come round within controller.snapshotCycleTicks, so the cycle time of a
+            // warehouse of many aisles is bounded instead of growing with it (M22). One location up to about 1200 of
+            // them at the shipped defaults, which is literally what every version before M22 read.
+            for (int budget = SnapshotCadence.locationsPerInterval(membership.storageCount(),
+                    WareworksConfig.snapshotIntervalTicks(), WareworksConfig.snapshotCycleTicks(),
+                    WareworksConfig.maxSnapshotsPerTick()); budget > 0; budget--) {
+                Optional<RackPosition> next = nextRoundRobinLocation();
+                if (next.isEmpty())
+                    break;
+                refreshLocation(next.get());
+            }
         }
         tickStockKeepers(now);
         if (layout != null && now >= nextPortTick) {
@@ -4069,12 +4101,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * the aisle is enough — and the crane then planned routes, answered {@code canDrive} and parked against rails that
      * a player had broken. The broad flag is the right reason not to <b>reshape</b> a warehouse, because a shorter scan
      * renumbers; it is not a reason to keep a length that a loaded block has already disproved
-     * ({@link NetworkGeometry#truncatedToFirstBranchLength} renumbers nothing, M21 review fix).
+     * ({@link NetworkGeometry#withFirstBranchLength} renumbers nothing, M21 review fix).
+     * <p>
+     * Only that one aisle is shortened. A loaded block at the far end of the aisle at the dock says nothing about the
+     * other aisles, so the side aisles of a comb keep their addresses and their stock even when the main run under them
+     * got shorter; one the shorter run really disconnects says on its own blocks that the crane cannot reach it
+     * ({@link AisleAssignment.State#UNREACHABLE}), which is what M22 made the answer for a loose aisle everywhere.
      */
     private NetworkGeometry keptNetwork(AisleGeometry own, Direction facing) {
         WarehouseLayout known = layout;
         if (known != null && known.branchCount() > 1 && known.facing() == facing)
-            return known.network().truncatedToFirstBranchLength(own.length());
+            return known.network().withFirstBranchLength(own.length());
         return NetworkGeometry.of(own, Headings.of(facing));
     }
 
@@ -4665,7 +4702,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
         ControllerGoggleSummary shown = summary;
         WareworksLang.translate(WareworksLang.GOGGLES_WAREHOUSE_CONTROLLER).forGoggles(tooltip);
-        WareworksLang.aisleLetter(aisleLetter()).forGoggles(tooltip, 1);
+        WareworksLang.warehouseLetter(aisleLetter()).forGoggles(tooltip, 1);
         switch (shown.status()) {
             case READY -> WareworksLang.translate(WareworksLang.GOGGLES_STATUS_READY).style(ChatFormatting.GREEN)
                     .forGoggles(tooltip, 1);

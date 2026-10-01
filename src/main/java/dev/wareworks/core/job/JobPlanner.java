@@ -713,10 +713,18 @@ public final class JobPlanner<K, L> {
             @Nullable StoreSurvey survey) {
         if (limit < 1)
             return;
-        int order = 0;
-        for (L location : input.storageLocations()) {
-            int rank = order++;
-            if (location.equals(excluded) || !input.available().test(location)) {
+        // The available storage locations, derived once for the whole pass rather than per (station x item type)
+        // (M22, issue #2): availability is the most expensive question about a location and nothing can change it
+        // while the planner ranks. Each kept location keeps the index it has in the full list, which is the last
+        // ranking key, so filtering cannot reorder two candidates that are otherwise equal.
+        LocationAvailability.Available<L> reachable = input.available().available(input.storageLocations());
+        if (reachable.anySkipped())
+            note(survey, false); // one note is one flag: the survey counts kinds of skip, never skips
+        List<L> locations = reachable.locations();
+        for (int at = 0; at < locations.size(); at++) {
+            L location = locations.get(at);
+            int rank = reachable.rankOf(at);
+            if (location.equals(excluded)) {
                 note(survey, false);
                 continue;
             }

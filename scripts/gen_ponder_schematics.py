@@ -48,9 +48,12 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 # The corner scene (M21) uses the same square 9 plate with a second aisle at right angles: aisle A runs east at
 #   z = 3 over x = 1..6 and aisle B south at x = 6 over z = 3..8, with one rack plane beside each
 #   (dev.wareworks.client.ponder.scenes.PonderNetwork).
+# The junction scene (M22) uses that plate as a comb: the main run east at z = 2 over x = 1..8, with two side aisles
+#   south at x = 3 and x = 6 over z = 2..6, racks on the far side of each and the collecting port at x = 1, z = 3.
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
+    "warehouse/junction": (9, 7, 9),
     "warehouse/interface": (7, 6, 7),
     "warehouse/filters": (9, 7, 9),
     "warehouse/storing": (9, 7, 9),

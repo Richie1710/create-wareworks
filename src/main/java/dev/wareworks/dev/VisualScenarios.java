@@ -12,6 +12,7 @@ final class VisualScenarios {
             Map.entry(AisleVisualScenario.NAME, AisleVisualScenario::new),
             Map.entry(CranePosesVisualScenario.NAME, CranePosesVisualScenario::new),
             Map.entry(CornerVisualScenario.NAME, CornerVisualScenario::new),
+            Map.entry(CombVisualScenario.NAME, CombVisualScenario::new),
             Map.entry(HomeVisualScenario.NAME, HomeVisualScenario::new),
             Map.entry(BlocksVisualScenario.NAME, BlocksVisualScenario::new),
             Map.entry(FiltersVisualScenario.NAME, FiltersVisualScenario::new),

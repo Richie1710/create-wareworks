@@ -307,15 +307,19 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      * <p>
      * Kept until the shape or the penalty really changes: the client asks for it on <b>every</b> tick of a moving
      * crane, and the corner blocks it derives depend on the shape alone (M21 review fix).
+     * <p>
+     * Built on the {@link WarehouseLayout#routes() route table of this dock's own warehouse}, which {@link #warehouse}
+     * keeps for as long as the shape lasts, so the machine's route questions and the ones asked about the same rails
+     * through the layout read one table and one set of derived single-source passes (M22 review fix).
      */
     public CraneNetwork craneNetwork() {
-        NetworkGeometry network = networkGeometry();
+        WarehouseLayout warehouse = warehouse();
         double penalty = WareworksConfig.turnPenaltyBlocks();
         CraneNetwork cached = cachedCraneNetwork;
         if (cached instanceof CraneNetwork.Discovered discovered && discovered.turnPenaltyBlocks() == penalty
-                && discovered.geometry().equals(network))
+                && discovered.routes() == warehouse.routes())
             return cached;
-        cached = CraneNetwork.of(network, penalty);
+        cached = CraneNetwork.of(warehouse.routes(), penalty);
         cachedCraneNetwork = cached;
         return cached;
     }
@@ -456,7 +460,8 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
 
         int maxLength = Math.min(WareworksConfig.maxAisleLength(), AisleGeometry.MAX_LENGTH);
         RailNetwork network = RailNetworkScan.scan(level, worldPosition, facing(), new RailGraph.Limits(
-                WareworksConfig.maxNetworkRails(), WareworksConfig.maxBranches(), maxLength, mastHeight()));
+                WareworksConfig.maxNetworkRails(), WareworksConfig.maxBranches(), WareworksConfig.maxJunctions(),
+                maxLength, mastHeight()));
         discoveredNetwork = network;
         reportNetworkStop(network);
         aisleLength = network.resolveFirstBranchLength(aisleLength, maxLength);
@@ -498,12 +503,18 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
 
     /**
      * Says in the log where the warehouse stops and why, whenever that changes to something a player did not ask for:
-     * another dock on the same rails, a branching rail this version cannot follow, a configured cap, or a chunk that is
-     * not loaded. The rails a player closed on purpose and a warehouse that simply ends say nothing.
+     * another dock on the same rails, a configured maximum, or a chunk that is not loaded. The rails a player closed on
+     * purpose and a warehouse that simply ends say nothing.
      * <p>
-     * This is the whole report for now. The goggle line, the controller status and {@code /wareworks network} come with
-     * the controller's half of the milestone; until then the fault is at least never <b>silent</b>, which is the one
-     * thing discovery must not be.
+     * Since M22 (issue #2) a rail that <b>splits</b> or closes into a ring is no longer one of those reasons: a T, a
+     * cross and a ring are ordinary warehouses, so the two stops that only ever said "this version cannot follow that
+     * shape" are gone and every reason that is left names something a player can walk to and change
+     * ({@link NetworkStop}).
+     * <p>
+     * The log is the dock's own half of the report. The player-facing half belongs to the controller behind it, which
+     * shows the same stop as a goggle line and marks it on the warehouse summary display
+     * ({@code NetworkGoggleInfo}); {@code /wareworks network} is still not built. A fault is therefore never
+     * <b>silent</b>, which is the one thing discovery must not be.
      */
     private void reportNetworkStop(RailNetwork network) {
         NetworkStop stop = network.stop();
