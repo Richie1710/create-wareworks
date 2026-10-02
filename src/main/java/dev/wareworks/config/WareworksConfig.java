@@ -180,6 +180,29 @@ public final class WareworksConfig {
         return get(SERVER.maxTerminalStockEntries);
     }
 
+    /**
+     * Clipboard entries one list order takes ({@code docs/warehouse-system.md} §3.4.4, M23, issue #19). Entries beyond
+     * it stay on the clipboard untouched and unticked, and the screen says how many were taken.
+     */
+    public static int maxTerminalListEntries() {
+        return get(SERVER.maxTerminalListEntries);
+    }
+
+    /** Retrieval requests one list order keeps open at a time (M23). */
+    public static int terminalListOpenRequests() {
+        return get(SERVER.terminalListOpenRequests);
+    }
+
+    /** Ticks between two top-up passes of a list order (M23); a delivery makes the next one due at once. */
+    public static int terminalListIntervalTicks() {
+        return get(SERVER.terminalListIntervalTicks);
+    }
+
+    /** Ticks a list order may make no progress at all before it parks until a player resumes it (M23); 0 never parks. */
+    public static int terminalListStallTicks() {
+        return get(SERVER.terminalListStallTicks);
+    }
+
     public static int productionBufferSlots() {
         return get(SERVER.productionBufferSlots);
     }
@@ -389,6 +412,10 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue terminalBufferSlots;
         public final ModConfigSpec.IntValue maxTerminalRequestAmount;
         public final ModConfigSpec.IntValue maxTerminalStockEntries;
+        public final ModConfigSpec.IntValue maxTerminalListEntries;
+        public final ModConfigSpec.IntValue terminalListOpenRequests;
+        public final ModConfigSpec.IntValue terminalListIntervalTicks;
+        public final ModConfigSpec.IntValue terminalListStallTicks;
         public final ModConfigSpec.IntValue productionBufferSlots;
         public final ModConfigSpec.IntValue maxProductionPatterns;
         public final ModConfigSpec.IntValue stockKeeperRows;
@@ -534,6 +561,31 @@ public final class WareworksConfig {
                                     + "per refresh. The types with the most items are reported, and the screen says "
                                     + "how many it was not told about.")
                     .defineInRange("maxTerminalStockEntries", 512, 16, 4096);
+            maxTerminalListEntries = builder
+                    .comment("Entries one clipboard order in a warehouse terminal takes from the clipboard.",
+                            "A Schematicannon's material checklist is usually far shorter than this. Entries beyond "
+                                    + "the bound stay on the clipboard untouched and unticked, and the terminal says "
+                                    + "how many it took.")
+                    .defineInRange("maxTerminalListEntries", 128, 1, 1024);
+            terminalListOpenRequests = builder
+                    .comment("Retrieval requests one clipboard order keeps open at a time.",
+                            "A list is worked off in portions: this is how many of its entries the crane may be "
+                                    + "fetching at once. They are ordinary requests, so maxOpenRequests and "
+                                    + "maxOpenRequestsPerOutput still bound them.")
+                    .defineInRange("terminalListOpenRequests", 2, 1, 16);
+            terminalListIntervalTicks = builder
+                    .comment("Ticks between two top-up passes of a clipboard order.",
+                            "A delivery makes the next pass due at once, so freed buffer space continues the list "
+                                    + "without waiting for this interval; it only bounds how often an order that "
+                                    + "found nothing measures again.")
+                    .defineInRange("terminalListIntervalTicks", 20, 1, 1200);
+            terminalListStallTicks = builder
+                    .comment("Ticks a clipboard order may make no progress at all before it stops measuring until a "
+                            + "player resumes it at the terminal.",
+                            "An order that is waiting for items already on their way, or for a full buffer to be "
+                                    + "emptied, is making progress and never parks. Set to 0 to let an order keep "
+                                    + "trying for ever.")
+                    .defineInRange("terminalListStallTicks", 1200, 0, 432000);
             productionBufferSlots = builder
                     .comment("Buffer slots of a warehouse production station. Applies to newly placed or reloaded "
                             + "stations.",

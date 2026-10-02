@@ -102,7 +102,14 @@ dev.wareworks
 │   │                          carries folded into one line per chain, head plus frontier — pure, so every degenerate
 │   │                          payload has a test) and PlanCancelCost (what giving up on such a line really costs:
 │   │                          the orders failPlan would end and the batch it would abandon, in one tested place so
-│   │                          the panel and the server cannot disagree)
+│   │                          the panel and the server cannot disagree); the clipboard list (M23, issue #19,
+│   │                          ADR-036): RequestScope (click or list portion — the two things a scope changes),
+│   │                          ListEntry (what one clipboard entry is worth believing), ListLine (the order's own
+│   │                          record of an entry: the line is the truth, the tick mark the receipt), ListOrder (the
+│   │                          whole order: which entries, which line next, how big a portion, how a delivery maps
+│   │                          back), ListPortion / ListPass / ListCredit / ListOrderState and
+│   │                          ListOrderConfirmation (what pressing Fetch would really mean, measured over the whole
+│   │                          list)
 │   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
@@ -128,7 +135,8 @@ dev.wareworks
 │                              StockRulePause (the safety stop)
 ├── content
 │   ├── item                   ItemKey (item + components, count-less), ItemHandlerSnapshots, ItemTypeSummaries
-│   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views)
+│   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views),
+│   │                          ClipboardList (M23, ADR-036: the only place Create's clipboard is read or ticked off)
 │   ├── storage                WarehouseInterfaceBlock / BlockEntity, AttachedInventorySummary (storage location);
 │   │                          StorageFilterBehaviour (the store filter slot, empty filters not synced; since M16 the
 │   │                          same box also carries the storage priority as a hold-to-edit board row, written only
@@ -219,7 +227,10 @@ dev.wareworks
 │                              WarehouseHomePointBlock / BlockEntity (the rack position a crane with nothing to do
 │                              waits at; no items, no capability, no arm point, no ticker and nothing saved),
 │                              HomePointStatus (what the warehouse does with it, and the sentence for every way it can
-│                              fail to be used), HomePointGoggleSummary (M21, issue #1, ADR-034)
+│                              fail to be used), HomePointGoggleSummary (M21, issue #1, ADR-034);
+│                              the clipboard order of a terminal (M23, issue #19, ADR-036): TerminalListPersistence
+│                              (its NBT form), TerminalListState (the bounded state the screen and the goggles get),
+│                              TerminalListResult / TerminalListOutcome (what a list button press answered)
 │   └── display                the four Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -236,7 +247,11 @@ dev.wareworks
 │                              the two stock keeper payloads: StockKeeperScreenPayload (server → client),
 │                              StockKeeperRulePayload (client → server, moves no item) (M15, ADR-027);
 │                              TerminalConfirmPayload (server → client: what a click would cross, and nothing was
-│                              requested) (M15 part 2, ADR-027).
+│                              requested) (M15 part 2, ADR-027; since M23 it carries the RequestScope, so the screen
+│                              knows whether the answer belongs to the click or to the clipboard order);
+│                              the three clipboard-order payloads (M23, issue #19, ADR-036): TerminalListPayload and
+│                              TerminalListAnswerPayload (server → client), TerminalListActionPayload (client →
+│                              server: fetch, answer, resume or cancel; moves no item).
 │                              Everything else syncs through block entity update packets
 ├── client
 │   ├── gui                    WarehouseTerminalScreen (the terminal's screen) and TerminalScreenUpdates (where the
@@ -2400,11 +2415,108 @@ not needed — `junctionsOn` is a handful on every shape a player builds, and a 
 have made the planner prefer racks it cannot actually reach soonest and would have been unprovable.
 
 
+### ADR-036 — A clipboard list is a stream of ordinary requests with one owner, and the tick marks are written into Create's own item through the one path its read-only flag leaves open (M23, issue #19)
+
+*Context:* Issue #19 asks for a clipboard with a list of items to be handed to a terminal and worked off, with the
+delivered entries **ticked off on the clipboard**. The obvious source is Create's Schematicannon, whose material
+checklist can already be written onto a clipboard (`MaterialChecklist#createWrittenClipboard`), but a hand-written one
+has to work just as well. Three things made this a decision rather than an implementation: a whole schematic's worth of
+material cannot fit anywhere at once, so the order has to run over minutes and survive a reload with nobody at the
+terminal; the clipboard belongs to **another mod** and the checklist it writes is `readOnly = true`; and the warehouse
+already has a request queue with batching (ADR-020), reserves and maxima (ADR-027), production chains (ADR-032) and a
+safety stop, none of which may be duplicated or bypassed.
+
+*Decision:*
+
+* **A list order is not a new kind of request.** `core.terminal.ListOrder` resolves the clipboard into lines once and
+  then keeps a small number of **ordinary** retrieval requests open, each made through the very call a click goes
+  through (`WarehouseControllerBlockEntity#request`). No new job kind, reservation kind, queue or network of its own;
+  merging, reserves, maxima, filters, priorities, chains, the safety stop and the full-destination back-off cannot tell
+  a portion from a click. Nothing teleports: every item is fetched physically by the crane.
+* **`RequestScope` is the whole difference between a click and a portion**, and it changes exactly two things, both in
+  `core.terminal`: whether a request that would have items **made** must be agreed to first
+  (`RequestConfirmation#required(scope)`) and whether an answer has to name that number
+  (`RequestAcknowledgement#covers(…, scope)`). A click starts production under the player's eyes; a list order starts it
+  while nobody is there, which is the issue's "producible items ask too". `required()` and `covers()` without a scope
+  mean `CLICK`, so every caller from before M23 asks and answers byte for byte what it did.
+* **The clipboard goes into a slot of the terminal, not into a hand.** That is what makes the feature
+  server-authoritative and what lets the ticks be written where the clipboard lies. The slot is not part of the item
+  capability, so automation can neither feed a list in nor pull the receipt out.
+* **The order's lines are the truth; the clipboard is its receipt.** A tick mark cannot express "1300 of 2000", so
+  partial progress lives in `ListLine` and a mark is written only when a line is complete. The clipboard is re-read only
+  to check that it is still the same list (by the entries' **icons**) and to write marks; taken out, swapped or edited
+  mid-run ends the order and cancels its requests, and a partly delivered entry is never ticked.
+* **Writing `checked` on a read-only clipboard is sanctioned, not a workaround.** Verified in Create 6.0.10's own
+  sources: the list is one data component (`AllDataComponents.CLIPBOARD_CONTENT`), `ClipboardEntry#readAll` hands out
+  **fresh, mutable page lists** (Create's own comment says so), and `ClipboardScreen` reads `readOnly` in exactly
+  three places — the text cursor, the "next page" button past the last page and entering text-edit mode. The
+  **checkbox** path has no such guard, and neither has `ClipboardEditPacket`, so a player may tick a checklist off by
+  hand and Create persists it. `content.item.ClipboardList` writes that same field, through `stack.get`/`stack.set`,
+  with no mixin, no reflection and no packet of ours, and leaves the flag and everything else about the clipboard as it
+  found it. The entry's **text** is never read: it is a foreign `Component` that a checklist hangs
+  `HoverEvent.SHOW_ITEM` on, so the item comes from the icon and the amount from `itemAmount`. Only the two **list**
+  levels are re-created by `readAll`, though, so the entry objects are shared with the old `ClipboardContent` and with
+  every copy of the stack; `tickOff` therefore puts a **ticked copy** in the entry's place rather than changing it,
+  which keeps the mark on the one clipboard it was earned on and makes the new component compare unequal, so an open
+  screen is really sent the receipt (M23 review fix, §3.4.4).
+* **One confirmation mechanism, used twice.** Fetch raises one dialog measured over the **whole** list
+  (`ListOrderConfirmation`: what the racks fall short of, what would be produced, what the entry cap left behind), and a
+  Yes becomes a consent **budget** that the portions spend down. A portion that costs more than the remainder covers
+  stops the order and raises the **existing** per-item panel (§3.6.6) through the **existing** `TerminalConfirmPayload`,
+  which gained a `scope` field so the screen routes the answer back to the order. The list-wide budget is production
+  only, because a reserve and a maximum cannot be measured over a list without walking a plan per entry — and they are
+  exactly the ones a player must not sign away blindly.
+* **Consent carries no item, so a list order has to supply one.** A `RequestAcknowledgement` is four numbers; kept as a
+  single budget, a Yes about one item's reserve paid for the next item's. A portion's answer is therefore kept whole
+  under the key its question named (`ListOrder#budgetFor`/`#spend`) and only the Fetch dialog's production total — the
+  one consent really measured over the whole list — stays list-wide; the answered portion is the first one offered
+  again, and a player's **no** parks the order instead of leaving it in `ASKING` with nothing on screen to refuse it
+  (M23 review fix).
+* **Waiting is the answer to a full destination, never a refusal.** A full buffer is already a planner skip with a
+  back-off, so the request stays open and the next delivery makes the order due at once. Only an order with **nothing**
+  in flight that has made no progress for `terminalListStallTicks` parks, and then a player's click resumes it.
+* **The controller keeps no saved list state.** An unsaved, server-only set of terminals worth looking in on, rebuilt
+  on any membership change and bounded at 64, is the whole registration; the order itself lives in the terminal beside
+  the clipboard it belongs to. A set that is wrong is self-healing and can lose no order, whatever order block entities
+  load in. Both the rebuild and the walk check `Level#isLoaded` before they resolve a block entity, like every other
+  lookup in the controller: a member record survives a chunk unload on purpose, so an unguarded lookup would force-load
+  every unloaded output-station chunk of the warehouse on any membership change (M23 review fix).
+
+*Consequences:* the terminal menu has one slot more (`listSlotIndex() == bufferSlots`), which is a protocol change for
+any client of the menu and is why the network `VERSION` went to `7` together with the three list payloads. One
+pre-existing bug had to be fixed for the production question to work at all: `confirmationFrom` short-circuited for an
+aisle with no governing stock rule and therefore never reported `made()`, so the question would have been dead in the
+common case of an aisle with patterns and no keeper; it now short-circuits only when nothing would be produced either,
+and a click's question is unchanged because `required(CLICK)` never looks at that number. `TerminalRequestOutcome`
+gained an optional `cost`, the measurement the request path makes anyway, so a portion can spend the budget by what it
+really cost instead of measuring a second time.
+
+A list order's per-portion consent and the question it answers are deliberately **not** saved, for the same reason every
+confirmation is measured fresh: both are statements about the warehouse as it was, and a restored order comes back
+`RUNNING` and asks again.
+
+*Alternatives rejected:* **right-clicking a block with the clipboard in hand** (the issue's own first option), which
+cannot show progress, cannot be read by the screen and loses the order the moment the player puts the clipboard in a
+chest; **a fresh clipboard carrying what is left** instead of ticking the original, which the read-only check proved
+unnecessary and which would have thrown away the checklist a player printed; **one request per stack**, which buys
+nothing because the planner already splits a large request into successive jobs and a full destination is already a
+skip, and would cost a round of measuring per stack; **a second queue or a "list job" kind**, which is exactly the
+duplication the issue forbids and would have had to re-implement batching, reserves and the safety stop; **asking per
+entry**, which a 128-entry checklist turns into a dialog storm; and **a mixin on `ClipboardScreen` or
+`ClipboardContent`**, which was never needed once the checkbox path was read.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
 * The client receives only what rendering and goggles need through the standard BE update packet. Custom payloads are added only if that is insufficient.
 * The mod's chunk holds (M19, ADR-031) are **not** part of this: the hold is derived state and the tickets themselves are NeoForge's own saved data, reconciled against the mod's in-memory record by the validation callback at load. The controller gained exactly **one** NBT key for it, `ChunkKeep` (`{GaveUp, Work}`), written only while the aisle has given up on its work: that bound refuses work which *is* saved, so a flag living only as long as one block entity instance would let every reload take the whole footprint again for work that had already proved unservable (M19 review). An aisle that becomes idle drops the flag, so it can never strand one.
+* A terminal's **clipboard order** (M23, ADR-036) is saved in the terminal, beside the clipboard it belongs to: the
+  slot under `ListSlot` and the order under `ListOrder` (lines, dropped entries, state, consent budget, the two tick
+  stamps restarted from the world's current time). The controller saves **nothing** about it — its set of terminals
+  worth looking in on is rebuilt from the world — and a line's request id either still exists in the controller's own
+  saved queue or is forgotten on the next pass, which gives nothing back because what a line is missing does not depend
+  on it. The question an order was asking is never saved: like every confirmation it is measured against the warehouse
+  as it is now, so such an order comes back `RUNNING` and asks again.
 * After a restart, jobs resume from the persisted state (`CraneStateMachine.resume` makes a loaded state consistent). There is no `FAULT` phase: if a referenced block is missing, a job aborts with a reason before the pick, and after it the held items are rerouted (`REROUTE`), held and retried (`HOLDING`) or waited with at the requesting output (`WAITING_FOR_TARGET`). Items are dropped only when the dock itself breaks (`stacker-crane.md` §4.1, `warehouse-system.md` §8).
 
 ## Performance rules

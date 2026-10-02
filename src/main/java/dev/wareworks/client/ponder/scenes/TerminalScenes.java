@@ -1,5 +1,6 @@
 package dev.wareworks.client.ponder.scenes;
 
+import com.simibubi.create.AllBlocks;
 import com.simibubi.create.AllItems;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
@@ -20,7 +21,7 @@ import net.minecraft.world.item.Items;
 
 /**
  * Ponder scenes of the warehouse terminal: placing it (where the screen and the intake port end up) and requesting
- * items at it.
+ * items at it, the second one closing on the clipboard order (M23, issue #19).
  * <p>
  * As in {@link WarehouseScenes}, storyboards must stay level-free: they also run with {@code level == null} during lang
  * datagen. The order of the {@code .text(...)} calls defines the {@code text_1 … text_n} lang keys of each scene id.
@@ -190,7 +191,10 @@ public final class TerminalScenes {
 
     // --- requesting --------------------------------------------------------------------------------------------------
 
-    /** Asking for items at the screen: the crane fetches them and delivers into the terminal's own slots. */
+    /**
+     * Asking for items at the screen: the crane fetches them and delivers into the terminal's own slots, and — since
+     * M23 — that the same screen takes a whole clipboard list.
+     */
     public static void requesting(SceneBuilder builder, SceneBuildingUtil util) {
         CreateSceneBuilder scene = new CreateSceneBuilder(builder);
         scene.title("warehouse_requesting", "Requesting Items at a Terminal");
@@ -311,6 +315,25 @@ public final class TerminalScenes {
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().topOf(terminal.above()));
+        scene.idle(TEXT_IDLE);
+
+        // M23 (issue #19, warehouse-system.md §3.4.4): the clipboard order, as the last beat and deliberately as an
+        // *offer* rather than a second lesson — the scene has already taught the screen, and this says that the same
+        // screen takes a whole list. Appended at the very end on purpose: the seven texts before it keep their lang
+        // keys (text_1 … text_7), so no translation had to move for it.
+        // The list slot is inside the screen, which Ponder cannot open (see the class comment), so it is represented
+        // the way every other screen interaction in these two scenes is: a click icon on the display face, here
+        // carrying the clipboard that is clicked into the slot.
+        scene.overlay().showOutline(PonderPalette.INPUT, "list", util.select().position(terminal), TEXT_TICKS);
+        scene.overlay().showControls(util.vector().blockSurface(terminal, SCREEN), Pointing.LEFT, CONTROL_TICKS)
+                .leftClick()
+                .withItem(AllBlocks.CLIPBOARD.asStack());
+        scene.idle(CLICK_LEAD);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Or put a clipboard in: the whole list is fetched, and each entry ticked off as it arrives")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, SCREEN));
         scene.idle(TEXT_IDLE);
 
         scene.markAsFinished();

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hand the warehouse a shopping list.** The Warehouse Terminal has one more slot, for a **clipboard**. Put a
+  clipboard with a list of items in it, press the **list button**, and the warehouse works the whole list off: it
+  fetches what it can, **ticks each entry off on the clipboard as it delivers it**, and waits whenever the terminal is
+  full instead of refusing — so a whole building's worth of material arrives in portions while you carry the crates to
+  the site. There is no "your output cannot hold 40 stacks"
+- **The clipboard is the order and its receipt in one.** Pick it up at any time and the ticks tell you what arrived and
+  what is still outstanding. An entry that arrived only partly stays **unticked**, because the warehouse never ticks a
+  line it did not finish, and putting the clipboard back in carries on where it left off. The ticks belong to that one
+  clipboard: a copy of it made with Create's own copying recipe stays as it was
+- **The row under the delivery slots keeps saying what the terminal is doing.** While the list runs it counts the
+  entries down; when the list is finished it says so for a moment and then goes back to the crane, and the finished
+  receipt stays on the clipboard's own tooltip. A terminal that has lost its aisle or its crane says **that** first,
+  because it is the reason the list is not moving
+- **A Schematicannon's material checklist works as it comes.** Print the checklist onto a clipboard at the cannon and
+  carry it to the terminal — "build this schematic" becomes "hand the warehouse the shopping list". A hand-written
+  clipboard works exactly the same, and a read-only checklist is still ticked off
+- **It asks before it starts, if it has to.** If the list wants more than the warehouse holds, the terminal says how
+  much is missing, names the entries it is short of and asks whether to fetch what there is. If something on the list
+  would have to be **produced** first, it asks about that too — it never starts your machines for a list without
+  being told to. A clipboard so long that part of it was left out says that in the same dialog, before anything is
+  fetched. A list a stocked warehouse covers starts with no questions at all
+- **A question that comes up while the list runs names what it is about.** The warehouse asks again, item by item,
+  whenever one portion would reach into a reserve, store something above a maximum or start a production run bigger than
+  you agreed to — and that panel names the item, how many of it, and what would be made. Saying **yes** pays for that
+  one item and nothing else, saying **no** leaves the rest of the list for later instead of stalling it, and the list
+  button brings the question back if you closed the panel
+- **An entry the warehouse can neither stock nor produce never blocks the rest.** It is stepped over, left unticked and
+  counted in the dialog; everything behind it is still fetched. A list that cannot be served at all stops trying after
+  a minute and waits for you to click it again, instead of leaving the crane running
+- **Nothing new happens underneath.** Every entry becomes an **ordinary** request, so batching, storage filters,
+  priorities, reserves, maxima, production chains and the safety stop all apply unchanged, no item teleports, and the
+  crane physically fetches every single one. Four new server config keys in the `stations` section
+  (`maxTerminalListEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`)
+- The terminal's goggles say how many entries of a clipboard order are done and how much is still to fetch, and its
+  Ponder scene "Requesting Items at a Terminal" ends on the new beat
+
+### Changed
+
+- The Warehouse Terminal's window has **one slot more** (the clipboard slot, at the right-hand end of the delivery
+  row); the window is the same size, because the delivery row gives up a column for it. A shift-click moves a clipboard
+  in and out. Delivery slots, the stock list and every other click work exactly as before
+
 ## [0.6.0-alpha] - 2026-10-02
 
 ### Added

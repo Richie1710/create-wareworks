@@ -204,7 +204,11 @@ that each scene compiles, is registered for the right item and looks right in th
     as "the screen walks around the block", not as flicker.
 44b. **"Requesting Items at a Terminal".** The order of the beats matches how you really use the screen (open, search,
     click, click again, crane, delivery, pull out). The funnel above the terminal flaps when the items arrive, and the
-    text about the terminal's own slots is on screen while the crane actually drops them.
+    text about the terminal's own slots is on screen while the crane actually drops them. **Since M23** the scene has an
+    eighth beat: a clipboard floats at the screen and the text says that a whole list can be handed over and is
+    ticked off as it is delivered. Judge whether that beat reads as an *offer* at the end of the scene rather than as
+    a second lesson crammed on, and whether the clipboard icon is recognisable at Ponder's distance; the German line
+    is the longest of the scene, so check it fits.
 44c. **"Feeding Machines from a Warehouse".** The three-block tower reads as production station → funnel → Mechanical
     Crafter, and the crafter is recognisable as *your* machine standing next to the station, not as part of Wareworks.
     The sentence "Wareworks delivers and collects; it never crafts anything itself" arrives while the machine is in
@@ -1610,3 +1614,87 @@ you get tired of waiting, and put it back before judging check 160.
     out-of-bounds `setBlock`, a raw lang key or a lost registration fails the run; `PonderNetwork#requireTwinOf` makes
     the storyboard refuse to compile if either outlined rack ever stopped being a rack of both aisles. What no run can
     judge is pacing and whether the lesson lands, which is what this check is for.
+
+## AA. Order a whole list from a clipboard (M23, issue #19)
+
+167. **Build something from a Schematicannon's checklist, end to end, and say whether the loop is worth it.** Build a
+    small house, save it as a schematic, deploy it somewhere else and put the schematic plus a blank clipboard into a
+    Schematicannon: it prints the **material checklist**. Carry that clipboard to a warehouse terminal, drop it into
+    the slot at the right-hand end of the buffer row, press the **list button** and walk away. Come back and empty the
+    terminal while the warehouse keeps filling it.
+
+    Everything about the mechanism below is automated (see the note at the end of this section); what is not is whether
+    this is a **way you want to build**. Does "hand the warehouse the shopping list and carry the crate to the site"
+    feel better than clicking twenty items, or does the trip back and forth to empty the terminal eat the gain? Is one
+    terminal's buffer the right size for it — nine slots is the default — or did you find yourself wanting a port with
+    a chest behind it instead? And when the list is long: does the crane look like it is working the list off, or like
+    it is shuffling? Note the list length at which it stopped feeling good, because that is the number a later
+    milestone would have to answer.
+
+168. **Read the Fetch dialog with your own eyes, in both languages.** Make a list the warehouse cannot cover — two
+    entries it has plenty of, one it has part of, one it has none of — and press the list button. The panel must say,
+    in this order: **"Fetch this list?"**, how many of the list's items are **not in stock**, how many would be
+    **produced** (only if any would), how many entries cannot be had at all and stay unticked, then up to five named
+    entries as "what there is of what it asked for", then "More entries: N" if there are, and finally
+    **"Fetch what there is?"**. (A clipboard longer than `maxTerminalListEntries` adds "Entries not taken from the
+    clipboard: N" in gold, before the named entries.) Then:
+    can you tell from it what you will get and what you will not, without counting? Restart with a German client
+    (`de_de`) and read it again — German is the longer language and the automated run only ever renders English, so a
+    line that overflows its box or clips can only show up here. The same for the **production** case: put a pattern in
+    a production station for an item the racks do not hold, and check that the dialog says items would be **produced**
+    and that you understand you are about to start machines by pressing Confirm.
+
+169. **The list button's four faces and the status row.** The one button beside sort and filter changes with the state:
+    **play** before you start, **stop** (green while it runs) while the list is being worked off, **confirm** while a
+    portion is waiting for an answer, **refresh** when the order has given up for now. Hover each one and read the
+    tooltip. Then: can you tell at a glance which of the four you are looking at, at **GUI scale 1 and 4**, and in
+    German? Is "stop" unmistakably "give the list up" rather than "pause"? The status row below the buffer reads
+    `List 1/2, 5 left (fetching)` while it runs and `List done: 4/4` for a few seconds when it is finished, after which
+    the row goes back to the crane and the finished receipt stays on the clipboard slot's own tooltip — read both at
+    scale 1 and in German and say whether they fit the row and whether the numbers mean what you expect (entries, then
+    items). Then say whether the done line disappearing again is right: the clipboard is the lasting receipt, the row
+    is what the terminal is doing now, and if you missed the done line because you were away, say so.
+
+    Also read the panel a **single portion** raises, which is the other half of check 168. Put a pattern in a
+    production station that makes four of something at a time and list **one** of it: the whole-list dialog asks about
+    one produced item, and the portion that follows asks again, because a whole run is four. That panel must name
+    "From the clipboard list: 1 <item>" and "Making it starts a production order; 4 would be made in total." and must
+    **not** offer the Alt skip (there is no click to hold Alt on). Press **Cancel** on it: the order must park, the
+    button must become *refresh*, and pressing the button again must bring the same question back. Read it in German
+    too.
+
+170. **The receipt.** Take the clipboard out while the list is half done and open it: the entries that really arrived
+    carry a **tick**, the others do not, and the one that arrived only partly must be **unticked** — the warehouse
+    never ticks a line it did not finish. Put it back in and press the button again: it picks up where it left off.
+    Then let a list finish and open the clipboard one last time. Does it read as a **receipt** — "this is what I
+    ordered, this is what came" — or does a half-ticked checklist look like something went wrong? If it reads wrong,
+    say what you expected instead, because this is the part of the feature the issue called "the point".
+
+171. **A list that cannot be served, and a terminal that is full.** Put an entry on the list the warehouse can neither
+    stock nor produce (a nether star in a cobblestone warehouse) beside one it can: the entry it can serve must be
+    served and ticked while the impossible one stays unticked. Then let an order run out of things to do altogether
+    and wait a minute of game time: it **parks**, the button becomes *refresh*, and the status row and the terminal's
+    goggle lines are the only things that say so (saying **no** to a portion's question parks it the same way). Walk up
+    to that terminal as a player who did not start the order and
+    ask whether you would ever find out why nothing is happening — if the answer is no, a chat message or a coloured
+    status row is worth considering, and this check is where that decision belongs. Finally fill the terminal's buffer
+    to the brim with the list still running: it must **wait**, not refuse, and continue by itself the moment you pull
+    the items out.
+
+    **Automated for this section:** `TerminalListGameTests` (10 tests, item census on every tick) proves a list worked
+    off and ticked completely, the partial question answered No and then Yes, a producible entry asked about **for a
+    list and not for a click**, a full destination waited for and then continued, a reload, the clipboard taken out and
+    swapped mid-list, an unobtainable entry stepped over, a tick mark that does not leak onto a clipboard sharing the
+    same content, one portion's question shown again and refused and then answered, and a clipboard the entry cap cut
+    short being asked about first; `ListOrderTest`, `ListOrderConfirmationTest` and
+    `RequestScopeTest` (63 tests) pin the order's own arithmetic, including the parking the GameTests do not wait out
+    and that a Yes about one item never pays for another's reserve.
+    And `./gradlew runVisualTest -Pwareworks.visualTest=checklist` plays check 167's whole story in a running game with
+    a **real Schematicannon** — the checklist printed onto the clipboard, the partial dialog with its drawn lines
+    asserted word for word, 80 ticks of a full terminal delivering nothing and refusing nothing, the ticks appearing
+    one after another, the missing material fed in and the last entry following, and the finished clipboard opened in
+    **Create's own clipboard screen** — with every claim a shot makes asserted on the server first, including that the
+    number of tick marks equals the number of lines the order reports as complete, plus one shot of the panel a
+    **single portion** raises, whose lines are read back from the screen itself. So **look at those shots before
+    building anything by hand**: the mechanism is covered, and 167–171 are only about whether it is a good way to
+    play, whether the four button faces and the two status sentences are legible, and whether the German reads.

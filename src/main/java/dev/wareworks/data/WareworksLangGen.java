@@ -7,6 +7,7 @@ import dev.wareworks.content.controller.ChunkKeepReason;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.content.station.HomePointStatus;
+import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.port.PortRedstone;
@@ -17,6 +18,7 @@ import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.StockRuleAdjustment;
 import dev.wareworks.core.stock.StockRulePause;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.core.warehouse.NetworkStop;
 import dev.wareworks.registry.WareworksCreativeTabs;
@@ -390,8 +392,70 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_NO), "Cancel");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_SKIP),
                 "Hold Alt while clicking to skip this question");
+        // A portion of a clipboard order raised this one, not a click: it has to say which item it is about, and that
+        // machines would be started for it (M23 review fix).
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_LIST_ITEM), "From the clipboard list: %1$s %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CONFIRM_PRODUCE),
+                "Making it starts a production order; %1$s would be made in total.");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_BUFFER), "Delivered here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NOT_SHOWN), "+%1$s not shown");
+        // The clipboard order (M23, issue #19): a whole list ordered at once, worked off in portions and ticked off on
+        // the clipboard as it is delivered.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_LIST),
+                "Clipboard order: %1$s of %2$s entries (%3$s)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_LIST_LEFT), "Still to fetch: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_LABEL), "Clipboard");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_SLOT),
+                "A clipboard with a list of items - the warehouse fetches it and ticks off what it delivered");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_EMPTY),
+                "Put a clipboard in to order a whole list");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_FETCH), "Fetch the whole list");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CANCEL), "Stop working the list off");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_RESUME), "Try the rest of the list again");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_ANSWER), "Answer the question about this list");
+        // Short on purpose: the status line owns one 202 pixel row and has to hold four numbers plus the state
+        // ({@code docs/warehouse-system.md} §3.4.2), so it names them instead of describing them.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_STATUS), "List %1$s/%2$s, %3$s left (%4$s)");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_STATUS_DONE), "List done: %1$s/%2$s");
+        // Count last, and no bare plural noun after a number that is commonly 1: these four sentences read "1 entries"
+        // and "1 items" before the M23 review fix, and Minecraft's lang format has no plural selection.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TRUNCATED),
+                "Entries not taken from the clipboard: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_TITLE), "Fetch this list?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_SHORT),
+                "%1$s of the %2$s items on the list are not in stock.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_PRODUCE),
+                "In total %1$s would be produced for the list.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_IMPOSSIBLE),
+                "Entries that cannot be had at all and stay unticked: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_ENTRY), "%1$s: %2$s of %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_MORE), "More entries: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_ASK), "Fetch what there is?");
+        for (ListOrderState state : ListOrderState.values()) {
+            lang.accept(WareworksLang.key(state.langKey()), switch (state) {
+                case RUNNING -> "fetching";
+                case ASKING -> "waiting for your answer";
+                case PARKED -> "given up for now";
+                case DONE -> "done";
+            });
+        }
+        for (TerminalListResult result : TerminalListResult.values()) {
+            lang.accept(WareworksLang.key(result.langKey()), switch (result) {
+                case STARTED -> "Working the list off";
+                case ASKING -> "Please answer the question about this list";
+                case ANSWERED -> "Carrying on with the list";
+                case QUESTION -> "Here is the question about this list again";
+                case DECLINED -> "The rest of the list is left for now";
+                case RESUMED -> "Trying the rest of the list again";
+                case CANCELLED -> "The list was given up";
+                case NO_CLIPBOARD -> "Put a clipboard into the slot first";
+                case EMPTY_LIST -> "This clipboard asks for nothing";
+                case ALREADY_RUNNING -> "A list is already being worked off here";
+                case NOT_RUNNING -> "No list is being worked off here";
+                case NO_AISLE -> "This terminal is not part of a warehouse";
+                case OUT_OF_REACH -> "You are too far away";
+            });
+        }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_PATTERNS), "Patterns");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_BUFFER), "Delivered here");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_HINT),
@@ -678,9 +742,17 @@ public final class WareworksLangGen {
                         + "_ingredients_ are missing is ordered as a whole _chain_. The terminal shows it as _one line_ "
                         + "with the step that is working; a click on that line lists every _step_ with the _address_ of "
                         + "the machine it runs at, and gives the whole chain up at once.",
+                "When ordering a whole list",
+                "Put a _clipboard_ with a list of items into the slot beside the buffer and press the _list button_: "
+                        + "the warehouse works the list off in _portions_ and _ticks each entry off_ as it delivers "
+                        + "it, so the clipboard is the order and its receipt in one. A _Schematicannon_ writes its "
+                        + "_material checklist_ onto a clipboard, and a hand-written one works just as well. If the "
+                        + "list wants more than the warehouse has, or something would have to be _produced_, it asks "
+                        + "first; a _full_ terminal makes it wait rather than refuse.",
                 "When looked at with Goggles",
                 "Shows its _address_, the _buffered items_, the _pending request_ with the items _delivered_ so far, "
-                        + "and why the last request was _refused_.");
+                        + "and why the last request was _refused_. A _clipboard order_ adds how many of its entries "
+                        + "are done and how much is still to fetch.");
 
         tooltip(lang, "block.wareworks.warehouse_production",
                 "A _station_ of a warehouse _aisle_ that feeds your _machines_. Define a _pattern_ here, and the "

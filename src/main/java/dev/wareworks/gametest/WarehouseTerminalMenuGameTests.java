@@ -11,6 +11,8 @@ import java.util.UUID;
 
 import io.netty.buffer.Unpooled;
 
+import com.simibubi.create.AllBlocks;
+
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.RequestRejection;
@@ -152,7 +154,9 @@ public final class WarehouseTerminalMenuGameTests {
 
             TerminalMenuLayout layout = menu.layout();
             helper.assertValueEqual(menu.bufferSlots(), terminal.bufferSlots(), "buffer slots");
-            helper.assertValueEqual(menu.slots.size(), terminal.bufferSlots() + PLAYER_SLOTS, "slot count");
+            // Since M23 the window also carries the one list slot the clipboard order is read from (issue #19).
+            helper.assertValueEqual(menu.slots.size(),
+                    terminal.bufferSlots() + WarehouseTerminalMenu.LIST_SLOTS + PLAYER_SLOTS, "slot count");
             helper.assertTrue(TerminalMenuLayout.WIDTH <= MIN_SCALED_WIDTH, "the window fits the smallest GUI width");
             helper.assertValueEqual(MIN_SCALED_HEIGHT, TerminalMenuLayout.MAX_HEIGHT, "the layout's height budget");
             // Since M11 the window also carries the production section, and the stock grid pays for it (ADR-024).
@@ -188,7 +192,21 @@ public final class WarehouseTerminalMenuGameTests {
             helper.assertValueEqual(first.x, layout.bufferSlotX(0), "first buffer slot x");
             helper.assertValueEqual(first.y, layout.bufferSlotY(0), "first buffer slot y");
             helper.assertFalse(first.mayPlace(GOLD.toStack(1)), "nothing can be put into a terminal");
-            Slot firstPlayerSlot = menu.slots.get(terminal.bufferSlots());
+            // The list slot sits between the buffer and the player inventory and takes a clipboard and nothing else
+            // (M23, issue #19).
+            Slot listSlot = menu.slots.get(menu.listSlotIndex());
+            helper.assertValueEqual(menu.listSlotIndex(), terminal.bufferSlots(), "the list slot follows the buffer");
+            helper.assertValueEqual(listSlot.x, layout.listSlotX(), "list slot x");
+            helper.assertValueEqual(listSlot.y, layout.listSlotY(), "list slot y");
+            helper.assertFalse(listSlot.mayPlace(GOLD.toStack(1)), "a gold ingot is not a list");
+            helper.assertTrue(listSlot.mayPlace(AllBlocks.CLIPBOARD.asStack()), "a clipboard is");
+            helper.assertTrue(listSlot.x + TerminalMenuLayout.SLOT
+                    <= TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN, "the list slot stays inside the window");
+            helper.assertTrue(layout.bufferSlotX(0) + layout.bufferColumns() * TerminalMenuLayout.SLOT
+                    <= listSlot.x, "and the buffer gave it a column of its own");
+            Slot firstPlayerSlot = menu.slots.get(menu.firstPlayerSlot());
+            helper.assertValueEqual(menu.firstPlayerSlot(), terminal.bufferSlots() + WarehouseTerminalMenu.LIST_SLOTS,
+                    "the player inventory follows the list slot");
             helper.assertValueEqual(firstPlayerSlot.x, layout.playerSlotsX(), "first player slot x");
             helper.assertValueEqual(firstPlayerSlot.y, layout.playerSlotsY(), "first player slot y");
 
@@ -199,9 +217,32 @@ public final class WarehouseTerminalMenuGameTests {
             helper.assertValueEqual(moved.getCount(), DELIVERED_GOLD, "shift-clicked out of the terminal");
             helper.assertValueEqual(terminal.bufferedItems().count(GOLD), 0L, "the buffer is empty now");
             helper.assertValueEqual(countIn(player, Items.GOLD_INGOT), DELIVERED_GOLD, "the player has the gold");
-            helper.assertTrue(menu.quickMoveStack(player, terminal.bufferSlots()).isEmpty(),
+            // The gold really is in one of the player's slots now: a shift-click on it must still put nothing into
+            // the terminal, which is what the list slot's arrival must not have changed.
+            int holding = -1;
+            for (int slot = menu.firstPlayerSlot(); slot < menu.slots.size(); slot++) {
+                if (menu.slots.get(slot).hasItem())
+                    holding = slot;
+            }
+            helper.assertTrue(holding >= 0, "the gold sits in a player slot of the menu");
+            helper.assertTrue(menu.quickMoveStack(player, holding).isEmpty(),
                     "a shift-click in the inventory puts nothing into the terminal");
             helper.assertValueEqual(countIn(player, Items.GOLD_INGOT), DELIVERED_GOLD, "the gold stayed with the player");
+            // A clipboard, on the other hand, is what the list slot is for: a shift-click hands it over (M23).
+            player.getInventory().add(AllBlocks.CLIPBOARD.asStack());
+            int clipboardSlot = -1;
+            for (int slot = menu.firstPlayerSlot(); slot < menu.slots.size(); slot++) {
+                if (menu.slots.get(slot).getItem().is(AllBlocks.CLIPBOARD.asItem()))
+                    clipboardSlot = slot;
+            }
+            helper.assertTrue(clipboardSlot >= 0, "the clipboard sits in a player slot of the menu");
+            helper.assertFalse(menu.quickMoveStack(player, clipboardSlot).isEmpty(),
+                    "a shift-clicked clipboard goes into the list slot");
+            helper.assertTrue(terminal.listClipboard().is(AllBlocks.CLIPBOARD.asItem()),
+                    "and the terminal holds it afterwards");
+            helper.assertFalse(menu.quickMoveStack(player, menu.listSlotIndex()).isEmpty(),
+                    "a shift-click takes it back out");
+            helper.assertTrue(terminal.listClipboard().isEmpty(), "and the list slot is empty again");
 
             // Without a server player the throttled push does nothing at all (and never throws).
             for (int tick = 0; tick < TICKS_WITHOUT_A_SERVER_PLAYER; tick++)
@@ -237,10 +278,11 @@ public final class WarehouseTerminalMenuGameTests {
             Player player = playerAt(helper, CENTER);
             WarehouseTerminalMenu menu = openMenu(player, terminal);
             helper.assertValueEqual(menu.bufferSlots(), GROWN_SLOTS, "the menu announces the grown count");
-            helper.assertValueEqual(menu.slots.size(), GROWN_SLOTS + PLAYER_SLOTS, "slot count");
+            helper.assertValueEqual(menu.slots.size(),
+                    GROWN_SLOTS + WarehouseTerminalMenu.LIST_SLOTS + PLAYER_SLOTS, "slot count");
             helper.assertValueEqual(menu.slots.get(GROWN_SLOTS - 1).getItem().getCount(), 1, "the last buffer slot");
-            helper.assertValueEqual(menu.slots.get(GROWN_SLOTS).x, menu.layout().playerSlotsX(),
-                    "the player inventory starts right after the buffer");
+            helper.assertValueEqual(menu.slots.get(menu.firstPlayerSlot()).x, menu.layout().playerSlotsX(),
+                    "the player inventory starts right after the list slot");
 
             // What a client builds: its block entity always has the configured count, but the menu has the announced
             // one, so the slots the handler lacks must read as empty instead of shrinking the menu or throwing.

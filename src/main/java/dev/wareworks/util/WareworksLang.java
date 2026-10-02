@@ -534,6 +534,59 @@ public final class WareworksLang {
     public static final String TERMINAL_CONFIRM_NO = "gui.terminal.confirm.no";
     /** How to skip the confirmation next time (Ctrl), shown under the two buttons. */
     public static final String TERMINAL_CONFIRM_SKIP = "gui.terminal.confirm.skip";
+    /**
+     * {@code "From the clipboard list: %1$s %2$s"}: which item and how many one portion of a clipboard order is about
+     * (M23 review fix). A click's question needs no such line, because the player just clicked the item.
+     */
+    public static final String TERMINAL_CONFIRM_LIST_ITEM = "gui.terminal.confirm.list_item";
+    /**
+     * {@code "Making it starts a production order; %1$s would be made in total."}: the one cost only a clipboard
+     * order's portion is asked about, because it starts machines with nobody at the terminal
+     * ({@code core.terminal.RequestScope}, M23).
+     */
+    public static final String TERMINAL_CONFIRM_PRODUCE = "gui.terminal.confirm.produce";
+    // --- a clipboard order at the terminal (M23, issue #19, ADR-036) ------------------------------------------------
+    /** {@code "Clipboard order: %1$s of %2$s entries (%3$s)"}: the goggle line of a terminal working a list off. */
+    public static final String GOGGLES_TERMINAL_LIST = "gui.goggles.terminal_list";
+    /** {@code "Still to fetch: %1$s"}: items the clipboard order is missing, in the goggles. */
+    public static final String GOGGLES_TERMINAL_LIST_LEFT = "gui.goggles.terminal_list_left";
+    /** {@code "Clipboard"}: label of the terminal's list slot. */
+    public static final String TERMINAL_LIST_LABEL = "gui.terminal.list.label";
+    /** What the list slot is for (its tooltip), i.e. the one sentence that explains the whole feature. */
+    public static final String TERMINAL_LIST_SLOT = "gui.terminal.list.slot";
+    /** {@code "Put a clipboard in to order a whole list"}: the status line without a clipboard. */
+    public static final String TERMINAL_LIST_EMPTY = "gui.terminal.list.empty";
+    /** Tooltip of the list button while it would start the list. */
+    public static final String TERMINAL_LIST_FETCH = "gui.terminal.list.fetch";
+    /** Tooltip of the list button while it would give the running order up. */
+    public static final String TERMINAL_LIST_CANCEL = "gui.terminal.list.cancel";
+    /** Tooltip of the list button while it would give a parked order another try. */
+    public static final String TERMINAL_LIST_RESUME = "gui.terminal.list.resume";
+    /** Tooltip of the list button while a question of one portion is waiting for an answer. */
+    public static final String TERMINAL_LIST_ANSWER = "gui.terminal.list.answer";
+    /** {@code "List: %1$s of %2$s entries, %3$s left - %4$s"}: the status line of a running order. */
+    public static final String TERMINAL_LIST_STATUS = "gui.terminal.list.status";
+    /** {@code "List: %1$s of %2$s entries fetched"}: the status line of a finished order. */
+    public static final String TERMINAL_LIST_STATUS_DONE = "gui.terminal.list.status_done";
+    /**
+     * {@code "Entries not taken from the clipboard: %1$s"}: the entry cap cut the list. Named in the Fetch dialog and
+     * in the list slot's tooltip, so a truncated list is never started without saying so (M23 review fix).
+     */
+    public static final String TERMINAL_LIST_TRUNCATED = "gui.terminal.list.truncated";
+    /** Title of the one dialog a Fetch raises. */
+    public static final String TERMINAL_LIST_CONFIRM_TITLE = "gui.terminal.list.confirm.title";
+    /** {@code "%1$s of the %2$s items on the list are not in stock."}: the partial case (issue #19). */
+    public static final String TERMINAL_LIST_CONFIRM_SHORT = "gui.terminal.list.confirm.short";
+    /** {@code "In total %1$s would be produced for the list."}: the production case, which asks as well (issue #19). */
+    public static final String TERMINAL_LIST_CONFIRM_PRODUCE = "gui.terminal.list.confirm.produce";
+    /** {@code "Entries that cannot be had at all and stay unticked: %1$s"} */
+    public static final String TERMINAL_LIST_CONFIRM_IMPOSSIBLE = "gui.terminal.list.confirm.impossible";
+    /** {@code "%1$s: %2$s of %3$s"}: one named entry of the dialog (item, what is to be had, what it asked for). */
+    public static final String TERMINAL_LIST_CONFIRM_ENTRY = "gui.terminal.list.confirm.entry";
+    /** {@code "More entries: %1$s"}: the entries past the few the dialog names. */
+    public static final String TERMINAL_LIST_CONFIRM_MORE = "gui.terminal.list.confirm.more";
+    /** {@code "Fetch what there is?"}: the question itself, under the numbers. */
+    public static final String TERMINAL_LIST_CONFIRM_ASK = "gui.terminal.list.confirm.ask";
     /** {@code "Delivered here"}: label above the terminal's own buffer slots. */
     public static final String TERMINAL_BUFFER = "gui.terminal.buffer";
     /** {@code "+%1$s not shown"}: item types the aisle holds beyond {@code maxTerminalStockEntries}. */
@@ -979,6 +1032,15 @@ public final class WareworksLang {
     public static LangBuilder stationCounts(int inputs, int outputs) {
         return translate(GOGGLES_STATIONS, number(inputs).style(ChatFormatting.GOLD),
                 number(outputs).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Clipboard order: 3 of 12 entries (fetching)" — the one goggle line of a warehouse terminal's list order (M23,
+     * issue #19). The state's own sentence is nested rather than appended, so a translation decides where it goes.
+     */
+    public static LangBuilder listProgress(int complete, int entries, String stateKey) {
+        return translate(GOGGLES_TERMINAL_LIST, number(complete).style(ChatFormatting.GOLD), number(entries),
+                translate(stateKey).style(ChatFormatting.WHITE)).style(ChatFormatting.GRAY);
     }
 
     /** "Items requested: N (requests: M)" with both numbers highlighted. */

@@ -60,7 +60,9 @@ teleported: every item you put in or take out is carried by the crane, where you
   storage, so no belt has to lead back to the aisle. Funnels, chutes, hoppers and Mechanical Arms take the items out of a
   requesting or accepting port either way. Details in the **The warehouse port** section below.
 * **Warehouse Terminal**: a searchable screen showing the whole warehouse's stock; click an item and the crane
-  delivers it into the terminal.
+  delivers it into the terminal. Or hand it a whole **list**: put a clipboard — a Schematicannon's material checklist,
+  or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks each
+  entry off as it delivers it.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
@@ -175,6 +177,18 @@ never onto the port. Right-click with an empty hand to open it.
   that is working, and a click on that line lists every step with the address of its machine (see **Production**).
 * Delivered items land in the terminal's own slots. Take them by hand, or let a funnel, chute or Mechanical Arm pull
   them onward.
+
+**Hand it a list.** Beside the terminal's delivery slots there is one more slot, for a **clipboard**. Put a clipboard
+with a list of items in it, press the **list button**, and the warehouse works the whole list off: it fetches what it
+can, **ticks each entry off on the clipboard as it delivers it**, and waits whenever the terminal is full instead of
+refusing — so a whole building's worth of material arrives in portions while you carry the crates to the site. Pick the
+clipboard up at any time and the ticks tell you what arrived and what is still outstanding: the list is the order and
+its receipt in one. A **Schematicannon** writes its material checklist straight onto a clipboard, so "build this
+schematic" becomes "hand the warehouse the shopping list"; a hand-written clipboard works exactly the same. If the list
+wants more than the warehouse has, or if something on it would have to be **produced** first, the terminal asks before
+it starts and tells you the numbers for the whole list. Underneath it is nothing new: every entry becomes an ordinary
+request, so batching, filters, priorities, reserves and maxima all still apply and the crane fetches every single item
+itself.
 
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
 path for your factory — and the same block can keep asking by itself, or take items *in*, which is the next section.

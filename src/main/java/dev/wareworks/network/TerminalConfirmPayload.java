@@ -9,6 +9,7 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.production.ProductionPattern;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.terminal.RequestConfirmation;
+import dev.wareworks.core.terminal.RequestScope;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -27,10 +28,16 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * ingredients are promised to, so it could never work out that four planks cost a log a rule protects. Reading is
  * bounded at {@value ProductionPattern#MAX_INGREDIENTS} ingredients, whatever the length prefix claims.
  *
+ * <b>The same question is raised by one portion of a clipboard order</b> (M23, issue #19): a list order is the same
+ * stream of ordinary requests with nobody watching, so it stops on exactly this panel. {@link #scope()} is what tells
+ * the screen where the answer belongs — back to the click as a {@link TerminalRequestPayload}, or to the order as a
+ * {@link TerminalListActionPayload}. Nothing else about the question differs.
+ *
  * @param containerId the menu the question belongs to; the screen ignores one for another menu
  * @param question    what the request would cross
+ * @param scope       who the request was for, i.e. where the answer goes back to
  */
-public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKey> question)
+public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKey> question, RequestScope scope)
         implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<TerminalConfirmPayload> TYPE =
             new CustomPacketPayload.Type<>(Wareworks.asResource("terminal_confirm"));
@@ -40,10 +47,17 @@ public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKe
 
     public TerminalConfirmPayload {
         Objects.requireNonNull(question, "question");
+        if (scope == null)
+            scope = RequestScope.CLICK;
+    }
+
+    /** The question a player's own click raised, which is every question before M23. */
+    public TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKey> question) {
+        this(containerId, question, RequestScope.CLICK);
     }
 
     private TerminalConfirmPayload(RegistryFriendlyByteBuf buffer) {
-        this(buffer.readVarInt(), readQuestion(buffer));
+        this(buffer.readVarInt(), readQuestion(buffer), readScope(buffer));
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
@@ -65,6 +79,18 @@ public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKe
             buffer.writeVarLong(ingredient.fromReserve());
             buffer.writeVarLong(ingredient.reserved());
         }
+        // Last, and by name: a scope a build does not know reads as a plain click, which is the answer that can only
+        // ever be refused by the server rather than acted on in the wrong place (M23).
+        buffer.writeUtf(scope.name());
+    }
+
+    private static RequestScope readScope(RegistryFriendlyByteBuf buffer) {
+        String name = buffer.readUtf();
+        for (RequestScope scope : RequestScope.values()) {
+            if (scope.name().equals(name))
+                return scope;
+        }
+        return RequestScope.CLICK;
     }
 
     private static RequestConfirmation<ItemKey> readQuestion(RegistryFriendlyByteBuf buffer) {

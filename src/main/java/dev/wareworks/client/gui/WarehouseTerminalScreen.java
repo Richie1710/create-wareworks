@@ -19,18 +19,23 @@ import com.simibubi.create.foundation.gui.widget.ScrollInput;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.TerminalListResult;
+import dev.wareworks.content.station.TerminalListState;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalScreenStatus;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.CountFormat;
+import dev.wareworks.core.terminal.ListOrderConfirmation;
+import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.PlanCancelCost;
 import dev.wareworks.core.terminal.PlanLine;
 import dev.wareworks.core.terminal.PlanLines;
 import dev.wareworks.core.terminal.PlanMember;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
+import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockLine;
 import dev.wareworks.core.terminal.StockListModel;
@@ -39,6 +44,9 @@ import dev.wareworks.core.terminal.TerminalSearch;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.network.ProductionCancelPayload;
 import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalListActionPayload;
+import dev.wareworks.network.TerminalListAnswerPayload;
+import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalRequestPayload;
 import dev.wareworks.network.TerminalResultPayload;
@@ -230,6 +238,32 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private RequestConfirmation<ItemKey> confirmed;
     private boolean costChanged;
     /**
+     * Where the answer to {@link #confirming} belongs: back to the click as a request, or to the clipboard order
+     * (M23, issue #19). A list order stops on the very panel a click raises, which is the "use the mechanism the
+     * terminal already has" of the issue; this field is the whole difference between the two.
+     */
+    private RequestScope confirmScope = RequestScope.CLICK;
+    /**
+     * What the <b>whole clipboard list</b> would cost, while that one dialog is up (M23, issue #19): the partial case
+     * ("the list wants 2000 cobblestone and the warehouse holds 1300") and the production case, measured over the
+     * whole list on the server before anything was requested. {@code null} while nothing is being asked.
+     */
+    @Nullable
+    private ListOrderConfirmation<ItemKey> listConfirming;
+    /**
+     * The list question the player has just confirmed, kept until the server has answered in turn — the counterpart of
+     * {@link #confirmed} for the other of the two dialogs (M23 review fix).
+     * <p>
+     * {@link #confirmListFetch()} clears {@link #listConfirming} before it sends the Fetch, so a second question could
+     * not be told from a first one by that field and the "the warehouse has changed since you were asked" line was
+     * unreachable. The numbers of the question that was answered are kept here instead and compared with the new ones,
+     * so the notice appears exactly when the warehouse really moved — and not when two Fetch presses raced.
+     */
+    @Nullable
+    private ListOrderConfirmation<ItemKey> listConfirmed;
+    /** How far the clipboard order has got, as the server last pushed it (M23). */
+    private TerminalListState listState = TerminalListState.NONE;
+    /**
      * The wrapped text and the geometry of {@link #confirming}, built once and dropped whenever anything it is built
      * from changes: the question itself, {@link #costChanged}, and the window layout ({@link #init()}).
      */
@@ -242,6 +276,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private EditBox searchBox;
     private IconButton sortButton;
     private IconButton filterButton;
+    /** The clipboard order's one button: Fetch, Cancel, Resume or Answer, whichever the state calls for (M23). */
+    private IconButton listButton;
     private ScrollInput amountInput;
     private Label amountLabel;
 
@@ -263,13 +299,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         panel = null;
         stepPanel = null;
 
-        int searchWidth = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN - AMOUNT_WIDTH - 2 * BUTTON_SIZE
-                - 3 * WIDGET_GAP;
+        // Three option buttons since M23: the clipboard order's button sits beside sort and filter, and the search box
+        // pays for it (the grid and the window height may not).
+        int searchWidth = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN - AMOUNT_WIDTH - 3 * BUTTON_SIZE
+                - 4 * WIDGET_GAP;
         int rowY = topPos + layout.searchY();
         int searchX = leftPos + TerminalMenuLayout.MARGIN;
         int amountX = searchX + searchWidth + WIDGET_GAP;
         int sortX = amountX + AMOUNT_WIDTH + WIDGET_GAP;
         int filterX = sortX + BUTTON_SIZE + WIDGET_GAP;
+        int listX = filterX + BUTTON_SIZE + WIDGET_GAP;
 
         searchBox = new EditBox(font, searchX + TEXT_INSET, rowY + TEXT_ROW_INSET, searchWidth - 2 * TEXT_INSET, 9,
                 WareworksLang.translateDirect(WareworksLang.TERMINAL_SEARCH));
@@ -310,6 +349,13 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
         });
         addRenderableWidget(filterButton);
+
+        listButton = new IconButton(listX, rowY, AllIcons.I_PLAY);
+        listButton.withCallback(() -> {
+            sendListAction();
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
+        });
+        addRenderableWidget(listButton);
 
         updateOptionButtons();
         if (menu.terminal() == null && minecraft != null && minecraft.player != null)
@@ -579,6 +625,239 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         filterButton.green = model.inStockOnly();
         filterButton.setToolTip(WareworksLang.translateDirect(
                 model.inStockOnly() ? WareworksLang.TERMINAL_ONLY_IN_STOCK : WareworksLang.TERMINAL_SHOW_ALL));
+        updateListButton();
+    }
+
+    // --- the clipboard order (M23, issue #19) ----------------------------------------------------------------------
+
+    /**
+     * The one button the clipboard order has, which is whichever of its four actions the state calls for: start the
+     * list, answer the question one portion raised, give a parked order another try, or give the order up.
+     * <p>
+     * It is a button and not a click on the status line because starting a list order and giving one up are both
+     * things a player has to be able to aim at, and because the tooltip is where the four cases are named.
+     */
+    private void updateListButton() {
+        if (listButton == null)
+            return;
+        listButton.setIcon(switch (listAction()) {
+            case ANSWER -> AllIcons.I_CONFIRM;
+            case RESUME -> AllIcons.I_REFRESH;
+            case CANCEL -> AllIcons.I_STOP;
+            default -> AllIcons.I_PLAY;
+        });
+        listButton.green = listState.isOpen() && !listState.waitsForPlayer();
+        listButton.setToolTip(WareworksLang.translateDirect(switch (listAction()) {
+            case ANSWER -> WareworksLang.TERMINAL_LIST_ANSWER;
+            case RESUME -> WareworksLang.TERMINAL_LIST_RESUME;
+            case CANCEL -> WareworksLang.TERMINAL_LIST_CANCEL;
+            default -> WareworksLang.TERMINAL_LIST_FETCH;
+        }));
+    }
+
+    /** What the list button would do right now; the dev harness and the tests of the client side read it too. */
+    public TerminalListActionPayload.Action listAction() {
+        if (!listState.isOpen())
+            return TerminalListActionPayload.Action.FETCH;
+        if (listState.asking())
+            return TerminalListActionPayload.Action.ANSWER;
+        if (listState.state() == ListOrderState.PARKED)
+            return TerminalListActionPayload.Action.RESUME;
+        return TerminalListActionPayload.Action.CANCEL;
+    }
+
+    /**
+     * Sends what the list button does. A Fetch accepts nothing the first time, which is exactly what makes the server
+     * measure the whole list and ask; the answer comes back as {@link #onListAnswer}.
+     * <p>
+     * {@code ANSWER} accepts nothing either, and that is the whole action: the question one portion raised lives on the
+     * server, so the button asks for it to be <b>put up again</b> and the player answers it in the panel
+     * ({@link #confirmRequest()}). Before this, the button played its click sound and sent nothing at all, which left a
+     * player who had dismissed the panel with no way back to the question (M23 review fix).
+     */
+    public void sendListAction() {
+        PacketDistributor.sendToServer(new TerminalListActionPayload(menu.containerId, listAction()));
+    }
+
+    /** The server sent how far the clipboard order has got. */
+    public void onList(TerminalListPayload payload) {
+        TerminalListState before = listState;
+        listState = payload.state();
+        // A list that has just finished says so for a few seconds, like every other answer, and then gives the row back
+        // (M23 review fix): its lasting receipt is the clipboard and the ticks on it, which the slot's own tooltip
+        // shows, and the status row belongs to whatever the terminal is doing now.
+        if (before.isOpen() && listState.active() && !listState.isOpen()) {
+            feedback = listDoneLine();
+            feedbackColor = COLOR_SUCCESS;
+            feedbackTicks = FEEDBACK_TICKS;
+        }
+        updateListButton();
+    }
+
+    /**
+     * The server answered a clipboard-order action: the sentence goes into the status line for a few seconds, and an
+     * {@link TerminalListResult#ASKING} puts the one dialog of the feature up.
+     * <p>
+     * A question for a list the player has just confirmed means the warehouse moved between the answer and the
+     * re-check — the server measures every confirmed Fetch again — so the panel says so rather than asking what looks
+     * like the same thing twice.
+     */
+    public void onListAnswer(TerminalListAnswerPayload payload) {
+        // A question is only ever put up when one really arrived: the payload is decoded without that pairing being
+        // enforced, so a truncated or crafted one must leave the screen alone rather than throw inside a packet
+        // handler.
+        if (payload.result().isAsking() && payload.question().isPresent()) {
+            ListOrderConfirmation<ItemKey> question = payload.question().get();
+            // The notice belongs to a question that really differs from the one the player already said yes to: a
+            // second Fetch press before the first answer arrived raises the identical question and must not claim the
+            // warehouse moved (M23 review fix).
+            costChanged = listConfirmed != null && !listConfirmed.equals(question);
+            listConfirmed = null;
+            listConfirming = question;
+            // Only one dialog at a time: the list's question wins over a chain a player was reading (M20/M23).
+            confirming = null;
+            confirmed = null;
+            openPlan = null;
+            stepPanel = null;
+            panel = null;
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
+            return;
+        }
+        listConfirming = null;
+        listConfirmed = null;
+        costChanged = false;
+        panel = null;
+        feedback = WareworksLang.translateDirect(payload.result().langKey());
+        feedbackColor = payload.result().isSuccess() ? COLOR_SUCCESS : COLOR_ERROR;
+        feedbackTicks = FEEDBACK_TICKS;
+        playUiSound(payload.result().isSuccess() ? SoundEvents.NOTE_BLOCK_BELL.value()
+                : SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, payload.result().isSuccess() ? 1.6F : 0.8F);
+    }
+
+    /** How far the clipboard order has got, as last pushed (the dev harness and the tests of the client side). */
+    public TerminalListState listState() {
+        return listState;
+    }
+
+    /** What the whole list would cost, while that dialog is up; {@code null} while it is not. */
+    @Nullable
+    public ListOrderConfirmation<ItemKey> listConfirmation() {
+        return listConfirming;
+    }
+
+    /** Carries the Fetch out with the numbers the player was shown; the server measures them again. */
+    private void confirmListFetch() {
+        ListOrderConfirmation<ItemKey> question = listConfirming;
+        listConfirming = null;
+        costChanged = false;
+        panel = null;
+        if (question == null)
+            return;
+        // Kept until the server answers, so a second question can be told from a first one (M23 review fix).
+        listConfirmed = question;
+        PacketDistributor.sendToServer(TerminalListActionPayload.fetch(menu.containerId, question.missing(),
+                question.producing(), question.entriesDropped()));
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+    }
+
+    /**
+     * The lines of the list dialog: the numbers first, then the few entries worth naming, then the question itself.
+     * They are named rather than described, exactly as a click's question names its numbers — "1300 of 2000 are not in
+     * stock" is a fact a player can act on.
+     */
+    private List<Component> listConfirmationLines(ListOrderConfirmation<ItemKey> question) {
+        List<Component> lines = new ArrayList<>(7 + question.named().size());
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_TITLE).copy()
+                .withStyle(ChatFormatting.GOLD));
+        if (costChanged)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
+                    .withStyle(ChatFormatting.GOLD));
+        if (question.missing() > 0L)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_SHORT,
+                    Component.literal(LangNumberFormat.format(question.missing())),
+                    Component.literal(LangNumberFormat.format(question.wanted()))).copy()
+                    .withStyle(ChatFormatting.WHITE));
+        if (question.producing() > 0L)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_PRODUCE,
+                    Component.literal(LangNumberFormat.format(question.producing()))).copy()
+                    .withStyle(ChatFormatting.WHITE));
+        if (question.entriesImpossible() > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_IMPOSSIBLE,
+                    Component.literal(LangNumberFormat.format(question.entriesImpossible()))).copy()
+                    .withStyle(ChatFormatting.WHITE));
+        // What the entry cap left behind, in the dialog the player consents in and not only in a tooltip they have to
+        // know to hover: pressing Fetch on "this list" must never quietly order part of it (M23 review fix).
+        if (question.truncated())
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TRUNCATED,
+                    Component.literal(LangNumberFormat.format(question.entriesDropped()))).copy()
+                    .withStyle(ChatFormatting.GOLD));
+        for (ListOrderConfirmation.Line<ItemKey> line : question.named())
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_ENTRY,
+                    line.key().toStack().getHoverName(),
+                    Component.literal(LangNumberFormat.format(line.serveable() + line.producing())),
+                    Component.literal(LangNumberFormat.format(line.wanted()))).copy()
+                    .withStyle(ChatFormatting.GRAY));
+        int unnamed = question.entriesShort() + question.entriesProducing() + question.entriesImpossible()
+                - question.named().size();
+        if (unnamed > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_MORE,
+                    Component.literal(LangNumberFormat.format(unnamed))).copy().withStyle(ChatFormatting.DARK_GRAY));
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_ASK).copy()
+                .withStyle(ChatFormatting.WHITE));
+        return lines;
+    }
+
+    /**
+     * The tooltip of the list slot: what the slot is for while it is empty, and otherwise the clipboard's own tooltip
+     * with the order's progress and anything the entry cap left behind under it. Public, because the visual harness
+     * reads it instead of photographing it.
+     */
+    public List<Component> listSlotTooltip(ItemStack clipboard) {
+        List<Component> tooltip = new ArrayList<>(4);
+        if (clipboard.isEmpty()) {
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_LABEL).copy()
+                    .withStyle(ChatFormatting.WHITE));
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_SLOT).copy()
+                    .withStyle(ChatFormatting.GRAY));
+            return tooltip;
+        }
+        if (minecraft != null)
+            tooltip.addAll(getTooltipFromItem(minecraft, clipboard));
+        // The slot's own tooltip is where a finished order belongs: it is the clipboard's receipt and it stays as long
+        // as the clipboard lies there (M23 review fix).
+        Component status = listState.active() && !listState.isOpen() ? listDoneLine() : listStatusLine();
+        if (status != null)
+            tooltip.add(status.copy().withStyle(ChatFormatting.GRAY));
+        if (listState.truncated())
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TRUNCATED,
+                    LangNumberFormat.format(listState.dropped())).copy().withStyle(ChatFormatting.GOLD));
+        return tooltip;
+    }
+
+    /**
+     * The clipboard order's own status line while the order still has work to do, or {@code null} when it has not.
+     * <p>
+     * A <b>finished</b> order deliberately returns nothing here (M23 review fix). Nothing drops a finished order — the
+     * ticked clipboard left in the slot is what the design asks for, and the order is its receipt — so a done line in
+     * this row would stay there for ever and across reloads, hiding every later request's progress and even "No crane"
+     * and "Not part of a warehouse" behind a job that ended hours ago. The done line is shown twice where it belongs
+     * instead: for a few seconds as the answer to finishing ({@link #onList}) and for as long as the clipboard lies in
+     * the slot, in that slot's own tooltip ({@link #listSlotTooltip}).
+     */
+    @Nullable
+    private Component listStatusLine() {
+        if (!listState.isOpen())
+            return null;
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_STATUS,
+                LangNumberFormat.format(listState.entriesComplete()), LangNumberFormat.format(listState.entries()),
+                LangNumberFormat.format(listState.outstanding()),
+                WareworksLang.translateDirect(listState.state().langKey()));
+    }
+
+    /** "List done: 4/4" — the receipt of a finished clipboard order. */
+    private Component listDoneLine() {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_STATUS_DONE,
+                LangNumberFormat.format(listState.entriesComplete()), LangNumberFormat.format(listState.entries()));
     }
 
     @Override
@@ -592,7 +871,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         // The question owns every click while it is up: the grid behind it is deliberately out of reach, so a player
         // cannot answer it by accident with the click they were about to make (M15 part 2).
-        if (confirming != null) {
+        if (isAskingSomething()) {
             if (button == 0 && isOverConfirmButton(mouseX, mouseY, true))
                 confirmRequest();
             else if (button == 0 && isOverConfirmButton(mouseX, mouseY, false))
@@ -640,7 +919,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         // Enter confirms, Escape drops it — and Escape must not close the whole screen while a question is up.
-        if (confirming != null) {
+        if (isAskingSomething()) {
             if (keyCode == InputConstants.KEY_RETURN || keyCode == InputConstants.KEY_NUMPADENTER)
                 confirmRequest();
             else if (keyCode == InputConstants.KEY_ESCAPE)
@@ -1161,6 +1440,13 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /** "Crane: travelling to the source", "Crane: paused (no rotation)" or what this terminal is still waiting for. */
     private Component statusLine() {
+        // A clipboard order wins the row while it is really being worked off (M23, issue #19): it is the thing a player
+        // started and is waiting for, and the two numbers it counts down say more than "waiting for 64, delivered 0"
+        // does. It does *not* win it over a terminal that has lost its aisle or its crane, because that is the answer
+        // to "why is my list not moving", and a finished order does not win it at all (M23 review fix).
+        Component list = status.hasAisle() && status.craneLinked() ? listStatusLine() : null;
+        if (list != null)
+            return list;
         if (status.requestsHere() > 0)
             return WareworksLang.translateDirect(WareworksLang.TERMINAL_WAITING,
                     LangNumberFormat.format(status.requestedHere()), LangNumberFormat.format(status.deliveredHere()));
@@ -1176,13 +1462,22 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     @Override
     protected void renderForeground(GuiGraphics graphics, int mouseX, int mouseY, float partialTicks) {
         super.renderForeground(graphics, mouseX, mouseY, partialTicks);
-        if (confirming != null) {
+        if (isAskingSomething()) {
             renderConfirmation(graphics, mouseX, mouseY);
             return; // no tooltip from the grid underneath: it is not what the player is answering
         }
         if (openPlan != null) {
             renderStepPanel(graphics, mouseX, mouseY);
             return; // likewise: while the chain is on screen, nothing behind it is being pointed at
+        }
+        // The list slot says what it is for while it is empty, which is the one place the whole feature is explained
+        // (M23, issue #19); a clipboard in it keeps its own tooltip, with what the order has got to under it.
+        if (hoveredSlot != null && hoveredSlot == menu.slots.get(menu.listSlotIndex())) {
+            List<Component> tooltip = listSlotTooltip(hoveredSlot.getItem());
+            if (!tooltip.isEmpty()) {
+                graphics.renderComponentTooltip(font, tooltip, mouseX, mouseY);
+                return;
+            }
         }
         int cell = cellAt(mouseX, mouseY);
         List<StockLine<ItemKey>> visible = visibleEntries();
@@ -1210,8 +1505,14 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         costChanged = confirmed != null && confirmed.key().equals(question.key());
         confirmed = null;
         confirming = question;
+        // Where the answer goes back to: the click that raised it, or the clipboard order one portion of which did
+        // (M23, issue #19). The panel itself is the same either way.
+        confirmScope = payload.scope();
         panel = null;
-        // Only one dialog at a time: a question the server is asking wins over a chain a player was reading (M20).
+        // Only one dialog at a time: a question the server is asking wins over a chain a player was reading (M20) and
+        // over the list dialog, which is the player's own and can be raised again by the button.
+        listConfirming = null;
+        listConfirmed = null;
         openPlan = null;
         stepPanel = null;
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
@@ -1227,7 +1528,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (question == null)
             return null;
         Component joined = null;
-        for (Component cost : confirmationCosts(question))
+        for (Component cost : confirmationCosts(question, confirmScope))
             joined = joined == null ? cost : joined.copy().append(" ").append(cost);
         return joined == null ? Component.empty() : joined;
     }
@@ -1239,29 +1540,63 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     /**
+     * Whether a modal question is up at all — a click's cost or a whole clipboard list's (M23, issue #19). While one
+     * is, the grid behind it is deliberately out of reach and every click and key belongs to the panel.
+     */
+    public boolean isAskingSomething() {
+        return confirming != null || listConfirming != null;
+    }
+
+    /**
      * Carries the pending request out (the Confirm button and Enter): the same request again, now saying what the player
      * accepted. The server measures the cost once more before it acts on it, so this is a statement of consent and not
      * a command.
      */
     public void confirmRequest() {
+        if (listConfirming != null) {
+            confirmListFetch(); // the list dialog: the same consent, measured again over the whole list (M23)
+            return;
+        }
         RequestConfirmation<ItemKey> question = confirming;
+        RequestScope scope = confirmScope;
         confirming = null;
         costChanged = false;
         panel = null;
         if (question == null)
             return;
         confirmed = question;
+        // A question one portion of a clipboard order raised belongs to the order, not to a click: the answer tops the
+        // order's consent budget up and the order offers that portion again (M23, issue #19).
+        if (scope == RequestScope.LIST) {
+            PacketDistributor.sendToServer(TerminalListActionPayload.answer(menu.containerId,
+                    question.acknowledgement(RequestScope.LIST)));
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+            return;
+        }
         send(question.key(), (int) Math.min(Integer.MAX_VALUE, question.amount()), question.acknowledgement());
     }
 
-    /** Drops the pending request without making it (the Cancel button and Escape). Nothing was ever requested. */
+    /**
+     * Drops the pending request without making it (the Cancel button and Escape). Nothing was ever requested.
+     * <p>
+     * A question one <b>portion</b> of a clipboard order raised is the one case where saying no has to reach the server
+     * (M23 review fix): the order is standing in {@code ASKING} and measures nothing, so a purely client-side dismissal
+     * left it stalled with nothing on screen to answer or refuse it. A no parks it instead — the list button becomes
+     * Resume and the same question can be had again.
+     */
     public void cancelConfirmation() {
-        if (confirming == null)
+        if (confirming == null && listConfirming == null)
             return;
+        boolean declining = confirming != null && confirmScope == RequestScope.LIST;
         confirming = null;
+        listConfirming = null;
+        listConfirmed = null;
         confirmed = null;
         costChanged = false;
         panel = null;
+        if (declining)
+            PacketDistributor.sendToServer(new TerminalListActionPayload(menu.containerId,
+                    TerminalListActionPayload.Action.DECLINE));
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
     }
 
@@ -1271,16 +1606,26 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * while "are you sure?" alone is not.
      */
     private List<Component> confirmationLines(RequestConfirmation<ItemKey> question) {
-        List<Component> lines = new ArrayList<>(4 + question.ingredients().size());
+        boolean forList = confirmScope == RequestScope.LIST;
+        List<Component> lines = new ArrayList<>(5 + question.ingredients().size());
         lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_TITLE).copy()
                 .withStyle(ChatFormatting.GOLD));
         if (costChanged)
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
                     .withStyle(ChatFormatting.GOLD));
-        for (Component cost : confirmationCosts(question))
+        // A portion of a clipboard order is nothing the player clicked, so the panel has to say which item and how many
+        // it is about before it names what that costs (M23 review fix): without it a question that only crosses
+        // "something would be made" drew the title and the Alt hint and nothing else at all.
+        if (forList)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_LIST_ITEM,
+                    Component.literal(LangNumberFormat.format(question.amount())),
+                    question.key().toStack().getHoverName()).copy().withStyle(ChatFormatting.GOLD));
+        for (Component cost : confirmationCosts(question, confirmScope))
             lines.add(cost.copy().withStyle(ChatFormatting.WHITE));
-        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_SKIP).copy()
-                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        // Alt skips the question a *click* raises; there is no click to hold it on when the order raised this one.
+        if (!forList)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_SKIP).copy()
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return lines;
     }
 
@@ -1288,9 +1633,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * One sentence per boundary the request crosses, in the order a player meets them: what leaves the reserve of the
      * item itself, what a production order would spend out of <b>another</b> item's reserve — which only the server can
      * know, because it alone has the patterns — and what would be stored above the maximum.
+     * <p>
+     * A {@link RequestScope#LIST} portion adds the one cost a click is never asked about: that machines would be
+     * <b>started</b> for it, with nobody at the terminal ({@link RequestConfirmation#required(RequestScope)}). That is
+     * the only cost such a question may name, so without this sentence the dialog could be empty (M23 review fix).
      */
-    private List<Component> confirmationCosts(RequestConfirmation<ItemKey> question) {
-        List<Component> costs = new ArrayList<>(2 + question.ingredients().size());
+    private List<Component> confirmationCosts(RequestConfirmation<ItemKey> question, RequestScope scope) {
+        List<Component> costs = new ArrayList<>(3 + question.ingredients().size());
+        if (scope == RequestScope.LIST && question.made() > 0L)
+            costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_PRODUCE,
+                    Component.literal(LangNumberFormat.format(question.made()))));
         if (question.fromReserve() > 0L)
             costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_RESERVE,
                     Component.literal(LangNumberFormat.format(question.fromReserve())),
@@ -1343,15 +1695,21 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         }
     }
 
-    /** The panel of {@link #confirming}, built on demand and dropped whenever anything it is built from changes. */
+    /**
+     * The panel of whichever question is up, built on demand and dropped whenever anything it is built from changes.
+     * <p>
+     * One panel for two questions (M23, issue #19): a click's cost ({@link #confirming}) and a whole clipboard list's
+     * ({@link #listConfirming}) are drawn, hit-tested and answered by the same shape, which is what the issue's "use
+     * the confirmation mechanism the terminal already has" asks for. Only the rows differ.
+     */
     @Nullable
     private ConfirmPanel panel() {
-        RequestConfirmation<ItemKey> question = confirming;
-        if (question == null)
+        if (confirming == null && listConfirming == null)
             return null;
         if (panel != null)
             return panel;
-        List<Component> lines = confirmationLines(question);
+        List<Component> lines = confirming != null ? confirmationLines(confirming)
+                : listConfirmationLines(listConfirming);
         List<FormattedCharSequence> rows = new ArrayList<>();
         int text = 0;
         for (Component line : lines) {

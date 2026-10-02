@@ -7,6 +7,7 @@ import java.util.List;
 
 import org.lwjgl.glfw.GLFW;
 
+import com.simibubi.create.foundation.gui.widget.IconButton;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
 import dev.wareworks.client.gui.WarehouseProductionScreen;
@@ -16,6 +17,7 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.StockKeeperMenuLayout;
 import dev.wareworks.content.station.TerminalMenuLayout;
+import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
@@ -52,6 +54,7 @@ final class ScreenInput {
             double.class);
     private static final Field TERMINAL_LAYOUT = field(WarehouseTerminalScreen.class, "layout");
     private static final Field TERMINAL_AMOUNT = field(WarehouseTerminalScreen.class, "amountInput");
+    private static final Field TERMINAL_LIST_BUTTON = field(WarehouseTerminalScreen.class, "listButton");
     private static final Method TERMINAL_CELL_AT = method(WarehouseTerminalScreen.class, "cellAt", double.class,
             double.class);
     private static final Method TERMINAL_ORDER_AT = method(WarehouseTerminalScreen.class, "orderAt", double.class,
@@ -59,6 +62,8 @@ final class ScreenInput {
     private static final Method TERMINAL_CANCEL_MARK_X = method(WarehouseTerminalScreen.class, "cancelMarkX");
     private static final Method TERMINAL_CONFIRM_LINES = method(WarehouseTerminalScreen.class, "confirmationLines",
             RequestConfirmation.class);
+    private static final Method TERMINAL_LIST_CONFIRM_LINES = method(WarehouseTerminalScreen.class,
+            "listConfirmationLines", ListOrderConfirmation.class);
     private static final Field PRODUCTION_LAYOUT = field(WarehouseProductionScreen.class, "layout");
     private static final Method PRODUCTION_CELL_AT = method(WarehouseProductionScreen.class, "cellAt", double.class,
             double.class);
@@ -76,6 +81,8 @@ final class ScreenInput {
             int.class);
     /** What the keeper screen's own hit tests return for "nothing here" ({@code WarehouseStockKeeperScreen.NONE}). */
     private static final int NO_NUMBER_FIELD = -1;
+    /** Middle of a vanilla 16x16 menu slot, measured from {@code Slot#x}/{@code y}. */
+    private static final double SLOT_CENTRE = 8.0;
     private static final Method FIND_SLOT = method(AbstractContainerScreen.class, "findSlot", double.class,
             double.class);
 
@@ -198,11 +205,15 @@ final class ScreenInput {
     /**
      * The centre of one of the two buttons of the terminal's confirmation panel (M15 part 2), checked with the
      * screen's own hit test.
+     * <p>
+     * The panel is the same one for both of the terminal's questions since M23 (issue #19) — a click's cost and a
+     * whole clipboard list's — so this asks the screen whether it is asking <i>anything</i>
+     * ({@code WarehouseTerminalScreen#isAskingSomething}) rather than only about a click's question.
      *
      * @param confirm {@code true} for "Confirm", {@code false} for "Cancel"
      */
     static Point terminalConfirmButton(WarehouseTerminalScreen screen, boolean confirm) {
-        if (screen.confirmation() == null)
+        if (!screen.isAskingSomething())
             throw new VisualTestException("the terminal is not asking anything, so it draws no confirm button");
         // The screen hands out the centre itself: its panel is laid out once per question and kept, so reflecting
         // three private helpers back together would be reading a geometry that no longer exists (M15 review fix).
@@ -210,6 +221,54 @@ final class ScreenInput {
         if (!screen.isOverConfirmButton(point.x(), point.y(), confirm))
             throw new VisualTestException("the terminal's hit test does not put " + point + " on the "
                     + (confirm ? "confirm" : "cancel") + " button");
+        return point;
+    }
+
+    /**
+     * The centre of the terminal's <b>list button</b> — the one button of a clipboard order (Fetch, Cancel, Resume or
+     * Answer, M23, issue #19) — checked with the widget's own hit test.
+     */
+    static Point terminalListButton(WarehouseTerminalScreen screen) {
+        IconButton button = (IconButton) get(TERMINAL_LIST_BUTTON, screen);
+        if (button == null)
+            throw new VisualTestException("the terminal screen has no list button yet (not laid out)");
+        Point point = centre(button);
+        if (!button.isMouseOver(point.x(), point.y()))
+            throw new VisualTestException("the list button's own hit test does not put " + point + " on it");
+        return point;
+    }
+
+    /**
+     * Every line of the terminal's panel while a whole <b>clipboard list</b> is being asked about (M23, issue #19), as
+     * it is drawn: the totals, the entries worth naming and the question itself.
+     * <p>
+     * The counterpart of {@link #terminalConfirmationLines} for the other of the two questions the one panel shows. A
+     * screenshot cannot be trusted to prove which numbers a dialog names, so a run reads them.
+     */
+    static List<Component> terminalListConfirmationLines(WarehouseTerminalScreen screen) {
+        ListOrderConfirmation<ItemKey> question = screen.listConfirmation();
+        if (question == null)
+            throw new VisualTestException("the terminal is not asking about a list, so it draws no list panel");
+        @SuppressWarnings("unchecked")
+        List<Component> lines = (List<Component>) invoke(TERMINAL_LIST_CONFIRM_LINES, screen, question);
+        return lines;
+    }
+
+    /**
+     * The centre of menu slot {@code index} of any container screen, checked with the screen's own slot lookup.
+     * <p>
+     * This is how an item is really carried from one slot to another: a left click picks the stack up onto the cursor
+     * and a second one puts it down, which is what a player does when no shift-click is available
+     * ({@link #requireNoModifiers}).
+     */
+    static Point menuSlot(AbstractContainerScreen<?> screen, int index) {
+        List<Slot> slots = screen.getMenu().slots;
+        if (index < 0 || index >= slots.size())
+            throw new VisualTestException("the screen has no menu slot " + index + " (it has " + slots.size() + ")");
+        Slot slot = slots.get(index);
+        Point point = new Point(screen.getGuiLeft() + slot.x + SLOT_CENTRE, screen.getGuiTop() + slot.y + SLOT_CENTRE);
+        if (invoke(FIND_SLOT, screen, point.x(), point.y()) != slot)
+            throw new VisualTestException("the screen's slot lookup does not find menu slot " + index + " at " + point);
         return point;
     }
 
@@ -385,7 +444,8 @@ final class ScreenInput {
         for (Slot slot : screen.getMenu().slots) {
             if (!(slot.container instanceof Inventory) || slot.getContainerSlot() != hotbarIndex)
                 continue;
-            Point point = new Point(screen.getGuiLeft() + slot.x + 8.0, screen.getGuiTop() + slot.y + 8.0);
+            Point point = new Point(screen.getGuiLeft() + slot.x + SLOT_CENTRE,
+                    screen.getGuiTop() + slot.y + SLOT_CENTRE);
             if (invoke(FIND_SLOT, screen, point.x(), point.y()) != slot)
                 throw new VisualTestException("the screen's slot lookup does not find hotbar slot " + hotbarIndex + " at "
                         + point);

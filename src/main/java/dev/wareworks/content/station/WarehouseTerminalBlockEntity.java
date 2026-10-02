@@ -10,9 +10,12 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.UUID;
 
+import org.jetbrains.annotations.Nullable;
+
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.utility.IInteractionChecker;
 
+import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
@@ -21,6 +24,7 @@ import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.controller.BranchLayout;
+import dev.wareworks.content.item.ClipboardList;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
@@ -33,23 +37,40 @@ import dev.wareworks.core.stock.StockLevels;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.stock.StockRules;
+import dev.wareworks.core.terminal.ListCredit;
+import dev.wareworks.core.terminal.ListLine;
+import dev.wareworks.core.terminal.ListOrder;
+import dev.wareworks.core.terminal.ListOrderConfirmation;
+import dev.wareworks.core.terminal.ListOrderState;
+import dev.wareworks.core.terminal.ListPass;
+import dev.wareworks.core.terminal.ListPortion;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
+import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.util.WareworksLang;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
+import net.minecraft.world.Containers;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.items.IItemHandlerModifiable;
+import net.neoforged.neoforge.items.ItemStackHandler;
 
 /**
  * Block entity of the warehouse terminal ({@code docs/warehouse-system.md} §3.4, ADR-018): the player-facing request
@@ -83,6 +104,27 @@ import net.neoforged.neoforge.items.IItemHandler;
  * the queue caps.
  */
 public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockEntity implements IInteractionChecker {
+    /** The one slot of the list handler; the terminal holds exactly one clipboard (M23, issue #19). */
+    public static final int LIST_SLOT = 0;
+    /** NBT key of the clipboard in the list slot. */
+    public static final String LIST_SLOT_TAG = "ListSlot";
+    /** NBT key of the bounded list state in client packets (goggles). */
+    public static final String LIST_STATE_TAG = "ListState";
+
+    /**
+     * The clipboard a list order is read from and ticked off on ({@link #listSlot()}). Its own handler rather than a
+     * slot of the station buffer: the buffer is what the crane delivers into and what automation empties, and a
+     * clipboard must be neither.
+     */
+    private final ListSlotHandler listSlot = new ListSlotHandler();
+    /** The clipboard order, or {@code null} while there is none. Saved with this block entity. */
+    @Nullable
+    private ListOrder<ItemKey> listOrder;
+    /** Whether the tick marks of the delivered lines still have to be re-asserted after a load (server). */
+    private boolean listTicksPending;
+    /** The bounded list state: built on the server when goggles are observed, received on the client. */
+    private TerminalListState shownList = TerminalListState.NONE;
+
     public WarehouseTerminalBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.terminalBufferSlots());
     }
@@ -544,6 +586,399 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         return outcome;
     }
 
+    // --- clipboard orders (M23, issue #19, ADR-036) ----------------------------------------------------------------
+
+    /**
+     * The terminal's <b>list slot</b>: one clipboard, the order and its receipt in one
+     * ({@code docs/warehouse-system.md} §3.4.4).
+     * <p>
+     * It is a real slot on the block entity rather than an item in the player's hand, and that is what makes the
+     * feature server-authoritative: the order runs on while the player walks to the building site, the entries are
+     * ticked off where the clipboard lies, and the screen can show how far the list has got. Automation never sees it —
+     * the item capability is the extract-only buffer view and nothing else ({@link #registerCapabilities}) — so a
+     * funnel can neither feed a clipboard in nor pull the receipt out.
+     */
+    public IItemHandlerModifiable listSlot() {
+        return listSlot;
+    }
+
+    /** The clipboard in the list slot, or an empty stack. The returned stack is the live one; do not keep it. */
+    public ItemStack listClipboard() {
+        return listSlot.getStackInSlot(LIST_SLOT);
+    }
+
+    /** Whether a clipboard order exists at all, finished ones included. */
+    public boolean hasListOrder() {
+        return listOrder != null;
+    }
+
+    /** Whether a clipboard order still has work to do, i.e. whether the controller has to look in on this terminal. */
+    public boolean hasOpenListOrder() {
+        return listOrder != null && listOrder.state().isOpen();
+    }
+
+    /** How far the clipboard order has got, in the bounded form the screen and the goggles are given. */
+    public TerminalListState listState() {
+        return TerminalListState.of(listOrder);
+    }
+
+    /**
+     * The question one portion of the clipboard order raised, while the order is
+     * {@link dev.wareworks.core.terminal.ListOrderState#ASKING}.
+     * <p>
+     * It is an ordinary {@link RequestConfirmation}, the very question a click raises, so the screen shows it in the
+     * panel M15 built and the answer travels back through the same shape ({@code §3.6.6}) — the "use the confirmation
+     * mechanism the terminal already has" of issue #19.
+     */
+    public Optional<RequestConfirmation<ItemKey>> listQuestion() {
+        return listOrder == null ? Optional.empty() : listOrder.question();
+    }
+
+    /**
+     * Server: what pressing <b>Fetch</b> on the clipboard in the list slot would mean, and the order itself once the
+     * player has agreed to it ({@code docs/warehouse-system.md} §3.4.4, issue #19).
+     * <p>
+     * The two answers the project owner settled on are one dialog, measured over the whole list before anything is
+     * requested ({@link ListOrderConfirmation}): what the racks fall short of ("the list wants 2000 cobblestone and
+     * the warehouse holds 1300 — fetch what there is?") and what would have to be <b>made</b> ("4 entries are not in
+     * stock but can be produced"). A list a stocked warehouse covers from the racks starts without any dialog at all.
+     * <p>
+     * <b>The answer is measured again</b>, exactly as a click's is: the numbers the player saw are compared with the
+     * numbers the server measures now ({@link ListOrderConfirmation#covers}), so a warehouse that lost stock in
+     * between asks a second time instead of quietly ordering more production than was agreed to. Nothing is promised
+     * by measuring, and {@link TerminalListResult#ASKING} means that no request and no production order exists.
+     * <p>
+     * A Yes becomes the order's consent <b>budget</b>, which its portions spend down one by one
+     * ({@link ListOrder#spend}): one Yes cannot pay for an unbounded stream of requests, and a portion the remainder
+     * no longer covers stops the order and asks again.
+     *
+     * @param acceptedMissing   items the player accepts not getting, i.e. what they saw as missing
+     * @param acceptedProducing items the player accepts having made for them
+     * @param acceptedDropped   entries the player accepts the entry cap leaving on the clipboard, i.e. what they saw as
+     *                          not taken (M23 review fix)
+     */
+    public TerminalListOutcome fetchList(Player player, long acceptedMissing, long acceptedProducing,
+            long acceptedDropped) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved())
+            return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
+        if (!canPlayerUse(player))
+            return TerminalListOutcome.of(TerminalListResult.OUT_OF_REACH);
+        if (hasOpenListOrder())
+            return TerminalListOutcome.of(TerminalListResult.ALREADY_RUNNING);
+        ItemStack clipboard = listClipboard();
+        if (!ClipboardList.isClipboard(clipboard))
+            return TerminalListOutcome.of(TerminalListResult.NO_CLIPBOARD);
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
+        WarehouseControllerBlockEntity controller = found.get();
+        long now = level.getGameTime();
+        // Resolved once, here: from now on the order's own lines are the truth about what is being fetched, and the
+        // clipboard is only ever read again to check that it is still the same list and to write the tick marks.
+        ListOrder<ItemKey> resolved = ListOrder.of(ClipboardList.read(clipboard),
+                WareworksConfig.maxTerminalListEntries(), RequestAcknowledgement.NONE, now);
+        if (resolved.entries() == 0)
+            return TerminalListOutcome.of(TerminalListResult.EMPTY_LIST);
+        // One lookup per line and one walk of the aisle's patterns for the whole list: what could be produced right
+        // now is the server's own number, which no screen could derive (M11, ADR-024).
+        Map<ItemKey, Long> producible = controller.producibleAmounts();
+        // The entries the cap left behind are part of the question, not only of a tooltip: a player presses Fetch on
+        // "this list" and has to be told in the dialog they consent in that part of it was left out (M23 review fix).
+        ListOrderConfirmation<ItemKey> question = ListOrderConfirmation.of(resolved.lines(), resolved.dropped(),
+                controller::availableStock, key -> producible.getOrDefault(key, 0L));
+        if (question.required() && !question.covers(acceptedMissing, acceptedProducing, acceptedDropped))
+            return TerminalListOutcome.asking(question);
+        listOrder = ListOrder.restore(resolved.lines(), resolved.dropped(), ListOrderState.RUNNING, question.budget(),
+                now, now);
+        listTicksPending = false;
+        setChanged();
+        controller.onListOrderStarted(worldPosition);
+        markSummaryDirty();
+        return TerminalListOutcome.of(TerminalListResult.STARTED);
+    }
+
+    /**
+     * Server: the player's answer to the question one portion raised ({@link #listQuestion()}). It tops the order's
+     * consent up — it never replaces it — and the order runs again from this tick, which offers <b>that</b> portion
+     * once more and measures it against the warehouse as it is then.
+     * <p>
+     * An answer that accepts <b>nothing</b> is not a Yes and not a No: it is the list button asking for the question to
+     * be put up again ({@link TerminalListResult#QUESTION}), because the question lives here and a player who closed
+     * the panel would otherwise have no way back to it (M23 review fix). It changes no state at all.
+     */
+    public TerminalListOutcome answerListQuestion(Player player, RequestAcknowledgement acknowledged) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(acknowledged, "acknowledged");
+        if (level == null || level.isClientSide || isRemoved())
+            return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
+        if (!canPlayerUse(player))
+            return TerminalListOutcome.of(TerminalListResult.OUT_OF_REACH);
+        ListOrder<ItemKey> order = listOrder;
+        if (order == null || order.state() != ListOrderState.ASKING)
+            return TerminalListOutcome.of(TerminalListResult.NOT_RUNNING);
+        if (!acknowledged.given())
+            return TerminalListOutcome.of(TerminalListResult.QUESTION);
+        order.answer(acknowledged, level.getGameTime());
+        setChanged();
+        controller().ifPresent(controller -> controller.onListOrderStarted(worldPosition));
+        return TerminalListOutcome.of(TerminalListResult.ANSWERED);
+    }
+
+    /**
+     * Server: the player's <b>no</b> to the question one portion raised — the Cancel button of that panel (M23 review
+     * fix).
+     * <p>
+     * Nothing is accepted and nothing is requested; the order parks ({@link ListOrderState#PARKED}), so the list button
+     * becomes <b>Resume</b>, every line and every tick mark stays as it is, and a player who changes their mind gets
+     * the same question again. Before this, a dismissed panel left the order standing in
+     * {@link ListOrderState#ASKING} with no way on screen to answer or refuse it.
+     */
+    public TerminalListOutcome declineListQuestion(Player player) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved())
+            return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
+        if (!canPlayerUse(player))
+            return TerminalListOutcome.of(TerminalListResult.OUT_OF_REACH);
+        ListOrder<ItemKey> order = listOrder;
+        if (order == null || !order.decline(level.getGameTime()))
+            return TerminalListOutcome.of(TerminalListResult.NOT_RUNNING);
+        setChanged();
+        markSummaryDirty();
+        return TerminalListOutcome.of(TerminalListResult.DECLINED);
+    }
+
+    /** Server: gives a parked clipboard order another try — the "click to try again" of an order that gave up. */
+    public TerminalListOutcome resumeListOrder(Player player) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved())
+            return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
+        if (!canPlayerUse(player))
+            return TerminalListOutcome.of(TerminalListResult.OUT_OF_REACH);
+        ListOrder<ItemKey> order = listOrder;
+        if (order == null || !order.state().isOpen())
+            return TerminalListOutcome.of(TerminalListResult.NOT_RUNNING);
+        order.resume(level.getGameTime());
+        setChanged();
+        controller().ifPresent(controller -> controller.onListOrderStarted(worldPosition));
+        return TerminalListOutcome.of(TerminalListResult.RESUMED);
+    }
+
+    /**
+     * Server: gives the clipboard order up (the Cancel button, the clipboard taken out of the slot, the terminal
+     * broken).
+     * <p>
+     * Its open requests are cancelled, so nothing is left promised; items the crane already delivered stay in the
+     * buffer, and the tick marks the clipboard carries stay as they are — they are a receipt for what really arrived,
+     * and a cancelled order may never un-tick a delivered entry. A production order one of those requests started
+     * keeps running and its result lands in stock, exactly as for any other cancelled request ({@code §3.5}).
+     *
+     * @return whether an order was given up
+     */
+    public boolean cancelListOrder() {
+        ListOrder<ItemKey> order = listOrder;
+        if (order == null)
+            return false;
+        Set<UUID> open = order.release();
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isPresent()) {
+            for (UUID id : open)
+                found.get().cancelRequest(id);
+        }
+        listOrder = null;
+        listTicksPending = false;
+        setChanged();
+        markSummaryDirty();
+        return true;
+    }
+
+    /**
+     * Server: one top-up pass of the clipboard order ({@code docs/warehouse-system.md} §3.4.4), called by the
+     * controller.
+     * <p>
+     * It is the whole "worked off in portions" of issue #19, and every portion goes through precisely the call a click
+     * goes through ({@code WarehouseControllerBlockEntity#request} with {@link RequestScope#LIST}): the same clamping,
+     * the same merging (ADR-020), the same reserves, maxima, filters, priorities, chains, safety stop and
+     * full-destination back-off. A full buffer is a planner skip with a back-off, so the request stays open and the
+     * order simply waits — it never refuses because a whole schematic does not fit — and the first freed slot restarts
+     * the trip.
+     * <p>
+     * <b>The clipboard is checked before anything is asked for.</b> A clipboard that was taken out, swapped or edited
+     * no longer shows this order's items ({@link ClipboardList#stillShowsAll}), and the order is then given up rather
+     * than carried on against a list nobody can read any more.
+     *
+     * @return whether this terminal is still worth looking in on
+     */
+    public boolean tickListOrder(long now) {
+        if (level == null || level.isClientSide || isRemoved())
+            return false;
+        ListOrder<ItemKey> order = listOrder;
+        if (order == null || !order.state().isOpen())
+            return false;
+        ItemStack clipboard = listClipboard();
+        // After a reload the lines are back but the clipboard was saved with the item: re-assert every tick mark the
+        // order has earned, once. Writing a mark twice is harmless (ClipboardList#tickOff), and this is what makes a
+        // save written between a delivery and its tick mark come back consistent.
+        if (listTicksPending) {
+            listTicksPending = false;
+            if (!stillThisList(clipboard, order))
+                return false;
+            writeTickMarks(clipboard, order.completedLines());
+        }
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return true; // no aisle right now (misaligned, unloaded): wait, never give the order up for it
+        // The clipboard is checked once per due pass rather than once per walk: the slot's own change hook
+        // ({@link #onListSlotChanged()}) catches everything a player can do, so this is the bounded safety net for
+        // what a command or another mod can — and reading a clipboard's pages is a copy of all of them.
+        if (!order.due(now))
+            return true;
+        if (!stillThisList(clipboard, order))
+            return false;
+        WarehouseControllerBlockEntity controller = found.get();
+        order.beginPass(controller::hasOpenRequest);
+        int perRequest = Math.max(1, WareworksConfig.maxTerminalRequestAmount());
+        int openLimit = Math.max(1, WareworksConfig.terminalListOpenRequests());
+        Optional<ListPortion<ItemKey>> next;
+        while ((next = order.nextPortion(openLimit, perRequest)).isPresent()) {
+            ListPortion<ItemKey> portion = next.get();
+            // A player's own request: a stock rule's reserve does not hold it back, and the one thing the scope adds is
+            // that production has to be agreed to first, because nobody is at the terminal (RequestScope).
+            // What this portion may spend is what the player accepted for *this item* plus the list's own production
+            // total: a Yes about one item never pays for another's reserve (ListOrder#budgetFor, M23 review fix).
+            TerminalRequestOutcome outcome = controller.request(worldPosition, portion.key(), portion.amount(),
+                    perRequest, StockAccess.PLAYER, order.budgetFor(portion.key()), RequestScope.LIST);
+            if (outcome.isAsking()) {
+                order.ask(outcome.question().orElseThrow());
+                break;
+            }
+            RequestResult result = outcome.result().orElseThrow();
+            if (result.isAccepted()
+                    && order.granted(portion, result.request().orElseThrow().id(), result.granted(), now))
+                // What the portion really cost comes out of the budget, so one Yes cannot pay for the next portion too.
+                outcome.cost().ifPresent(order::spend);
+            else
+                order.refused(portion);
+        }
+        ListPass pass = order.finishPass(now, WareworksConfig.terminalListIntervalTicks(),
+                WareworksConfig.terminalListStallTicks());
+        if (pass != ListPass.WAITING)
+            setChanged();
+        markSummaryDirty();
+        return order.state().isOpen();
+    }
+
+    /**
+     * Server: {@code amount} items of request {@code id} really arrived in this terminal's buffer
+     * ({@code WarehouseControllerBlockEntity#onCraneDelivered}) — the one event that moves a clipboard order forward.
+     * <p>
+     * The items are credited to the lines that really asked for them, and a line that reaches its amount is ticked off
+     * on the clipboard ({@link ListCredit#completed()}). A delivery no line of this order was waiting for is claimed
+     * as nothing, which is what makes a request shared with a player's own click (ADR-020) safe.
+     *
+     * @return whether this order claimed any of the delivery
+     */
+    public boolean creditListDelivery(UUID id, int amount, long now) {
+        ListOrder<ItemKey> order = listOrder;
+        if (order == null || !order.state().isOpen() || id == null || amount < 1)
+            return false;
+        ListCredit<ItemKey> credit = order.credit(id, amount, now);
+        if (credit.isEmpty())
+            return false;
+        if (!credit.completed().isEmpty())
+            writeTickMarks(listClipboard(), credit.completed());
+        setChanged();
+        markSummaryDirty();
+        return true;
+    }
+
+    /**
+     * Whether {@code clipboard} is still the list {@code order} was started for, giving the order up when it is not.
+     * <p>
+     * A clipboard that was taken out, swapped or edited no longer shows this order's items
+     * ({@link ClipboardList#stillShowsAll}), and an order carried on against a list nobody can read any more could
+     * neither be ticked off nor explained to the player.
+     *
+     * @return whether the order may carry on
+     */
+    private boolean stillThisList(ItemStack clipboard, ListOrder<ItemKey> order) {
+        if (ClipboardList.stillShowsAll(clipboard, order.lines()))
+            return true;
+        cancelListOrder();
+        return false;
+    }
+
+    /**
+     * Writes the tick marks of {@code lines} onto {@code clipboard} and tells the world about the stack change, so an
+     * open screen and the block's own save see the receipt.
+     * <p>
+     * A mark that could not be written means the clipboard no longer shows that entry's item — swapped or edited
+     * between the delivery and this write — which the next pass answers by giving the order up
+     * ({@link #tickListOrder}). It is logged rather than swallowed, because the order's own lines stay authoritative
+     * either way and the player has to be able to find out why their receipt is incomplete.
+     * <p>
+     * A mark that was <b>already there</b> is not that, and is not reported: the re-assertion after a reload passes
+     * every completed line again, and on a consistent save every one of them is already ticked
+     * ({@link ClipboardList.Ticks}, M23 review fix).
+     */
+    private void writeTickMarks(ItemStack clipboard, List<ListLine<ItemKey>> lines) {
+        if (lines.isEmpty())
+            return;
+        ClipboardList.Ticks ticks = ClipboardList.tickOff(clipboard, lines);
+        if (!ticks.complete())
+            Wareworks.LOGGER.warn("Could not tick {} of {} delivered entries off the clipboard in the terminal at {}",
+                    ticks.missed(), lines.size(), worldPosition);
+        if (ticks.written() > 0)
+            setChanged();
+    }
+
+    /**
+     * The handler behind the list slot: one clipboard and nothing else.
+     * <p>
+     * {@link #isItemValid} is what keeps anything but a clipboard out of it, on <b>both</b> sides of the menu and for
+     * every path that touches the handler, and the stack limit of one is what makes "the clipboard in the slot"
+     * unambiguous. Every change runs {@link #onListSlotChanged()}, which is where a clipboard that was taken out or
+     * swapped ends the order.
+     */
+    private final class ListSlotHandler extends ItemStackHandler {
+        private ListSlotHandler() {
+            super(1);
+        }
+
+        @Override
+        public boolean isItemValid(int slot, ItemStack stack) {
+            return ClipboardList.isClipboard(stack);
+        }
+
+        @Override
+        public int getSlotLimit(int slot) {
+            return 1;
+        }
+
+        @Override
+        protected void onContentsChanged(int slot) {
+            onListSlotChanged();
+        }
+    }
+
+    /** The slot change hook: a clipboard that is no longer this order's list ends the order. */
+    private void onListSlotChanged() {
+        setChanged();
+        if (level == null || level.isClientSide || isRemoved() || listOrder == null)
+            return;
+        if (!listOrder.state().isOpen()) {
+            // A finished order is only the receipt of the clipboard that is gone: forget it with the item.
+            if (!ClipboardList.stillShowsAll(listClipboard(), listOrder.lines())) {
+                listOrder = null;
+                listTicksPending = false;
+                markSummaryDirty();
+            }
+            return;
+        }
+        if (!ClipboardList.stillShowsAll(listClipboard(), listOrder.lines()))
+            cancelListOrder();
+    }
+
     // --- station -------------------------------------------------------------------------------------------------
 
     @Override
@@ -554,5 +989,112 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     @Override
     protected String misalignedHintKey() {
         return WareworksLang.GOGGLES_TERMINAL_MISALIGNED_HINT;
+    }
+
+    /**
+     * Goggles: the clipboard order's own lines, between the aisle assignment and the request lines (M23, issue #19).
+     * <p>
+     * A terminal without an order adds nothing at all, so the tooltip every terminal had before M23 is unchanged.
+     */
+    @Override
+    protected void addStationGoggleLines(List<Component> tooltip, StationGoggleSummary shown) {
+        TerminalListState list = shownList;
+        if (list.active()) {
+            WareworksLang.listProgress(list.entriesComplete(), list.entries(), list.state().langKey())
+                    .forGoggles(tooltip, 1);
+            if (list.outstanding() > 0)
+                WareworksLang.countLine(WareworksLang.GOGGLES_TERMINAL_LIST_LEFT, list.outstanding())
+                        .forGoggles(tooltip, 2);
+        }
+        super.addStationGoggleLines(tooltip, shown);
+    }
+
+    @Override
+    public void onGoggleObserved() {
+        if (level == null || level.isClientSide || isVirtual() || isRemoved())
+            return;
+        TerminalListState next = listState();
+        if (!next.equals(shownList)) {
+            shownList = next;
+            markSummaryDirty();
+        }
+        super.onGoggleObserved();
+    }
+
+    /** Real break (server): the clipboard is dropped with the buffer — a receipt is never deleted. */
+    @Override
+    public void destroy() {
+        super.destroy();
+        if (level == null || level.isClientSide)
+            return;
+        ItemStack clipboard = listSlot.extractItem(LIST_SLOT, Integer.MAX_VALUE, false);
+        if (!clipboard.isEmpty())
+            Containers.dropItemStack(level, worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
+                    clipboard);
+    }
+
+    /** {@link net.minecraft.world.Clearable}: commands and structure placement empty the list slot with the buffer. */
+    @Override
+    public void clearContent() {
+        super.clearContent();
+        listSlot.setStackInSlot(LIST_SLOT, ItemStack.EMPTY);
+        listOrder = null;
+        listTicksPending = false;
+    }
+
+    // --- persistence ---------------------------------------------------------------------------------------------
+
+    @Override
+    protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+        super.write(tag, registries, clientPacket);
+        if (!clientPacket)
+            return;
+        // Only the bounded numbers, and only while a list is really being worked off: the clipboard itself never goes
+        // into a chunk packet (TerminalListState).
+        CompoundTag listTag = new CompoundTag();
+        shownList.write(listTag);
+        if (!listTag.isEmpty())
+            tag.put(LIST_STATE_TAG, listTag);
+    }
+
+    @Override
+    protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+        super.read(tag, registries, clientPacket);
+        if (clientPacket)
+            shownList = TerminalListState.read(tag.getCompound(LIST_STATE_TAG));
+    }
+
+    @Override
+    protected void writeStationData(CompoundTag tag, HolderLookup.Provider registries) {
+        super.writeStationData(tag, registries);
+        if (!listClipboard().isEmpty())
+            tag.put(LIST_SLOT_TAG, listSlot.serializeNBT(registries));
+        TerminalListPersistence.write(tag, listOrder, registries);
+    }
+
+    @Override
+    protected void readStationData(CompoundTag tag, HolderLookup.Provider registries) {
+        super.readStationData(tag, registries);
+        listSlot.setStackInSlot(LIST_SLOT, ItemStack.EMPTY);
+        if (tag.contains(LIST_SLOT_TAG, Tag.TAG_COMPOUND))
+            listSlot.deserializeNBT(registries, tag.getCompound(LIST_SLOT_TAG));
+        // The interval and the stall timer start over from the world's current time (TerminalListPersistence), so a
+        // world that was closed for an hour does not come back with every order already parked.
+        long now = level == null ? 0L : level.getGameTime();
+        listOrder = TerminalListPersistence.read(tag, registries, now).orElse(null);
+        shownList = listState();
+        // The clipboard and the order were saved together, but a tick mark is written to the item and the lines live in
+        // the block entity: re-asserting them once after the load is what makes the two agree whatever the save caught.
+        listTicksPending = listOrder != null;
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        // The order is back; the controller of this aisle has to know that this terminal is worth looking in on. Its
+        // own membership probe would find it anyway (WarehouseControllerBlockEntity#onMemberChanged, which the base's
+        // onLoad fires), so this is the cheap, direct half of the same answer.
+        if (level instanceof ServerLevel && hasOpenListOrder())
+            controller().ifPresent(controller -> controller.onListOrderStarted(worldPosition));
     }
 }

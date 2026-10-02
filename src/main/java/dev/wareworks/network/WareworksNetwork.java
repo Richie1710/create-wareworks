@@ -5,6 +5,7 @@ import java.util.Optional;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.StockKeeperMenu;
+import dev.wareworks.content.station.TerminalListOutcome;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.terminal.RequestConfirmation;
@@ -77,8 +78,15 @@ public final class WareworksNetwork {
      * only behind a refusal, so an answer with no plan behind it costs one empty string; a reader of the old shape
      * would still stop at the end of the known fields and leave the rest in the buffer, which is exactly what this
      * version string prevents.
+     * <p>
+     * <b>{@code "7"} is M23</b> (order a whole list from a clipboard, issue #19, ADR-036): the three list payloads
+     * ({@link TerminalListPayload}, {@link TerminalListAnswerPayload}, {@link TerminalListActionPayload}), which an
+     * older client would neither send nor understand, and one appended field on {@link TerminalConfirmPayload} — the
+     * {@link dev.wareworks.core.terminal.RequestScope} that says whether the answer belongs to the click or to the
+     * clipboard order. That field travels by <b>name</b> and is written last, so a reader of the old shape would stop
+     * before it and leave bytes in the buffer, which is exactly what this version string prevents.
      */
-    public static final String VERSION = "6";
+    public static final String VERSION = "7";
 
     private WareworksNetwork() {
     }
@@ -98,6 +106,12 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalConfirm);
         registrar.playToServer(TerminalRequestPayload.TYPE, TerminalRequestPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalRequest);
+        registrar.playToClient(TerminalListPayload.TYPE, TerminalListPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalList);
+        registrar.playToClient(TerminalListAnswerPayload.TYPE, TerminalListAnswerPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalListAnswer);
+        registrar.playToServer(TerminalListActionPayload.TYPE, TerminalListActionPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalListAction);
         registrar.playToClient(ProductionScreenPayload.TYPE, ProductionScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionScreen);
         registrar.playToServer(ProductionPatternPayload.TYPE, ProductionPatternPayload.STREAM_CODEC,
@@ -135,6 +149,26 @@ public final class WareworksNetwork {
         }
         PacketDistributor.sendToPlayer(serverPlayer, TerminalResultPayload.of(payload.containerId(), payload.key(),
                 outcome.get().result().orElseThrow()));
+    }
+
+    /**
+     * A player pressed one of the clipboard order's buttons in their open terminal screen (M23, issue #19,
+     * {@code docs/warehouse-system.md} §3.4.4).
+     * <p>
+     * The payload is only a hint: the menu the player really has open decides which terminal is meant, the terminal
+     * re-validates reach and aisle, and it acts on the clipboard in its <b>own</b> list slot. A Fetch whose three
+     * numbers do not cover what the list really costs is answered with the question and nothing else — no request, no
+     * production order, no promise — exactly as a click that crosses a reserve is ({@code §3.6.6}).
+     */
+    private static void onTerminalListAction(TerminalListActionPayload payload, IPayloadContext context) {
+        Player player = context.player();
+        Optional<TerminalListOutcome> outcome = WarehouseTerminalMenu.submitListAction(player, payload.containerId(),
+                payload.action(), payload.acceptedMissing(), payload.acceptedProducing(), payload.acceptedDropped(),
+                payload.acknowledged());
+        if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
+            return;
+        PacketDistributor.sendToPlayer(serverPlayer, new TerminalListAnswerPayload(payload.containerId(),
+                outcome.get().result(), outcome.get().question()));
     }
 
     /**
@@ -210,6 +244,16 @@ public final class WareworksNetwork {
     private static void onTerminalConfirm(TerminalConfirmPayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.TerminalScreenUpdates.onConfirm(payload);
+    }
+
+    private static void onTerminalList(TerminalListPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onList(payload);
+    }
+
+    private static void onTerminalListAnswer(TerminalListAnswerPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onListAnswer(payload);
     }
 
     private static void onProductionScreen(ProductionScreenPayload payload, IPayloadContext context) {

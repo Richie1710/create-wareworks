@@ -15,8 +15,12 @@ import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockDiff;
+import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalListActionPayload;
+import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
@@ -79,6 +83,8 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     public static final int REFRESH_INTERVAL_TICKS = 10;
     /** Requests of one menu that are answered in the same tick; a player can click at most once per tick. */
     public static final int MAX_REQUESTS_PER_TICK = 8;
+    /** Slots of the terminal's list slot: one clipboard (M23, issue #19). */
+    public static final int LIST_SLOTS = 1;
 
     /** Game time of {@link #lastPushGameTime} and {@link #requestBudgetGameTime} before the first one. */
     private static final long NEVER = Long.MIN_VALUE;
@@ -87,6 +93,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     private int bufferSlots;
     private TerminalMenuLayout layout;
     private IItemHandler bufferHandler;
+    private IItemHandler listHandler;
 
     /** Server side only; also set during the super constructor, so likewise without initializers. */
     private StockDiff<ItemKey> stockDiff;
@@ -99,6 +106,14 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     private TerminalScreenStatus lastStatus;
     @Nullable
     private List<ProductionScreenState.OrderView> lastOrders;
+    /** The clipboard order's state as last pushed, so a terminal whose list did not move costs no packet (M23). */
+    @Nullable
+    private TerminalListState lastList;
+    /**
+     * The question the clipboard order is waiting on goes out with the next push, although the order did not change
+     * state: the list button's <b>Answer</b> ({@link #resendListQuestion()}, M23 review fix).
+     */
+    private boolean listQuestionPending;
 
     /** Client: Registrate's menu factory, with the extra data the server wrote when the screen was opened. */
     public WarehouseTerminalMenu(MenuType<?> type, int id, Inventory inv, RegistryFriendlyByteBuf extraData) {
@@ -140,9 +155,13 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         // One size for both sides, whatever the local handler has (see the class comment).
         bufferHandler = new FixedSlotsItemHandler(
                 terminal != null ? terminal.menuBuffer() : new ItemStackHandler(bufferSlots), bufferSlots);
+        // The clipboard the list order is read from and ticked off on lives on the block entity (M23, issue #19); a
+        // client without it gets a one-slot stand-in, so both sides still build the same slots.
+        listHandler = terminal != null ? terminal.listSlot() : new ItemStackHandler(LIST_SLOTS);
         layout = new TerminalMenuLayout(bufferSlots);
         stockDiff = new StockDiff<>();
         fullSyncPending = true;
+        listQuestionPending = false;
         lastPushGameTime = NEVER;
         pushPending = true;
         requestBudgetGameTime = NEVER;
@@ -151,9 +170,11 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
 
     @Override
     protected void addSlots() {
-        // Exactly the announced number of buffer slots, so bufferSlots is also the index of the first player slot.
+        // Exactly the announced number of buffer slots, then the one list slot, so bufferSlots is the index of the
+        // list slot and bufferSlots + LIST_SLOTS the index of the first player slot.
         for (int slot = 0; slot < bufferSlots; slot++)
             addSlot(new TerminalBufferSlot(bufferHandler, slot, layout.bufferSlotX(slot), layout.bufferSlotY(slot)));
+        addSlot(new TerminalListSlot(listHandler, layout.listSlotX(), layout.listSlotY()));
         addPlayerSlots(layout.playerSlotsX(), layout.playerSlotsY());
     }
 
@@ -172,27 +193,43 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         return contentHolder;
     }
 
-    /** Number of buffer slots, i.e. the number of menu slots before the player inventory. */
+    /** Number of buffer slots, i.e. the number of menu slots before the list slot. */
     public int bufferSlots() {
         return bufferSlots;
+    }
+
+    /** Index of the terminal's list slot: the one clipboard a list order is read from and ticked off on (M23). */
+    public int listSlotIndex() {
+        return bufferSlots;
+    }
+
+    /** Index of the first player inventory slot. */
+    public int firstPlayerSlot() {
+        return bufferSlots + LIST_SLOTS;
     }
 
     // --- shift-clicking --------------------------------------------------------------------------------------------
 
     /**
-     * Delivered items can be taken out of the terminal, nothing can be put in: a shift-click in the buffer moves items
-     * into the player inventory, a shift-click in the player inventory does nothing.
+     * Delivered items can be taken out of the terminal and a clipboard can be put into the list slot, and that is all.
+     * <p>
+     * A shift-click in the buffer or in the list slot moves the stack into the player inventory; a shift-click on a
+     * <b>clipboard</b> in the player inventory puts it into the empty list slot, which is how a player hands a
+     * material checklist over without dragging (M23, issue #19). Everything else in the player inventory does nothing,
+     * exactly as before.
      */
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
         Slot slot = slots.get(index);
-        // addSlots() adds exactly bufferSlots buffer slots, so this is the boundary of the player inventory.
-        if (!slot.hasItem() || index >= bufferSlots)
+        if (!slot.hasItem())
             return ItemStack.EMPTY;
         // The stack of a SlotItemHandler must not be modified in place, so everything works on copies.
         ItemStack remainder = slot.getItem().copy();
         ItemStack moved = remainder.copy();
-        if (!moveItemStackTo(remainder, bufferSlots, slots.size(), true))
+        // addSlots() adds bufferSlots buffer slots, then the list slot, then the player inventory.
+        int target = index < firstPlayerSlot() ? firstPlayerSlot() : listSlotIndex();
+        int targetEnd = index < firstPlayerSlot() ? slots.size() : listSlotIndex() + LIST_SLOTS;
+        if (!moveItemStackTo(remainder, target, targetEnd, true))
             return ItemStack.EMPTY;
         slot.setByPlayer(remainder.isEmpty() ? ItemStack.EMPTY : remainder.copy());
         slot.setChanged();
@@ -271,6 +308,69 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         if (!menu.takeRequestBudget())
             return Optional.empty();
         return Optional.of(menu.cancel(player, orderId));
+    }
+
+    /**
+     * Server: a {@code TerminalListActionPayload}, resolved against the menu {@code player} really has open (M23,
+     * issue #19, {@code docs/warehouse-system.md} §3.4.4).
+     * <p>
+     * Empty (and nothing done) when the player has no terminal menu open, the id does not match, the action is one
+     * this build does not know, or this menu has already answered {@value #MAX_REQUESTS_PER_TICK} actions in the
+     * current tick — pressing Fetch is a click like a request and shares that budget, so a crafted flood cannot make
+     * the server measure a whole list more often than a clicking player could. Everything else — reach, aisle, the
+     * clipboard, the numbers — is validated by the terminal.
+     */
+    public static Optional<TerminalListOutcome> submitListAction(@Nullable Player player, int containerId,
+            TerminalListActionPayload.Action action, long acceptedMissing, long acceptedProducing,
+            long acceptedDropped, RequestAcknowledgement acknowledged) {
+        if (player == null || player.level() == null || player.level().isClientSide || action == null
+                || action == TerminalListActionPayload.Action.NONE)
+            return Optional.empty();
+        if (!(player.containerMenu instanceof WarehouseTerminalMenu menu) || menu.containerId != containerId)
+            return Optional.empty();
+        if (!menu.takeRequestBudget())
+            return Optional.empty();
+        return Optional.of(menu.listAction(player, action, acceptedMissing, acceptedProducing, acceptedDropped,
+                acknowledged == null ? RequestAcknowledgement.NONE : acknowledged));
+    }
+
+    /** Server: carries one list action out on this menu's terminal; every check happens in the terminal. */
+    public TerminalListOutcome listAction(Player requester, TerminalListActionPayload.Action action,
+            long acceptedMissing, long acceptedProducing, long acceptedDropped,
+            RequestAcknowledgement acknowledged) {
+        if (contentHolder == null || contentHolder.isRemoved())
+            return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
+        TerminalListOutcome outcome = switch (action) {
+            case FETCH -> contentHolder.fetchList(requester, acceptedMissing, acceptedProducing, acceptedDropped);
+            case ANSWER -> contentHolder.answerListQuestion(requester, acknowledged);
+            case DECLINE -> contentHolder.declineListQuestion(requester);
+            case RESUME -> contentHolder.resumeListOrder(requester);
+            case CANCEL -> contentHolder.canPlayerUse(requester)
+                    ? TerminalListOutcome.of(contentHolder.cancelListOrder() ? TerminalListResult.CANCELLED
+                            : TerminalListResult.NOT_RUNNING)
+                    : TerminalListOutcome.of(TerminalListResult.OUT_OF_REACH);
+            case NONE -> TerminalListOutcome.of(TerminalListResult.NOT_RUNNING);
+        };
+        // "Put that question up again" changes nothing and is therefore not a state push: the question itself is sent,
+        // which is the whole point of the action (M23 review fix).
+        if (outcome.result() == TerminalListResult.QUESTION)
+            resendListQuestion();
+        else if (outcome.isSuccess())
+            markDirty(); // the list state changed: push it with the next tick instead of waiting for the interval
+        return outcome;
+    }
+
+    /**
+     * Server: send the question the clipboard order is waiting on with the next push, even though the order did not
+     * change state (M23 review fix).
+     * <p>
+     * The question is pushed on the <b>edge</b> into {@link dev.wareworks.core.terminal.ListOrderState#ASKING} and on a
+     * full sync, so a player who dismissed the panel without answering would otherwise have to close and reopen the
+     * screen to see it again. This is the list button's <b>Answer</b>.
+     */
+    private void resendListQuestion() {
+        listQuestionPending = true;
+        markDirty();
     }
 
     /** Server: gives up on a production order of this terminal's aisle; every check happens in the terminal. */
@@ -367,6 +467,23 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             lastOrders = orders;
             PacketDistributor.sendToPlayer(target, new TerminalOrdersPayload(containerId, orders));
         }
+
+        // How far the clipboard order has got (M23, issue #19). Compared by value like the two above, so a terminal
+        // without a list — and one whose list did not move — costs no packet; and with it, whenever the order is
+        // waiting for an answer, the question itself, because a player who opens the screen later has to see it.
+        TerminalListState list = contentHolder.listState();
+        boolean askingNow = list.asking() && (reset || lastList == null || !lastList.asking());
+        if (reset || !list.equals(lastList)) {
+            lastList = list;
+            PacketDistributor.sendToPlayer(target, new TerminalListPayload(containerId, list));
+        }
+        // On the asking edge, on a full sync, and whenever the player asked for it again (resendListQuestion): the
+        // question lives on the server, so the screen can never be the only place it exists (M23 review fix).
+        if (askingNow || listQuestionPending) {
+            listQuestionPending = false;
+            contentHolder.listQuestion().ifPresent(question -> PacketDistributor.sendToPlayer(target,
+                    new TerminalConfirmPayload(containerId, question, RequestScope.LIST)));
+        }
     }
 
     /**
@@ -416,6 +533,20 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         @Override
         public boolean mayPlace(ItemStack stack) {
             return false;
+        }
+    }
+
+    /**
+     * The list slot: one clipboard, in and out by hand (M23, issue #19).
+     * <p>
+     * What may go in is decided by the handler on the block entity
+     * ({@code WarehouseTerminalBlockEntity.ListSlotHandler#isItemValid}), which {@link SlotItemHandler} asks, so the
+     * rule holds for the drag, the shift-click and every other path at once — and on the server, which is the only
+     * side that decides anything here.
+     */
+    private static final class TerminalListSlot extends SlotItemHandler {
+        private TerminalListSlot(IItemHandler handler, int x, int y) {
+            super(handler, 0, x, y);
         }
     }
 }

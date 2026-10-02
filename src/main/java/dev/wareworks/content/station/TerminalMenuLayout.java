@@ -31,8 +31,19 @@ package dev.wareworks.content.station;
 public final class TerminalMenuLayout {
     /** Edge length of an item cell and of a slot. */
     public static final int SLOT = 18;
-    /** Item cells per row of the stock grid, and slots per row of the terminal's buffer. */
+    /** Item cells per row of the stock grid. */
     public static final int GRID_COLUMNS = 12;
+    /**
+     * Columns of the buffer row the <b>list slot</b> takes for itself (M23, issue #19): the clipboard a list order is
+     * read from and ticked off on sits at the right-hand end of the first buffer row
+     * ({@link #listSlotX()}/{@link #listSlotY()}).
+     * <p>
+     * It is a reserved column rather than a widget of its own row, because the window must not get taller: the buffer
+     * gives up one column instead ({@link #bufferColumns()}), which changes nothing at all for every buffer up to 11
+     * slots — the shipped default is 9 — and costs a buffer of exactly 12 one extra row, which the layout search
+     * already knows how to pay for.
+     */
+    public static final int LIST_COLUMNS = 1;
     /** Rows of the stock grid with the default buffer; more entries are reached by scrolling. */
     public static final int MAX_GRID_ROWS = 3;
     /** Rows the stock grid keeps even for a very large buffer. */
@@ -77,7 +88,7 @@ public final class TerminalMenuLayout {
      */
     public TerminalMenuLayout(int bufferSlots) {
         this.bufferSlots = Math.max(1, bufferSlots);
-        this.bufferColumns = Math.min(this.bufferSlots, GRID_COLUMNS);
+        this.bufferColumns = Math.min(this.bufferSlots, GRID_COLUMNS - LIST_COLUMNS);
         this.bufferRows = (this.bufferSlots + bufferColumns - 1) / bufferColumns;
         // The tallest production section that still fits, giving up its lines before the grid's last row: a buffer so
         // large that both cannot be had is the one case where the section disappears (see the class comment).
@@ -178,6 +189,19 @@ public final class TerminalMenuLayout {
     /** Y of the buffer slot with index {@code slot}. */
     public int bufferSlotY(int slot) {
         return bufferY() + slot / bufferColumns * SLOT;
+    }
+
+    /**
+     * X of the <b>list slot</b>: the right-hand end of the buffer row, in the column the buffer gave up for it
+     * ({@link #LIST_COLUMNS}). It is aligned with the grid's last cell, so the window's right edge reads as one line.
+     */
+    public int listSlotX() {
+        return MARGIN + (GRID_COLUMNS - LIST_COLUMNS) * SLOT;
+    }
+
+    /** Y of the list slot: the first buffer row, beside the slots the crane delivers into. */
+    public int listSlotY() {
+        return bufferY();
     }
 
     /** Top of the status line. */

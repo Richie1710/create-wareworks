@@ -3,6 +3,8 @@ package dev.wareworks.client.gui;
 import java.util.Optional;
 
 import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalListAnswerPayload;
+import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalResultPayload;
 import dev.wareworks.network.TerminalStatusPayload;
@@ -51,6 +53,20 @@ public final class TerminalScreenUpdates {
      */
     public static void onConfirm(TerminalConfirmPayload payload) {
         screen(payload.containerId()).ifPresent(screen -> screen.onConfirm(payload));
+    }
+
+    /** How far the open screen's clipboard order has got (M23, issue #19). */
+    public static void onList(TerminalListPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onList(payload));
+    }
+
+    /**
+     * The answer to a clipboard-order action the open screen sent (M23, issue #19): the sentence, and the question when
+     * the server is asking about the whole list first. A late payload is dropped like every other one, and because
+     * nothing was started, dropping a question loses nothing.
+     */
+    public static void onListAnswer(TerminalListAnswerPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onListAnswer(payload));
     }
 
     /** The open terminal screen of the menu {@code containerId}, if that is what the player is looking at. */

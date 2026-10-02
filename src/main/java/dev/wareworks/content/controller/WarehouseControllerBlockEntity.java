@@ -36,6 +36,7 @@ import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
+import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.BranchGeometry;
 import dev.wareworks.core.address.Heading;
@@ -91,6 +92,7 @@ import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.stock.StockRules;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
+import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.warehouse.AisleMembership;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
@@ -191,6 +193,18 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private static final int CHUNK_KEEP_RECHECK_TICKS = 20;
     /** The footprint of an aisle that has none (no dock). */
     private static final int[] EMPTY_FOOTPRINT = new int[0];
+    /**
+     * Terminals of one warehouse that may work a clipboard order off at the same time (M23, issue #19). It bounds what
+     * one controller's list walk can ever cost; a terminal beyond it simply waits for one of the others to finish, and
+     * its order is untouched.
+     */
+    private static final int MAX_LIST_TERMINALS = 64;
+    /**
+     * How often the controller looks in on its list orders. Each order then decides for itself whether a top-up pass
+     * is due ({@code ListOrder#due}, on {@code terminalListIntervalTicks}), so this is only the resolution at which a
+     * freed buffer slot restarts a waiting list — not how often anything is measured.
+     */
+    private static final int LIST_WALK_INTERVAL_TICKS = 5;
 
     /**
      * "Aisle" value box. Assigned in {@link #addBehaviours}, which {@code SmartBlockEntity} calls from its constructor, so
@@ -295,6 +309,20 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private long nextProductionTick;
     private long nextStockRuleTick;
     private long nextPortTick;
+    private long nextListTick;
+    /**
+     * The terminals of this warehouse that are working a clipboard order off (M23, issue #19, ADR-036).
+     * <p>
+     * <b>Nothing of a list order is saved here.</b> The order itself lives in its terminal's own block entity, where
+     * the clipboard it belongs to lies in a slot; this set is only the controller's note of <i>which</i> terminals are
+     * worth a call, so that a warehouse without a list order costs nothing per tick and one with a list order does not
+     * resolve every output station's block entity to find it. It is rebuilt from the world whenever
+     * {@link #listTerminalsDirty} says so — on every membership change, which is also what a terminal's chunk load
+     * fires ({@link #onMemberChanged}) — and an entry whose terminal is gone, unloaded or finished drops out of it on
+     * the next walk. A set that is wrong is therefore self-healing and can lose no order.
+     */
+    private final Set<BlockPos> listTerminals = new LinkedHashSet<>();
+    private boolean listTerminalsDirty = true;
     /**
      * Every keeper of the aisle is re-read on the next tick. Set on load, after a layout change and on every re-link
      * check, so a keeper edited while this controller was unloaded is picked up at the latest one
@@ -769,6 +797,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** From the registry: a member at {@code rack} changed. */
     void onMemberChanged(RackPosition rack) {
         membership.markDirty(rack);
+        // A terminal that was placed, broken, turned or whose chunk has just come back may hold a clipboard order the
+        // warehouse does not know about yet; one boolean is the whole cost of never missing one (M23, issue #19).
+        listTerminalsDirty = true;
     }
 
     /**
@@ -2061,7 +2092,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private RequestConfirmation<ItemKey> confirmationFrom(ItemKey key, long wantedByClick, StockLevels levels,
             @Nullable ProductionPlan<ItemKey, RackPosition> plan, ToLongFunction<ItemKey> ingredientAvailability) {
         StockRules<ItemKey> rules = stockRules();
-        if (wantedByClick < 1 || rules.governingCount() == 0)
+        // An aisle with no governing rule can cross no boundary a keeper set — but it can still have items *made*,
+        // which is the one thing a list order's portion has to be agreed to first (M23, issue #19,
+        // RequestConfirmation#required(RequestScope)). So the cheap answer is only given when nothing would be
+        // produced either; a plain click is unaffected, because its question never looks at that number.
+        if (wantedByClick < 1 || (rules.governingCount() == 0 && (plan == null || wantedByClick <= levels.available())))
             return RequestConfirmation.none(key, Math.max(0L, wantedByClick));
         // Only a request that reaches past the racks can start a plan at all, and nothing is produced without one.
         if (plan == null || wantedByClick <= levels.available())
@@ -2159,10 +2194,32 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public TerminalRequestOutcome request(BlockPos outputPos, ItemKey key, int amount, int maxRemainingPerRequest,
             StockAccess access, RequestAcknowledgement acknowledged) {
+        return request(outputPos, key, amount, maxRemainingPerRequest, access, acknowledged, RequestScope.CLICK);
+    }
+
+    /**
+     * Server: {@link #request(BlockPos, ItemKey, int, int, StockAccess, RequestAcknowledgement)} made for a
+     * {@link RequestScope} (M23, issue #19, ADR-036).
+     * <p>
+     * <b>A portion of a list order is not a new kind of request.</b> It takes this very method, with the same
+     * clamping, the same merging (ADR-020), the same reserves, maxima, filters, priorities, chains, safety stop and
+     * full-destination back-off; nothing downstream can tell it from a click. The scope changes exactly two things,
+     * both in {@code core.terminal}: whether a request that would have items <b>made</b> has to be agreed to first
+     * ({@link RequestConfirmation#required(RequestScope)} — a list order starts production while nobody is at the
+     * terminal), and whether an answer has to name that number
+     * ({@link RequestAcknowledgement#covers(RequestConfirmation, RequestScope)}).
+     * <p>
+     * It also hands the measured cost back on success ({@link TerminalRequestOutcome#cost()}), because a list order
+     * has to spend its consent budget down by what the portion really cost. That measurement is the question this
+     * method takes anyway whenever {@code acknowledged} is not {@link RequestAcknowledgement#ANY}, so it is free.
+     */
+    public TerminalRequestOutcome request(BlockPos outputPos, ItemKey key, int amount, int maxRemainingPerRequest,
+            StockAccess access, RequestAcknowledgement acknowledged, RequestScope scope) {
         Objects.requireNonNull(outputPos, "outputPos");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(access, "access");
         Objects.requireNonNull(acknowledged, "acknowledged");
+        Objects.requireNonNull(scope, "scope");
         if (amount < 1)
             throw new IllegalArgumentException("amount must be at least 1: " + amount);
         if (level == null || level.isClientSide || isRemoved() || layout == null || !isOutputStation(layout, outputPos))
@@ -2203,10 +2260,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (planBusy)
             plan = null;
         // What this click would cross, measured over that very plan. Nothing is promised until it is covered.
+        // The measurement is kept: a list order spends its consent budget down by what the portion really cost (M23).
+        RequestConfirmation<ItemKey> measured = null;
         if (!acknowledged.any()) {
             RequestConfirmation<ItemKey> question = confirmationFrom(key, amount, levels, plan, ingredients);
-            if (!acknowledged.covers(question))
+            if (!acknowledged.covers(question, scope))
                 return TerminalRequestOutcome.asking(question);
+            measured = question;
         }
         // What the queue may promise beyond the racks is what the plan really offers, not what a pattern could make in
         // the abstract: the plan is the only thing that knows whether the chain behind it holds.
@@ -2251,7 +2311,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         ProductionPlanResult<ItemKey, RackPosition> shortfall = granted < amount ? planned.orElse(null) : null;
         return TerminalRequestOutcome.of(RequestResult.accepted(requests.get(accepted.id()).orElse(accepted), granted,
                 added.merged(), producing, shortfall == null ? Optional.empty() : shortfall.refusal(),
-                shortfall == null ? Optional.empty() : shortfall.about()));
+                shortfall == null ? Optional.empty() : shortfall.about()), measured);
     }
 
     /**
@@ -3503,6 +3563,81 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return Math.max(RequestQueue.MIN_OPEN_REQUESTS, WareworksConfig.maxOpenRequests());
     }
 
+    // --- clipboard orders (M23, issue #19, ADR-036) ----------------------------------------------------------------
+
+    /**
+     * Server: from a terminal — "I have a clipboard order now, look in on me".
+     * <p>
+     * It is a hint and not a registration: the set is rebuilt from the world
+     * ({@link #refreshListTerminals(WarehouseLayout)}), so a terminal that never calls this is found by the next
+     * membership change anyway, and one that calls it without an order drops straight out again. That is what makes
+     * the feature survive every order of block entity loading without a second saved list.
+     */
+    public void onListOrderStarted(BlockPos terminalPos) {
+        if (terminalPos == null || level == null || level.isClientSide)
+            return;
+        listTerminalsDirty = true;
+        // Due at once: the first pass of a fresh order belongs to the tick the player pressed Fetch in, not to the
+        // next walk, so the crane is on its way while they are still looking at the screen.
+        nextListTick = Long.MIN_VALUE;
+    }
+
+    /**
+     * Looks in on the terminals that are working a clipboard order off ({@code docs/warehouse-system.md} §3.4.4).
+     * <p>
+     * Each terminal decides for itself whether a top-up pass is due and what it costs; this walk is one block entity
+     * lookup per <b>known</b> list terminal, at most {@value #MAX_LIST_TERMINALS} of them and only every
+     * {@value #LIST_WALK_INTERVAL_TICKS} ticks. A warehouse with no clipboard order in it does nothing at all here,
+     * which is the whole reason the set exists.
+     */
+    private void tickListOrders(long now) {
+        if (listTerminalsDirty) {
+            listTerminalsDirty = false;
+            refreshListTerminals(layout);
+        }
+        if (listTerminals.isEmpty())
+            return;
+        // A copy, because a pass may finish an order and take its terminal out of the set.
+        for (BlockPos pos : List.copyOf(listTerminals)) {
+            // An unloaded position is dropped without being looked at: resolving a block entity there would load the
+            // chunk synchronously, which is exactly what this walk must never do (M23 review fix). The entry comes
+            // back on the membership change a chunk load fires, so nothing is lost.
+            if (!level.isLoaded(pos)) {
+                listTerminals.remove(pos);
+                continue;
+            }
+            WarehouseTerminalBlockEntity terminal = level.getBlockEntity(pos) instanceof WarehouseTerminalBlockEntity be
+                    ? be : null;
+            if (terminal == null || terminal.isRemoved() || !terminal.tickListOrder(now))
+                listTerminals.remove(pos);
+        }
+    }
+
+    /**
+     * Rebuilds {@link #listTerminals} from the warehouse's own output-style members: every loaded terminal of this
+     * warehouse that really has an open clipboard order, in aisle order and bounded by
+     * {@value #MAX_LIST_TERMINALS}.
+     * <p>
+     * It resolves one block entity per <b>loaded</b> output station, which is why it runs on a dirty flag rather than on
+     * a cadence. An unloaded position is skipped rather than resolved: a member record survives a chunk unload on
+     * purpose ({@code WarehouseStationBlockEntity#remove}), so without that check one block placed in the aisle would
+     * force-load every unloaded output-station chunk of the warehouse (M23 review fix). A chunk load fires a membership
+     * change of its own, which is what brings the terminal back into the set.
+     */
+    private void refreshListTerminals(@Nullable WarehouseLayout current) {
+        listTerminals.clear();
+        if (current == null || level == null || level.isClientSide)
+            return;
+        for (LocationRecord record : membership.records(LocationKind.OUTPUT)) {
+            if (listTerminals.size() >= MAX_LIST_TERMINALS)
+                return;
+            BlockPos pos = current.rackPos(record.position());
+            if (level.isLoaded(pos) && level.getBlockEntity(pos) instanceof WarehouseTerminalBlockEntity terminal
+                    && terminal.hasOpenListOrder())
+                listTerminals.add(pos.immutable());
+        }
+    }
+
     // --- crane reports (M3) --------------------------------------------------------------------------------------
 
     /** Reports are accepted from the linked dock only. */
@@ -3552,8 +3687,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Optional<UUID> requestId = job.requestId();
         if (requestId.isPresent() && job.targetKind() == LocationKind.OUTPUT) {
             Optional<RetrievalRequest<ItemKey, BlockPos>> request = requests.get(requestId.get());
-            if (request.isPresent() && request.get().destination().equals(layout.rackPos(target)))
-                deliverRequest(requestId.get(), delivered);
+            BlockPos targetPos = layout.rackPos(target);
+            if (request.isPresent() && request.get().destination().equals(targetPos)) {
+                int counted = deliverRequest(requestId.get(), delivered);
+                // The one moment a clipboard order learns that items really arrived, which is also what ticks the
+                // entry off and makes the next portion due (M23, issue #19): the physical drop into this terminal's
+                // buffer. A delivery no list order was waiting for is claimed as nothing (ListOrder#credit).
+                if (counted > 0 && level.getBlockEntity(targetPos) instanceof WarehouseTerminalBlockEntity terminal
+                        && terminal.creditListDelivery(requestId.get(), counted, level.getGameTime()))
+                    listTerminalsDirty = true;
+            }
         }
         // A supply job carries the ingredient line of a production order instead of a request (§3.5, ADR-024): this is
         // the moment an ingredient really arrived at the machine, so only a real drop counts here too.
@@ -3686,6 +3829,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (layout != null && now >= nextPortTick) {
             nextPortTick = now + Math.max(1, WareworksConfig.dispatchIntervalTicks());
             tickPorts(now);
+        }
+        // Before the dispatch on purpose: a portion a list order asks for in this tick is an ordinary request, so the
+        // planner may serve it in this very tick instead of on the next one (M23, issue #19).
+        if (layout != null && now >= nextListTick) {
+            nextListTick = now + LIST_WALK_INTERVAL_TICKS;
+            tickListOrders(now);
         }
         if (layout != null)
             dispatch.tick(level, layout, now);

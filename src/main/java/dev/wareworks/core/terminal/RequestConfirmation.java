@@ -225,9 +225,27 @@ public record RequestConfirmation<K>(K key, long amount, long fromReserve, long 
     /**
      * Whether this request crosses anything at all, i.e. whether the terminal has to ask before making it. A warehouse
      * without stock keepers never does.
+     * <p>
+     * This is the question a <b>click</b> raises and the whole answer before M23; {@link #required(RequestScope)} is
+     * the same decision for one portion of a list order.
      */
     public boolean required() {
-        return fromReserve > 0L || pastMaximum > 0L || !ingredients.isEmpty();
+        return required(RequestScope.CLICK);
+    }
+
+    /**
+     * Whether a request of {@code scope} has to be asked about before it is made.
+     * <p>
+     * {@link RequestScope#CLICK} is {@link #required()}: the two boundaries a stock keeper set. A
+     * {@link RequestScope#LIST} portion adds one thing to it — a request that would have items <b>made</b>
+     * ({@link #made()}) is asked about as well, because a list order starts production while nobody is at the terminal
+     * (M23, issue #19, "producible items ask too"). A warehouse that produces nothing for this request answers the
+     * same for both scopes, so an aisle without production patterns never sees an extra dialog.
+     */
+    public boolean required(RequestScope scope) {
+        if (fromReserve > 0L || pastMaximum > 0L || !ingredients.isEmpty())
+            return true;
+        return scope == RequestScope.LIST && made > 0L;
     }
 
     /** Items of other keys the request would spend out of their reserves, over all {@link #ingredients()}. */
@@ -248,6 +266,16 @@ public record RequestConfirmation<K>(K key, long amount, long fromReserve, long 
 
     /** The answer that carries exactly this question out — what a client sends back when the player confirms. */
     public RequestAcknowledgement acknowledgement() {
-        return new RequestAcknowledgement(false, fromReserve, pastMaximum, fromIngredientReserve());
+        return acknowledgement(RequestScope.CLICK);
+    }
+
+    /**
+     * The answer that carries exactly this question out for {@code scope}. A {@link RequestScope#LIST} answer also
+     * names what would be made ({@link RequestAcknowledgement#produced()}), which is the number a list order's budget
+     * is then spent down by (M23, ADR-036); a {@link RequestScope#CLICK} answer is the M15 one, byte for byte.
+     */
+    public RequestAcknowledgement acknowledgement(RequestScope scope) {
+        return new RequestAcknowledgement(false, fromReserve, pastMaximum, fromIngredientReserve(),
+                scope == RequestScope.LIST ? made : 0L);
     }
 }

@@ -1206,6 +1206,10 @@ The player-facing request station of an aisle: a screen instead of a filter slot
     request, but it subtracts a rule's reserve only for `StockAccess.AUTOMATION`. A request made *at this screen* is a
     player's and is served down to the last item; the row and, since part 2, a confirmation panel say that it goes below
     the reserve (§3.6.6). Downstream nothing changed — the queue, the ledger and the job still see one `OUTPUT` request.
+* **Since M23 it also takes a whole list** (§3.4.4, ADR-036, issue #19): a **list slot** beside the buffer holds one
+  clipboard, and the warehouse works its entries off in portions, ticking each one off on the clipboard as it delivers
+  it. A list order is a stream of **ordinary** requests with one owner, so everything in this section — batching,
+  reserves, maxima, filters, priorities, chains and the safety stop — applies to it unchanged.
 * **In-game teaching (M13):** two Ponder scenes in `client.ponder.scenes.TerminalScenes`, both registered for the
   terminal item. `warehouse/terminal` ("Placing a Warehouse Terminal") covers §3.4.3: the screen is placed facing the
   player, a terminal placed **from beside the rack** has its port turned onto the aisle by the controller, and a wrench
@@ -1218,7 +1222,13 @@ The player-facing request station of an aisle: a screen instead of a filter slot
   and §7.2: the stock list and the search, the click rules of §3.4.2 (click, Shift, Ctrl), the M7 batching (a second
   click grows the open request instead of starting a second trip), the crane fetching from the locations that hold the
   items and delivering into the terminal's **own** slots, and funnels, chutes, hoppers or Mechanical Arms pulling them
-  out from there. The terminal joined the Ponder tag `wareworks:warehouse` and Create's "Item Transportation" in the
+  out from there. **M23 added an eighth beat to it** rather than a scene of its own (issue #19): the terminal is
+  outlined, a clipboard is clicked onto the display face and the text says that a whole list is fetched and each
+  entry ticked off as it arrives. It is the last beat on purpose — an *offer* after the screen has been taught, not a
+  second lesson — and appending it left `text_1 … text_7` where they were, so no translation moved. A whole scene
+  was weighed and rejected: the list slot is inside the screen, which Ponder cannot open at all (`openScreen` needs a
+  `ServerPlayer`), so a scene would have shown the same crane trip the requesting scene already shows, with the one
+  thing that is new — the tick marks on an item in a slot — invisible. The terminal joined the Ponder tag `wareworks:warehouse` and Create's "Item Transportation" in the
   same pass. The screen itself is never opened in a scene: `openScreen` needs a `ServerPlayer` and a `PonderLevel` is
   client-side, so both scenes represent it with control icons and text, the click wording following
   `wareworks.gui.terminal.amount_hint` (ADR-016). Until M13 the terminal had no scene and was in no Ponder tag.
@@ -1622,6 +1632,279 @@ property, placement and wrench), `WarehouseTerminalBlockEntity` (`displaySide()`
   `alignToAisle`. No block entity key was added, so no save can be too old to read and nothing can throw on load.
   GameTest `terminalworldcompatibility` reads the pre-M10 block state through `NbtUtils.readBlockState` and runs the
   whole request-and-delivery loop on it.
+
+#### 3.4.4 Order a whole list from a clipboard (M23, issue #19)
+
+> Status: **binding design**. Decision, alternatives and the boundaries: **ADR-036**.
+
+Put a clipboard with a list of items into the terminal's **list slot**, press the list button, and the warehouse works
+the list off: it fetches what it can in portions, **ticks each entry off on the clipboard as it delivers it**, and waits
+whenever the terminal's own buffer is full. The clipboard is the order and its receipt in one — pick it up and the ticks
+say what arrived.
+
+The obvious source of such a list is Create's **Schematicannon**, whose material checklist can be written onto a
+clipboard (`MaterialChecklist#createWrittenClipboard`). A hand-written clipboard works exactly the same, which is why
+this is a general feature and not a Schematicannon one.
+
+**Where the clipboard goes.** A one-slot handler on the block entity
+(`WarehouseTerminalBlockEntity.ListSlotHandler`, `isItemValid` accepts a clipboard and nothing else, slot limit 1),
+shown as a real menu slot at the right-hand end of the first buffer row (`TerminalMenuLayout.LIST_COLUMNS`,
+`listSlotX()`/`listSlotY()`). A slot on the block rather than an item in hand is what makes the feature
+server-authoritative: the order runs on while the player walks to the building site, the ticks are written where the
+clipboard lies, and the screen can say how far the list has got.
+
+* It is **not** part of the item capability. `registerCapabilities` still exposes only the extract-only buffer view, so
+  a funnel can neither feed a clipboard in nor pull the receipt out; a Mechanical Arm sees the buffer exactly as before
+  (§3.2.2).
+* The menu adds the slot **after** the buffer slots and before the player inventory, so `listSlotIndex() ==
+  bufferSlots` and `firstPlayerSlot() == bufferSlots + 1`. A shift-click on a clipboard in the player inventory puts it
+  into the empty list slot; a shift-click in the list slot takes it back. Everything else in the player inventory still
+  does nothing.
+* It is persisted with the station data (`ListSlot`), dropped by `destroy()` with the buffer — a receipt is never
+  deleted — and emptied by `clearContent()` with it.
+
+**One order, made of ordinary requests.** `WarehouseTerminalBlockEntity#tickListOrder` is one *top-up pass*, and every
+portion of it goes through the very call a click goes through:
+`WarehouseControllerBlockEntity#request(..., RequestAcknowledgement, RequestScope.LIST)`. The same clamping, the same
+merging (ADR-020), the same reserves, maxima, filters, priorities, chains, safety stop and full-destination back-off;
+nothing downstream can tell a portion from a click except by its `RequestScope`. There is no second request system, no
+new job kind and no new reservation kind.
+
+* **A portion is what the line still needs**, bounded by `maxTerminalRequestAmount` — not one stack. A request above one
+  stack is already split into successive `RETRIEVE` jobs by the planner (§3.4.1) and a full destination is a planner
+  skip with a back-off rather than a refusal, so a whole schematic's worth of material is ordered a portion at a time
+  without the order ever having to know how much fits. That is the issue's "no *your output cannot hold 40 stacks*
+  refusal".
+* **At most `terminalListOpenRequests` requests are open at a time**, one per line (`ListLine#isInFlight`), so one line
+  never has two requests. Requests are counted, not lines: two entries asking for the same item merge into one request
+  that keeps its id, and each line only ever takes its own share.
+* **A refused line is stepped over for the rest of the pass** and a pass offers at most
+  `ListOrder.ATTEMPTS_PER_OPEN_REQUEST` portions per request slot, carrying on from a **cursor** that wraps around the
+  list. So one unobtainable item never blocks the rest of the list, and a list of 128 entries the warehouse can serve
+  none of costs a handful of lookups per pass instead of 128.
+* **Who calls it.** The controller keeps a server-only, unsaved `listTerminals` set — its note of *which* terminals are
+  worth a call — rebuilt from the warehouse's own output-style members whenever membership changes
+  (`onMemberChanged`, which a chunk load fires too), bounded at `MAX_LIST_TERMINALS = 64`, and walked every
+  `LIST_WALK_INTERVAL_TICKS = 5`. Each order then decides for itself whether a pass is due
+  (`terminalListIntervalTicks`). A warehouse with no clipboard order in it does nothing at all here, and a set that is
+  wrong is self-healing: an entry whose terminal is gone, unloaded or finished drops out on the next walk, and a
+  terminal that never announced itself is found by the next membership change. The walk runs **before** the dispatch, so
+  a portion asked for in a tick can be planned in that same tick.
+* **Neither the walk nor the rebuild loads a chunk.** `Level#getBlockEntity` resolves through `getChunkAt` with
+  `requireChunk = true` and so loads the chunk **synchronously**, while `Level#isLoaded` asks the chunk source and
+  loads nothing — which is why every other block-entity lookup in the controller is guarded by it. A member record
+  deliberately survives a chunk unload (`WarehouseStationBlockEntity#remove`), so without that guard the rebuild — which
+  runs on every membership change, with or without a list order anywhere — would force-load every unloaded
+  output-station chunk of the warehouse, and the walk would force-load the terminal's. Both skip an unloaded position
+  instead; the chunk load fires a membership change of its own, which brings the terminal back.
+
+**The line is the truth, the tick mark is the receipt.** `ListOrder` resolves the clipboard into `ListLine`s **once**,
+at Fetch, and from then on its own lines are authoritative about what is being fetched. A tick mark cannot say
+"1300 of 2000", so partial progress lives in the line and the clipboard is written **only when a line is complete**
+(`ListLine#isComplete`). A clipboard pulled out halfway therefore reads truthfully: a ticked entry was delivered in
+full, an unticked one was not.
+
+* **Which entries are an order at all** (`ListEntry#orderable`, the same reading Create's own stock keeper applies to a
+  checklist): an entry without an icon is a page separator (`">>>"`) and not an item, an already ticked entry has been
+  dealt with, and an amount below 1 asks for nothing. A Schematicannon's checklist contains all three. The item comes
+  from the entry's **icon** and the amount from its `itemAmount`; the entry's **text** is never read, because it is a
+  foreign `Component` that the checklist hangs `HoverEvent.SHOW_ITEM` on.
+* **A delivery is credited at the physical drop.** `WarehouseControllerBlockEntity#onCraneDelivered` is the one event
+  that moves a list order forward: items are credited in list order, each bounded by what that line was owed
+  (`ListOrder#credit`), a delivery no line was waiting for is claimed as nothing, and crediting twice is therefore
+  harmless. A delivery also makes the next pass due **at once**, which is the issue's "as soon as space frees, it
+  continues with the next stack".
+* **Writing the mark is validated again** (`ClipboardList#tickOff`): the entry at that line's page and index must still
+  show that very item. Nothing else about the clipboard is touched — type, read-only flag, last page, copied value
+  settings, every entry's text, icon and amount — so a Schematicannon's checklist comes out of the terminal as the same
+  checklist with the delivered lines ticked. A mark that cannot be written is logged and costs a message, never the
+  order, because the lines stay authoritative either way.
+* **The entry is replaced, never changed in place.** `ClipboardEntry#readAll` re-creates only the two *list* levels; the
+  entry objects inside them are the very instances the old `ClipboardContent` still holds, and a data component value is
+  shared **by reference** between every copy of a stack (`PatchedDataComponentMap#copy` marks the patch map
+  copy-on-write and never touches the values). Setting `checked` on the entry would therefore write the mark onto every
+  clipboard that shares the component — Create's own `ItemCopyingRecipe` makes a stack of clipboards out of one written
+  one and a few blanks — and, because a ticked entry is not orderable, those clipboards would silently drop that entry
+  from any later list. The same aliasing also defeats `AbstractContainerMenu#synchronizeSlotToRemote`, whose
+  `ItemStack.matches` comparison against the remembered slot reaches `ClipboardEntry#equals` on the already-changed
+  object and finds it equal, so an open screen would never be sent the receipt. `tickOff` therefore puts a **ticked
+  copy** in the entry's place, built exactly as `ClipboardEntry.CODEC` builds one.
+* **"Already ticked" is not "could not tick".** `tickOff` answers with three numbers (`ClipboardList.Ticks`: written,
+  already, missed) and only a **missed** line — one whose entry no longer shows that item — is worth the warning. The
+  re-assertion after a reload passes every completed line again and on a consistent save finds every one of them
+  already marked, so counting those as failures made every single load log "Could not tick N of N delivered entries",
+  which said the opposite of what had happened.
+* **A read-only clipboard is still ticked off**, and that is not a violation of the flag. The Schematicannon writes its
+  checklist with `readOnly = true`, and Create's own `ClipboardScreen` reads that flag in exactly three places — the
+  text cursor, the "next page" button past the last page, and entering text-edit mode. The **checkbox** path has no
+  read-only guard, and neither has `ClipboardEditPacket`, so a player may tick a checklist off by hand and Create
+  persists it. `tickOff` writes the same field and leaves the flag as it found it (ADR-036).
+* **After a reload the ticks are re-asserted once.** The clipboard is saved with the item and the lines with the block
+  entity, so a save caught between a delivery and its mark could disagree; `listTicksPending` re-writes every completed
+  line's mark on the first pass after the load, which is harmless because writing a mark twice changes nothing.
+
+**Two dialogs, one mechanism.** The confirmation the terminal already has for reserves and maxima (§3.6.6) is the one
+that asks, exactly as the issue required.
+
+* **Fetch raises one dialog for the whole list** (`ListOrderConfirmation`, measured over every line before anything is
+  requested): what the racks fall short of — *"13 of the 67 items on the list are not in stock. Glass: 12 of 25. Fetch
+  what there is?"* — and what would have to be **produced**. Shared stock is spent, not counted twice: the lines are
+  classified against a *running* stock and production budget in list order, so two entries of 1300 cobblestone are not
+  both told they can be served, and `wanted == serveable + producing + missing` always holds. At most
+  `MAX_NAMED = 5` entries are named before the panel counts the rest; the panel's order is title, what is missing,
+  what would be produced, how many entries cannot be had at all, how many entries the **entry cap** left on the
+  clipboard, the named entries, "More entries: N", and the question. A list a stocked warehouse covers from the racks
+  starts with **no dialog at all**.
+* **A clipboard the entry cap cut short always asks** (`entriesDropped`). The untaken entries are no part of any other
+  number — the order never took them — but they are part of the **question**, because a player presses Fetch on "this
+  list" and may not be told about the rest only by a tooltip they have to know to hover.
+* **The answer is measured again** when the Yes arrives (`covers(acceptedMissing, acceptedProducing,
+  acceptedDropped)`): a warehouse that lost stock in between asks a second time instead of quietly ordering more
+  production than was agreed to. Nothing is promised by measuring — `TerminalListResult.ASKING` means no request and no
+  production order exists.
+* **A Yes becomes the order's consent budget**, and the budget is *production only* (`ListOrderConfirmation#budget`).
+  The other two costs — a reserve and a maximum — cannot be measured over a list without walking a plan per entry, and
+  they are exactly the ones a player must not be able to sign away blindly.
+* **A portion that costs more than the budget covers stops the order** (`ListOrderState.ASKING`) and the next player to
+  open the screen sees the **ordinary** panel for that one item, carried by the **existing** `TerminalConfirmPayload`
+  with a new `scope` field that routes the answer back to the order. The answer **tops the consent up**, it never
+  replaces it, and every portion that is made spends down by what it really cost
+  (`TerminalRequestOutcome#cost` → `ListOrder#spend`), so one Yes cannot pay for portion after portion. The question
+  itself is never saved: like every confirmation it is measured against the warehouse as it is now, so an order that
+  was asking when the world was saved comes back `RUNNING` and asks again.
+* **The consent of a portion is kept per item** (`ListOrder#budgetFor`). A `RequestAcknowledgement` carries no key, so
+  nothing in it could tell a Yes about Iron's reserve from a Yes about Copper's; kept as one budget, a Yes for one item
+  paid for the next item's reserve and the item it had really been given for asked again a pass later. A portion's
+  answer is therefore kept **whole, under the key its question named**, and only the one consent the Fetch dialog really
+  measured over the whole list — the production total — stays list-wide. A portion may spend both
+  (`budgetFor(key) == budget.plus(answered[key])`) and `spend` draws both down, which can only make the order ask a
+  little sooner where they overlap; that is the safe direction. The portion the question was raised for is also the
+  **first** one offered again when the Yes arrives, instead of the one the wrapping cursor happens to point at.
+* **A question can be shown again, and said no to.** The question lives on the server, so the list button's **Answer**
+  asks for it to be sent once more (`TerminalListResult.QUESTION`, `WarehouseTerminalMenu#resendListQuestion`) rather
+  than hoping the screen still has it — the panel is pushed on the edge into `ASKING` and on a full sync, so a player
+  who dismissed it would otherwise have to close and reopen the screen. The panel's **Cancel** sends
+  `Action.DECLINE`, which parks the order (`ListOrder#decline`): nothing is accepted, the list button becomes
+  **Resume**, every line and every tick mark stays, and the same question can be had again. Before that, a dismissed
+  panel left the order standing in `ASKING`, measuring nothing, with no way on screen to answer or refuse it.
+* **Producible items ask too, and only for a list.** `RequestScope` is the whole difference between a click and a
+  portion: `RequestConfirmation#required(LIST)` adds *what would be made* to the question and
+  `RequestAcknowledgement#covers(…, LIST)` to the answer. A click starts production under the player's eyes; a list
+  order starts it while nobody is at the terminal. An aisle with no production patterns answers the same for both
+  scopes and never sees an extra dialog.
+
+**What stops an order.** `ListOrderState` has four values, and only `RUNNING` measures anything.
+
+* **The clipboard leaving, being swapped or being edited ends it.** The slot's own change hook
+  (`onListSlotChanged`) and once per due pass, the order checks that every line still finds its item at its page and
+  index (`ClipboardList#stillShowsAll`, deliberately about the **icons** only, so tick marks — ours or a player's —
+  never count as a change). An order whose list is gone is cancelled: its open requests are cancelled, nothing stays
+  promised, items already delivered stay in the buffer and the ticks already written stay written.
+* **Cancel** is the same path, on the button. A production order one of those requests started keeps running and its
+  result lands in stock, exactly as for any other cancelled request (§3.5).
+* **Parking.** An order with nothing in flight that has made no progress for `terminalListStallTicks` stops measuring
+  until a player resumes it (`PARKED`, the list button becomes *Resume*), and so does a player's **no** to one
+  portion's question. Parking by the stall timer needs **both** conditions: items on their way are progress waiting to
+  happen, and a full destination is exactly that (`ListPass.WAITING` is not `STARVED`). The interval is also stretched
+  by `BACKOFF_FACTOR = 5` after `FRUITLESS_PASSES_BEFORE_BACKOFF = 10` fruitless passes. Together with the planner's own
+  full-destination back-off and the one-request-per-line rule, that is five guards against a crane spinning without
+  progress, four of them older than this feature.
+* **An entry the warehouse can neither stock nor produce** is left unticked and reported, as the issue asked: the
+  dialog counts it (`entriesImpossible`), the pass steps over it, and the entries behind it are served.
+
+**Limits.** `maxTerminalListEntries` (default 128, hard ceiling `ListOrder.MAX_ENTRIES = 1024`) bounds what one
+clipboard orders; orderable entries beyond it stay on the clipboard untouched and unticked and are counted in
+`dropped()`, which the Fetch **dialog** names and the screen reports. One terminal works off one list at a time
+(`ALREADY_RUNNING`), and
+`MAX_LIST_TERMINALS` bounds how many terminals of one warehouse are looked in on at once. Pressing a list button shares
+the menu's per-tick request budget (`MAX_REQUESTS_PER_TICK`), so a crafted flood cannot make the server measure a whole
+list more often than a clicking player could.
+
+**The player surface.** One **list button** beside sort and filter, whichever of its four actions the state calls for
+(Fetch `I_PLAY`, Answer `I_CONFIRM`, Resume `I_REFRESH`, Cancel `I_STOP`, green while the order is running), its own
+tooltip per action; a **status line** (`List 1/2, 5 left (fetching)`); a tooltip on the empty slot saying what it is
+for; and two **goggle lines** on the terminal (`Clipboard order: 3 of 12 entries (fetching)` and `Still to fetch: N`),
+between the aisle assignment and the request lines. A terminal without an order adds nothing, so the tooltip every
+terminal had before M23 is unchanged.
+
+* **The status row belongs to what the terminal is doing now.** A running order takes it, because it is the thing the
+  player started — but a terminal that has lost its aisle or its crane says **that** instead, because it is the answer
+  to "why is my list not moving". A **finished** order takes it only for a few seconds, as the answer to finishing, and
+  then gives it back: nothing drops a finished order (the ticked clipboard left in the slot is the design's own end
+  state, and the order is its receipt), so a `List done: 4/4` in that row would stay there for ever and across reloads,
+  hiding every later request's progress behind a job that ended hours ago. The lasting receipt is where it belongs — on
+  the clipboard's own slot tooltip, for as long as the clipboard lies there — and in the goggle lines, which **add** a
+  line rather than displacing one and are the only sign from outside that the list is done.
+* **A portion's question names what it is about.** A click's panel needs no item line, because the player just clicked
+  the item; a portion's does, and it is the only question whose cost can be production alone
+  (`RequestConfirmation#required(LIST)`), which an aisle without stock rules then drew as a title and nothing else. So
+  the `LIST` scope adds "From the clipboard list: 4 Oak Planks" above the costs and "Making it starts a production
+  order; 4 would be made in total." among them, and it leaves the **Alt** hint out: Alt skips the question a click
+  raises, and there is no click to hold it on when the order asked.
+* **"The warehouse has changed since you were asked" really appears.** The Fetch re-measures the whole list when the
+  Yes arrives and asks again when it moved in between; the screen keeps the question it answered (`listConfirmed`) and
+  compares it with the new one, so the notice fires exactly when the numbers differ — and not when two Fetch presses
+  raced, which the earlier `listConfirming != null` test got wrong in both directions.
+
+**Persistence and sync.** The order is saved with the station data (`TerminalListPersistence`, key `ListOrder`): lines
+(page, index, item, wanted, delivered, in-flight amount, request id), `Dropped`, `State`, the consent `Budget` and the
+two tick stamps — the interval and the stall timer are **restarted from the world's current time**, so a world that was
+closed for an hour does not come back with every order parked. A line's request id either still exists in the
+controller's own saved queue or is forgotten by the next `beginPass`, and a forgotten request gives nothing back,
+because what a line is missing is `outstanding()` either way; that is what makes a cancelled request, a pruned queue and
+a reload the same harmless event. The client is sent only the bounded numbers (`TerminalListState` in the block-entity
+update tag for the goggles, `TerminalListPayload` for the open screen) — **never the clipboard**. Three new payloads
+plus one appended field put the network `VERSION` at `7`.
+
+**Tests.**
+
+* **JUnit** (`core.terminal`): `ListOrderTest` (36) — resolution and the three skipped entry kinds, the entry cap and
+  `dropped`, portions in list order with the wrapping cursor and the attempt bound, one request per line, merged
+  requests credited per line, the completion edge firing once, the budget topped up and spent down, a Yes about one
+  item not paying for another, the answered portion being offered first, a no parking the order, parking and the
+  interval back-off, release and restore. `ListOrderConfirmationTest` (16) — the running stock and production budgets,
+  the four entry kinds, the `wanted == serveable + producing + missing` invariant, a truncated clipboard always being
+  asked about, `covers` and the production-only budget. `RequestScopeTest` (11) — the two things a scope changes, and
+  that `CLICK` is byte-for-byte what it was.
+* **GameTests** (`gametest.TerminalListGameTests`, 10, all with an `ItemCensus` on every tick):
+  `terminallistworkedoffcompletely` (a read-only, Schematicannon-shaped clipboard a stocked warehouse covers: both
+  entries fetched physically and ticked off, stock really gone from the racks, crane idle and empty);
+  `terminallistpartialstockasksfirst` (40 wanted, 12 in stock: the question names wanted/serveable/missing/producing
+  and the entry; a No leaves no order, no request, no promise and delivers nothing for 40 ticks; a Yes delivers the 12
+  and the entry stays unticked); `terminallistproducibleentryasks` (4 planks from 8 logs and a pattern: the question
+  names what would be produced and nothing is promised while it is up, the **same item through a click is not asked
+  about at all**, and the Yes creates exactly one production order);
+  `terminallistwaitsforafulldestination` (all 9 buffer slots filled first: the list is accepted, nothing is delivered
+  or ticked for 60 ticks while the order stays open, and emptying the buffer finishes it);
+  `terminallistsurvivesareload` (lines, amounts, progress, ticks and the clipboard all come back, and the restored
+  order fetches and ticks the rest); `terminallistclipboardtakenoutmidlist` (the player gets the same item back, the
+  order is gone, its requests are cancelled, nothing stays promised; and a swap in one click ends a second order too);
+  `terminallistunobtainableentryneverblocksthelist` (a nether star beside a diamond entry: the diamonds are delivered
+  and ticked while the star entry stays unticked and nothing was invented for it);
+  `terminallisttickmarksneverleaktoasharedclipboard` (one clipboard split off a stack of two, so both carry the same
+  `ClipboardContent` instance: the list is worked off, and the clipboard left behind is still unticked, still orderable,
+  and the ticked one carries a **new** content instance — which is what makes the menu resync it);
+  `terminallistportionquestionisshownagainandcanberefused` (1 plank from a 4-plank pattern, so one portion costs more
+  production than the Fetch paid for: the question is the described, production-only shape, asking for it again changes
+  nothing, a no parks the order, Resume asks it again and the Yes starts exactly one production order);
+  `terminallisttruncatedclipboardasksfirst` (the entry cap lowered to one, in its own batch: a two-entry clipboard is
+  asked about although everything it took is in stock, a Yes that is silent about the dropped entry asks again, and the
+  untaken entry stays unticked). The silent re-assertion of a mark that is already there is asserted in
+  `terminallistworkedoffcompletely`. The menu's own slot count and boundaries, and that only a clipboard may enter the
+  list slot, are in `WarehouseTerminalMenuGameTests`.
+* **Visual** (`./gradlew runVisualTest -Pwareworks.visualTest=checklist`, 21 shots): a **real Schematicannon** prints
+  the material checklist of a 5x5 hut onto a clipboard, and the terminal works that clipboard off — the partial dialog
+  with its drawn lines, 80 ticks of a full destination delivering nothing, the ticks appearing one after another, the
+  missing glass fed in and the last entry following, and the finished receipt opened in **Create's own clipboard
+  screen**. Every claim a shot makes is asserted on the server first, including that the number of tick marks equals
+  the number of complete lines the order reports. One shot is a **client-side** check of a panel this warehouse cannot
+  raise by itself: a single portion's production-only question is handed to the screen's own packet handler and the
+  lines it draws are read back, because that is the shape that used to be empty (`checkPortionQuestionPanel`; its
+  server half is `terminallistportionquestionisshownagainandcanberefused`).
+* **The clipboard is deliberately outside `ItemCensus`**: ticking an entry off changes its data component by design, so
+  its `ItemKey` changes and no fixed census expectation could hold. Clipboard conservation is asserted explicitly
+  instead — still in the slot after every test, the same item handed back when it is pulled out, dropped by
+  `destroy()`.
 
 ### 3.5 Warehouse Production Station (`content.station`, M11)
 
@@ -3468,6 +3751,10 @@ The table above is covered by automated tests. What only a running game can reac
 | `terminalBufferSlots` | 9 | buffer of a warehouse terminal (M6) |
 | `maxTerminalRequestAmount` | 1024 | largest amount one terminal request may wait for, before the controller clamps it to the available stock (M6). Since M7 it bounds the **merged** amount of repeated clicks for one item, not a single click (§7.2) |
 | `maxTerminalStockEntries` | 512 | item types a terminal reports in one stock snapshot, so a huge warehouse cannot produce an unbounded list for the screen (M6). It bounds the **payload**, not the pass over the index (§3.4.1); the types with the most items are reported and the screen shows how many were left out |
+| `maxTerminalListEntries` | 128 | entries one **clipboard order** takes from the clipboard in a terminal's list slot (M23, §3.4.4). A Schematicannon's checklist is usually far shorter; entries beyond the bound stay on the clipboard untouched and unticked, and a clipboard the bound cuts short is always asked about before anything is fetched. The hard ceiling is 1024 |
+| `terminalListOpenRequests` | 2 | retrieval requests one clipboard order keeps open at a time, i.e. how many of its entries the crane may be fetching at once. They are ordinary requests, so `maxOpenRequests` and `maxOpenRequestsPerOutput` still bound them |
+| `terminalListIntervalTicks` | 20 | ticks between two top-up passes of a clipboard order. A delivery makes the next pass due **at once**, so freed buffer space continues the list without waiting for this interval; it only bounds how often an order that found nothing measures again |
+| `terminalListStallTicks` | 1200 | ticks a clipboard order may make **no progress at all** before it stops measuring until a player resumes it at the terminal (1 minute). An order waiting for items already on their way, or for a full buffer to be emptied, is making progress and never parks. **0 lets an order keep trying for ever** |
 | `snapshotIntervalTicks` | 10 | round-robin reconciliation: how often locations the controller has heard nothing about are re-read |
 | `snapshotCycleTicks` | 12000 | how long that round robin may take to come round to **every** storage location once (M22). The count read per interval is scaled to meet it and capped by `maxSnapshotsPerTick`, so the cycle time is bounded instead of the per-tick count; at the default a warehouse of up to ~1200 locations reads one per interval, exactly as before. **0 switches the scaling off** (`SnapshotCadence`) |
 | `dispatchIntervalTicks` | 5 | controller planning cadence |
@@ -3502,7 +3789,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 |---|---|---|
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks`, `maxNetworkRails`, `maxBranches`, `maxJunctions` | 1–128, 1–64, 1–1200, 16–1024, 1–26, 0–128 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `turnPenaltyBlocks`, `returnHomeIdleTicks`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 0–16, 0–72000, 1–200, 1–27, 1–1728 |
-| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–8 |
+| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–16; 1–1200; 0–432000; 1–8 |
 | `controller` | `snapshotIntervalTicks`, `snapshotCycleTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 0–432000, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
 
