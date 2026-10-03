@@ -44,12 +44,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`maxTerminalListEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`)
 - The terminal's goggles say how many entries of a clipboard order are done and how much is still to fetch, and its
   Ponder scene "Requesting Items at a Terminal" ends on the new beat
+- **The terminal can sort by what you actually use.** The sort button has a third order, **"most used"**: the items you
+  request most often come first, so a warehouse holding hundreds of item types opens on the twenty you keep fetching
+  instead of on the twenty it has the most of. Each request counts once, whatever amount it asked for, so one
+  ctrl-click on a thousand cobblestone does not outrank a hundred deliberate requests. The terminal remembers a
+  bounded number of item types per player and lets an old habit **fade** as a new one grows, so the order follows what
+  you are building now rather than what you built in your first week. Until you have requested anything it is simply
+  "most available first", and the search, the "only what is available" filter and the offers a production station
+  makes all behave exactly as before. Handing the terminal a **clipboard list** counts every item type on it once, so
+  the lists you fetch again and again are what the order learns from most
+- **What the warehouse actually holds always comes first.** A favourite the warehouse has just run out of does not jump
+  to the top of "most used" — not an item a production station could make, and not one a Warehouse Stock Keeper is
+  calling for: both keep their row, behind everything you can really have right now. The top of the list is never a
+  row that cannot be ordered
+- **The order you pick is yours, and it stays picked.** The terminal remembers which of the three orders you chose and
+  how often you have asked for each item — **per player, on the server**. So it is the same at every terminal of the
+  world, it survives closing the game and rejoining, and on a server everybody has their own order and their own list
+  of favourites
+- **One button, three orders you can tell apart.** Each order has its own icon — chevrons for *most available first*,
+  a target for *most used*, a list for *by name* — so the button says which one is on without being hovered. Hovering
+  it names the order, says in a sentence what it does and tells you which order the **next** press would give, so the
+  cycle does not have to be learned by pressing it; while you have requested nothing yet, it also says why "most used"
+  looks like "most available first". Changing the order takes you back to the top of the list, because that is where
+  the answer to the new order is, and nothing else ever moves the list under you
+- **Clicking the same cell twice asks for the same item twice.** Under "most used", requesting something raises its
+  count, which would otherwise pull that row to the front of the list about a tick after you clicked it — so a second
+  click on the same spot would have ordered whatever had slid into it. The new counts therefore take effect the next
+  time *you* ask for a list: when you press the sort button, type in the search or flip the filter. The list never
+  reshuffles under the cursor that is using it, and the next terminal you open is in the full order
+- Only a **player's** request teaches the terminal anything: clicking an item, and handing it a clipboard list. A
+  redstone request at a **Warehouse Output** — the warehouse's port — counts for nobody, because a port is not a
+  player. One new server config key,
+  `maxTerminalUsageEntries` in the `stations` section, says how many item types the terminal remembers per player
+  (64 by default). What is remembered is bounded in size as well as in number: an item carrying a whole inventory with
+  it — a filled shulker box, a written book — is not remembered at all, so nobody's save file can grow by kilobytes
+  per favourite. Requesting such an item works exactly as before; it simply never joins the order
 
 ### Changed
 
 - The Warehouse Terminal's window has **one slot more** (the clipboard slot, at the right-hand end of the delivery
   row); the window is the same size, because the delivery row gives up a column for it. A shift-click moves a clipboard
   in and out. Delivery slots, the stock list and every other click work exactly as before
+
+### Fixed
+
+- **The terminal's status row no longer cuts off what the crane is doing.** The row said "Crane: …" and then ran out of
+  space, so in German the most ordinary line of all — "Regalbediengerät: Wartet auf einen Auftrag" — was drawn with its
+  end missing, and several of the longer English phases came within a few pixels of the same thing. The row now drops
+  the "Crane:" label whenever keeping it would cut the text, and shows what the crane is doing in full instead; nothing
+  changes for the lines that already fitted. The only text that is still too long for the row is the one that says a
+  crane speed factor is 0 in the server config, which a crane's goggle overlay shows in full
 
 ## [0.6.0-alpha] - 2026-10-02
 

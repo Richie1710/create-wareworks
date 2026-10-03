@@ -1698,3 +1698,113 @@ you get tired of waiting, and put it back before judging check 160.
     **single portion** raises, whose lines are read back from the screen itself. So **look at those shots before
     building anything by hand**: the mechanism is covered, and 167–171 are only about whether it is a good way to
     play, whether the four button faces and the two status sentences are legible, and whether the German reads.
+
+## AB. Sort the terminal's stock list (M24, issue #17)
+
+172. **Does "most used" put the right things first after a few hours of play?** This is the one thing no harness can
+    answer. Play normally for an evening with a warehouse that holds a hundred item types or more, requesting from the
+    terminal as you would, then open it on **most used** (press the sort button until the tooltip says so). Are the
+    first twenty cells the twenty you keep fetching? If something you use constantly is not near the front, say what
+    it is and roughly how often you asked for it, because that is the counting rule being wrong and not a bug.
+    Then try the other side of it: build something completely different for an evening and check whether the order
+    **follows you** — the fade is supposed to let an old habit shrink as a new one grows, so a list still frozen on
+    last week's build is the thing to report.
+
+173. **The three icons, at every GUI scale.** The sort button has one icon per order: a double chevron up for *most
+    available first*, a **target** for *most used*, a stack of lines for *by name*. Cycle through all three at GUI
+    scale 1, 2, 3 and *auto*, and at the smallest window vanilla allows: can you tell at a glance **which** order is
+    active without hovering, and without reading the list? The chevrons and the lines are the pair to look at hardest
+    at scale 1, since both are a few horizontal strokes. The shots `sort-amount`, `sort-used` and `sort-name` of
+    `./gradlew runVisualTest -Pwareworks.visualTest=terminal` are the same three buttons at the scale the harness
+    uses, if you want something to compare against.
+
+174. **It really is remembered, and it is really yours.** Choose *most used* at one terminal, walk to a **second**
+    terminal of the same warehouse and open it: the same order, with no flicker of the old one first. Then quit to the
+    title screen, rejoin, and open a terminal again: still *most used*, still with your favourites first. Then, on a
+    **LAN world or a server with a second player**, have both of you pick different orders and request different
+    items: each of you must keep your own order and your own favourites at the same terminal, and nothing either of
+    you does may reorder the other's list.
+
+175. **Only what you ask for counts.** Set up a **Warehouse Output** (the warehouse's port) that requests an item on
+    redstone and let it pull a few hundred of that item through the warehouse while you request something else by
+    hand. Open the terminal on *most
+    used*: the item the **port** fetched must not have moved up at all. Then ctrl-click a thousand of one item once
+    and deliberately click another item ten times: the one you clicked ten times must come first. Finally hand the
+    terminal a clipboard list and press Fetch — every item **on the list** counts once, so a list you fetch regularly
+    must pull its items forward over a few runs. Try that with a **long** list (a Schematicannon checklist of more
+    than sixty item types is ideal): fetch it three or four times and check that the items near the **top** of the
+    clipboard really do climb. Before M24's review they could not: the list spent its own memory on itself and never
+    raised a single count, which is the kind of thing only repeated play shows.
+
+    **Automated for this section:** `TerminalUsageGameTests` (8 tests) proves that an accepted click counts once
+    whatever amount it asked for, that a refusal and a redstone request at a port count nothing, that the cap evicts
+    the weakest entry and never a favourite, that the chosen order and every count survive the exact save-and-load
+    path a world load takes (including items with data components and a lowered cap), that two players keep separate
+    counts and separate orders, that the payload reads back exactly what it wrote, that a **clipboard order** counts
+    once per item type and that **ordering the same list again raises those counts**, and that an item carrying a
+    whole inventory with it is not remembered at all while the request itself still works; `TerminalUsageTest`,
+    `TerminalSortTest` and `StockListModelUsageTest` (44 tests) pin the counting, the eviction, the fade, what one
+    action naming many item types does and all three comparators without a game; and `./gradlew runRobustnessTest`
+    proves the order and the counts coming back after a **real** save, quit to the title screen and rejoin.
+
+    The **button** is covered too since M24's client half: `-Pwareworks.visualTest=terminal` presses it with real
+    clicks through the mouse handler, shoots each order twice (the grid, and the button being hovered) and asserts
+    before every shot that the order is the one claimed, that the three icons differ, that the three lists differ
+    while holding exactly the same items, that the longest name in the aisle reads the same in all three, that "most
+    used" without a history *is* the amount order, and that no tooltip line is wider than the window's row — in
+    English and, after a real language switch, in German. It also scrolls the grid down and makes the server push new
+    counts at it, to prove that a push moves neither the scroll position nor the order. Since the review pass it also
+    clicks **one cell four times in a row** in the used order and fails if that cell ever stops holding the item that
+    was clicked, or if the row moves forward in the list.
+
+    Since M24's evidence pass the same run makes "most used" a **ranking** rather than one favourite — it asks for
+    four item types at four different counts, three of them the aisle's smallest stacks, so the used order is the
+    amount order's tail turned into its head — lets the **server** name the expected first rows before every shot from
+    its own stock snapshot and its own request counts, checks the counts and the size of the store against the clicks
+    it made, and then saves the world, quits to the **title screen** (shot `reload-title`) and opens it again: the
+    reopened terminal has to come up in the chosen order with nobody pressing anything, and the order and every count
+    have to be read back from the player's own save data (`reload-chosen` before, `reload-kept` and
+    `sort-used-reloaded-tip` after). It also walks every text the status row can hold, in both languages, and fails on
+    anything wider than the row except the one sentence about a crane speed factor of 0 in the server config.
+
+    What is left for a human is whether the icons tell themselves apart at **your** GUI scale (173), whether "most
+    used" is *right* after an evening of play (172), and the second-terminal and two-player halves of 174 and 175 —
+    the restart half of 174 is now automated, but doing it once by hand is still worth the minute.
+
+176. **The crane line without its label.** The terminal's status row now drops the "Crane:" label whenever keeping it
+    would cut the text, which in German is most of the time ("Regalbediengerät: " alone is 93 of the row's 216 pixels).
+    Watch a crane work with the terminal open, in **German** and in English: does `Fährt zur Quelle` / `Travelling to
+    the source` standing on its own still read as *the crane*, or does the row look like it is talking about the
+    terminal? There is nothing else in that window it could be about, which is why the label is the thing that gets
+    dropped — but it is a judgement a human has to make. The row's whole vocabulary is already measured automatically
+    in both languages, so this is about wording and not about width.
+
+177. **Does the sort tooltip say the right thing — in German?** Only the **width** of these lines is checked
+    automatically; whether they *mean* the right thing is a human's. Restart with a German client, hover the sort
+    button in each of its three states and read every line it shows (up to four):
+    * the label, `Sortierung: am meisten Verfügbares` / `am häufigsten angefordert` / `nach Name` — does each one name
+      the order the grid is actually in?
+    * the sentence under it, e.g. `was du am häufigsten anforderst, zuerst` — does it say what the order does, or does
+      it only repeat the label?
+    * `Klick: <order>` — is it clear that this is the order the **next** press gives, and not the one you are in? This
+      is the line to be hardest on: it is two words carrying the whole cycle, and if it reads as "click for this
+      order" instead, the button becomes guesswork again.
+    * `noch nichts angefordert, Menge zählt`, which appears on *most used* only while you have requested nothing
+      — does it explain why that order looks exactly like the amount order, or does it read like a fault? (It used to
+      read `… daher nach Menge`, which was 7 px too wide for the window and named an order that does not exist: the
+      amount order is called `am meisten Verfügbares`, so "nach Menge" looked like a fourth one.)
+
+    Then do the same in English and compare the two: both languages should make the same promise. The nit this check
+    used to hand over is **fixed**: the English amount sentence said "what the *aisle* holds most of comes first" and
+    now reads "what the warehouse has most of first", so the two languages agree about whose stock the list is. Say
+    whether the shorter English wording still reads well — it is short because the obvious version does not fit the
+    window.
+
+178. **Does the list hold still while you work in it?** Open a terminal on *most used* with a warehouse holding a few
+    dozen item types and click one cell in the middle of the grid several times without moving the mouse: every click
+    must ask for the **same** item (watch the line under the grid, which names what was requested and grows one
+    request rather than making several). Then press the sort button twice to come back to *most used*: now the item
+    you clicked should have moved towards the front, because that is where the new counts take effect. Does that feel
+    right, or does it read as the button being slow to notice what you did? The alternative was a list that reorders
+    the moment the server answers, which moved the row out from under the cursor that had just clicked it — say which
+    of the two you would rather have.

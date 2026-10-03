@@ -36,7 +36,10 @@ dev.wareworks
 │                              WareworksArmInteractionPoints (Create mechanical arm interaction point types of the
 │                              stations, registered into Create's registry, M12, ADR-025);
 │                              WareworksDisplaySources (the four Create display link sources and the transformer that
-│                              binds two of them to one block in a fixed order, M14, ADR-026)
+│                              binds two of them to one block in a fixed order, M14, ADR-026);
+│                              WareworksAttachments (the mod's NeoForge data attachment types, i.e. state that belongs
+│                              to a **player** and not to a block: today only TERMINAL_PREFERENCES, saved inside that
+│                              player's own playerdata, copied on death and never synced, M24, issue #17, ADR-037)
 │                              (WareworksItems only if plain items are ever added)
 ├── command                    WareworksCommands (`/wareworks chunks`, permission 2: what the mod holds force-loaded per
 │                              dimension, and the release valve — a hard requirement of M19, because nothing outside
@@ -109,7 +112,11 @@ dev.wareworks
 │   │                          whole order: which entries, which line next, how big a portion, how a delivery maps
 │   │                          back), ListPortion / ListPass / ListCredit / ListOrderState and
 │   │                          ListOrderConfirmation (what pressing Fetch would really mean, measured over the whole
-│   │                          list)
+│   │                          list); the "most used" order (M24, issue #17, ADR-037): TerminalUsage (the bounded
+│   │                          per-player store — one count per item type, one request counted once, the weakest
+│   │                          entry evicted when it is full, counts fading by use and never by a clock, and a
+│   │                          save/restore surface that re-applies every bound) and TerminalUsageCounts (the
+│   │                          read-only half a comparator and a screen need)
 │   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
@@ -230,7 +237,10 @@ dev.wareworks
 │                              fail to be used), HomePointGoggleSummary (M21, issue #1, ADR-034);
 │                              the clipboard order of a terminal (M23, issue #19, ADR-036): TerminalListPersistence
 │                              (its NBT form), TerminalListState (the bounded state the screen and the goggles get),
-│                              TerminalListResult / TerminalListOutcome (what a list button press answered)
+│                              TerminalListResult / TerminalListOutcome (what a list button press answered);
+│                              TerminalPreferences (M24, issue #17, ADR-037: one player's chosen TerminalSort and
+│                              their TerminalUsage store, the two counting calls a player's request goes through, and
+│                              the versioned compound WareworksAttachments saves them as — no block owns it)
 │   └── display                the four Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -251,7 +261,11 @@ dev.wareworks
 │                              knows whether the answer belongs to the click or to the clipboard order);
 │                              the three clipboard-order payloads (M23, issue #19, ADR-036): TerminalListPayload and
 │                              TerminalListAnswerPayload (server → client), TerminalListActionPayload (client →
-│                              server: fetch, answer, resume or cancel; moves no item).
+│                              server: fetch, answer, resume or cancel; moves no item);
+│                              the two sorting payloads (M24, issue #17, ADR-037): TerminalUsagePayload (server →
+│                              client: the stored order and one count per item type, without the recency stamps only
+│                              eviction needs) and TerminalSortPayload (client → server: the player pressed the
+│                              button, read back by name).
 │                              Everything else syncs through block entity update packets
 ├── client
 │   ├── gui                    WarehouseTerminalScreen (the terminal's screen) and TerminalScreenUpdates (where the
@@ -338,7 +352,15 @@ dev.wareworks
 │                              stored down and emptied out of every aisle into one block, the tee's ownership rule,
 │                              the cheaper way round a ring, an aisle a maximum cut loose and reported, a rebuild
 │                              under a running job, and the round robin's cycle time measured in a running world
-│                              (M22, issue #2, ADR-035)
+│                              (M22, issue #2, ADR-035);
+│                              TerminalListGameTests: a clipboard order worked off, ticked off, asked about, waited
+│                              for, swapped and reloaded (M23, issue #19, ADR-036);
+│                              TerminalUsageGameTests: what teaches a player's terminal and what may not — an
+│                              accepted click counted once whatever amount it asked for, a refusal and the very call
+│                              a redstone port makes counting nothing, the cap evicting the weakest entry and not the
+│                              favourite, the save-and-load path a world load takes (crafted data included), two
+│                              players keeping separate counts and orders, the payload round trip and the attachment
+│                              itself (M24, issue #17, ADR-037)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -399,6 +421,13 @@ dev.wareworks
 │                              junction, the goggles naming the aisles and their letters, one terminal for the whole
 │                              comb, a retrieval across two turns, and the two ways an aisle stops working - a rail
 │                              closed with a wrench and aisle.maxAisleLength lowered under the running warehouse),
+│                              TerminalVisualScenario (the terminal's own screen, driven through ScreenInput: the
+│                              stock list, the search typed character by character, a request and its delivery, the
+│                              clipboard order of M23, and since M24 the three sort orders — each shot with the
+│                              expected first rows named by the **server**, "most used" asserted equal to the amount
+│                              order while the history is empty, every tooltip line measured against the window's row
+│                              in English and in German, and the chosen order carried through a real save, quit to
+│                              the title screen and rejoin, which is the only automated place that shows it),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -2505,6 +2534,115 @@ duplication the issue forbids and would have had to re-implement batching, reser
 entry**, which a 128-entry checklist turns into a dialog storm; and **a mixin on `ClipboardScreen` or
 `ClipboardContent`**, which was never needed once the checkbox path was read.
 
+### ADR-037 — A player's terminal order and their request counts are a data attachment on the player; the server owns the numbers and the client does the sorting (M24, issue #17)
+
+*Context:* Issue #17 asks for a terminal whose stock grid a player can reorder, with a **"most used"** order — what
+*this player* requests most often — and the choice **remembered per player**. The build before M24 had two of the three
+orders and a button that cycled them, but the choice lived in a `static` field of `WarehouseTerminalScreen`: lost on
+every restart, and meaningless on a server, where one client's field would have decided for whoever opened a terminal
+next. The issue's own open questions were left for this decision: where "most used" is counted (per player, per
+terminal or per warehouse) and whether it is kept across a restart. Two constraints come from the hard rules: `core.*`
+must stay pure Java, and nothing may be scanned per tick.
+
+*Decision:*
+
+* **Per player, on the server, nowhere else.** The counts answer "what does *this* player keep fetching", so a
+  per-terminal or per-warehouse store would answer a different question — and a per-terminal one would make the order
+  change as a player walks from one terminal to the next. `content.station.TerminalPreferences` holds one player's
+  chosen order and their `core.terminal.TerminalUsage` store; it is a NeoForge **data attachment**
+  (`registry.WareworksAttachments.TERMINAL_PREFERENCES`), so NeoForge saves it inside that player's own
+  `playerdata/<uuid>.dat` (`Entity#saveWithoutId` → `AttachmentHolder.ATTACHMENTS_NBT_KEY`) and the lifetime is exactly
+  a player's. `copyOnDeath()` keeps it across a respawn: dying is not a reason to forget what somebody uses.
+* **Counting happens in exactly two calls, both where a player asks.** An accepted click
+  (`WarehouseTerminalBlockEntity#requestFromTerminal` → `TerminalPreferences#countRequest`) and the item types of a
+  clipboard order at the moment the player starts it (`#fetchList` → `#countListOrder`). One request counts **once**,
+  whatever amount it asked for, so a ctrl-click on a thousand cobblestone cannot outrank a hundred deliberate
+  requests; a refusal and a question count nothing. A **redstone** request at a warehouse port reaches neither call —
+  a port is not a player, and its requests carry `StockAccess.AUTOMATION` and no `Player` at all — so automation can
+  never teach a player's terminal anything. The cost is one map write per click: no tick, no scan, no pass over the
+  warehouse.
+* **The store is bounded four times and fades by use, never by time** (`TerminalUsage`, and `warehouse-system.md`
+  §3.4.2 for the whole rule set): a capacity in item types (`maxTerminalUsageEntries`, default 64, hard-capped at
+  256), a ceiling on a count, recency stamps renumbered before they could run away, and — added by the M24 review —
+  a bound on the **size** of what is remembered. The first three are all counts of *things*, and an `ItemKey` carries
+  the item's whole data-component patch, so 64 keys can be 64 shulker boxes with a `container` component or 64 written
+  books, i.e. kilobytes each in every player's save file. The size bound therefore lives in the content layer, where
+  an item is visible at all (`TerminalPreferences.MAX_KEY_SIZE` refuses to remember an oversized key, so it reaches
+  neither the store, the save nor the payload, while `MAX_USED_SIZE` bounds the whole written list), and the request
+  itself is never affected. When the capacity is reached the **weakest** entry goes — lowest count, among equal counts
+  the one asked for longest ago — so a new item type is always learned and a passing click never pushes a favourite
+  out. A time-based decay was rejected: it needs a clock the pure class deliberately does not have, it would punish a
+  player who merely took a break from the world, and it could reorder a list while they were looking at it.
+* **One player action is counted as one action, however many item types it names** (`TerminalUsage#recordAll`, M24
+  review fix). A clipboard order may name more item types than the store holds — `maxTerminalListEntries` is 128
+  against 64 entries by default and 1024 against 256 at the extremes — and counting it key by key made the later keys
+  of one list evict its earlier ones, because a brand new entry is the weakest entry there is. A repeated identical
+  order was then a fixed point at count 1 that could never raise anything, so the one action a building player repeats
+  most taught the terminal nothing. A batch therefore raises what the store already knows **first** and never evicts
+  what the same action counted; a list that does not fit keeps the item types it named first and reports how many were
+  counted. The eviction order among *older* entries is unchanged, so a list still behaves exactly like the clicks it
+  replaces.
+* **The client sorts; the server owns the data.** The screen is sent the counts and the stored order
+  (`TerminalUsagePayload`) and sorts with the same pure comparator the server would have used. It is not the client
+  deciding: it counts nothing, bounds nothing, evicts nothing and invents no order — it receives numbers it may only
+  read, and its one message back is "the player pressed the button" (`TerminalSortPayload`), which the server
+  validates by **name** and stores. Sorting on the server was rejected because the screen must already hold the whole
+  bounded stock list — the search narrows it per keystroke and the grid pages through it per scroll, neither of which
+  may cost a round trip — so a server-side sort would mean re-sending the list for every keystroke, or sending a rank
+  per item, which is the same payload with more bytes. Network version `8`; the counts travel without their recency
+  stamps, which only eviction needs.
+* **Save data is read by name and never rejected.** The order is saved as `TerminalSort#name()` so the cycle order
+  stays a presentation decision, the compound carries a version field, `save` writes **nothing at all** for a player
+  who never touched a terminal, and `load` skips an entry whose item cannot be decoded and re-applies every bound —
+  including a capacity a config change has lowered since, which then keeps the strongest entries. An NBT serializer is
+  used rather than a `Codec`, because the codec-based attachment builder throws on a parse error and one removed mod
+  would otherwise fail a whole player's load.
+* **The attachment is never synced by NeoForge.** Its `sync` handler would send a player's numbers to every client
+  that can see them. The one player with a screen open is sent what that screen needs, and only while it is open.
+* **A press is applied at once and reconciled, not waited for** (the client half). The screen sorts with numbers it
+  already has, so waiting a round trip would only make the button feel slow — but a push the server had already built
+  carries the **old** order and would put the list back into it for two or three ticks. The screen therefore keeps the
+  order it has chosen and not yet seen confirmed (`WarehouseTerminalScreen#pendingSort`), ignores a pushed order while
+  one is outstanding, takes the counts from that same push regardless, and settles on the first push that agrees with
+  what is on screen — which also covers the player cycling right back to the stored order, for which the server has no
+  new payload to send. This is the standard shape for client-side prediction of a server-owned value, and it is the
+  only place in the mod that needs it: every other screen state is either the server's alone (pushed, never guessed)
+  or the client's alone (the search text, the filter).
+* **New counts take effect at the next list the player asks for, not the moment they arrive** (the client half, M24
+  review fix). Under "most used" the count is the *first* sort key, so the first click on any row gives it a count it
+  did not have and pulls it in front of every row with none — and the push carrying that count arrives about a tick
+  after the click, while the cursor is still over the cell. The grid's hit test is positional, so a player clicking a
+  cell twice (how one request is grown, §7.2) would have asked for whatever slid into that cell, and a crane job is a
+  real consequence. The screen therefore keeps the newest counts (`WarehouseTerminalScreen#latestUsage`) and hands
+  them to the list on the first push of a screen, on every push that cannot reorder it, and otherwise at the next
+  moment the player asks for a different list: a press of the sort button, a keystroke in the search, the filter. The
+  alternatives were worse: suppressing the re-sort only while the pointer happens to be over the grid makes the
+  behaviour depend on where a mouse rests, and re-anchoring the scroll on the clicked row moves every other row
+  instead. Nothing is lost — the store is the server's, and every list the player asks for is built from the newest
+  numbers.
+* **The server is what checks the client's sorting, in the visual run.** Because the sorting itself happens on the
+  client, a client-side assertion over the list the client would draw proves nothing about the numbers behind it — it
+  would agree with a client that sorted by the wrong counts. So the `terminal` scenario hands the server the rows the
+  screen shows and lets it rebuild the expected list from `WarehouseTerminalMenu#stockCounts` and the player's own
+  `TerminalPreferences` before every sort shot (`TerminalVisualScenario#checkRowsOnServer`), and the counts are
+  checked against the clicks the scenario made, size included. The same scenario carries the chosen order through a
+  real save, quit to the title screen and rejoin: no GameTest server can leave a world, so that is the only automated
+  place where "it remembered" is shown on the screen rather than in the data.
+
+*Alternatives rejected:* **a `SavedData` of the level keyed by player UUID**, which would have to be swept for players
+who never return and would duplicate what an entity's own save file does for free; **fields on the terminal block
+entity**, which makes a player's own order a property of whichever terminal they stood at and would be copied by
+`/clone`; **keeping the client static and only adding the third order**, which leaves the issue's "remembered per
+player" unanswered and is wrong on any multiplayer server; **counting items rather than requests**, which would let
+one bulk click bury a hundred deliberate ones; **counting refusals**, which would let mis-clicks reorder the list;
+**counting a clipboard order line by line as it runs**, which has no player to count for and would weight an item by
+how many portions it happened to take; **letting the attachment type build its own copy handler**, which writes the
+attachment and reads it back on every respawn and would drop an entry whose key a codec happens not to encode, so
+`TerminalPreferences#copy` is handed over explicitly instead (M24 review fix); and **a fourth "recently requested"
+order**, which the issue raises as a
+possibility — the store already records recency, so it is a comparator and a lang key away, but three orders still fit
+a cycling button and a fourth would want a menu (open point in `docs/roadmap.md`).
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -2517,6 +2655,16 @@ entry**, which a 128-entry checklist turns into a dialog storm; and **a mixin on
   saved queue or is forgotten on the next pass, which gives nothing back because what a line is missing does not depend
   on it. The question an order was asking is never saved: like every confirmation it is measured against the warehouse
   as it is now, so such an order comes back `RUNNING` and asks again.
+* A player's **terminal preferences** (M24, ADR-037) are the one piece of authoritative state that lives on a
+  **player** and not in a block entity: the chosen order and the request counts, as a data attachment NeoForge saves
+  inside `playerdata/<uuid>.dat` and copies onto the respawned player on death. The copy is
+  `TerminalPreferences#copy`, passed to the builder as an explicit `copyHandler`: a type that provides none is given
+  one that serializes the attachment and parses it again (`AttachmentType.defaultCopyHandler`), which is a codec
+  round trip per respawn and would silently drop an entry a save is right to leave out. Nothing is written for a
+  player who never touched a terminal, and a load skips what it cannot read and re-applies every bound — including
+  the size bound, so save data from a build without it loses its oversized entries — so neither crafted nor truncated
+  data can fail a player's load. The client is sent the numbers for the one screen it has open and owns none of
+  them.
 * After a restart, jobs resume from the persisted state (`CraneStateMachine.resume` makes a loaded state consistent). There is no `FAULT` phase: if a referenced block is missing, a job aborts with a reason before the pick, and after it the held items are rerouted (`REROUTE`), held and retried (`HOLDING`) or waited with at the requesting output (`WAITING_FOR_TARGET`). Items are dropped only when the dock itself breaks (`stacker-crane.md` §4.1, `warehouse-system.md` §8).
 
 ## Performance rules

@@ -16,6 +16,7 @@ import dev.wareworks.content.station.ProductionStationHooks;
 import dev.wareworks.data.WareworksDatagen;
 import dev.wareworks.network.WareworksNetwork;
 import dev.wareworks.registry.WareworksArmInteractionPoints;
+import dev.wareworks.registry.WareworksAttachments;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCapabilities;
@@ -73,6 +74,9 @@ public final class Wareworks {
         WareworksBlockEntityTypes.register();
         WareworksMenuTypes.register();
         WareworksArmInteractionPoints.register(modEventBus);
+        // Per-player state that belongs to the player and not to a block: the terminal's chosen order and request
+        // counts (M24, issue #17, ADR-037). It references no block, so its place in this order does not matter.
+        WareworksAttachments.register(modEventBus);
 
         modEventBus.addListener(WareworksCapabilities::register);
         modEventBus.addListener(WareworksNetwork::register);

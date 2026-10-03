@@ -85,8 +85,13 @@ public final class WareworksNetwork {
      * {@link dev.wareworks.core.terminal.RequestScope} that says whether the answer belongs to the click or to the
      * clipboard order. That field travels by <b>name</b> and is written last, so a reader of the old shape would stop
      * before it and leave bytes in the buffer, which is exactly what this version string prevents.
+     * <p>
+     * <b>{@code "8"} is M24</b> (sort the terminal's stock list, issue #17, ADR-037): the two sort payloads
+     * ({@link TerminalUsagePayload} server → client, {@link TerminalSortPayload} client → server), which an older
+     * client would neither send nor understand. Both carry the chosen order by <b>name</b>, and no existing payload's
+     * field order moved, so the bump is for the two new types alone.
      */
-    public static final String VERSION = "7";
+    public static final String VERSION = "8";
 
     private WareworksNetwork() {
     }
@@ -112,6 +117,10 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalListAnswer);
         registrar.playToServer(TerminalListActionPayload.TYPE, TerminalListActionPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalListAction);
+        registrar.playToClient(TerminalUsagePayload.TYPE, TerminalUsagePayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalUsage);
+        registrar.playToServer(TerminalSortPayload.TYPE, TerminalSortPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalSort);
         registrar.playToClient(ProductionScreenPayload.TYPE, ProductionScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionScreen);
         registrar.playToServer(ProductionPatternPayload.TYPE, ProductionPatternPayload.STREAM_CODEC,
@@ -169,6 +178,17 @@ public final class WareworksNetwork {
             return;
         PacketDistributor.sendToPlayer(serverPlayer, new TerminalListAnswerPayload(payload.containerId(),
                 outcome.get().result(), outcome.get().question()));
+    }
+
+    /**
+     * A player pressed the sort button on their open terminal screen (M24, issue #17, ADR-037).
+     * <p>
+     * The payload is only a hint: the menu the player really has open decides, the order is read by name and an
+     * unknown one reads as the default. Nothing is requested and no item moves — this stores one enum constant on that
+     * player, so their terminals open in the same order next time, on any terminal and after a reconnect.
+     */
+    private static void onTerminalSort(TerminalSortPayload payload, IPayloadContext context) {
+        WarehouseTerminalMenu.submitSort(context.player(), payload.containerId(), payload.sort());
     }
 
     /**
@@ -254,6 +274,12 @@ public final class WareworksNetwork {
     private static void onTerminalListAnswer(TerminalListAnswerPayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.TerminalScreenUpdates.onListAnswer(payload);
+    }
+
+    /** The order this player chose and how often they have asked for each item type (M24, issue #17). */
+    private static void onTerminalUsage(TerminalUsagePayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onUsage(payload);
     }
 
     private static void onProductionScreen(ProductionScreenPayload payload, IPayloadContext context) {

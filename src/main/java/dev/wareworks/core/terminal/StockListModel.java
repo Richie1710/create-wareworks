@@ -10,7 +10,8 @@ import java.util.Optional;
 
 /**
  * The item list a warehouse terminal screen shows: everything the server sent, narrowed by the search and the "only
- * what is in stock" filter, ordered by the chosen {@link TerminalSort} and cut into the rows of the grid
+ * what is in stock" filter, ordered by the chosen {@link TerminalSort} — for {@link TerminalSort#USED} with the
+ * request counts of {@link #setUsage(TerminalUsageCounts)} — and cut into the rows of the grid
  * ({@code docs/warehouse-system.md} §3.4.2).
  * <p>
  * Pure Java: the screen owns one of these and only feeds it lines and user input, so the list, search, sort and paging
@@ -24,8 +25,10 @@ public final class StockListModel<K> {
     private final Map<K, StockLine<K>> lines = new LinkedHashMap<>();
 
     private String query = "";
-    private TerminalSort sort = TerminalSort.AMOUNT;
+    private TerminalSort sort = TerminalSort.DEFAULT;
     private boolean inStockOnly;
+    /** What this player asks for most often, as the server last reported it; {@link TerminalSort#USED} reads it. */
+    private TerminalUsageCounts<K> usage = TerminalUsageCounts.none();
 
     private List<StockLine<K>> visible = List.of();
     private boolean dirty = true;
@@ -80,6 +83,24 @@ public final class StockListModel<K> {
         sort = newSort;
         dirty = true;
         return true;
+    }
+
+    /**
+     * Replaces the request counts {@link TerminalSort#USED} orders by (the server sent them, or a request this player
+     * just made changed one). {@code null} means "no history", which makes that order the {@link TerminalSort#AMOUNT}
+     * one.
+     * <p>
+     * Always marks the list dirty: the counts are a lookup the model cannot compare for equality, and the one
+     * re-sort of a bounded list it costs happens when a payload arrives, never per frame.
+     */
+    public void setUsage(TerminalUsageCounts<K> counts) {
+        usage = counts == null ? TerminalUsageCounts.none() : counts;
+        dirty = true;
+    }
+
+    /** What {@link TerminalSort#USED} currently orders by; never {@code null}. */
+    public TerminalUsageCounts<K> usage() {
+        return usage;
     }
 
     /** @return whether the filter changed */
@@ -160,7 +181,7 @@ public final class StockListModel<K> {
             if (TerminalSearch.matches(line, query))
                 matching.add(line);
         }
-        matching.sort(sort.comparator());
+        matching.sort(sort.comparator(usage));
         visible = List.copyOf(matching);
         dirty = false;
     }

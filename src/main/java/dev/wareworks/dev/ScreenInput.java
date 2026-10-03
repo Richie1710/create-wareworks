@@ -54,6 +54,9 @@ final class ScreenInput {
             double.class);
     private static final Field TERMINAL_LAYOUT = field(WarehouseTerminalScreen.class, "layout");
     private static final Field TERMINAL_AMOUNT = field(WarehouseTerminalScreen.class, "amountInput");
+    private static final Field TERMINAL_SORT_BUTTON = field(WarehouseTerminalScreen.class, "sortButton");
+    /** An icon button's own icon, so a run can tell three orders apart by what the button draws. */
+    private static final Field BUTTON_ICON = field(IconButton.class, "icon");
     private static final Field TERMINAL_LIST_BUTTON = field(WarehouseTerminalScreen.class, "listButton");
     private static final Method TERMINAL_CELL_AT = method(WarehouseTerminalScreen.class, "cellAt", double.class,
             double.class);
@@ -229,13 +232,34 @@ final class ScreenInput {
      * Answer, M23, issue #19) — checked with the widget's own hit test.
      */
     static Point terminalListButton(WarehouseTerminalScreen screen) {
-        IconButton button = (IconButton) get(TERMINAL_LIST_BUTTON, screen);
+        return terminalButton(screen, TERMINAL_LIST_BUTTON, "list");
+    }
+
+    /**
+     * The centre of the terminal's <b>sort button</b> — the one that cycles the three orders (M24, issue #17) —
+     * checked with the widget's own hit test.
+     */
+    static Point terminalSortButton(WarehouseTerminalScreen screen) {
+        return terminalButton(screen, TERMINAL_SORT_BUTTON, "sort");
+    }
+
+    /** The centre of one of the terminal's icon buttons, checked with the widget's own hit test. */
+    private static Point terminalButton(WarehouseTerminalScreen screen, Field field, String name) {
+        IconButton button = (IconButton) get(field, screen);
         if (button == null)
-            throw new VisualTestException("the terminal screen has no list button yet (not laid out)");
+            throw new VisualTestException("the terminal screen has no " + name + " button yet (not laid out)");
         Point point = centre(button);
         if (!button.isMouseOver(point.x(), point.y()))
-            throw new VisualTestException("the list button's own hit test does not put " + point + " on it");
+            throw new VisualTestException("the " + name + " button's own hit test does not put " + point + " on it");
         return point;
+    }
+
+    /** The icon the terminal's sort button currently draws, so a run can prove the three orders look different. */
+    static Object terminalSortIcon(WarehouseTerminalScreen screen) {
+        IconButton button = (IconButton) get(TERMINAL_SORT_BUTTON, screen);
+        if (button == null)
+            throw new VisualTestException("the terminal screen has no sort button yet (not laid out)");
+        return get(BUTTON_ICON, button);
     }
 
     /**

@@ -42,6 +42,7 @@ import dev.wareworks.core.terminal.StockListModel;
 import dev.wareworks.core.terminal.TerminalAmounts;
 import dev.wareworks.core.terminal.TerminalSearch;
 import dev.wareworks.core.terminal.TerminalSort;
+import dev.wareworks.core.terminal.TerminalUsageCounts;
 import dev.wareworks.network.ProductionCancelPayload;
 import dev.wareworks.network.TerminalConfirmPayload;
 import dev.wareworks.network.TerminalListActionPayload;
@@ -50,8 +51,10 @@ import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalRequestPayload;
 import dev.wareworks.network.TerminalResultPayload;
+import dev.wareworks.network.TerminalSortPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
+import dev.wareworks.network.TerminalUsagePayload;
 import dev.wareworks.util.WareworksLang;
 import net.createmod.catnip.gui.UIRenderHelper;
 import net.createmod.catnip.gui.element.GuiGameElement;
@@ -191,9 +194,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     private static final int MAX_STEP_INDENT = 2 * MAX_STEP_ROWS;
 
-    /** Search, order and filter survive closing the screen, like a storage mod's terminal. */
+    /**
+     * Search and filter survive closing the screen, like a storage mod's terminal — for this client session only, as
+     * before. They are a view a player sets up for the next few clicks, not something a world has to remember.
+     * <p>
+     * The <b>order</b> used to be a static here too and is not any more (M24, issue #17, ADR-037): it is stored on the
+     * player, on the server ({@code content.station.TerminalPreferences}), so it survives a restart and means the same
+     * on a server with several players. The screen receives it with the first stock page
+     * ({@link #onUsage(TerminalUsagePayload)}) and never invents one.
+     */
     private static String rememberedQuery = "";
-    private static TerminalSort rememberedSort = TerminalSort.AMOUNT;
     private static boolean rememberedInStockOnly;
     private static int rememberedAmount = TerminalAmounts.MIN_AMOUNT;
 
@@ -218,6 +228,43 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private boolean stockReceived;
     private int scrollRow;
     private int selectedAmount = rememberedAmount;
+    /**
+     * The order the player has just pressed the button for and the server has not confirmed yet (M24, issue #17).
+     * <p>
+     * It exists so that the list cannot <b>flicker</b>. The screen applies a press at once and tells the server, but a
+     * push the server had already built carries the <i>old</i> order, and without this field that push would put the
+     * list back into it for the two or three ticks until the next one — a visible jump back and forth, and one that
+     * really happens, because a request the player made a moment earlier changes the counts and makes the server send
+     * exactly such a push. While a choice is unconfirmed the pushed order is therefore ignored and only its counts are
+     * taken; the first push that agrees with the screen settles it ({@link #onUsage(TerminalUsagePayload)}).
+     */
+    @Nullable
+    private TerminalSort pendingSort;
+    /**
+     * Whether the server's last push held no counts at all, i.e. whether this player has never requested anything.
+     * Only the sort button's tooltip reads it: "most used" is then exactly the amount order, and saying so is the
+     * difference between a sensible fall-back and a list that looks broken (M24, issue #17).
+     */
+    private boolean usageEmpty = true;
+
+    /**
+     * The newest counts the server has pushed, which the list takes at its next rebuild ({@link #takeUsage()}).
+     * <p>
+     * They are not handed to the model the moment they arrive, and that is the point (M24 review fix). Under
+     * {@link TerminalSort#USED} the count is the <b>first</b> sort key, so the first request for any item moves its row
+     * to the very top of the list — and the push that carries that new count arrives about one tick after the click.
+     * A player clicking a row twice, which is the documented way to grow one request ({@code §7.2}), would therefore
+     * have requested the item that slid into that cell meanwhile: the grid's hit test is positional
+     * ({@link #cellAt}) and a crane job is a real consequence. So the counts a request changed take effect at the next
+     * moment the player themselves asks for a different list — a press of the sort button, a keystroke in the search,
+     * the filter — and until then the rows stay where they were clicked. Nothing is lost: the store is the server's,
+     * every later screen opens in the full order, and the counts are applied at once while the order is one they
+     * cannot reorder.
+     */
+    private TerminalUsageCounts<ItemKey> latestUsage = TerminalUsageCounts.none();
+
+    /** Whether {@link #latestUsage} is what the list is sorted by; false until the first push of this screen. */
+    private boolean usageTaken;
 
     @Nullable
     private Component feedback;
@@ -283,7 +330,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     public WarehouseTerminalScreen(WarehouseTerminalMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
-        model.setSort(rememberedSort);
+        // No order is set here: the server's stored one arrives with the first stock page, and the grid is not drawn
+        // before that page (stockReceived), so a player never sees a list in an order they did not choose.
         model.setInStockOnly(rememberedInStockOnly);
         model.setQuery(rememberedQuery);
     }
@@ -338,7 +386,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
         sortButton = new IconButton(sortX, rowY, AllIcons.I_PRIORITY_VERY_HIGH);
         sortButton.withCallback(() -> {
-            setSort(model.sort().next());
+            chooseSort(model.sort().next());
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
         });
         addRenderableWidget(sortButton);
@@ -380,6 +428,52 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** The server sent the aisle and crane state. */
     public void onStatus(TerminalStatusPayload payload) {
         status = payload.status();
+    }
+
+    /**
+     * The server sent the order it has stored for this player and how often they have asked for each item type (M24,
+     * issue #17, ADR-037).
+     * <p>
+     * It is the <b>only</b> source of both: the counts are counted, bounded and saved on the server, and the order is
+     * saved with them, so this is where a screen learns which one it is in. It arrives with the first stock page of a
+     * screen and again whenever a request changed a count.
+     * <p>
+     * The <b>counts</b> are kept and are handed to the list on the first push of a screen and on every push that
+     * cannot reorder it under the player's cursor; otherwise they wait for the next rebuild
+     * ({@link #latestUsage}, {@link #takeUsage()}). Whenever they are handed over,
+     * {@link StockListModel#setUsage} marks the list dirty and the one re-sort happens when the grid is next read,
+     * never per frame.
+     * <p>
+     * The counts are always taken; the <b>order</b> is taken only while the player has no press of their own waiting
+     * for an answer ({@link #pendingSort}), so a push that was built before the press cannot throw the list back into
+     * the previous order for a few ticks. A push that agrees with what is on screen settles the press — including the
+     * case where the player cycled right back to the stored order, which the server then has no new payload to send
+     * for.
+     * <p>
+     * It never moves the view: a pushed order can only differ from the shown one on the very first push of a screen,
+     * where the grid is at its top anyway, and the counts arriving simply re-sort the rows under a scroll position the
+     * player chose.
+     */
+    public void onUsage(TerminalUsagePayload payload) {
+        latestUsage = payload.toUsage();
+        usageEmpty = payload.entries().isEmpty();
+        if (payload.sort() == model.sort())
+            pendingSort = null;
+        if (pendingSort == null)
+            applySort(payload.sort());
+        else
+            updateOptionButtons(); // the counts may have turned "nothing requested yet" into a real history
+        // The first push of a screen is the list's own order, and in an order the counts cannot change the rows are
+        // not moved by taking them either; the one case that waits is new counts under "most used" (see latestUsage).
+        if (!usageTaken || model.sort() != TerminalSort.USED)
+            takeUsage();
+        clampScroll();
+    }
+
+    /** Hands the newest counts to the list, which re-sorts when the grid is next read ({@link #latestUsage}). */
+    private void takeUsage() {
+        model.setUsage(latestUsage);
+        usageTaken = true;
     }
 
     /**
@@ -594,22 +688,45 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private void onSearchChanged(String text) {
         rememberedQuery = text;
         if (model.setQuery(text)) {
+            takeUsage(); // the player asked for another list, so waiting counts take effect here too (latestUsage)
             scrollRow = 0;
             clampScroll();
         }
     }
 
-    private void setSort(TerminalSort sort) {
-        if (model.setSort(sort)) {
-            rememberedSort = sort;
+    /**
+     * Applies an order the <b>player</b> chose and tells the server, which stores it on them (M24, issue #17).
+     * <p>
+     * The new order is applied at once rather than after an answer: the sorting is the client's own work on numbers the
+     * server owns, so waiting a tick would only make the button feel slow. The server's copy is what the next screen
+     * opens with, and its next push confirms it ({@link #onUsage(TerminalUsagePayload)}), so the two cannot drift.
+     * <p>
+     * A press is the one thing that scrolls the grid back to its top, and it does so on purpose: the answer to
+     * "most used" or "by name" is what now stands <b>first</b>, and row twelve of a completely re-ordered list is a
+     * slice the player never asked for. Nothing else ever moves the view — neither a push of new counts nor the
+     * confirmation of this very press.
+     */
+    private void chooseSort(TerminalSort sort) {
+        pendingSort = sort;
+        // A press is a player asking for a different list, so it is also where counts that were waiting take effect
+        // (see latestUsage): the new order is built from the newest numbers, and the grid goes to its top anyway.
+        takeUsage();
+        if (model.setSort(sort))
             scrollRow = 0;
-            clampScroll();
-        }
+        clampScroll();
+        updateOptionButtons();
+        PacketDistributor.sendToServer(new TerminalSortPayload(menu.containerId, sort));
+    }
+
+    /** Applies the order the server has stored, leaving the scroll position where the player put it. */
+    private void applySort(TerminalSort sort) {
+        model.setSort(sort);
         updateOptionButtons();
     }
 
     private void setInStockOnly(boolean only) {
         if (model.setInStockOnly(only)) {
+            takeUsage(); // as for the search and the sort button: a new list is where waiting counts take effect
             rememberedInStockOnly = only;
             scrollRow = 0;
             clampScroll();
@@ -618,14 +735,100 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     private void updateOptionButtons() {
-        sortButton.setIcon(model.sort() == TerminalSort.AMOUNT ? AllIcons.I_PRIORITY_VERY_HIGH : AllIcons.I_WHITELIST);
-        sortButton.setToolTip(WareworksLang.translateDirect(WareworksLang.TERMINAL_SORT,
-                WareworksLang.translateDirect(model.sort().langKey())));
+        // Guarded like the list button below, in case a payload ever reaches this screen before init() built the
+        // widgets: what such a payload carries is in the model either way, and the next init() reads it from there.
+        if (sortButton == null || filterButton == null)
+            return;
+        updateSortButton();
         filterButton.setIcon(model.inStockOnly() ? AllIcons.I_ACTIVE : AllIcons.I_PASSIVE);
         filterButton.green = model.inStockOnly();
         filterButton.setToolTip(WareworksLang.translateDirect(
                 model.inStockOnly() ? WareworksLang.TERMINAL_ONLY_IN_STOCK : WareworksLang.TERMINAL_SHOW_ALL));
         updateListButton();
+    }
+
+    /**
+     * The sort button: one icon per order and a tooltip that says what the order means (M24, issue #17).
+     * <p>
+     * <b>The icon is the whole point of a cycling button.</b> It is what tells a player which of the three orders they
+     * are in without hovering anything, so the three are deliberately three different <i>shapes</i> and not three
+     * variations of one: a double chevron pointing up for "the biggest amounts first", a target for "what you keep
+     * going for", and a stack of lines for "by name". A page with a checkmark stood here for the alphabet before, two
+     * buttons away from the list button's own checkmark ({@link #updateListButton}), which at the smallest GUI scale is
+     * two checkmarks in one row.
+     * <p>
+     * <b>The tooltip is where the cycle explains itself.</b> A player who hovers it reads which order is on, what that
+     * order does, and — the thing an icon that changes on every press cannot show — which order the next press would
+     * give. "Most used" adds one line while this player has never requested anything, because it is then exactly the
+     * amount order and a terminal that looks like it ignored the button would be the obvious reading.
+     * <p>
+     * Every line is kept inside the window's own row width ({@link #ROW_WIDTH}), in every language: a tooltip wider
+     * than the terminal it belongs to is the one thing a translation can break here, so the texts are written short and
+     * {@link #sortTooltipFits()} is what the visual run asserts instead of trusting a screenshot.
+     */
+    private void updateSortButton() {
+        TerminalSort sort = model.sort();
+        sortButton.setIcon(switch (sort) {
+            case AMOUNT -> AllIcons.I_PRIORITY_VERY_HIGH;
+            case USED -> AllIcons.I_TARGET;
+            case NAME -> AllIcons.I_VIEW_SCHEDULE;
+        });
+        List<Component> tooltip = sortButton.getToolTip();
+        tooltip.clear();
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_SORT,
+                WareworksLang.translateDirect(sort.langKey())));
+        tooltip.add(WareworksLang.translateDirect(sort.detailKey()).withStyle(ChatFormatting.GRAY));
+        if (sort == TerminalSort.USED && usageEmpty)
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_SORT_NO_HISTORY)
+                    .withStyle(ChatFormatting.GOLD));
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_SORT_NEXT,
+                WareworksLang.translateDirect(sort.next().langKey()))
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+    }
+
+    /** The order the grid is in (the dev harness and the tests of the client side). */
+    public TerminalSort sort() {
+        return model.sort();
+    }
+
+    /** The sort button's tooltip as a player reads it; the visual harness reads it instead of photographing it. */
+    public List<Component> sortTooltip() {
+        return sortButton == null ? List.of() : List.copyOf(sortButton.getToolTip());
+    }
+
+    /**
+     * Whether every line the sort button can show fits the window's row width in the language that is loaded right now
+     * ({@link #updateSortButton}). The harness asserts it in English and in German.
+     * <p>
+     * "Can show", not "shows": the "nothing requested yet" line is only in the tooltip while this player has no
+     * history at all, which is a state a world passes through once. A run that checks the tooltip after its first
+     * request — which the German pass has to, because it needs a stocked, used warehouse — would never measure that
+     * line, and the German translation of it really was 7 px too wide (M24 review fix). It is therefore measured
+     * whatever the state, in every order.
+     */
+    public boolean sortTooltipFits() {
+        for (Component line : sortTooltipLines()) {
+            if (font.width(line) > ROW_WIDTH)
+                return false;
+        }
+        return true;
+    }
+
+    /**
+     * Every line the sort button can show in the order it is in: its tooltip, plus the "nothing requested yet" line
+     * while that one is not in it. This is what {@link #sortTooltipFits()} measures, and what the harness names in the
+     * message of a failed measurement.
+     */
+    public List<Component> sortTooltipLines() {
+        List<Component> lines = new ArrayList<>(sortTooltip());
+        if (!usageEmpty)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_SORT_NO_HISTORY));
+        return List.copyOf(lines);
+    }
+
+    /** The topmost row of the grid, counted in grid rows (the dev harness: nothing may move it on its own). */
+    public int scrollRow() {
+        return scrollRow;
     }
 
     // --- the clipboard order (M23, issue #19) ----------------------------------------------------------------------
@@ -1456,7 +1659,31 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_CRANE);
         Component state = status.isPaused() ? WareworksLang.translateDirect(status.cranePause().langKey())
                 : WareworksLang.translateDirect(WareworksLang.cranePhaseKey(status.cranePhase()));
-        return WareworksLang.translateDirect(WareworksLang.TERMINAL_CRANE, state);
+        return craneStatusText(state);
+    }
+
+    /**
+     * The crane's state as this row shows it: {@code "Crane: <state>"} normally, and the <b>bare state</b> whenever the
+     * prefixed form would not fit the row.
+     * <p>
+     * The phase and pause texts are the ones the goggles show ({@code gui.goggles.crane_phase.*}), i.e. whole short
+     * sentences, while this row is {@link #ROW_WIDTH} px wide and fixed — so the prefix is what decides whether a
+     * player reads the state or an ellipsis. In German it costs 93 of those pixels ("Regalbediengerät: "), which is why
+     * the most ordinary line a terminal has, the idle one, used to be drawn cut off; in English it costs 43 and the
+     * longer phases came close. Dropping it is the right thing to drop: this row sits under the terminal's own buffer
+     * and there is nothing else in the window it could be about, while the state is the information.
+     * <p>
+     * Public because the visual run measures the row's whole vocabulary through this very decision — a translation that
+     * does not fit is a defect no screenshot of one warehouse state can be trusted to show.
+     */
+    public Component craneStatusText(Component state) {
+        Component prefixed = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRANE, state);
+        return fitsStatusRow(prefixed) ? prefixed : state;
+    }
+
+    /** Whether {@code text} is drawn in full in the status row; the measure {@link #statusTextsFit()} applies. */
+    public boolean fitsStatusRow(Component text) {
+        return font.width(text) <= ROW_WIDTH;
     }
 
     @Override

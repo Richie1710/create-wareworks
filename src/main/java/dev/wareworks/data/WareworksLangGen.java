@@ -351,10 +351,25 @@ public final class WareworksLangGen {
         }
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SEARCH), "Search items");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SORT), "Sorting: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SORT_NEXT), "Click: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SORT_NO_HISTORY),
+                "nothing requested yet, so amounts decide");
+        // One short label per order and one sentence that says what it does: the label sits beside the icon and has to
+        // fit the terminal's row, the sentence is where a cycling button explains itself (M24, issue #17).
         for (TerminalSort sort : TerminalSort.values()) {
             lang.accept(WareworksLang.key(sort.langKey()), switch (sort) {
                 case AMOUNT -> "most available first";
+                case USED -> "most used first";
                 case NAME -> "by name";
+            });
+            lang.accept(WareworksLang.key(sort.detailKey()), switch (sort) {
+                // "warehouse", not "aisle": the list is the controller's stock index, which spans every aisle of the
+                // warehouse since M22, and every other string of this screen says so (M24 review fix). The wording is
+                // the short one because "what the warehouse holds most of comes first" measures 233 px against the
+                // window's own 216 (WarehouseTerminalScreen#sortTooltipFits).
+                case AMOUNT -> "what the warehouse has most of first";
+                case USED -> "what you request most often comes first";
+                case NAME -> "alphabetical, to find an item you know";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_ONLY_IN_STOCK), "Showing only what is available");

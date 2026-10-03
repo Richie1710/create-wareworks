@@ -9,6 +9,7 @@ import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalResultPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
+import dev.wareworks.network.TerminalUsagePayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 
@@ -53,6 +54,14 @@ public final class TerminalScreenUpdates {
      */
     public static void onConfirm(TerminalConfirmPayload payload) {
         screen(payload.containerId()).ifPresent(screen -> screen.onConfirm(payload));
+    }
+
+    /**
+     * The order the server has stored for this player and how often they have asked for each item type (M24, issue
+     * #17, ADR-037). It arrives with the first stock page of a screen and whenever a request changed a count.
+     */
+    public static void onUsage(TerminalUsagePayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onUsage(payload));
     }
 
     /** How far the open screen's clipboard order has got (M23, issue #19). */

@@ -3,8 +3,16 @@ package dev.wareworks.dev;
 import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -19,12 +27,14 @@ import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalMenuLayout;
+import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
@@ -32,25 +42,35 @@ import dev.wareworks.content.station.StockKeeperRules;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockLine;
 import dev.wareworks.core.terminal.TerminalAmounts;
+import dev.wareworks.core.terminal.TerminalSort;
+import dev.wareworks.core.terminal.TerminalUsage;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -70,6 +90,14 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * after the same item was clicked {@value #MERGE_CLICKS} more times (the M7 merging case,
  * {@code docs/warehouse-system.md} §7.2: the status line names the pending total and "Open requests" stays 1), and
  * after the crane delivered the items into the terminal's buffer slots.
+ * <p>
+ * It then asks for {@link #USAGE_REQUESTS} item types several times each ({@link #usageSteps}), so that "most used" is
+ * a <b>ranking</b> and not one favourite, presses the <b>sort button</b> through the mouse handler and shoots each of
+ * the three orders, in English and in German (M24, issue #17, {@link #sortSteps}): the icon, the tooltip and the list
+ * the order produces are asserted before every shot, the <b>server</b> checks the first rows of every order against its
+ * own request counts, and so is what must not happen when the server pushes new counts at a scrolled grid. Finally the
+ * world is saved, left and opened again ({@link #reloadSteps}), and the terminal has to come back in the order this
+ * player chose, with the counts behind it.
  * <p>
  * The camera stands inside the aisle, about two blocks from the terminal: a screen closes itself as soon as the player
  * leaves the vanilla container range, so the shots also prove that the menu stays open while the crane works. The second
@@ -94,6 +122,13 @@ public final class TerminalVisualScenario implements VisualScenario {
     private static final int CLEAR_MARGIN = 3;
     private static final int CLEAR_HEIGHT = 8;
 
+    /**
+     * One item in the racks with a <b>long</b> name, so the three orders (M24, issue #17) can be checked against the
+     * window's fixed row width with a name that really is too long for one: with nothing but "Lapis Lazuli" in the
+     * aisle the check would pass without ever exercising anything.
+     */
+    private static final Item LONG_NAME = Items.WAXED_OXIDIZED_CUT_COPPER_STAIRS;
+
     /** Item types placed into the racks; the grid shows 36 cells, so this fills it and leaves room to scroll. */
     private static final List<ItemStack> STOCK = List.of(new ItemStack(Items.IRON_INGOT, 64),
             new ItemStack(Items.COPPER_INGOT, 64), new ItemStack(Items.GOLD_INGOT, 48),
@@ -101,7 +136,7 @@ public final class TerminalVisualScenario implements VisualScenario {
             new ItemStack(Items.EMERALD, 12), new ItemStack(Items.COAL, 64), new ItemStack(Items.QUARTZ, 40),
             new ItemStack(Items.COBBLESTONE, 64), new ItemStack(Items.OAK_LOG, 32), new ItemStack(Items.GLASS, 48),
             new ItemStack(Items.WHEAT, 56), new ItemStack(Items.STRING, 16), new ItemStack(Items.BONE, 20),
-            new ItemStack(Items.LEATHER, 8), new ItemStack(Items.PAPER, 64), new ItemStack(Items.BRICK, 36),
+            new ItemStack(Items.LEATHER, 8), new ItemStack(Items.PAPER, 64), new ItemStack(LONG_NAME, 36),
             new ItemStack(Items.FLINT, 5), new ItemStack(Items.SLIME_BALL, 3), new ItemStack(Items.ANDESITE, 64),
             new ItemStack(Items.SAND, 64), new ItemStack(Items.GRAVEL, 64), new ItemStack(Items.KELP, 1));
     /** How many item types the racks hold; the screen must list at least this many. */
@@ -147,6 +182,79 @@ public final class TerminalVisualScenario implements VisualScenario {
     private static final int DELIVERY_TIMEOUT_TICKS = 1200;
     private static final int SETTLE_TICKS = 4;
 
+    // --- the sort button (M24, issue #17) --------------------------------------------------------------------------
+    /** The orders the button gives, in the order the presses give them; the last press closes the cycle. */
+    private static final List<TerminalSort> CYCLE = List.of(TerminalSort.USED, TerminalSort.NAME, TerminalSort.AMOUNT);
+    /** The language the tooltips are measured in besides English; the only hand-written one the mod ships. */
+    private static final String GERMAN = "de_de";
+    private static final String ENGLISH = "en_us";
+    private static final int RELOAD_TIMEOUT_TICKS = 600;
+    /** Comfortably more than the menu's own push interval, so at least two pushes have been through. */
+    private static final int PUSH_TICKS = 25;
+    /** How many of a list's first names go into the log line of a shot. */
+    private static final int NAMES_LOGGED = 4;
+    /** Where the mouse is parked for a shot without a tooltip: the window's title row, on nothing at all. */
+    private static final int TITLE_CORNER = 5;
+    /** Lines the sort tooltip has at least: the order, what it does, and what the next press would give. */
+    private static final int MIN_SORT_TOOLTIP_LINES = 3;
+    /**
+     * The first grid row the "click one cell twice" check may use: far enough down that a new count would pull the row
+     * forward past everything this player has already asked for (M24 review fix).
+     */
+    private static final int STABLE_ROW_FROM = 5;
+    /**
+     * How often that one cell is clicked. It is also the count that item type ends up with, so it has to be one no
+     * other item type of this scenario reaches, or {@link #requestedRanking()} would have no defined sequence.
+     */
+    private static final int STABLE_CLICKS = 4;
+    /** How far the grid is scrolled down before it is checked that nothing the server pushes moves it. */
+    private static final int SCROLL_NOTCHES = 2;
+    // --- the three orders told apart (M24, issue #17) ---------------------------------------------------------------
+    /**
+     * The item types this player asks for before the sort shots, and how many clicks each of them gets: a
+     * <b>ranking</b>, not one favourite. A "most used" order whose only evidence is a single item sitting in front of
+     * the amount order cannot be told from a coincidence; four items in a known sequence can.
+     * <p>
+     * They are deliberately three of the <b>smallest</b> stacks of the aisle. The amount order puts those at the very
+     * end of its list, so "most used" turns its tail into its head: the two screenshots cannot be mistaken for each
+     * other, and neither can the two assertions. No stock rule governs any of them, so every click is simply accepted
+     * instead of raising the confirmation panel.
+     */
+    private static final List<UsageRequest> USAGE_REQUESTS = List.of(new UsageRequest(Items.LEATHER, 5),
+            new UsageRequest(Items.STRING, 3), new UsageRequest(Items.BONE, 2));
+
+    /** How many of the first rows the server checks against its own request counts before each shot. */
+    private static final int ASSERTED_ROWS = 6;
+    /** The order whose survival of a save, quit and rejoin is shown; the one this player's counts are visible in. */
+    private static final TerminalSort KEPT_SORT = TerminalSort.USED;
+    /** The width every text of the terminal's status row has to fit, in every language; for the failure message. */
+    private static final int ROW_WIDTH = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN;
+    /**
+     * The one status text that is allowed not to fit the terminal's row, in either language.
+     * <p>
+     * {@code SPEED_FACTOR_ZERO} does not name a state of the machine, it names a <b>mistake in the server config</b>
+     * ("a crane speed factor is 0 in the server config", and the German compound for it is half again as long). Making
+     * that sentence fit 216 px would mean dropping the part that tells an operator where to look, which is a wording
+     * decision for the project owner and not something to slip into a milestone about sorting — and a player can read
+     * it in full through the crane's goggle overlay, which has no fixed row width. So it is listed here rather than
+     * silently tolerated, and {@link #checkStatusVocabularyFits} compares the offenders with this set <b>exactly</b>:
+     * a new text that does not fit fails, and so does this one being shortened and the entry left behind.
+     */
+    private static final Set<String> STATUS_ROW_TOO_LONG = Set.of("pause.speed_factor_zero");
+    /** A reload is a phase of its own: it costs world loading time that the run's own budget never allowed for. */
+    private static final long RELOAD_WATCHDOG_MILLIS = VisualTestHarness.RUN_TIMEOUT_MILLIS;
+
+    /** One item type the scenario asks for, with how many clicks it spends on it. */
+    private record UsageRequest(Item item, int clicks) {
+        ItemKey key() {
+            return ItemKey.of(item);
+        }
+
+        String name() {
+            return ItemKey.of(item).toStack().getHoverName().getString();
+        }
+    }
+
     /** In the aisle, two blocks from the terminal, looking at its screen; inside the vanilla container range. */
     private static final CameraView AT_TERMINAL = CameraView.of("terminal", 3.1, 1.6, 0.5, 1.4, 0.9, 1.2);
 
@@ -155,6 +263,39 @@ public final class TerminalVisualScenario implements VisualScenario {
     private ItemKey requestedKey;
     /** The status line before the repeated clicks, so the step after them waits for the new answer. */
     private String feedbackBeforeMerge = "";
+    /** The icon the button draws per order: three orders a player cannot tell apart would be one order. */
+    private final Map<TerminalSort, Object> sortIcons = new EnumMap<>(TerminalSort.class);
+    /** The list each order produces, so the three can be compared: same items, different sequence. */
+    private final Map<TerminalSort, List<ItemKey>> sortLists = new EnumMap<>(TerminalSort.class);
+    /** The longest item name as the grid's own tooltip shows it per order; it has to be the same text every time. */
+    private final Map<TerminalSort, String> longestNames = new EnumMap<>(TerminalSort.class);
+    /** What the search and the filter keep, taken in the first order: no order may change the set itself. */
+    private Set<ItemKey> baselineKeys = Set.of();
+    /** The same list as a sequence, so "most used without a history is the amount order" can be asserted outright. */
+    private List<ItemKey> baselineOrder = List.of();
+    /** Where the grid stood before the server pushed new counts at it. */
+    private int scrollBeforePush;
+    /**
+     * The rows the screen last showed, as the client read them, handed to the <b>server</b> step that checks them
+     * against its own stock snapshot and its own request counts. Volatile because the two steps run on two threads.
+     */
+    private volatile List<ItemKey> shownRows = List.of();
+    /** Every key the screen last showed, so the server can check it is talking about the same list at all. */
+    private volatile Set<ItemKey> shownKeys = Set.of();
+    /** What the server held before the save, in its own words, for the log line after the rejoin. */
+    private volatile String preferencesBeforeReload = "";
+    /** The item the scrolled-grid request asked for; an accepted request, so the store has to show it too. */
+    @Nullable
+    private volatile ItemKey pushRequestKey;
+    /** The item type the "click one cell twice" check clicks, and how often it has really been clicked so far. */
+    @Nullable
+    private volatile ItemKey stableKey;
+    private volatile int stableCell = -1;
+    private volatile int stableRowBefore = -1;
+    private volatile int stableClicksDone;
+    /** The resource reload a language switch starts, awaited like the language screen does. */
+    @Nullable
+    private CompletableFuture<Void> languageReload;
 
     @Override
     public String name() {
@@ -179,6 +320,7 @@ public final class TerminalVisualScenario implements VisualScenario {
                 .waitTicks(SETTLE_TICKS)
                 .shot("list");
         if (pass == VisualPass.FLYWHEEL) {
+            freshUsageSteps(script);
             script.client("terminal: type '" + SEARCH_TEXT + "' into the search box",
                             context -> typeSearch(context, SEARCH_TEXT))
                     .waitTicks(SETTLE_TICKS)
@@ -247,6 +389,9 @@ public final class TerminalVisualScenario implements VisualScenario {
                     .waitTicks(SETTLE_TICKS)
                     .client("terminal: check every badge the shot claims", TerminalVisualScenario::checkRuleBadges)
                     .shot("rules");
+            usageSteps(script);
+            sortSteps(script);
+            reloadSteps(script);
         }
         script.client("terminal: close the screen", TerminalVisualScenario::closeScreen)
                 .until("terminal: wait until the screen is closed", context -> context.minecraft().screen == null,
@@ -259,10 +404,12 @@ public final class TerminalVisualScenario implements VisualScenario {
         if (!(open instanceof WarehouseTerminalScreen terminal))
             return "screen=" + (open == null ? "none" : open.getClass().getSimpleName());
         return String.format(Locale.ROOT,
-                "screen=terminal entries=%d shown=%d ruled=%d requestsHere=%d requestedHere=%d openRequests=%d "
-                        + "orders=%d orderState=%s feedback='%s' status='%s' statusFits=%s",
+                "screen=terminal entries=%d shown=%d ruled=%d sort=%s sortFits=%s first='%s' requestsHere=%d "
+                        + "requestedHere=%d openRequests=%d orders=%d orderState=%s feedback='%s' status='%s' "
+                        + "statusFits=%s",
                 terminal.matchingEntries().size(), terminal.visibleEntries().size(),
-                terminal.matchingEntries().stream().filter(StockLine::ruled).count(), terminal.status().requestsHere(),
+                terminal.matchingEntries().stream().filter(StockLine::ruled).count(), terminal.sort(),
+                terminal.sortTooltipFits(), firstNames(terminal.matchingEntries()), terminal.status().requestsHere(),
                 terminal.status().requestedHere(), terminal.status().openRequests(),
                 terminal.productionOrders().size(), newestOrderState(terminal), feedbackText(terminal),
                 terminal.shownStatusLine().getString(), terminal.statusTextsFit());
@@ -342,20 +489,44 @@ public final class TerminalVisualScenario implements VisualScenario {
     }
 
     private static boolean sceneReady(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = readyController(server, context);
+        return controller != null && controller.stockIndex().distinctKeys() >= ITEM_TYPES
+                // The station is recorded and its pattern is readable, so the terminal really offers the product.
+                && controller.productionStations().size() == 1 && controller.producibleKeys().contains(PRODUCT);
+    }
+
+    /**
+     * The aisle after the save, quit and rejoin: indexed and linked again, but <b>without</b> the stock the scenario
+     * started from.
+     * <p>
+     * {@link #sceneReady} may not be reused here. By the time the world is reloaded the scenario has spent the aisle's
+     * whole stack of oak logs on the production order, so the index holds one item type less than the racks were
+     * filled with — and a readiness condition that waits for the first number again would simply never come true.
+     * <p>
+     * The keeper's rules are waited for instead, because they decide which rows the list has at all: a rule keeps the
+     * row of an item the warehouse holds none of (M15), so a screen opened before the controller has its copy of them
+     * back would show one row less than the list every earlier assertion was taken from.
+     */
+    private static boolean sceneReloaded(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = readyController(server, context);
+        return controller != null && controller.stockRules().governingCount() == GOVERNING_RULES;
+    }
+
+    /** The aisle's controller once it is ready, linked and has nothing left to index; {@code null} while it is not. */
+    @Nullable
+    private static WarehouseControllerBlockEntity readyController(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
         WarehouseControllerBlockEntity controller = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER.getNullable(level,
                 dock.relative(AISLE.getOpposite()));
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
         if (controller == null || crane == null)
-            return false;
+            return null;
         int expectedStorage = (RAILS - STORAGE_FIRST_POSITION + 1) * STORAGE_LEVELS * Side.values().length;
-        return controller.status() == ControllerStatus.READY && !controller.isMembershipDirty()
+        boolean ready = controller.status() == ControllerStatus.READY && !controller.isMembershipDirty()
                 && controller.pendingSnapshotCount() == 0 && controller.storageLocations().size() == expectedStorage
-                && controller.outputStations().size() == 1 && crane.isControllerLinked()
-                && controller.stockIndex().distinctKeys() >= ITEM_TYPES
-                // The station is recorded and its pattern is readable, so the terminal really offers the product.
-                && controller.productionStations().size() == 1 && controller.producibleKeys().contains(PRODUCT);
+                && controller.outputStations().size() == 1 && crane.isControllerLinked();
+        return ready ? controller : null;
     }
 
     private static void openScreen(MinecraftServer server, VisualContext context) {
@@ -638,5 +809,967 @@ public final class TerminalVisualScenario implements VisualScenario {
         LocalPlayer player = context.minecraft().player;
         if (player != null)
             player.closeContainer();
+    }
+
+    // --- the sort button (M24, issue #17) ---------------------------------------------------------------------------
+
+    /**
+     * The three orders, each reached by a <b>real click</b> on the button through the mouse handler
+     * ({@link ScreenInput}), shot and checked.
+     * <p>
+     * A screenshot can show that three orders look different; it cannot show that they are the right three, that the
+     * tooltip is not a raw lang key, or that a translation has not grown wider than the window. So every shot is
+     * preceded by the assertions behind it: the order the button claims, the tooltip's three parts and their width in
+     * the window's own row, the icon (three orders a player cannot tell apart would be one order), the fact that no
+     * order changes <i>which</i> items the search and the filter keep, and the one name in the aisle that is long
+     * enough to be cut — which has to read the same in all three.
+     * <p>
+     * And before every shot the <b>server</b> says which item types the first rows have to be
+     * ({@link #assertRowsOnServer}), built from its own stock snapshot and its own request counts. The client's checks
+     * are read off the very list the client would draw, so a client sorting by the wrong numbers would agree with
+     * itself; the server is where the numbers live.
+     * <p>
+     * Afterwards the grid is scrolled down and the server is made to push new counts at it, because the other half of
+     * "the button a player presses" is everything that must <b>not</b> happen: the list may re-sort under a scroll
+     * position the player set, it may not jump back to the top, and it may not fall back into the previous order for a
+     * few ticks.
+     */
+    private void sortSteps(VisualScript script) {
+        script.client("terminal: remember what the first order shows", this::rememberBaseline)
+                .client("terminal: check the amount order", context -> checkSort(context, TerminalSort.AMOUNT));
+        assertRowsOnServer(script, TerminalSort.AMOUNT);
+        sortShots(script, TerminalSort.AMOUNT, "");
+        for (TerminalSort next : CYCLE) {
+            String label = next.name().toLowerCase(Locale.ROOT);
+            script.client("terminal: press the sort button (-> " + label + ")", TerminalVisualScenario::pressSort)
+                    .until("terminal: wait until the grid is in the " + label + " order",
+                            context -> screen(context).sort() == next, SCREEN_TIMEOUT_TICKS)
+                    .waitTicks(SETTLE_TICKS)
+                    .client("terminal: check the " + label + " order", context -> checkSort(context, next));
+            assertRowsOnServer(script, next);
+            // The last press closes the cycle back onto the first order, which already has its two shots.
+            if (next != TerminalSort.AMOUNT)
+                sortShots(script, next, "");
+        }
+        script.client("terminal: check that the three orders really are three", this::checkOrdersDiffer);
+        stableClickSteps(script);
+        script.client("terminal: scroll the grid down", TerminalVisualScenario::scrollDown)
+                .client("terminal: request one item, so the server pushes new counts", this::requestForPush)
+                .until("terminal: wait until the answer is on screen", context -> screen(context).hasFeedback(),
+                        REQUEST_TIMEOUT_TICKS)
+                .waitTicks(PUSH_TICKS)
+                .client("terminal: check that the push moved neither the grid nor the order", this::checkScrollKept)
+                .client("terminal: scroll the grid back up", TerminalVisualScenario::scrollUp);
+        germanSortSteps(script);
+    }
+
+    /**
+     * <b>Clicking one cell of the grid repeatedly, in the "most used" order, keeps asking for the same item</b>
+     * (M24 review fix).
+     * <p>
+     * It is the order's own hazard: the request count is the <b>first</b> sort key, so the first click on any row
+     * gives it a count the row did not have and pulls it in front of every row with none - and the push that carries
+     * that count arrives about a tick after the click. A player clicking a cell twice, which is how one request is
+     * grown ({@code docs/warehouse-system.md} §7.2), would have asked for whatever item slid into that cell meanwhile,
+     * and the grid's hit test is positional. So new counts now wait for the next list the player asks for themselves
+     * ({@code WarehouseTerminalScreen#latestUsage}), and this is where that is shown.
+     * <p>
+     * The assertions are written so that only <b>that</b> movement can fail them: the cell has to still hold the item
+     * before every one of the {@value #STABLE_CLICKS} clicks, and the row may not move <b>forward</b> in the list.
+     * Losing items to its own request can only move a row back (the amount keys sort the largest first), so a row
+     * that moved forward moved because of a count. The clicks are one per step and therefore one per tick, like every
+     * other repeated click here, and the item is chosen with amounts far enough from its neighbours' that four items
+     * leaving the racks cannot reorder it at all.
+     * <p>
+     * The counts are not lost, only deferred: the two presses that follow take them, and after the reload the screen
+     * comes up in this order with this item type among the favourites, which {@link #checkOrderItself} asserts
+     * against the clicks the scenario itself made.
+     */
+    private void stableClickSteps(VisualScript script) {
+        script.client("terminal: press the sort button into the used order", TerminalVisualScenario::pressSort)
+                .until("terminal: wait until the grid is in the used order",
+                        context -> screen(context).sort() == TerminalSort.USED, SCREEN_TIMEOUT_TICKS)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: pick a row far enough down the used order", this::rememberStableCell);
+        for (int click = 1; click <= STABLE_CLICKS; click++)
+            script.client("terminal: click that one cell (" + click + " of " + STABLE_CLICKS + ")",
+                            this::clickStableCell)
+                    .waitTicks(PUSH_TICKS)
+                    .client("terminal: check that the new count did not move the row under the cursor",
+                            this::checkStableCell);
+        sortShots(script, TerminalSort.USED, "-clicked");
+        for (TerminalSort next : List.of(TerminalSort.NAME, TerminalSort.AMOUNT)) {
+            script.client("terminal: press the sort button back towards the amount order",
+                            TerminalVisualScenario::pressSort)
+                    .until("terminal: wait until the grid is in the " + next.name().toLowerCase(Locale.ROOT)
+                            + " order", context -> screen(context).sort() == next, SCREEN_TIMEOUT_TICKS);
+        }
+        script.waitTicks(SETTLE_TICKS)
+                .client("terminal: park the mouse beside the sort button", TerminalVisualScenario::hoverOffButton);
+    }
+
+    /**
+     * Picks the cell the repeated clicks use: a stocked, unruled row this player has never asked for, at least
+     * {@value #STABLE_ROW_FROM} rows down, and with amounts far enough from its neighbours' that the items this check
+     * itself fetches cannot reorder it.
+     */
+    private void rememberStableCell(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        List<StockLine<ItemKey>> visible = terminal.visibleEntries();
+        Set<ItemKey> counted = expectedCounts().keySet();
+        for (int cell = STABLE_ROW_FROM; cell < visible.size(); cell++) {
+            StockLine<ItemKey> line = visible.get(cell);
+            if (line.rule().isPresent() || counted.contains(line.key()) || line.available() <= STABLE_CLICKS)
+                continue;
+            if (!separatedFromNeighbours(visible, cell))
+                continue;
+            stableKey = line.key();
+            stableCell = cell;
+            stableClicksDone = 0;
+            stableRowBefore = cell;
+            LOGGER.info(PREFIX + "terminal: clicking cell {} ({}, {} available) {} times in the used order", cell,
+                    line.name(), line.available(), STABLE_CLICKS);
+            return;
+        }
+        throw new VisualTestException("no row from " + STABLE_ROW_FROM
+                + " on can be clicked repeatedly without being reordered by its own request: "
+                + firstNames(visible));
+    }
+
+    /**
+     * Whether the row at {@code cell} is far enough from its neighbours in amount that {@value #STABLE_CLICKS} items
+     * leaving the racks cannot move it past either of them.
+     */
+    private static boolean separatedFromNeighbours(List<StockLine<ItemKey>> visible, int cell) {
+        long available = visible.get(cell).available();
+        for (int other : new int[] { cell - 1, cell + 1 }) {
+            if (other < 0 || other >= visible.size())
+                continue;
+            if (Math.abs(visible.get(other).available() - available) <= STABLE_CLICKS)
+                return false;
+        }
+        return true;
+    }
+
+    /** One click on the remembered cell, after checking that the cell still holds the item that was clicked. */
+    private void clickStableCell(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        List<StockLine<ItemKey>> visible = terminal.visibleEntries();
+        if (stableCell < 0 || stableCell >= visible.size())
+            throw new VisualTestException("the grid no longer has the cell " + stableCell + " that was clicked");
+        ItemKey inCell = visible.get(stableCell).key();
+        if (!inCell.equals(stableKey))
+            throw new VisualTestException("cell " + stableCell + " holds " + displayName(inCell) + " instead of "
+                    + displayName(stableKey) + ": the list moved under the cursor, so this click would ask for "
+                    + "something the player did not click on");
+        stableRowBefore = rowOf(terminal, stableKey);
+        if (!terminal.requestVisible(stableCell, TerminalAmounts.Click.SELECTED))
+            throw new VisualTestException("the grid refused the click on " + displayName(stableKey));
+        stableClicksDone++;
+    }
+
+    /** What the push may not do: pull the clicked row forward, or take it out of the cell it was clicked in. */
+    private void checkStableCell(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        int row = rowOf(terminal, stableKey);
+        if (row < 0)
+            throw new VisualTestException(displayName(stableKey) + " has left the list after being requested");
+        if (row < stableRowBefore)
+            throw new VisualTestException("the count of click " + stableClicksDone + " moved "
+                    + displayName(stableKey) + " forward from row " + stableRowBefore + " to row " + row
+                    + ", i.e. under the cursor that clicked it");
+        List<StockLine<ItemKey>> visible = terminal.visibleEntries();
+        if (row == stableRowBefore && (stableCell >= visible.size()
+                || !visible.get(stableCell).key().equals(stableKey)))
+            throw new VisualTestException("the row stayed at " + row + " but cell " + stableCell
+                    + " no longer shows " + displayName(stableKey));
+        LOGGER.info(PREFIX + "terminal: after click {} of {}, {} is still at row {} of the used order",
+                stableClicksDone, STABLE_CLICKS, displayName(stableKey), row);
+    }
+
+    /** Where {@code key} is in the list the screen would draw, or -1. */
+    private static int rowOf(WarehouseTerminalScreen terminal, ItemKey key) {
+        List<StockLine<ItemKey>> matching = terminal.matchingEntries();
+        for (int row = 0; row < matching.size(); row++) {
+            if (matching.get(row).key().equals(key))
+                return row;
+        }
+        return -1;
+    }
+
+    /**
+     * "Most used" for a player who has never requested anything, which is the state every player starts in.
+     * <p>
+     * This runs <b>before</b> the first request of the scenario, because afterwards it can never be reached again in
+     * that world: it is the one moment the store is empty. The order must then be exactly the amount order — asserted
+     * list against list, not described — and the tooltip has to say so, or a terminal that looks like it ignored the
+     * button is the obvious reading. The three presses leave the button where they found it, so the rest of the
+     * scenario sees what it always saw.
+     */
+    private void freshUsageSteps(VisualScript script) {
+        script.client("terminal: remember the list before anything was requested", this::rememberBaseline)
+                .client("terminal: press the sort button with an empty history", TerminalVisualScenario::pressSort)
+                .until("terminal: wait until the grid is in the used order",
+                        context -> screen(context).sort() == TerminalSort.USED, SCREEN_TIMEOUT_TICKS)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: check 'most used' without a history", this::checkUsedWithoutHistory);
+        sortShots(script, TerminalSort.USED, "-empty");
+        for (TerminalSort next : List.of(TerminalSort.NAME, TerminalSort.AMOUNT)) {
+            script.client("terminal: press the sort button back towards the amount order",
+                            TerminalVisualScenario::pressSort)
+                    .until("terminal: wait until the grid is in the " + next.name().toLowerCase(Locale.ROOT)
+                            + " order", context -> screen(context).sort() == next, SCREEN_TIMEOUT_TICKS);
+        }
+        script.waitTicks(SETTLE_TICKS)
+                .client("terminal: park the mouse beside the sort button", TerminalVisualScenario::hoverOffButton);
+    }
+
+    /** The fall-back: the same list the amount order shows, and a tooltip that says why. */
+    private void checkUsedWithoutHistory(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        checkSortTooltip(context, TerminalSort.USED);
+        String reason = text(WareworksLang.TERMINAL_SORT_NO_HISTORY);
+        if (terminal.sortTooltip().stream().map(Component::getString).noneMatch(line -> line.contains(reason)))
+            throw new VisualTestException("the tooltip does not say that nothing has been requested yet: "
+                    + terminal.sortTooltip().stream().map(Component::getString).toList());
+        List<ItemKey> keys = new ArrayList<>();
+        for (StockLine<ItemKey> line : terminal.matchingEntries())
+            keys.add(line.key());
+        if (!keys.equals(baselineOrder))
+            throw new VisualTestException("'most used' without a history is not the amount order: " + keys.size()
+                    + " entries beginning with " + firstNames(terminal.matchingEntries()));
+        LOGGER.info(PREFIX + "terminal: with nothing requested yet, 'most used' is the amount order and says so: {}",
+                terminal.sortTooltip().stream().map(Component::getString).toList());
+    }
+
+    /**
+     * The same three tooltips in German, measured against the same row.
+     * <p>
+     * German is the project's one hand-written language, and it is where a tooltip grows: "Sorting: by name" is three
+     * words, "Sortierung: am meisten Verfügbares zuerst" is five long ones. {@code LangConsistencyTest} can only check
+     * that the keys and placeholders match — the <b>width</b> of a translation needs a font and a loaded language, so
+     * it is checked here, in the one place that has both.
+     * <p>
+     * It measures the "nothing requested yet" line as well, although this player has long since requested something:
+     * that line is only <i>shown</i> while the store is empty, which is a state a world passes through once and
+     * before this pass, so the German translation of it had never been measured at all and really was 7 px too wide
+     * (M24 review fix). {@code WarehouseTerminalScreen#sortTooltipLines} therefore hands over every line the button
+     * can show, not only the ones it shows now.
+     */
+    private void germanSortSteps(VisualScript script) {
+        script.client("terminal: check every status text of the row in English",
+                TerminalVisualScenario::checkStatusVocabularyFits);
+        switchLanguage(script, GERMAN);
+        script.client("terminal: check every status text of the row in German",
+                        TerminalVisualScenario::checkStatusVocabularyFits)
+                .client("terminal: check the amount order in German",
+                        context -> checkSortTooltip(context, TerminalSort.AMOUNT));
+        tooltipShot(script, TerminalSort.AMOUNT, "-de");
+        for (TerminalSort next : CYCLE) {
+            String label = next.name().toLowerCase(Locale.ROOT);
+            script.client("terminal: press the sort button in German (-> " + label + ")",
+                            TerminalVisualScenario::pressSort)
+                    .until("terminal: wait until the grid is in the " + label + " order",
+                            context -> screen(context).sort() == next, SCREEN_TIMEOUT_TICKS)
+                    .waitTicks(SETTLE_TICKS)
+                    .client("terminal: check the " + label + " order in German",
+                            context -> checkSortTooltip(context, next))
+                    // The status row as well, in German: it is the one row of this screen whose text comes from the
+                    // warehouse rather than from the player, and German is where a translation grows past it.
+                    .client("terminal: check that the German status texts fit their rows",
+                            TerminalVisualScenario::checkStatusFits);
+            if (next != TerminalSort.AMOUNT)
+                tooltipShot(script, next, "-de");
+        }
+        switchLanguage(script, ENGLISH);
+        script.client("terminal: check that the tooltip is English again",
+                context -> checkSortTooltip(context, TerminalSort.AMOUNT));
+    }
+
+    /**
+     * Two shots of one order: the grid with the mouse parked away from the button, and the button being hovered.
+     * <p>
+     * The two are both needed and neither replaces the other. A player hovering the button reads the tooltip but the
+     * tooltip then covers the first row of the very grid it is talking about, and a shot without it shows the icon and
+     * the new order but says nothing about the words. So the run takes both, and a reader can put them side by side.
+     */
+    private static void sortShots(VisualScript script, TerminalSort sort, String suffix) {
+        String label = "sort-" + sort.name().toLowerCase(Locale.ROOT) + suffix;
+        script.client("terminal: park the mouse beside the sort button", TerminalVisualScenario::hoverOffButton)
+                .waitTicks(SETTLE_TICKS)
+                .shot(label);
+        tooltipShot(script, sort, suffix);
+    }
+
+    /** One shot of the sort button being hovered, i.e. of its tooltip as a player reads it. */
+    private static void tooltipShot(VisualScript script, TerminalSort sort, String suffix) {
+        script.client("terminal: hover the sort button", TerminalVisualScenario::hoverSortButton)
+                .waitTicks(SETTLE_TICKS)
+                .shot("sort-" + sort.name().toLowerCase(Locale.ROOT) + suffix + "-tip");
+    }
+
+    /** Puts the cursor on the sort button, so the shot after it holds the tooltip a player reads. */
+    private static void hoverSortButton(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        ScreenInput.hover(context.minecraft(), ScreenInput.terminalSortButton(terminal));
+    }
+
+    /** Puts the cursor into the window's title row: inside the screen, on no widget, slot, cell or order line. */
+    private static void hoverOffButton(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        ScreenInput.hover(context.minecraft(), new ScreenInput.Point(terminal.getGuiLeft() + TITLE_CORNER,
+                terminal.getGuiTop() + TITLE_CORNER));
+    }
+
+    /**
+     * What the language screen does when a player picks a language ({@code LanguageSelectScreen#onDone}): select it in
+     * the language manager and the options, then reload the resource packs. The options are not saved, and the open
+     * screen stays open — its tooltip lines are translatable components, so they simply read the new language.
+     */
+    private void switchLanguage(VisualScript script, String code) {
+        script.client("terminal: switch the game language to " + code + " like the language screen does", context -> {
+            Minecraft minecraft = context.minecraft();
+            minecraft.getLanguageManager().setSelected(code);
+            minecraft.options.languageCode = code;
+            languageReload = minecraft.reloadResourcePacks();
+        }).until("terminal: wait until the resource reload for " + code + " finished", context -> {
+            CompletableFuture<Void> reload = languageReload;
+            return reload != null && reload.isDone() && context.minecraft().getOverlay() == null
+                    && code.equals(context.minecraft().getLanguageManager().getSelected());
+        }, RELOAD_TIMEOUT_TICKS).waitTicks(SETTLE_TICKS);
+    }
+
+    /** Presses the sort button the way a player does: a real click, through the mouse handler and the screen's own hit test. */
+    private static void pressSort(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        TerminalSort before = terminal.sort();
+        ScreenInput.click(context.minecraft(), ScreenInput.terminalSortButton(terminal));
+        LOGGER.info(PREFIX + "terminal: pressed the sort button in the {} order, now {}", before, terminal.sort());
+    }
+
+    /** The list the amount order shows right now: which item types it keeps, and in which order. */
+    private void rememberBaseline(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        if (terminal.sort() != TerminalSort.AMOUNT)
+            throw new VisualTestException("the baseline is taken in the " + terminal.sort() + " order");
+        List<ItemKey> keys = new ArrayList<>();
+        for (StockLine<ItemKey> line : terminal.matchingEntries())
+            keys.add(line.key());
+        if (new LinkedHashSet<>(keys).size() < ITEM_TYPES)
+            throw new VisualTestException("the terminal shows only " + keys.size() + " item types, not " + ITEM_TYPES);
+        baselineOrder = List.copyOf(keys);
+        baselineKeys = Set.copyOf(keys);
+    }
+
+    /** Everything one order has to get right, asserted before the shot that illustrates it. */
+    private void checkSort(VisualContext context, TerminalSort expected) {
+        WarehouseTerminalScreen terminal = screen(context);
+        if (terminal.sort() != expected)
+            throw new VisualTestException("the grid is in the " + terminal.sort() + " order, not in " + expected);
+        checkSortTooltip(context, expected);
+        sortIcons.put(expected, ScreenInput.terminalSortIcon(terminal));
+
+        List<StockLine<ItemKey>> matching = terminal.matchingEntries();
+        List<ItemKey> keys = new ArrayList<>(matching.size());
+        for (StockLine<ItemKey> line : matching)
+            keys.add(line.key());
+        if (!Set.copyOf(keys).equals(baselineKeys))
+            throw new VisualTestException(
+                    "the " + expected + " order changed which items the search and the filter keep: " + keys.size()
+                            + " instead of " + baselineKeys.size());
+        sortLists.put(expected, List.copyOf(keys));
+        checkOffersLast(expected, matching);
+        checkOrderItself(expected, matching);
+        if (!terminal.statusTextsFit())
+            throw new VisualTestException("the status texts do not fit their rows in the " + expected + " order: '"
+                    + terminal.shownStatusLine().getString() + "'");
+        longestNames.put(expected, checkLongestName(terminal, expected, matching));
+        LOGGER.info(PREFIX + "terminal: the {} order begins with {}", expected, firstNames(matching));
+    }
+
+    /** An item the aisle can only make stays behind everything it really holds — in every order (M11, ADR-024). */
+    private static void checkOffersLast(TerminalSort expected, List<StockLine<ItemKey>> matching) {
+        boolean offerSeen = false;
+        for (StockLine<ItemKey> line : matching) {
+            if (line.isProducibleOnly())
+                offerSeen = true;
+            else if (offerSeen)
+                throw new VisualTestException("the " + expected + " order puts an offer at zero stock in front of "
+                        + line.name());
+        }
+    }
+
+    /** That each order really is the order it claims, read off the list the screen would draw. */
+    private void checkOrderItself(TerminalSort expected, List<StockLine<ItemKey>> matching) {
+        List<StockLine<ItemKey>> stocked = matching.stream().filter(line -> !line.isProducibleOnly()).toList();
+        switch (expected) {
+            case AMOUNT -> {
+                for (int i = 1; i < stocked.size(); i++) {
+                    if (stocked.get(i - 1).available() < stocked.get(i).available())
+                        throw new VisualTestException("the amount order has " + stocked.get(i).name() + " behind "
+                                + stocked.get(i - 1).name());
+                }
+            }
+            case NAME -> {
+                for (int i = 1; i < stocked.size(); i++) {
+                    if (String.CASE_INSENSITIVE_ORDER.compare(stocked.get(i - 1).name(), stocked.get(i).name()) > 0)
+                        throw new VisualTestException("the name order has " + stocked.get(i).name() + " behind "
+                                + stocked.get(i - 1).name());
+                }
+            }
+            // The whole point of the third order: the items this player really asked for, in the order of how often,
+            // and not one of them is where the amount order would have put it - the three favourites after the first
+            // are the aisle's smallest stacks and sit at the very end of that one.
+            case USED -> {
+                List<ItemKey> wanted = requestedRanking();
+                List<ItemKey> head = keysOf(stocked).subList(0, Math.min(wanted.size(), stocked.size()));
+                if (!wanted.equals(head))
+                    throw new VisualTestException("the most used order should begin with " + names(wanted)
+                            + " (the items this player asked for, most often first), but begins with " + names(head));
+            }
+        }
+    }
+
+    /**
+     * The longest name in the aisle, as the grid's own tooltip shows it: it must be there in full, and it must be the
+     * same text in every order. The grid draws items and amounts, never names, so this tooltip is the one place a name
+     * reaches a player — and the one place an order could cut it differently.
+     */
+    private static String checkLongestName(WarehouseTerminalScreen terminal, TerminalSort expected,
+            List<StockLine<ItemKey>> matching) {
+        StockLine<ItemKey> longest = null;
+        for (StockLine<ItemKey> line : matching) {
+            if (longest == null || line.name().length() > longest.name().length())
+                longest = line;
+        }
+        if (longest == null)
+            throw new VisualTestException("the terminal shows no item at all in the " + expected + " order");
+        List<Component> tooltip = terminal.itemTooltip(longest);
+        String shown = tooltip.isEmpty() ? "" : tooltip.getFirst().getString();
+        if (!shown.contains(longest.name()) || shown.contains(CommonComponents.ELLIPSIS.getString()))
+            throw new VisualTestException("the longest name is not shown in full in the " + expected + " order: '"
+                    + shown + "' instead of '" + longest.name() + "'");
+        return shown;
+    }
+
+    /** The sort button's tooltip in whichever language is loaded: three parts, no raw key, and inside the window's row. */
+    private static void checkSortTooltip(VisualContext context, TerminalSort expected) {
+        WarehouseTerminalScreen terminal = screen(context);
+        String language = context.minecraft().getLanguageManager().getSelected();
+        List<Component> tooltip = terminal.sortTooltip();
+        if (tooltip.size() < MIN_SORT_TOOLTIP_LINES)
+            throw new VisualTestException("the sort tooltip has only " + tooltip.size() + " lines in " + language);
+        List<String> lines = tooltip.stream().map(Component::getString).toList();
+        for (String line : lines) {
+            if (line.contains(WareworksLang.key("gui.")))
+                throw new VisualTestException("the sort tooltip shows a raw lang key in " + language + ": " + line);
+        }
+        String label = text(expected.langKey());
+        String detail = text(expected.detailKey());
+        String next = text(expected.next().langKey());
+        if (!lines.getFirst().contains(label))
+            throw new VisualTestException("the sort tooltip does not name the order in " + language + ": " + lines);
+        if (lines.stream().noneMatch(line -> line.contains(detail)))
+            throw new VisualTestException("the sort tooltip does not say what the order does in " + language + ": "
+                    + lines);
+        if (!lines.getLast().contains(next))
+            throw new VisualTestException("the sort tooltip does not name what the next press gives in " + language
+                    + ": " + lines);
+        if (!terminal.sortTooltipFits())
+            throw new VisualTestException("a line of the sort tooltip is wider than the terminal's row ("
+                    + (TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN) + " px) in " + language + ": "
+                    + widths(context, terminal.sortTooltipLines()));
+        LOGGER.info(PREFIX + "terminal: the {} order reads in {}: {}", expected, language, lines);
+    }
+
+    /** Three orders a player can tell apart, and three lists that really differ. */
+    private void checkOrdersDiffer(VisualContext context) {
+        for (TerminalSort sort : TerminalSort.values()) {
+            if (!sortIcons.containsKey(sort) || !sortLists.containsKey(sort))
+                throw new VisualTestException("the button never reached the " + sort + " order");
+        }
+        for (TerminalSort one : TerminalSort.values()) {
+            for (TerminalSort other : TerminalSort.values()) {
+                if (one.ordinal() >= other.ordinal())
+                    continue;
+                if (sortIcons.get(one) == sortIcons.get(other))
+                    throw new VisualTestException("the " + one + " and " + other + " orders draw the same icon");
+                if (sortLists.get(one).equals(sortLists.get(other)))
+                    throw new VisualTestException("the " + one + " and " + other + " orders produce the same list");
+            }
+        }
+        if (Set.copyOf(longestNames.values()).size() != 1)
+            throw new VisualTestException("the longest name is cut differently per order: " + longestNames);
+        LOGGER.info(PREFIX + "terminal: three orders, three icons, three lists; '{}' reads the same in all of them",
+                longestNames.get(TerminalSort.AMOUNT));
+    }
+
+    /** Scrolls the grid down by one row, the way a player's wheel does. */
+    private static void scrollDown(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        int before = terminal.scrollRow();
+        for (int notch = 0; notch < SCROLL_NOTCHES && terminal.scrollRow() == before; notch++)
+            ScreenInput.scroll(context.minecraft(), ScreenInput.terminalCell(terminal, 0), -1.0);
+        if (terminal.scrollRow() <= before)
+            throw new VisualTestException("the grid did not scroll down (row " + terminal.scrollRow() + ")");
+    }
+
+    /** Scrolls back to the top, so the shots after this one show the list from its first row again. */
+    private static void scrollUp(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        for (int notch = 0; notch < SCROLL_NOTCHES + 1 && terminal.scrollRow() > 0; notch++)
+            ScreenInput.scroll(context.minecraft(), ScreenInput.terminalCell(terminal, 0), 1.0);
+        if (terminal.scrollRow() != 0)
+            throw new VisualTestException("the grid did not scroll back to the top (row " + terminal.scrollRow() + ")");
+    }
+
+    /**
+     * Requests one item of the first row the scrolled grid shows that no stock rule governs, so the request is accepted
+     * and the server really pushes new counts. A rule would raise the confirmation panel instead, and a refusal counts
+     * nothing — either way there would be no push to check against.
+     */
+    private void requestForPush(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        scrollBeforePush = terminal.scrollRow();
+        List<StockLine<ItemKey>> visible = terminal.visibleEntries();
+        for (int cell = 0; cell < visible.size(); cell++) {
+            StockLine<ItemKey> line = visible.get(cell);
+            // The repeated-click check above already owns one item type, and two checks counting the same one would
+            // leave two expected counts equal, which requestedRanking() has nothing to compare against.
+            if (line.rule().isPresent() || line.available() <= 0L || line.key().equals(stableKey))
+                continue;
+            if (!terminal.requestVisible(cell, TerminalAmounts.Click.SELECTED))
+                throw new VisualTestException("the scrolled grid refused the click on " + line.name());
+            // Remembered because it is a real, accepted request and therefore counts: every later check of this
+            // player's store has to expect it, or it would read as something that was counted without being asked for.
+            pushRequestKey = line.key();
+            LOGGER.info(PREFIX + "terminal: requested one {} with the grid scrolled to row {}", line.name(),
+                    scrollBeforePush);
+            return;
+        }
+        throw new VisualTestException("the scrolled grid shows no item that could be requested without a question");
+    }
+
+    /** What the push may not do: move the grid, or put the list back into the order the player left. */
+    private void checkScrollKept(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        if (terminal.scrollRow() != scrollBeforePush)
+            throw new VisualTestException("the server's push moved the grid from row " + scrollBeforePush + " to row "
+                    + terminal.scrollRow());
+        if (terminal.sort() != TerminalSort.AMOUNT)
+            throw new VisualTestException("the server's push changed the order to " + terminal.sort());
+        LOGGER.info(PREFIX + "terminal: the counts arrived, the grid stayed at row {} in the {} order",
+                terminal.scrollRow(), terminal.sort());
+    }
+
+    // --- a "most used" order with a real ranking (M24, issue #17) ---------------------------------------------------
+
+    /**
+     * Asks the terminal for {@link #USAGE_REQUESTS} item types, several clicks each, so that "most used" has something
+     * to be most used <i>about</i>.
+     * <p>
+     * Before this the scenario had asked for exactly one item type {@value #MERGE_CLICKS}+1 times, and the third order
+     * could therefore only be checked by "the favourite is in front" — which the amount order would also satisfy for
+     * an item that happens to be the largest stack. With four item types at four different counts the order is a
+     * sequence that no other order produces, and the three smallest stacks of the aisle being the favourites means the
+     * amount order's last rows are the used order's first ones.
+     * <p>
+     * The clicks go through the screen's own request path, one per step and therefore one per tick, like the merge
+     * clicks above: a menu answers at most {@code WarehouseTerminalMenu.MAX_REQUESTS_PER_TICK} requests in a tick, and
+     * the counting is part of accepting a request, so clicks that were never answered would never be counted either.
+     * Afterwards the run waits twice, with the push interval in between, until this terminal has no open request left
+     * and the crane is idle: every later assertion compares a list the client holds with one the server builds, and a
+     * crane still carrying items would move the amounts between the two reads.
+     */
+    private void usageSteps(VisualScript script) {
+        for (UsageRequest request : USAGE_REQUESTS) {
+            for (int click = 1; click <= request.clicks(); click++)
+                script.client("terminal: ask for " + request.name() + " (" + click + " of " + request.clicks() + ")",
+                        context -> requestOne(context, request));
+        }
+        script.until("terminal: wait until everything that was asked for has arrived",
+                        TerminalVisualScenario::warehouseSettled, DELIVERY_TIMEOUT_TICKS)
+                .waitTicks(PUSH_TICKS)
+                .until("terminal: check that the warehouse really came to rest",
+                        TerminalVisualScenario::warehouseSettled, SCREEN_TIMEOUT_TICKS)
+                .server("terminal: check the request counts the server has written", this::checkCountedRequests)
+                .client("terminal: check that the status texts still fit their rows",
+                        TerminalVisualScenario::checkStatusFits);
+    }
+
+    /** One click on {@code request}'s item, wherever the current order has put it in the grid. */
+    private void requestOne(VisualContext context, UsageRequest request) {
+        WarehouseTerminalScreen terminal = screen(context);
+        List<StockLine<ItemKey>> visible = terminal.visibleEntries();
+        for (int cell = 0; cell < visible.size(); cell++) {
+            if (!visible.get(cell).key().equals(request.key()))
+                continue;
+            if (!terminal.requestVisible(cell, TerminalAmounts.Click.SELECTED))
+                throw new VisualTestException("the grid refused the click on " + request.name());
+            return;
+        }
+        throw new VisualTestException(request.name() + " is not in the visible grid, so it cannot be clicked");
+    }
+
+    /** No open request of this terminal and an idle crane: the one state in which two reads cannot disagree. */
+    private static boolean warehouseSettled(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        return terminal.status().requestsHere() == 0 && terminal.status().cranePhase() == CranePhase.IDLE;
+    }
+
+    /**
+     * What this player's clicks taught the server, read from the server's own store before anything is shot.
+     * <p>
+     * It is the assertion the screenshots of the three orders rest on: a "most used" list is only right if the counts
+     * behind it are the ones the player's clicks made, and no screenshot can show a count. The <b>size</b> is checked
+     * as well as the counts, because an extra entry would mean something was counted that no player asked for — the
+     * redstone path, a refusal, or a line of the clipboard order — and that is exactly what must not happen.
+     */
+    private void checkCountedRequests(MinecraftServer server, VisualContext context) {
+        TerminalPreferences preferences = TerminalPreferences.of(context.serverPlayer(server));
+        Map<ItemKey, Long> expected = expectedCounts();
+        for (Map.Entry<ItemKey, Long> wanted : expected.entrySet()) {
+            long counted = preferences.usage().countFor(wanted.getKey());
+            if (counted != wanted.getValue())
+                throw new VisualTestException("the server counted " + counted + " requests of "
+                        + displayName(wanted.getKey()) + " for this player, not " + wanted.getValue() + " ("
+                        + describeCounts(preferences) + ")");
+        }
+        if (preferences.usage().size() != expected.size())
+            throw new VisualTestException("the server remembers " + preferences.usage().size()
+                    + " item types for this player, not the " + expected.size() + " that were really asked for ("
+                    + describeCounts(preferences) + ")");
+        LOGGER.info(PREFIX + "terminal: the server counted {}", describeCounts(preferences));
+    }
+
+    /**
+     * How often each item type was really asked for in this scenario, counted from the clicks it makes: the first
+     * requested item with its {@value #MERGE_CLICKS} repeats, the producible item that was ordered once, and
+     * {@link #USAGE_REQUESTS}.
+     */
+    private Map<ItemKey, Long> expectedCounts() {
+        Map<ItemKey, Long> expected = new LinkedHashMap<>();
+        if (requestedKey != null)
+            expected.merge(requestedKey, MERGE_CLICKS + 1L, Long::sum);
+        // Ordering something only a production station can make is an accepted request like any other, so it counts
+        // once as well - and it stays at the end of every order anyway, because it is an offer and not stock.
+        expected.merge(PRODUCT, 1L, Long::sum);
+        for (UsageRequest request : USAGE_REQUESTS)
+            expected.merge(request.key(), (long) request.clicks(), Long::sum);
+        ItemKey pushed = pushRequestKey;
+        if (pushed != null)
+            expected.merge(pushed, 1L, Long::sum);
+        // The repeated clicks on one cell (M24 review fix) are accepted requests like any other, counted as often as
+        // they have really been made so far, so a check between two of them expects the right number too.
+        ItemKey stable = stableKey;
+        if (stable != null && stableClicksDone > 0)
+            expected.merge(stable, (long) stableClicksDone, Long::sum);
+        return expected;
+    }
+
+    /**
+     * The item types this player asked for, most often first and without the producible offer: the sequence the "most
+     * used" order has to <b>begin</b> with.
+     * <p>
+     * It is computed from the clicks the scenario itself makes, never read back from the store under test, so the
+     * check cannot agree with a wrong implementation. The counts have to differ from each other — a ranking with two
+     * equal counts would have no defined sequence, and a check that tolerated either would not be one.
+     */
+    private List<ItemKey> requestedRanking() {
+        List<Map.Entry<ItemKey, Long>> ranked = new ArrayList<>(expectedCounts().entrySet());
+        ranked.removeIf(entry -> entry.getKey().equals(PRODUCT));
+        ranked.sort(Comparator.comparingLong((Map.Entry<ItemKey, Long> entry) -> -entry.getValue()));
+        List<ItemKey> keys = new ArrayList<>(ranked.size());
+        for (int index = 0; index < ranked.size(); index++) {
+            if (index > 0 && ranked.get(index - 1).getValue().equals(ranked.get(index).getValue()))
+                throw new VisualTestException("the scenario asked for " + displayName(ranked.get(index).getKey())
+                        + " and " + displayName(ranked.get(index - 1).getKey()) + " equally often, so 'most used' has "
+                        + "no defined sequence to be checked against");
+            keys.add(ranked.get(index).getKey());
+        }
+        return List.copyOf(keys);
+    }
+
+    /** This player's whole store, strongest first, for a log line and for the message of a failed check. */
+    private static String describeCounts(TerminalPreferences preferences) {
+        List<String> counts = new ArrayList<>();
+        for (TerminalUsage.Entry<ItemKey> entry : preferences.counts())
+            counts.add(displayName(entry.key()) + " x" + entry.count());
+        return "sort=" + preferences.sort() + ", used=" + counts;
+    }
+
+    // --- the server checks the first rows of every order ------------------------------------------------------------
+
+    /**
+     * Reads the rows the screen shows and then lets the <b>server</b> check them against its own data, as the two steps
+     * before every sort shot.
+     * <p>
+     * The client already asserts that each order <i>is</i> its order (see {@link #checkOrderItself}), but it does so
+     * from the very list it would draw: a client that sorted by the wrong counts would agree with itself. The server
+     * owns the counts and the stock, so it can say which item types the first rows have to be — and that is what makes
+     * a screenshot of "most used" evidence rather than an illustration.
+     */
+    private void assertRowsOnServer(VisualScript script, TerminalSort sort) {
+        String label = sort.name().toLowerCase(Locale.ROOT);
+        script.client("terminal: read the rows the screen shows in the " + label + " order", this::readShownRows)
+                .server("terminal: the server checks the first rows of the " + label + " order",
+                        (server, context) -> checkRowsOnServer(server, context, sort));
+    }
+
+    /** Hands the screen's current list to the server step after it. */
+    private void readShownRows(VisualContext context) {
+        List<StockLine<ItemKey>> matching = screen(context).matchingEntries();
+        List<ItemKey> keys = new ArrayList<>(matching.size());
+        for (StockLine<ItemKey> line : matching)
+            keys.add(line.key());
+        shownRows = List.copyOf(keys);
+        shownKeys = Set.copyOf(keys);
+    }
+
+    /**
+     * Builds the list {@code sort} has to produce from the server's own stock snapshot and the server's own request
+     * counts, and fails the run unless the screen's first {@value #ASSERTED_ROWS} rows are exactly its first
+     * {@value #ASSERTED_ROWS}.
+     * <p>
+     * The snapshot is taken through {@code WarehouseTerminalMenu#stockCounts}, i.e. through the very method whose
+     * result is sent to the screen, and the counts through {@link TerminalPreferences}, i.e. the player's own save
+     * data. The whole <b>key set</b> is compared as well: first rows that matched while the two sides were talking
+     * about different lists would prove nothing.
+     * <p>
+     * <b>Why this needs no tie-break of its own, and when it would.</b> Every comparator of {@link TerminalSort} is a
+     * total order over the <i>visible texts and amounts</i> — not over the keys, as its own class comment says: two
+     * distinct {@code ItemKey}s that agree on all of them are a tie, and a stable sort then leaves such a pair in
+     * whatever order the list it sorted already had. The two sides build that list differently (the client appends a
+     * delta's new keys to its {@code LinkedHashMap}, the server rebuilds in {@code TerminalStockEntry.ORDER}), so a
+     * tie group straddling the {@value #ASSERTED_ROWS}-row boundary could make this check fail on a difference a
+     * player cannot see. It cannot happen here because this scenario stocks only item types with distinct names, and
+     * that is a property of the scenario, not of the comparators. A scenario that stocked two rows a player cannot
+     * tell apart (two enchanted books, two filled shulker boxes) would have to sort both sides by
+     * {@code ItemKey.ORDER} first — the tie-break the content layer already uses for exactly this reason.
+     */
+    private void checkRowsOnServer(MinecraftServer server, VisualContext context, TerminalSort sort) {
+        ServerPlayer player = context.serverPlayer(server);
+        TerminalPreferences preferences = TerminalPreferences.of(player);
+        List<StockLine<ItemKey>> lines = serverLines(player);
+        if (!Set.copyOf(keysOf(lines)).equals(shownKeys))
+            throw new VisualTestException("the server has " + lines.size() + " rows for the " + sort
+                    + " order, the screen shows " + shownKeys.size() + "; they are not the same list");
+        lines.sort(sort.comparator(preferences.usage()));
+        List<ItemKey> expected = firstRows(keysOf(lines));
+        List<ItemKey> shown = firstRows(shownRows);
+        if (!expected.equals(shown))
+            throw new VisualTestException("the " + sort + " order should begin with " + names(expected)
+                    + ", but the screen shows " + names(shown) + " (" + describeCounts(preferences) + ")");
+        LOGGER.info(PREFIX + "terminal: the server confirms the {} order begins with {}", sort, names(expected));
+    }
+
+    /**
+     * The terminal's stock as the <b>server</b> has it, as the lines a screen would hold: the same conversion the push
+     * uses ({@code WarehouseTerminalMenu#stockCounts}) plus the two texts a client resolves for itself, because the
+     * display name is language dependent and is therefore never sent.
+     */
+    private static List<StockLine<ItemKey>> serverLines(ServerPlayer player) {
+        if (!(player.containerMenu instanceof WarehouseTerminalMenu menu))
+            throw new VisualTestException("the player has no terminal menu open on the server");
+        List<StockLine<ItemKey>> lines = new ArrayList<>();
+        for (StockCount<ItemKey> counts : menu.stockCounts()) {
+            StockLine<ItemKey> line = StockLine.of(counts, displayName(counts.key()), modId(counts.key()));
+            if (line.isShown())
+                lines.add(line);
+        }
+        return lines;
+    }
+
+    private static List<ItemKey> keysOf(List<StockLine<ItemKey>> lines) {
+        List<ItemKey> keys = new ArrayList<>(lines.size());
+        for (StockLine<ItemKey> line : lines)
+            keys.add(line.key());
+        return keys;
+    }
+
+    private static List<ItemKey> firstRows(List<ItemKey> keys) {
+        return List.copyOf(keys.subList(0, Math.min(ASSERTED_ROWS, keys.size())));
+    }
+
+    private static List<String> names(List<ItemKey> keys) {
+        List<String> names = new ArrayList<>(keys.size());
+        for (ItemKey key : keys)
+            names.add(displayName(key));
+        return names;
+    }
+
+    /** The name the grid's tooltip shows; resolved the same way on both sides ({@code WarehouseTerminalScreen}). */
+    private static String displayName(ItemKey key) {
+        return key.toStack().getHoverName().getString();
+    }
+
+    private static String modId(ItemKey key) {
+        ResourceLocation id = BuiltInRegistries.ITEM.getKey(key.getItem());
+        return id == null ? "" : id.getNamespace();
+    }
+
+    // --- the chosen order survives a save, quit and rejoin ----------------------------------------------------------
+
+    /**
+     * The order a player chose and the counts behind it, through a <b>real</b> save, quit to the title screen and
+     * rejoin of the same world (M24, issue #17, ADR-037).
+     * <p>
+     * This is the one claim of the milestone that nothing else can show. A GameTest server cannot quit to a title
+     * screen, so {@code TerminalUsageGameTests} can only exercise the serializer; the robustness scenario proves the
+     * <i>data</i> comes back but has no screen open. Here the screen itself is opened again after the rejoin and has to
+     * come up in {@link #KEPT_SORT} with nobody pressing anything — which is what a player would call "it remembered".
+     * <p>
+     * The world is saved explicitly first, exactly as {@code VisualWorld#saveAndQuit} does, instead of relying on the
+     * save that leaving does: the point of the step is the save, so it is not left to a side effect. The watchdog is
+     * re-armed afterwards because loading a world again costs time that the run's own budget never allowed for.
+     */
+    private void reloadSteps(VisualScript script) {
+        script.until("terminal: wait until the scrolled-grid request has arrived too",
+                        TerminalVisualScenario::warehouseSettled, DELIVERY_TIMEOUT_TICKS)
+                .client("terminal: press the sort button to the order that is to survive",
+                        TerminalVisualScenario::pressSort)
+                .until("terminal: wait until the grid is in the kept order",
+                        context -> screen(context).sort() == KEPT_SORT, SCREEN_TIMEOUT_TICKS)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: check the kept order before the save", context -> checkSort(context, KEPT_SORT));
+        assertRowsOnServer(script, KEPT_SORT);
+        script.client("terminal: park the mouse beside the sort button", TerminalVisualScenario::hoverOffButton)
+                .waitTicks(SETTLE_TICKS)
+                .shot("reload-chosen")
+                .server("terminal: remember what the server holds for this player", this::rememberPreferences)
+                .client("terminal: close the screen before the save", TerminalVisualScenario::closeScreen)
+                .until("terminal: wait until the screen is closed", context -> context.minecraft().screen == null,
+                        SCREEN_TIMEOUT_TICKS)
+                .server("terminal: save the world", (server, context) -> server.saveEverything(true, true, true));
+        // The title screen between the two terminal shots is what makes them a sequence: without it they are two
+        // pictures of the same screen, and nothing in either says that the game was closed in between.
+        VisualWorld.reload(script, worldProfile(), atTitle -> atTitle.waitTicks(SETTLE_TICKS).shot("reload-title"));
+        script.client("terminal: give the reload its own watchdog phase",
+                        context -> context.watchdog().rearm(RELOAD_WATCHDOG_MILLIS, "terminal after the reload"))
+                .camera(AT_TERMINAL)
+                .serverUntil("terminal: wait until the aisle is indexed again after the rejoin",
+                        TerminalVisualScenario::sceneReloaded, SCENE_READY_TIMEOUT_TICKS)
+                .server("terminal: the order and the counts came back from the player's save data",
+                        this::checkPreferencesSurvived)
+                .server("terminal: open the terminal screen again", TerminalVisualScenario::openScreen)
+                .until("terminal: wait for the screen with its stock", TerminalVisualScenario::screenReady,
+                        SCREEN_TIMEOUT_TICKS)
+                .waitTicks(PUSH_TICKS)
+                .client("terminal: the screen came up in the kept order without anyone pressing anything",
+                        this::checkSortCameBack);
+        assertRowsOnServer(script, KEPT_SORT);
+        script.client("terminal: park the mouse beside the sort button", TerminalVisualScenario::hoverOffButton)
+                .waitTicks(SETTLE_TICKS)
+                .shot("reload-kept");
+        tooltipShot(script, KEPT_SORT, "-reloaded");
+    }
+
+    /** What the server holds before the save; the rejoin is compared against this text and against the counts. */
+    private void rememberPreferences(MinecraftServer server, VisualContext context) {
+        TerminalPreferences preferences = TerminalPreferences.of(context.serverPlayer(server));
+        if (preferences.sort() != KEPT_SORT)
+            throw new VisualTestException("the server stored " + preferences.sort() + " instead of the pressed "
+                    + KEPT_SORT + "; the press never reached it");
+        preferencesBeforeReload = describeCounts(preferences);
+        LOGGER.info(PREFIX + "terminal: before the save the server holds {}", preferencesBeforeReload);
+    }
+
+    /**
+     * After the rejoin: the order and every count are back, read from the <b>new</b> player object the world load
+     * built, i.e. really from {@code playerdata/<uuid>.dat} and not from anything still in memory.
+     */
+    private void checkPreferencesSurvived(MinecraftServer server, VisualContext context) {
+        TerminalPreferences preferences = TerminalPreferences.of(context.serverPlayer(server));
+        if (preferences.sort() != KEPT_SORT)
+            throw new VisualTestException("the chosen order did not survive the rejoin: " + preferences.sort()
+                    + " instead of " + KEPT_SORT);
+        String after = describeCounts(preferences);
+        if (!after.equals(preferencesBeforeReload))
+            throw new VisualTestException("the request counts did not survive the rejoin: " + after + " instead of "
+                    + preferencesBeforeReload);
+        checkCountedRequests(server, context);
+        LOGGER.info(PREFIX + "terminal: PASS the order and the counts came back after the save, quit and rejoin ({})",
+                after);
+    }
+
+    /** The screen a rejoined player opens: the stored order, and the list that order produces, with no press at all. */
+    private void checkSortCameBack(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        if (terminal.sort() != KEPT_SORT)
+            throw new VisualTestException("the reopened screen is in the " + terminal.sort() + " order, not in the "
+                    + KEPT_SORT + " one the player chose before the save");
+        checkSort(context, KEPT_SORT);
+        LOGGER.info(PREFIX + "terminal: after the rejoin the screen opened in the {} order by itself, beginning with "
+                + "{}", terminal.sort(), firstNames(terminal.matchingEntries()));
+    }
+
+    // --- the status row in every language ---------------------------------------------------------------------------
+
+    /**
+     * Every text the terminal's status row can hold, measured against the row in the language that is loaded.
+     * <p>
+     * {@code statusTextsFit()} only ever sees the state the warehouse happens to be in while the run looks, and the
+     * earlier runs recorded exactly that gap: with the client switched to German the idle line read
+     * "Regalbedienger&auml;t: Wartet auf einen Auftrag" at 219 px in a 216 px row, was silently cut by the screen's own
+     * {@code fitToRow}, and the index line said {@code statusFits=false} without anything failing. So this walks the
+     * row's whole vocabulary instead — every {@link CranePhase}, every {@link CranePauseReason}, the two "no aisle" and
+     * "no crane" lines and the widest amount the waiting line can show — and reports <b>all</b> offenders at once,
+     * because a translation that is too long is never too long alone.
+     */
+    private static void checkStatusVocabularyFits(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        Map<String, Component> row = new LinkedHashMap<>();
+        for (CranePhase phase : CranePhase.values())
+            row.put("phase." + phase.name().toLowerCase(Locale.ROOT),
+                    terminal.craneStatusText(WareworksLang.translateDirect(WareworksLang.cranePhaseKey(phase))));
+        for (CranePauseReason reason : CranePauseReason.values()) {
+            // NONE is "not paused" and has no text at all: the status row asks for a pause reason only while
+            // TerminalScreenStatus#isPaused() is true, which is exactly "the reason is not NONE". Measuring it would
+            // measure the raw lang key - and the run did, at 246 px, which is how this comment came to be written.
+            if (reason == CranePauseReason.NONE)
+                continue;
+            row.put("pause." + reason.name().toLowerCase(Locale.ROOT),
+                    terminal.craneStatusText(WareworksLang.translateDirect(reason.langKey())));
+        }
+        row.put("no_aisle", WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE));
+        row.put("no_crane", WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_CRANE));
+
+        Map<String, String> tooWide = new LinkedHashMap<>();
+        int widest = 0;
+        for (Map.Entry<String, Component> line : row.entrySet()) {
+            int width = context.minecraft().font.width(line.getValue());
+            widest = Math.max(widest, width);
+            if (!terminal.fitsStatusRow(line.getValue()))
+                tooWide.put(line.getKey(), "'" + line.getValue().getString() + "' " + width + " px");
+        }
+        String language = context.minecraft().getLanguageManager().getSelected();
+        // An exact set, not an upper bound: a new text that does not fit fails here, and so does one of these two
+        // being shortened, which is the only way the exception below could ever be removed without someone noticing.
+        if (!tooWide.keySet().equals(STATUS_ROW_TOO_LONG))
+            throw new VisualTestException("the status texts that do not fit the terminal's row (" + ROW_WIDTH
+                    + " px) in " + language + " are " + tooWide + ", and the only one that may not fit is "
+                    + STATUS_ROW_TOO_LONG);
+        LOGGER.info(PREFIX + "terminal: {} of {} status texts fit the row's {} px in {} (widest {} px); the known "
+                + "exception is {}", row.size() - tooWide.size(), row.size(), ROW_WIDTH, language, widest, tooWide);
+    }
+
+    /** The names of the first few rows, for the log line of a shot. */
+    private static List<String> firstNames(List<StockLine<ItemKey>> matching) {
+        List<String> names = new ArrayList<>(NAMES_LOGGED);
+        for (StockLine<ItemKey> line : matching.subList(0, Math.min(NAMES_LOGGED, matching.size())))
+            names.add(line.name());
+        return names;
+    }
+
+    /** Every tooltip line with the width it is drawn at, for the message of a failed width check. */
+    private static List<String> widths(VisualContext context, List<Component> tooltip) {
+        List<String> measured = new ArrayList<>(tooltip.size());
+        for (Component line : tooltip)
+            measured.add("'" + line.getString() + "' " + context.minecraft().font.width(line) + " px");
+        return measured;
+    }
+
+    private static String text(String relativeKey) {
+        return WareworksLang.translateDirect(relativeKey).getString();
     }
 }

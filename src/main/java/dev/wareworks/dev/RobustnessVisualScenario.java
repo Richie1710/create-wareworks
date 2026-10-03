@@ -23,6 +23,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
@@ -32,6 +33,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
+import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -40,6 +42,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -122,6 +125,11 @@ public final class RobustnessVisualScenario implements VisualScenario {
     private static final int HOLD_RELEASE_TIMEOUT_TICKS = 1200;
 
     private static final int STACK = 64;
+
+    /** The order and the two items whose request counts have to survive the save, quit and rejoin (M24, issue #17). */
+    private static final TerminalSort PREFERRED_SORT = TerminalSort.USED;
+    private static final Item PREFERRED_ITEM = Items.AMETHYST_SHARD;
+    private static final Item SECOND_ITEM = Items.QUARTZ;
 
     /** Items fed into the input before each phase; fresh stacks, so the expectation and the world cannot share one. */
     private static List<ItemStack> firstFill() {
@@ -232,12 +240,16 @@ public final class RobustnessVisualScenario implements VisualScenario {
         script.server("robustness: refill the input", (server, context) -> refill(server, context, secondFill()))
                 .serverUntil("robustness: wait until the crane carries items again", this::craneCarries,
                         JOB_TIMEOUT_TICKS)
+                .server("robustness: choose a terminal order and count requests for the player",
+                        this::writeTerminalPreferences)
                 .server("robustness: save the world in the middle of the job",
                         (server, context) -> server.saveEverything(true, true, true));
         VisualWorld.reload(script, worldProfile());
         script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
                 .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
                         CHUNK_TIMEOUT_TICKS)
+                .server("robustness: the player's terminal order and request counts came back",
+                        this::assertTerminalPreferences)
                 .server("robustness: census after save, quit and rejoin",
                         (server, context) -> census(server, "save, quit and rejoin during a job"))
                 .serverUntil("robustness: wait until the resumed job finished", this::craneIdleAndInputEmpty,
@@ -425,6 +437,39 @@ public final class RobustnessVisualScenario implements VisualScenario {
     private boolean dockUnloaded(MinecraftServer server, VisualContext context) {
         StackerCraneBlockEntity before = dockBeforeUnload;
         return before != null && before.isRemoved() && !server.overworld().isLoaded(context.origin());
+    }
+
+    /**
+     * Writes the terminal preferences of the <b>real</b> player before the save: the order they chose and three
+     * counted requests (M24, issue #17, ADR-037).
+     * <p>
+     * Nothing else in the automated tests can prove this part, because it is the one thing a GameTest server cannot
+     * do: quit to the title screen and open the world again. The counts are written through the ordinary store, so
+     * what is saved is what a player's clicks would have written.
+     */
+    private void writeTerminalPreferences(MinecraftServer server, VisualContext context) {
+        TerminalPreferences preferences = TerminalPreferences.of(context.serverPlayer(server));
+        preferences.clear();
+        preferences.setSort(PREFERRED_SORT);
+        preferences.usage().record(ItemKey.of(PREFERRED_ITEM));
+        preferences.usage().record(ItemKey.of(PREFERRED_ITEM));
+        preferences.usage().record(ItemKey.of(SECOND_ITEM));
+        LOGGER.info(PREFIX + "robustness: wrote terminal preferences before the save ({})", preferences);
+    }
+
+    /** After the rejoin the order and every count must be back, read from the player's own save data. */
+    private void assertTerminalPreferences(MinecraftServer server, VisualContext context) {
+        TerminalPreferences preferences = TerminalPreferences.of(context.serverPlayer(server));
+        if (preferences.sort() != PREFERRED_SORT)
+            throw new VisualTestException("the chosen terminal order did not survive the rejoin: " + preferences.sort()
+                    + " instead of " + PREFERRED_SORT);
+        long preferred = preferences.usage().countFor(ItemKey.of(PREFERRED_ITEM));
+        long second = preferences.usage().countFor(ItemKey.of(SECOND_ITEM));
+        if (preferred != 2L || second != 1L)
+            throw new VisualTestException("the request counts did not survive the rejoin: " + PREFERRED_ITEM + " x"
+                    + preferred + ", " + SECOND_ITEM + " x" + second + " (expected x2 and x1)");
+        LOGGER.info(PREFIX + "robustness: PASS the terminal order {} and both request counts came back after the "
+                + "rejoin ({})", preferences.sort(), preferences);
     }
 
     /** After the round trip the dock must be a new block entity, read from the save rather than kept in memory. */

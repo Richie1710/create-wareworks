@@ -18,12 +18,14 @@ import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockDiff;
+import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.network.TerminalConfirmPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
+import dev.wareworks.network.TerminalUsagePayload;
 import dev.wareworks.registry.WareworksMenuTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -110,6 +112,12 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     @Nullable
     private TerminalListState lastList;
     /**
+     * The order and the counts as last pushed, so a player who requests nothing costs no packet (M24, issue #17). It is
+     * the payload rather than the store, because the store is mutated in place and could not be compared with itself.
+     */
+    @Nullable
+    private TerminalUsagePayload lastUsage;
+    /**
      * The question the clipboard order is waiting on goes out with the next push, although the order did not change
      * state: the list button's <b>Answer</b> ({@link #resendListQuestion()}, M23 review fix).
      */
@@ -161,6 +169,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         layout = new TerminalMenuLayout(bufferSlots);
         stockDiff = new StockDiff<>();
         fullSyncPending = true;
+        lastUsage = null;
         listQuestionPending = false;
         lastPushGameTime = NEVER;
         pushPending = true;
@@ -311,6 +320,30 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     }
 
     /**
+     * Server: the order of a {@code TerminalSortPayload}, stored on the player it came from (M24, issue #17,
+     * ADR-037).
+     * <p>
+     * Empty (and nothing done) when the player has no terminal menu open or the id does not match, like every other
+     * payload here. It deliberately spends <b>no</b> request budget: pressing the sort button asks the warehouse for
+     * nothing, measures nothing and walks no pattern — it writes one enum constant onto the player — so charging it
+     * against the eight clicks a tick would let a crafted flood of them block real requests. The work it can cause is
+     * bounded by {@link #broadcastChanges()}, which pushes at most one packet per tick whatever happens here.
+     *
+     * @return the order that is now stored, or empty when nothing was reached
+     */
+    public static Optional<TerminalSort> submitSort(@Nullable Player player, int containerId,
+            @Nullable TerminalSort sort) {
+        if (player == null || player.level() == null || player.level().isClientSide)
+            return Optional.empty();
+        if (!(player.containerMenu instanceof WarehouseTerminalMenu menu) || menu.containerId != containerId)
+            return Optional.empty();
+        TerminalPreferences preferences = TerminalPreferences.of(player);
+        if (preferences.setSort(sort))
+            menu.markDirty(); // confirm the stored order with the next push, so the two sides cannot drift apart
+        return Optional.of(preferences.sort());
+    }
+
+    /**
      * Server: a {@code TerminalListActionPayload}, resolved against the menu {@code player} really has open (M23,
      * issue #19, {@code docs/warehouse-system.md} §3.4.4).
      * <p>
@@ -442,6 +475,11 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             fullSyncPending = false;
             stockDiff.reset();
         }
+        // The order this player chose and what they ask for most often (M24, issue #17, ADR-037). It goes out before
+        // the stock, so the very first list a screen draws is already in the right order, and it is compared by value:
+        // a player who requests nothing costs no packet, exactly like an aisle whose stock does not change.
+        sendUsage(target);
+
         List<StockCount<ItemKey>> current = stockCounts();
         // An item type that only fell outside the reported window (maxTerminalStockEntries) has not left the index:
         // reporting it as gone would delete a stocked item from the screen, which could then not be requested.
@@ -501,6 +539,23 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             counts.add(new StockCount<>(entry.key(), entry.total(), entry.available(), entry.producible(),
                     entry.producibleAmount(), entry.rule(), entry.ruleReserved(), entry.ruleMaximum()));
         return counts;
+    }
+
+    /**
+     * Sends this player's chosen order and request counts, if either changed since the last push (M24, issue #17).
+     * <p>
+     * The counts are read from the player, not from the terminal: they are the player's own and the same at every
+     * terminal of the world ({@link TerminalPreferences}). Reading them is a map walk bounded by
+     * {@code maxTerminalUsageEntries}, and it happens at most once per tick like every other part of a push, so this
+     * adds no per-tick scan of anything.
+     */
+    private void sendUsage(ServerPlayer target) {
+        TerminalPreferences preferences = TerminalPreferences.of(target);
+        TerminalUsagePayload usage = TerminalUsagePayload.of(containerId, preferences.sort(), preferences.counts());
+        if (usage.equals(lastUsage))
+            return;
+        lastUsage = usage;
+        PacketDistributor.sendToPlayer(target, usage);
     }
 
     /** Sends {@code changes} in pages of at most {@link TerminalStockPayload#MAX_ENTRIES}; only the first page resets. */

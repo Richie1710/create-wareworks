@@ -60,9 +60,10 @@ teleported: every item you put in or take out is carried by the crane, where you
   storage, so no belt has to lead back to the aisle. Funnels, chutes, hoppers and Mechanical Arms take the items out of a
   requesting or accepting port either way. Details in the **The warehouse port** section below.
 * **Warehouse Terminal**: a searchable screen showing the whole warehouse's stock; click an item and the crane
-  delivers it into the terminal. Or hand it a whole **list**: put a clipboard — a Schematicannon's material checklist,
-  or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks each
-  entry off as it delivers it.
+  delivers it into the terminal. Its grid is ordered by what there is most of, by what **you** request most often, or
+  by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard — a Schematicannon's material
+  checklist, or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks
+  each entry off as it delivers it.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
@@ -168,7 +169,22 @@ that only their facing tells apart.
 the controller turns the crane's intake port towards the aisle by itself. The wrench turns the screen to another side,
 never onto the port. Right-click with an empty hand to open it.
 
-* Type to search; `@create` matches a mod id.
+* Type to search; `@create` matches a mod id. One button hides everything the warehouse holds none of.
+* One button cycles the **order** of the grid: **most available first**, **most used** or **by name**. Hovering it
+  says which order is on, what that order does and which one the next press gives. "Most used" puts the items *you*
+  keep fetching first, which is what a warehouse holding hundreds of item types needs; each request counts **once**,
+  whatever amount it asked for, so one ctrl-click on a thousand cobblestone does not outrank a hundred deliberate
+  clicks. Only **your own** requests count — a redstone request at a port counts for nobody. The order you pick and
+  what the terminal has learned about you are remembered **per player**, so they are the same at every terminal of the
+  warehouse and still there after you rejoin, and on a server everybody has their own. An old habit **fades** as a new
+  one grows, so the list follows what you are building now; until you have requested anything, "most used" is simply
+  "most available first". A **clipboard list** counts every item type on it once, so the lists you fetch again and
+  again are what it learns from most.
+* The list **holds still while you use it**. A request raises that item's count, and the new counts take effect the
+  next time you ask for a list — when you press the sort button, type in the search or flip the filter — so clicking
+  one cell twice always asks for the same item instead of the row sliding away under the cursor. What the warehouse
+  really holds also always comes first: an item it has run out of keeps its row behind everything you can have now,
+  whether a production station could make it or a stock keeper is calling for it.
 * **Click** to request the amount in the scroll input, **shift-click** for a stack, **ctrl-click** for everything
   available. Holding **Alt** skips the confirmation a stock rule would ask for (see **Stock rules**), and combines with
   either of the other two.

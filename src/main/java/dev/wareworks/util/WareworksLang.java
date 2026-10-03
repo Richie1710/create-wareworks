@@ -464,8 +464,18 @@ public final class WareworksLang {
     public static final String GOGGLES_DELIVERED_ITEMS = "gui.goggles.delivered_items";
     /** {@code "Search items"}: hint inside the terminal screen's search box. */
     public static final String TERMINAL_SEARCH = "gui.terminal.search";
-    /** {@code "Sorting: %1$s"}: tooltip of the terminal screen's sort button. */
+    /** {@code "Sorting: %1$s"}: first line of the terminal sort button's tooltip, naming the order it is in. */
     public static final String TERMINAL_SORT = "gui.terminal.sort";
+    /**
+     * {@code "Click: %1$s"}: last line of that tooltip, naming the order the <b>next</b> press would give. The
+     * button cycles, and a cycle whose next step is not written down has to be learned by pressing it (M24, issue #17).
+     */
+    public static final String TERMINAL_SORT_NEXT = "gui.terminal.sort_next";
+    /**
+     * Why {@link dev.wareworks.core.terminal.TerminalSort#USED} looks like the amount order for a player who has never
+     * requested anything here: there is nothing to put first yet, and the list is not broken (M24, issue #17).
+     */
+    public static final String TERMINAL_SORT_NO_HISTORY = "gui.terminal.sort_no_history";
     /** Tooltip of the terminal's filter button while it hides everything that is fully promised. */
     public static final String TERMINAL_ONLY_IN_STOCK = "gui.terminal.only_in_stock";
     /** Tooltip of the terminal's filter button while it shows every item type of the aisle. */

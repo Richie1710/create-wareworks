@@ -188,6 +188,16 @@ public final class WareworksConfig {
         return get(SERVER.maxTerminalListEntries);
     }
 
+    /**
+     * Item types a warehouse terminal remembers per player for the "most used" order ({@code §3.4.2}, M24, issue #17).
+     * <p>
+     * It bounds per-player save data, so it is clamped again by {@code TerminalUsage.MAX_CAPACITY}. Lowering it is
+     * safe: the next load keeps the strongest entries of what was saved.
+     */
+    public static int maxTerminalUsageEntries() {
+        return get(SERVER.maxTerminalUsageEntries);
+    }
+
     /** Retrieval requests one list order keeps open at a time (M23). */
     public static int terminalListOpenRequests() {
         return get(SERVER.terminalListOpenRequests);
@@ -413,6 +423,7 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxTerminalRequestAmount;
         public final ModConfigSpec.IntValue maxTerminalStockEntries;
         public final ModConfigSpec.IntValue maxTerminalListEntries;
+        public final ModConfigSpec.IntValue maxTerminalUsageEntries;
         public final ModConfigSpec.IntValue terminalListOpenRequests;
         public final ModConfigSpec.IntValue terminalListIntervalTicks;
         public final ModConfigSpec.IntValue terminalListStallTicks;
@@ -567,6 +578,14 @@ public final class WareworksConfig {
                                     + "the bound stay on the clipboard untouched and unticked, and the terminal says "
                                     + "how many it took.")
                     .defineInRange("maxTerminalListEntries", 128, 1, 1024);
+            maxTerminalUsageEntries = builder
+                    .comment("Item types a warehouse terminal remembers per player for its \"most used\" order.",
+                            "This is per-player save data, so it is bounded: when the bound is reached the weakest "
+                                    + "entry goes (the lowest count, among equal counts the one asked for longest "
+                                    + "ago), which means a new item type is always learned.",
+                            "Lowering it is safe: the next load of a player keeps the strongest entries of what was "
+                                    + "saved for them. 0 is not allowed; to switch the order off, do not use it.")
+                    .defineInRange("maxTerminalUsageEntries", 64, 1, 256);
             terminalListOpenRequests = builder
                     .comment("Retrieval requests one clipboard order keeps open at a time.",
                             "A list is worked off in portions: this is how many of its entries the crane may be "

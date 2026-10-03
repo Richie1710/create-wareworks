@@ -583,6 +583,12 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         TerminalRequestOutcome outcome = controller.request(worldPosition, key, amount,
                 Math.max(1, WareworksConfig.maxTerminalRequestAmount()), StockAccess.PLAYER, acknowledged);
         outcome.result().ifPresent(this::rememberRejection);
+        // One accepted click counts once towards this player's "most used" order, whatever amount it asked for
+        // (M24, issue #17, ADR-037). A question and a refusal count nothing: the question made no request at all, and
+        // a mis-click is not a habit. This is the whole of the counting on the click path: it moves no item, it changes
+        // nothing about the request it reports, and it cannot throw (TerminalPreferences#countRequest).
+        if (outcome.result().filter(RequestResult::isAccepted).isPresent())
+            TerminalPreferences.countRequest(player, key);
         return outcome;
     }
 
@@ -695,6 +701,11 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         setChanged();
         controller.onListOrderStarted(worldPosition);
         markSummaryDirty();
+        // The player asked for every item on the list, so each item type counts once towards their "most used" order
+        // (M24, issue #17). It is counted here, where the player is, and not line by line in tickListOrder: the order
+        // then runs on for minutes with nobody at the terminal, and a line the warehouse cannot cover still says what
+        // the player wanted.
+        TerminalPreferences.countListOrder(player, listOrder.lines().stream().map(ListLine::key).toList());
         return TerminalListOutcome.of(TerminalListResult.STARTED);
     }
 

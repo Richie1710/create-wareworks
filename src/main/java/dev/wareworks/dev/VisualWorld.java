@@ -6,6 +6,7 @@ import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.function.Consumer;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
@@ -103,10 +104,24 @@ final class VisualWorld {
      * scenario to reload a world in the middle of a crane job ({@code docs/warehouse-system.md} §8).
      */
     static void reload(VisualScript script, VisualWorldProfile profile) {
+        reload(script, profile, atTitle -> {
+        });
+    }
+
+    /**
+     * Like {@link #reload(VisualScript, VisualWorldProfile)}, but {@code atTitleScreen} adds steps for the moment when
+     * the world is really gone — no client level, no integrated server, the title screen up.
+     * <p>
+     * A scenario that has to <b>show</b> a reload needs that moment: two screenshots of the same screen before and
+     * after say nothing about what happened in between, and the title screen between them is the only picture that
+     * does ({@code TerminalVisualScenario#reloadSteps}).
+     */
+    static void reload(VisualScript script, VisualWorldProfile profile, Consumer<VisualScript> atTitleScreen) {
         script.client("quit to the title screen", VisualWorld::leaveWorld)
                 .until("wait until the world is left and the server has stopped", VisualWorld::leftWorld,
-                        TITLE_SCREEN_TIMEOUT_TICKS)
-                .client("open the world " + profile.worldFolder() + " again",
+                        TITLE_SCREEN_TIMEOUT_TICKS);
+        atTitleScreen.accept(script);
+        script.client("open the world " + profile.worldFolder() + " again",
                         context -> openExistingWorld(context, profile))
                 .until("wait for the player in the world again", VisualWorld::inWorld, WORLD_JOIN_TIMEOUT_TICKS)
                 .server("world settings and player", (server, context) -> applyWorldSettings(server, context, profile))

@@ -1376,10 +1376,19 @@ Networking decision and reasons: **ADR-019**.
 * **Producible items are offered at zero stock** (M11, ADR-024, §3.5.2). An item type a production station of the aisle
   can make is in the list even when the warehouse holds none of it: its cell shows a blue **`+`** instead of a count and
   its tooltip says "Can be produced here", plus "Can be made now: N" while the ingredients for a run are there.
-  * **They sort behind everything that is really in stock, in both orders** (`core.terminal.TerminalSort`). An offer is
+  * **They sort behind everything that is really in stock, in every order** (`core.terminal.TerminalSort`). An offer is
     not inventory, and under "by name" it would otherwise land between two items a player can have right now. It is the
     first sort key rather than a side effect of the amounts, because only the amount order would have produced it by
-    itself.
+    itself — under "most used" (M24) a favourite the warehouse has just run out of would even jump to the top.
+    * **Under "most used" that key sorts three groups and not two** (M24 review fix): stocked, then empty, then an
+      offer. The terminal shows a third kind of empty row — an item a **stock rule** governs that the warehouse has
+      run out of (§3.4.3) — and that row is neither stocked nor producible, so an "offers last" key does not catch it
+      and the usage key behind it put a favourite the warehouse had just run out of at the very **top** of the list,
+      where every click on it is a guaranteed refusal (`orderable()` is 0, so the server answers `NOT_IN_STOCK`).
+      Three groups is exactly the grouping the amount order produces through its own amount keys, so "most used"
+      without a history is still *exactly* that order. The key reads `total`, never `available`: an item the warehouse
+      holds 320 of that is all promised to open requests is stock, and a player who keeps asking for it wants to see
+      it first.
   * **"How many" is a server number** (`WarehouseControllerBlockEntity#producibleAmounts`, one pass over the aisle's
     patterns): the screen knows neither the patterns nor what their ingredients are already promised to, so it may
     never derive it. It travels in the stock payload next to `available` and is what a **ctrl-click** asks for
@@ -1398,9 +1407,153 @@ Networking decision and reasons: **ADR-019**.
   immediately. A blank query keeps everything; the query is split at whitespace and every token must match (AND); a
   token matches the display name case-insensitively; a token starting with `@` matches the **mod id** instead
   (`@create`), which is cheap because the id is already part of every line.
-* **Sorting and filter**: one button cycles the order (`TerminalSort`: most available first, or by name) and one toggles
-  "only what is available". Both, and the search text, are remembered while the client runs, so reopening a terminal
-  shows the same view.
+* **Sorting and filter**: one button cycles the order (`TerminalSort`: most available first → most used → by name →
+  most available first again) and one toggles "only what is available". The search text and the filter are remembered
+  while the client runs, so reopening a terminal shows the same view; the **order** is remembered per player on the
+  server (next bullet but one), because that is what issue #17 asked for.
+  * **"Most used" (M24, issue #17)** reads one number per item type: how often *this player* has asked for it
+    (`core.terminal.TerminalUsage`, a pure store the **server** owns and counts in; `TerminalUsageCounts` is the
+    read-only half a screen sorts with). **One accepted request counts once**, whatever amount it asked for — the order
+    answers "what does this player keep fetching", not "what moved the most items", so a single ctrl-click on a
+    thousand cobblestone cannot outrank a hundred deliberate requests. A refusal counts nothing, and a clipboard list
+    counts once per item type on it, at the moment the player starts the order.
+  * **Where the counting happens, and where it cannot.** Exactly two calls
+    (`content.station.TerminalPreferences#countRequest`, `#countListOrder`), both in
+    `WarehouseTerminalBlockEntity`: an accepted click in `requestFromTerminal`, and the item types of a clipboard
+    order in `fetchList`. A **redstone** request at a warehouse port reaches neither — a port is not a player, its
+    requests carry `StockAccess.AUTOMATION` and no `Player` at all — so automation can never teach a player's
+    terminal anything. Counting is one map write per click: no tick, no scan, no pass over the warehouse.
+  * **One action is counted as one action, however many item types it names** (`TerminalUsage#recordAll`, M24 review
+    fix). A clipboard order may be longer than the store is large — `maxTerminalListEntries` is 128 against 64
+    entries by default, and 1024 against 256 at the extremes — and counting its keys one by one made the later keys
+    of one list evict its earlier ones, because a brand new entry is the weakest entry there is. **A repeated
+    identical order could then never raise a count at all**: every key it would have raised had been displaced by a
+    later key of its own previous run, so the list sat at 1 for ever and "most used" systematically missed the one
+    action a building player repeats most. A batch therefore raises what the store already knows **first** and never
+    evicts what the same action counted; a list that does not fit keeps the item types it named **first** (what the
+    player wrote first) and the call reports how many were counted. Among *older* entries the eviction order is
+    unchanged, so a list still behaves exactly like the clicks it replaces.
+  * **The store and the chosen order live on the player, on the server** (ADR-037): a NeoForge **data attachment**
+    (`registry.WareworksAttachments.TERMINAL_PREFERENCES` → `content.station.TerminalPreferences`), saved inside that
+    player's `playerdata/<uuid>.dat` and copied onto the respawned player on death. So the order is the same at
+    **every** terminal of the world, it survives a restart and a reconnect, and two players on one server have two
+    stores and two orders. Before M24 the order was a `static` field of the screen: lost on restart and meaningless
+    with more than one player. The saved shape is one versioned compound (`v`, `sort` by **name**, `used` with an item
+    key, a count and a recency stamp per entry); `save` returns nothing at all while a player is still at the default —
+    no order pressed and nothing requested — so merely opening a terminal adds no byte to their save file, and `load`
+    skips what it cannot read, so neither crafted nor truncated data can throw while a player is being loaded. `maxTerminalUsageEntries` (server config, `stations`, default 64) says how many item types one
+    player's store holds.
+  * **The client is sent the numbers, not a sorted list** (`TerminalUsagePayload`, server → client, with the stored
+    order; `TerminalSortPayload`, client → server, when the button is pressed; network version `8`). The screen
+    already holds the whole bounded stock list because the search narrows it per keystroke and the grid pages through
+    it per scroll, neither of which may cost a round trip — sorting on the server would mean re-sending the list for
+    every keystroke, or sending a rank per item, which is this payload with more bytes. What is *not* the client's is
+    the data: it counts nothing, bounds nothing and invents no order, and both sides produce the same list because the
+    comparator is the same pure `TerminalSort` code. The payload is pushed with the first stock page of a screen and
+    again whenever a request changed a count, so the list reorders while it is open; a player who requests nothing
+    costs no packet. The counts travel without their recency stamps, which only eviction needs.
+  * **It is bounded four times over**, because this is per-player save data: at most `maxTerminalUsageEntries` item
+    types (64 by default, itself clamped to `TerminalUsage.MAX_CAPACITY` = 256), counts no larger than `MAX_COUNT`
+    (256), recency stamps that are renumbered from 1 before they could pass `MAX_STAMP` (65536), and — the M24 review
+    fix — a bound on how **large** one remembered item type may be. The first three are all counts of *things*, and
+    an `ItemKey` is the item plus its whole data-component patch (`ItemStack.SINGLE_ITEM_CODEC`), so one key can be a
+    shulker box with a `container` component of 27 stacks in it or a written book: kilobytes each, and the entry count
+    alone would happily bound 64 of them in every player's `.dat` file. The size bound therefore lives where an item
+    is visible at all: `TerminalPreferences.MAX_KEY_SIZE` (4 KiB as `Tag#sizeInBytes()` measures it, against about 190
+    for a plain item key) means such a key is **not counted** and so reaches neither the store, the save nor the
+    screen's payload, and `MAX_USED_SIZE` (64 KiB) bounds the whole written list, keeping the strongest entries.
+    Nothing about the **request** changes: this decides what is remembered, never what a player may ask for. It
+    matters most on a clipboard order, whose entry icons are arbitrary stacks a player wrote and need not be anything
+    the warehouse ever held. When the cap is reached the **weakest** entry goes: the
+    lowest count, and among equal counts the one asked for longest ago. A new item type is therefore always learned —
+    a player whose build has moved on has to be able to re-teach the terminal — and the price is that a brand new
+    entry is itself the next candidate, so a passing click cannot push a real favourite out.
+  * **Counts fade by use, never by elapsed time**: when one count reaches the ceiling, every count is halved and
+    whatever falls to zero is forgotten. A stopped habit therefore shrinks as a new one grows, instead of the list
+    ossifying around the first week of a world. A time-based decay was rejected on three grounds — it needs a clock
+    this pure class deliberately does not have, it would punish a player who simply took a break from the world
+    (they did nothing, and their terminal would have forgotten them), and it could reorder a list while a player is
+    looking at it. Halving rather than subtracting keeps the shape of a history while compressing it, and the entries
+    it drops hand their capacity to whatever the player is doing now.
+  * **A player with no history needs no special case**: with every count 0 the usage key is constant and the amount
+    keys behind it decide, so "most used" simply *is* "most available first" until the player has asked for
+    something. The visual run asserts exactly that — list against list, before the scenario's first request — rather
+    than describing it.
+  * **The button a player presses** (M24, the client half). One **icon per order**, and three different shapes rather
+    than three variants of one, because the icon is what says which order is on without being hovered:
+    `I_PRIORITY_VERY_HIGH` (a double chevron up) for the amounts, `I_TARGET` for "most used", `I_VIEW_SCHEDULE` (a
+    stack of lines) for the alphabet. The alphabet had `I_WHITELIST`, a page with a checkmark, which sits two buttons
+    from the list button's own checkmark; at GUI scale 1 that is two checkmarks in one row.
+  * **The tooltip is where a cycling button explains itself**: the order it is in (`gui.terminal.sort` with
+    `gui.terminal.sort.<order>`), one sentence saying what that order does (`…sort.<order>.detail`), the order the
+    **next** press would give (`gui.terminal.sort_next`) — a cycle whose next step is nowhere written has to be
+    learned by pressing it — and, while this player has requested nothing, why "most used" looks like the amount order
+    (`gui.terminal.sort_no_history`). Every line is kept inside the window's own row width (`ROW_WIDTH`, 216 px) in
+    **both** languages: `LangConsistencyTest` can only compare keys and placeholders, so the width of a translation is
+    asserted in the `terminal` visual run, which measures the tooltip with the font and then switches the client to
+    German and measures again (`WarehouseTerminalScreen#sortTooltipFits`). That check immediately found the German
+    amount label at 219 px and had it shortened.
+    * **Every line the button *can* show is measured, not only the ones it shows now**
+      (`#sortTooltipLines`, M24 review fix). The "nothing requested yet" line is in the tooltip only while the store
+      is empty, which is a state a world passes through **once** and before the German pass — that pass needs a
+      stocked, used warehouse — so the German translation of that line had never been measured at all, and it really
+      was 7 px too wide ("noch nichts angefordert, daher nach Menge", 223 px). It also named an order that does not
+      exist: "nach Menge" is not what the amount order is called ("am meisten Verfügbares"), while having the shape of
+      the real label "nach Name" one line above. It now reads "noch nichts angefordert, Menge zählt" (190 px).
+    * The English sentence of the **amount** order said "what the aisle holds most of comes first" (M24 review fix).
+      The list is the controller's stock index, which spans every aisle of the warehouse since M22, the German
+      translation of the same key said "Lager" and every sibling string of this screen says "warehouse". It now reads
+      "what the warehouse has most of first" — the short wording, because "what the warehouse holds most of comes
+      first" measures 233 px against the window's own 216.
+  * **Pressing the button scrolls the grid back to its top, and nothing else ever moves it.** The answer to "most
+    used" or "by name" is what now stands *first*, while row twelve of a re-ordered list is a slice nobody asked for.
+    A **push** from the server, on the other hand, may re-sort the rows under the player and may not move the view —
+    and it may not put the list back into the previous order either: the screen applies a press at once and tells the
+    server, so a push that was already built carries the old order, and `WarehouseTerminalScreen#pendingSort` ignores
+    a pushed order until one arrives that agrees with the screen. Without it a request made a moment before a press
+    (which is what makes the server send such a push at all) made the list flick back and forth for two or three
+    ticks.
+  * **New counts wait for the next list the player asks for** (M24 review fix). Under "most used" the count is the
+    *first* sort key, so the first click on any row gives it a count it did not have and pulls it in front of every
+    row with none — and the push carrying that count arrives about a tick after the click, with the cursor still over
+    the cell. The grid's hit test is positional (`cellAt`), so **clicking a cell twice** — which is how one request is
+    grown (§7.2) — asked for whatever item had slid into that cell, and that starts a real crane job. The screen
+    therefore keeps the newest counts (`WarehouseTerminalScreen#latestUsage`) and hands them to the list on the first
+    push of a screen, on any push that cannot reorder it (the other two orders do not read counts), and otherwise at
+    the next moment the player asks for a different list: a press of the sort button, a keystroke in the search, the
+    filter. So a stock push still re-sorts by amounts as it always did, while a count a player's own click produced
+    does not move that click's row. Nothing is lost — the store is the server's, every list the player asks for is
+    built from the newest numbers, and the next terminal they open is in the full order. Rejected: suppressing the
+    re-sort only while the pointer is over the grid (behaviour that depends on where a mouse rests), and re-anchoring
+    the scroll on the clicked row (which moves every *other* row instead).
+  * **What the `terminal` visual run proves about the three orders** (M24, the evidence pass). The scenario asks for
+    four item types at four *different* counts before it presses anything — the one it clicked eleven times, plus
+    leather (5), string (3) and bone (2), which are deliberately three of the aisle's **smallest** stacks, so "most
+    used" is the amount order's tail turned into its head and the two screenshots cannot be mistaken for each other.
+    One favourite would not have been enough: the amount order satisfies "the favourite is in front" for whatever
+    happens to be the largest stack.
+    * Before every shot the **server** says which item types the first rows have to be
+      (`TerminalVisualScenario#checkRowsOnServer`): it builds the list from `WarehouseTerminalMenu#stockCounts` — the
+      very method whose result is pushed — and from the player's own `TerminalPreferences`, sorts it with the same
+      pure comparator and compares the first six keys and the whole key set with what the client last showed. The
+      client's own checks are read off the list the client would draw, so a client sorting by the wrong counts would
+      agree with itself; the counts live on the server.
+    * The counts themselves are checked against the clicks the scenario made, **including the size of the store**: an
+      extra entry would mean something was counted that no player asked for, which is the one thing issue #17 must
+      never do.
+    * **One cell of the grid is then clicked four times in a row, in that order** (`#stableClickSteps`, M24 review
+      fix): the cell has to still hold the same item before every click, and the row may not move *forward* in the
+      list. Losing items to one's own request can only move a row back — the amount keys sort the largest first — so
+      a row that moved forward moved because of a count, which is exactly the bug. The item is picked with amounts
+      far enough from its neighbours' that the four items leaving the racks cannot reorder it at all, and the two
+      presses afterwards take the deferred counts, which the ranking check after the reload then sees.
+    * The chosen order then survives a **real** save, quit to the title screen and rejoin of the same world
+      (`#reloadSteps`), with a shot of the title screen between the two terminal shots so the pair reads as a
+      sequence. After the rejoin the screen is opened again and has to come up in that order with nobody pressing
+      anything, the order and every count are read back from the **new** player object the world load built, and the
+      server checks the first rows once more. `TerminalUsageGameTests` can only exercise the serializer (a GameTest
+      server cannot quit to a title screen) and the robustness scenario proves the data without a screen open, so this
+      is the only place the whole claim is shown.
 * **Requesting** (`core.terminal.TerminalAmounts`): the amount input is a Create `ScrollInput` (scroll to modify, shift
   scrolls faster) limited to `maxTerminalRequestAmount`; **click** requests that amount, **shift-click** one stack and
   **ctrl-click** everything that is possible — available plus producible since M11 (bullet above). **Alt** is not an
@@ -1438,9 +1591,23 @@ Networking decision and reasons: **ADR-019**.
     answer shortens the **item name** first (`WarehouseTerminalScreen#acceptedLine`), so the amounts a merged answer is
     about always survive, and `fitToRow` then cuts whatever is still too wide with an ellipsis. A cut name stands in
     full in the grid's tooltip.
+  * **The crane line drops its own label rather than its text** (M24 fix, `WarehouseTerminalScreen#craneStatusText`).
+    The phase and pause texts of this row are the ones the goggles show (`gui.goggles.crane_phase.*`), i.e. whole short
+    sentences that nothing bounds, and the `"Crane: %s"` frame costs 43 px in English and **93** in German
+    ("Regalbediengerät: "). So the row shows the prefixed form only while it fits and the bare state otherwise. Before
+    this, the most ordinary German line a terminal has — `Regalbediengerät: Wartet auf einen Auftrag`, 219 px — was
+    drawn cut off, which `index.txt` had been recording as `statusFits=false` for shots nobody read that far.
   * The dev harness asserts the widths instead of trusting a screenshot: `statusTextsFit()` (status line ≤ row, count
-    clear of the inventory title) is checked at the request, merged and delivered steps of the `terminal` scenario and
-    is logged per shot in `index.txt`.
+    clear of the inventory title) is checked at the request, merged and delivered steps of the `terminal` scenario, in
+    the German half of its sort block, and is logged per shot in `index.txt`. Since M24 the scenario also walks the
+    row's **whole vocabulary** once per language (`checkStatusVocabularyFits`: every `CranePhase`, every
+    `CranePauseReason` that is one, "no aisle" and "no crane") and compares the texts that do not fit with an exact
+    expected set — because a state the run happens not to reach is a state no screenshot ever measured. That set holds
+    exactly one entry, `crane_pause_reason.speed_factor_zero` (240 px English, 297 German): it names a mistake in the
+    server config rather than a state of the machine, shortening it would drop the part that says where to look, and
+    the crane's goggle overlay has no fixed row to cut it. `CranePauseReason.NONE` is not in the vocabulary at all —
+    the row asks for a reason only while `TerminalScreenStatus#isPaused()`, which *is* "the reason is not NONE", and it
+    has no lang value to measure.
 * **Networking** (ADR-019): the server pushes to the one player whose menu is open, at most every 10 ticks and only
   what changed. The first push after opening carries the whole list (pages of at most 64 entries,
   `reset = true`); later pushes carry only entries whose amounts changed plus item types that left the index (total 0),
@@ -3752,6 +3919,7 @@ The table above is covered by automated tests. What only a running game can reac
 | `maxTerminalRequestAmount` | 1024 | largest amount one terminal request may wait for, before the controller clamps it to the available stock (M6). Since M7 it bounds the **merged** amount of repeated clicks for one item, not a single click (§7.2) |
 | `maxTerminalStockEntries` | 512 | item types a terminal reports in one stock snapshot, so a huge warehouse cannot produce an unbounded list for the screen (M6). It bounds the **payload**, not the pass over the index (§3.4.1); the types with the most items are reported and the screen shows how many were left out |
 | `maxTerminalListEntries` | 128 | entries one **clipboard order** takes from the clipboard in a terminal's list slot (M23, §3.4.4). A Schematicannon's checklist is usually far shorter; entries beyond the bound stay on the clipboard untouched and unticked, and a clipboard the bound cuts short is always asked about before anything is fetched. The hard ceiling is 1024 |
+| `maxTerminalUsageEntries` | 64 | item types a terminal remembers **per player** for its "most used" order (M24, §3.4.2, ADR-037) — the size of that player's request counts, which live in their own save data and are the only thing M24 adds to it. It bounds the number of item types; how **large** one of them may be is bounded in code and not by config (`TerminalPreferences.MAX_KEY_SIZE`/`MAX_USED_SIZE`, §3.4.2), because an item key carrying a shulker box's whole contents is a defect to refuse rather than a number to tune. When the bound is reached the **weakest** entry goes (the lowest count, among equal counts the one asked for longest ago), so a new item type is always learned and a passing click never pushes a favourite out. Lowering it is safe and needs no migration: the next load of a player keeps the strongest entries of what was saved for them. There is no 0 — an order a player never presses the button into costs nothing anyway — and the hard ceiling is 256 (`TerminalUsage.MAX_CAPACITY`) |
 | `terminalListOpenRequests` | 2 | retrieval requests one clipboard order keeps open at a time, i.e. how many of its entries the crane may be fetching at once. They are ordinary requests, so `maxOpenRequests` and `maxOpenRequestsPerOutput` still bound them |
 | `terminalListIntervalTicks` | 20 | ticks between two top-up passes of a clipboard order. A delivery makes the next pass due **at once**, so freed buffer space continues the list without waiting for this interval; it only bounds how often an order that found nothing measures again |
 | `terminalListStallTicks` | 1200 | ticks a clipboard order may make **no progress at all** before it stops measuring until a player resumes it at the terminal (1 minute). An order waiting for items already on their way, or for a full buffer to be emptied, is making progress and never parks. **0 lets an order keep trying for ever** |
@@ -3789,7 +3957,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 |---|---|---|
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks`, `maxNetworkRails`, `maxBranches`, `maxJunctions` | 1–128, 1–64, 1–1200, 16–1024, 1–26, 0–128 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `turnPenaltyBlocks`, `returnHomeIdleTicks`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 0–16, 0–72000, 1–200, 1–27, 1–1728 |
-| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–16; 1–1200; 0–432000; 1–8 |
+| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `maxTerminalUsageEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–256; 1–16; 1–1200; 0–432000; 1–8 |
 | `controller` | `snapshotIntervalTicks`, `snapshotCycleTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 0–432000, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
 
