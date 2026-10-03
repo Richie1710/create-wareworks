@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -22,9 +21,12 @@ import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 
+import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
+import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.CranePauseReason;
@@ -33,6 +35,7 @@ import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.WarehouseProductionBlock;
@@ -50,6 +53,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockLine;
 import dev.wareworks.core.terminal.TerminalAmounts;
@@ -58,7 +62,9 @@ import dev.wareworks.core.terminal.TerminalUsage;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
+import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -227,20 +233,68 @@ public final class TerminalVisualScenario implements VisualScenario {
     private static final int ASSERTED_ROWS = 6;
     /** The order whose survival of a save, quit and rejoin is shown; the one this player's counts are visible in. */
     private static final TerminalSort KEPT_SORT = TerminalSort.USED;
-    /** The width every text of the terminal's status row has to fit, in every language; for the failure message. */
+    /**
+     * The width every text of a hard-clipped row has to fit, in every language; for the failure message. The
+     * terminal's window and the production station's are the same 12 cells wide, so both their rows are 216 px.
+     */
     private static final int ROW_WIDTH = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN;
     /**
-     * The one status text that is allowed not to fit the terminal's row, in either language.
+     * The widest amount one of these rows can be asked to show: the ceiling of {@code maxTerminalRequestAmount}. A
+     * line measured with it fits in every configuration, which a line measured with the warehouse this run happens to
+     * build does not — "it fits here" is what every one of these defects looked like before it was found.
      * <p>
-     * {@code SPEED_FACTOR_ZERO} does not name a state of the machine, it names a <b>mistake in the server config</b>
-     * ("a crane speed factor is 0 in the server config", and the German compound for it is half again as long). Making
-     * that sentence fit 216 px would mean dropping the part that tells an operator where to look, which is a wording
-     * decision for the project owner and not something to slip into a milestone about sorting — and a player can read
-     * it in full through the crane's goggle overlay, which has no fixed row width. So it is listed here rather than
-     * silently tolerated, and {@link #checkStatusVocabularyFits} compares the offenders with this set <b>exactly</b>:
-     * a new text that does not fit fails, and so does this one being shortened and the entry left behind.
+     * The clipboard line's third number is a <b>sum</b> over the whole list and so has a higher ceiling still; each
+     * further digit costs about 6 px, and the log line prints every row's slack so that a reader can see how much
+     * room is left for them.
      */
-    private static final Set<String> STATUS_ROW_TOO_LONG = Set.of("pause.speed_factor_zero");
+    private static final int WIDEST_AMOUNT = 65536;
+    /** The widest entry count a clipboard order can show: the ceiling of {@code maxTerminalListEntries}. */
+    private static final int WIDEST_ENTRIES = 1024;
+    /** The widest number of stopped products the station's stopped row can name (a station has at most 8 patterns). */
+    private static final int WIDEST_STOPPED = 99;
+    /** Steps a chain's badge counts, when this run cannot read the server config; the shipped default. */
+    private static final int DEFAULT_PLAN_STEPS = 32;
+    /**
+     * The status texts that are allowed not to fit the terminal's row, <b>per language</b>, as relative key names.
+     * {@link #checkRowVocabularyFits} compares the offenders with the set of the language that is loaded
+     * <b>exactly</b>: a new text that does not fit fails, and so does one of these being shortened and the entry left
+     * behind.
+     * <p>
+     * {@code pause.speed_factor_zero} does not name a state of the machine, it names a <b>mistake in the server
+     * config</b> ("a crane speed factor is 0 in the server config", and the German compound for it is half again as
+     * long). Making that sentence fit 216 px would mean dropping the part that tells an operator where to look, which
+     * is a wording decision for the project owner — and a player can read it in full through the crane's goggle
+     * overlay, which has no fixed row width.
+     * <p>
+     * The {@code refused.*} entries are the same case and the reason the two sets differ at all. Those sentences are
+     * the <b>goggles' own</b> ({@code gui.goggles.request_rejection.*}): whole explanatory sentences that name both
+     * what went wrong and what to do about it, written for the goggle overlay and for the port and terminal block
+     * tooltips, all of which have room. The status row shows them with its own frame already dropped
+     * ({@code WarehouseTerminalScreen#refusedLine}, which is what makes seven of the eleven whole in English and four
+     * in German, against three and one before it), and what is left is the diagnosis in full and the remedy cut.
+     * Shortening them would take the remedy out of the place it was written for, and giving the terminal a short
+     * vocabulary of its own is eleven new sentences in two languages — a wording decision for the project owner, not
+     * something to slip into a release about clipboards and sorting. They are listed here so that the next run says
+     * so out loud instead of a screenshot of one warehouse state not showing it.
+     */
+    private static final Map<String, Set<String>> STATUS_ROW_TOO_LONG = Map.of(
+            ENGLISH, Set.of("pause.speed_factor_zero", "refused.production_busy", "refused.production_paused",
+                    "refused.request_full", "refused.reserved"),
+            GERMAN, Set.of("pause.speed_factor_zero", "refused.production_busy", "refused.production_paused",
+                    "refused.request_full", "refused.reserved", "refused.output_full", "refused.invalid_amount",
+                    "refused.no_controller"));
+    /**
+     * The state texts that are allowed not to fit the state column of a <b>chain's</b> order line, in either language.
+     * <p>
+     * A chain's line carries its step badge between the item and the state ({@code "3 steps"}), and the badge is paid
+     * for out of the state's column — which is the design's own trade and not a defect
+     * ({@code WarehouseTerminalScreen#renderOrderLine}: the state wins the row, but never past the item's floor,
+     * because a name cut to three letters names nothing). What gives way is one of the two longest open states, and
+     * both of them stand in full in the line's tooltip and in the chain's step panel. This set is what keeps that
+     * trade honest: a third state falling off the row, or a wider badge, fails the run.
+     */
+    private static final Set<String> CHAIN_COLUMN_TOO_LONG =
+            Set.of("state.waiting_for_ingredients", "state.waiting_for_result");
     /** A reload is a phase of its own: it costs world loading time that the run's own budget never allowed for. */
     private static final long RELOAD_WATCHDOG_MILLIS = VisualTestHarness.RUN_TIMEOUT_MILLIS;
 
@@ -293,9 +347,8 @@ public final class TerminalVisualScenario implements VisualScenario {
     private volatile int stableCell = -1;
     private volatile int stableRowBefore = -1;
     private volatile int stableClicksDone;
-    /** The resource reload a language switch starts, awaited like the language screen does. */
-    @Nullable
-    private CompletableFuture<Void> languageReload;
+    /** The language switches of the German half, awaited like the language screen does. */
+    private final VisualLanguage language = new VisualLanguage(RELOAD_TIMEOUT_TICKS, SETTLE_TICKS);
 
     @Override
     public String name() {
@@ -1057,11 +1110,11 @@ public final class TerminalVisualScenario implements VisualScenario {
      * can show, not only the ones it shows now.
      */
     private void germanSortSteps(VisualScript script) {
-        script.client("terminal: check every status text of the row in English",
-                TerminalVisualScenario::checkStatusVocabularyFits);
+        script.client("terminal: check every text of every clipped row in English",
+                TerminalVisualScenario::checkRowVocabularyFits);
         switchLanguage(script, GERMAN);
-        script.client("terminal: check every status text of the row in German",
-                        TerminalVisualScenario::checkStatusVocabularyFits)
+        script.client("terminal: check every text of every clipped row in German",
+                        TerminalVisualScenario::checkRowVocabularyFits)
                 .client("terminal: check the amount order in German",
                         context -> checkSortTooltip(context, TerminalSort.AMOUNT));
         tooltipShot(script, TerminalSort.AMOUNT, "-de");
@@ -1121,22 +1174,9 @@ public final class TerminalVisualScenario implements VisualScenario {
                 terminal.getGuiTop() + TITLE_CORNER));
     }
 
-    /**
-     * What the language screen does when a player picks a language ({@code LanguageSelectScreen#onDone}): select it in
-     * the language manager and the options, then reload the resource packs. The options are not saved, and the open
-     * screen stays open — its tooltip lines are translatable components, so they simply read the new language.
-     */
+    /** What the language screen does when a player picks a language; see {@link VisualLanguage}. */
     private void switchLanguage(VisualScript script, String code) {
-        script.client("terminal: switch the game language to " + code + " like the language screen does", context -> {
-            Minecraft minecraft = context.minecraft();
-            minecraft.getLanguageManager().setSelected(code);
-            minecraft.options.languageCode = code;
-            languageReload = minecraft.reloadResourcePacks();
-        }).until("terminal: wait until the resource reload for " + code + " finished", context -> {
-            CompletableFuture<Void> reload = languageReload;
-            return reload != null && reload.isDone() && context.minecraft().getOverlay() == null
-                    && code.equals(context.minecraft().getLanguageManager().getSelected());
-        }, RELOAD_TIMEOUT_TICKS).waitTicks(SETTLE_TICKS);
+        language.switchTo(script, "terminal: ", code);
     }
 
     /** Presses the sort button the way a player does: a real click, through the mouse handler and the screen's own hit test. */
@@ -1703,21 +1743,77 @@ public final class TerminalVisualScenario implements VisualScenario {
                 + "{}", terminal.sort(), firstNames(terminal.matchingEntries()));
     }
 
-    // --- the status row in every language ---------------------------------------------------------------------------
+    // --- every hard-clipped row, in every language ------------------------------------------------------------------
+
+    /** One hard-clipped row, with the budget its texts have to fit and the ones that are allowed not to. */
+    private record MeasuredRow(String label, int budget, Map<String, Component> texts, Set<String> allowedTooWide) {
+        static MeasuredRow of(String label, int budget, Map<String, Component> texts) {
+            return new MeasuredRow(label, budget, texts, Set.of());
+        }
+    }
 
     /**
-     * Every text the terminal's status row can hold, measured against the row in the language that is loaded.
+     * Every text a hard-clipped row of the terminal or of the production station can hold, measured against that
+     * row's own budget in the language that is loaded.
      * <p>
      * {@code statusTextsFit()} only ever sees the state the warehouse happens to be in while the run looks, and the
      * earlier runs recorded exactly that gap: with the client switched to German the idle line read
-     * "Regalbedienger&auml;t: Wartet auf einen Auftrag" at 219 px in a 216 px row, was silently cut by the screen's own
-     * {@code fitToRow}, and the index line said {@code statusFits=false} without anything failing. So this walks the
-     * row's whole vocabulary instead — every {@link CranePhase}, every {@link CranePauseReason}, the two "no aisle" and
-     * "no crane" lines and the widest amount the waiting line can show — and reports <b>all</b> offenders at once,
+     * "Regalbedienger&auml;t: Wartet auf einen Auftrag" at 219 px in a 216 px row, was silently cut by the screen's
+     * own {@code fitToRow}, and the index line said {@code statusFits=false} without anything failing. So this walks
+     * the whole <b>vocabulary</b> of every such row instead and reports <b>all</b> offenders of all rows at once,
      * because a translation that is too long is never too long alone.
+     * <p>
+     * The rows are:
+     * <ul>
+     * <li>the terminal's <b>status row</b> ({@link #statusRow}): every {@link CranePhase}, every
+     *     {@link CranePauseReason}, the two "no aisle" and "no crane" lines, the waiting line and every refusal with
+     *     the widest amounts they can show, and the whole clipboard vocabulary - the progress line in each of its
+     *     states, the receipt and every answer the list button can produce (M23);</li>
+     * <li>the <b>state column</b> of the terminal's order lines, for an open order, for a finished one and behind a
+     *     chain's step badge ({@link #orderStateColumns});</li>
+     * <li>the production station's <b>order line</b> and its <b>stopped row</b> ({@link #stationRows}).</li>
+     * </ul>
+     * Every budget is asked of the screen that draws the row ({@code WarehouseTerminalScreen#orderStateBudget},
+     * {@code WarehouseProductionScreen#orderStateBudget}) rather than copied into this file, where the two could
+     * drift apart without anything saying so.
      */
-    private static void checkStatusVocabularyFits(VisualContext context) {
+    private static void checkRowVocabularyFits(VisualContext context) {
         WarehouseTerminalScreen terminal = screen(context);
+        Font font = context.minecraft().font;
+        String language = context.minecraft().getLanguageManager().getSelected();
+        List<MeasuredRow> rows = new ArrayList<>();
+        rows.add(statusRow(terminal, language));
+        rows.addAll(orderStateColumns(terminal));
+        rows.addAll(stationRows());
+
+        List<String> failures = new ArrayList<>();
+        for (MeasuredRow row : rows) {
+            Map<String, String> tooWide = new LinkedHashMap<>();
+            int widest = 0;
+            for (Map.Entry<String, Component> line : row.texts().entrySet()) {
+                int width = font.width(line.getValue());
+                widest = Math.max(widest, width);
+                if (width > row.budget())
+                    tooWide.put(line.getKey(), "'" + line.getValue().getString() + "' " + width + " px (+"
+                            + (width - row.budget()) + ")");
+            }
+            // An exact set, not an upper bound: a new text that does not fit fails here, and so does one of the known
+            // ones being shortened and its entry left behind, which is the only way an entry can ever be removed
+            // without someone noticing.
+            if (!tooWide.keySet().equals(row.allowedTooWide()))
+                failures.add("the " + row.label() + " (" + row.budget() + " px) does not hold " + tooWide
+                        + ", and the only ones that may not fit it are " + row.allowedTooWide());
+            LOGGER.info(PREFIX + "terminal: {} of {} texts fit the {} ({} px) in {}; widest {} px, slack {} px; "
+                    + "known exceptions {}", row.texts().size() - tooWide.size(), row.texts().size(), row.label(),
+                    row.budget(), language, widest, row.budget() - widest, tooWide.keySet());
+        }
+        if (!failures.isEmpty())
+            throw new VisualTestException("texts of " + failures.size() + " row(s) do not fit them in " + language
+                    + ": " + String.join("; ", failures));
+    }
+
+    /** The terminal's status row: the crane's words, the terminal's own, the request answers and the clipboard's. */
+    private static MeasuredRow statusRow(WarehouseTerminalScreen terminal, String language) {
         Map<String, Component> row = new LinkedHashMap<>();
         for (CranePhase phase : CranePhase.values())
             row.put("phase." + phase.name().toLowerCase(Locale.ROOT),
@@ -1733,24 +1829,105 @@ public final class TerminalVisualScenario implements VisualScenario {
         }
         row.put("no_aisle", WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE));
         row.put("no_crane", WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_CRANE));
-
-        Map<String, String> tooWide = new LinkedHashMap<>();
-        int widest = 0;
-        for (Map.Entry<String, Component> line : row.entrySet()) {
-            int width = context.minecraft().font.width(line.getValue());
-            widest = Math.max(widest, width);
-            if (!terminal.fitsStatusRow(line.getValue()))
-                tooWide.put(line.getKey(), "'" + line.getValue().getString() + "' " + width + " px");
+        row.put("loading", WareworksLang.translateDirect(WareworksLang.TERMINAL_LOADING));
+        // The waiting line with the two widest amounts a request can carry, which is what the javadoc of this check
+        // has claimed since M24 while the map never held it.
+        row.put("waiting", WareworksLang.translateDirect(WareworksLang.TERMINAL_WAITING, amount(WIDEST_AMOUNT),
+                amount(WIDEST_AMOUNT)));
+        // The clipboard order (M23, issue #19). Its progress line wins this row while the order has work to do, so
+        // every state it can be in while it does is measured; DONE gives the row back and shows the receipt instead.
+        for (ListOrderState state : ListOrderState.values()) {
+            if (state != ListOrderState.DONE)
+                row.put("list.status." + state.name().toLowerCase(Locale.ROOT), WarehouseTerminalScreen
+                        .listStatusText(state, WIDEST_ENTRIES, WIDEST_ENTRIES, WIDEST_AMOUNT));
         }
-        String language = context.minecraft().getLanguageManager().getSelected();
-        // An exact set, not an upper bound: a new text that does not fit fails here, and so does one of these two
-        // being shortened, which is the only way the exception below could ever be removed without someone noticing.
-        if (!tooWide.keySet().equals(STATUS_ROW_TOO_LONG))
-            throw new VisualTestException("the status texts that do not fit the terminal's row (" + ROW_WIDTH
-                    + " px) in " + language + " are " + tooWide + ", and the only one that may not fit is "
-                    + STATUS_ROW_TOO_LONG);
-        LOGGER.info(PREFIX + "terminal: {} of {} status texts fit the row's {} px in {} (widest {} px); the known "
-                + "exception is {}", row.size() - tooWide.size(), row.size(), ROW_WIDTH, language, widest, tooWide);
+        row.put("list.status_done", WarehouseTerminalScreen.listDoneText(WIDEST_ENTRIES, WIDEST_ENTRIES));
+        for (TerminalListResult result : TerminalListResult.values())
+            row.put("list.result." + result.name().toLowerCase(Locale.ROOT),
+                    WareworksLang.translateDirect(result.langKey()));
+        // Every refusal as the row shows it, i.e. through the frame-dropping decision itself.
+        for (RequestRejection rejection : RequestRejection.values())
+            row.put("refused." + rejection.name().toLowerCase(Locale.ROOT),
+                    terminal.refusedLine(WareworksLang.translateDirect(rejection.langKey())));
+        return new MeasuredRow("terminal status row", ROW_WIDTH, row,
+                STATUS_ROW_TOO_LONG.getOrDefault(language, Set.of()));
+    }
+
+    /**
+     * The state column of the terminal's order lines, in its three widths: an open order keeps the cancel mark's
+     * column, a finished one gets it back, and a chain's line pays for its step badge out of this very column.
+     */
+    private static List<MeasuredRow> orderStateColumns(WarehouseTerminalScreen terminal) {
+        Map<String, Component> open = new LinkedHashMap<>();
+        Map<String, Component> finished = new LinkedHashMap<>();
+        for (ProductionOrderState state : ProductionOrderState.values()) {
+            String key = "state." + state.name().toLowerCase(Locale.ROOT);
+            (state.isFinished() ? finished : open).put(key, WarehouseTerminalScreen.orderStateText(state, false));
+            // "lostIngredients" is "finished, not complete and something was already delivered", so the marker can
+            // only ever sit on one of these two states - measuring it on the others would measure a line no
+            // warehouse can produce.
+            if (state.isFinished() && state != ProductionOrderState.COMPLETE)
+                finished.put("order_lost." + state.name().toLowerCase(Locale.ROOT),
+                        WarehouseTerminalScreen.orderStateText(state, true));
+        }
+        Component badge = WarehouseTerminalScreen.stepBadgeText(planSteps());
+        Map<String, Component> chain = new LinkedHashMap<>(open);
+        // For a chain the column normally holds the frontier instead of a state: the item's name inside it gives way
+        // by design, so what has to fit is the sentence around it.
+        chain.put("plan.frontier", WarehouseTerminalScreen.frontierText(Component.empty()));
+        return List.of(
+                MeasuredRow.of("state column of an open order line", terminal.orderStateBudget(false, null), open),
+                MeasuredRow.of("state column of a finished order line", terminal.orderStateBudget(true, null),
+                        finished),
+                new MeasuredRow("state column behind a chain's '" + badge.getString() + "' badge",
+                        terminal.orderStateBudget(false, badge), chain, CHAIN_COLUMN_TOO_LONG));
+    }
+
+    /**
+     * The production station's clipped rows: the state column of an order line, and the stopped row in both its forms.
+     * <p>
+     * They are measured here and not in a station scenario of their own because what is being measured is a
+     * <b>translation</b> against a layout number, and both only need the font and the station's own arithmetic - while
+     * this scenario is the one that switches the client's language, which is where the defects live. The German
+     * {@code gui.production.waiting_for_step} was 172 px against a 158 px column and the German stopped row spent 250
+     * px before the item's name even started, and nothing measured either of them.
+     */
+    private static List<MeasuredRow> stationRows() {
+        Map<String, Component> column = new LinkedHashMap<>();
+        for (ProductionOrderState state : ProductionOrderState.values()) {
+            column.put("state." + state.name().toLowerCase(Locale.ROOT),
+                    WarehouseProductionScreen.orderStateText(state, false, false));
+            if (state.isFinished() && state != ProductionOrderState.COMPLETE)
+                column.put("order_lost." + state.name().toLowerCase(Locale.ROOT),
+                        WarehouseProductionScreen.orderStateText(state, false, true));
+        }
+        // An order waiting for an earlier step of its own chain is open, so it can carry no "lost" marker.
+        column.put("waiting_for_step",
+                WarehouseProductionScreen.orderStateText(ProductionOrderState.WAITING_FOR_INGREDIENTS, true, false));
+        // The stopped row leads with the item's name, so what a long name pushes off the end is everything after it:
+        // the singular form is measured with no name at all against a row that still owes the name its floor, and the
+        // plural form, which has no name in it, against the whole row.
+        Map<String, Component> stopped = new LinkedHashMap<>();
+        stopped.put("stopped_line", WarehouseProductionScreen.stoppedRowText(1, Component.empty()));
+        Map<String, Component> stoppedMany = new LinkedHashMap<>();
+        stoppedMany.put("stopped_line_many",
+                WarehouseProductionScreen.stoppedRowText(WIDEST_STOPPED, Component.empty()));
+        return List.of(
+                MeasuredRow.of("state column of a station's order line",
+                        WarehouseProductionScreen.orderStateBudget(), column),
+                MeasuredRow.of("station's stopped row without the item's name",
+                        ROW_WIDTH - WarehouseProductionScreen.MIN_ITEM_WIDTH, stopped),
+                MeasuredRow.of("station's stopped row for several products", ROW_WIDTH, stoppedMany));
+    }
+
+    /** Steps a chain's badge counts at its widest: what this server allows, or the shipped default. */
+    private static int planSteps() {
+        return WareworksConfig.isServerConfigLoaded() ? WareworksConfig.maxProductionPlanSteps() : DEFAULT_PLAN_STEPS;
+    }
+
+    /** An amount as every one of these rows formats it, in the language that is loaded. */
+    private static String amount(long value) {
+        return LangNumberFormat.format(value);
     }
 
     /** The names of the first few rows, for the log line of a shot. */

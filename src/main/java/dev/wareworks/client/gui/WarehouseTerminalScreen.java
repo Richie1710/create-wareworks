@@ -25,6 +25,7 @@ import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalScreenStatus;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.production.PlanRefusal;
+import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.CountFormat;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
@@ -535,9 +536,27 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     private Component refusedLine(TerminalResultPayload payload) {
         Component planned = planRefusalLine(payload);
-        return planned != null ? planned
-                : WareworksLang.translateDirect(WareworksLang.TERMINAL_REFUSED,
-                        WareworksLang.translateDirect(payload.rejection().orElseThrow().langKey()));
+        if (planned != null)
+            return planned;
+        return refusedLine(WareworksLang.translateDirect(payload.rejection().orElseThrow().langKey()));
+    }
+
+    /**
+     * A refusal as the status row shows it: {@code "Request refused: <reason>"} normally, and the <b>bare reason</b>
+     * whenever the framed form would not fit the row.
+     * <p>
+     * This is the same trade the crane line makes ({@link #craneStatusText}) and the one a chain's refusal has made
+     * since M20 ({@link #planRefusalLine}, which replaces the frame instead of filling it): the reason sentences are
+     * the goggles' own ({@code gui.goggles.request_rejection.*}), i.e. whole explanatory sentences that nothing
+     * bounds, while this row is {@value #ROW_WIDTH} px and fixed. The row is already red, so the frame spends 91 px in
+     * English and 124 in German on saying what the colour says, and the reason is the information. Dropping it makes
+     * four of the English reasons and three of the German ones whole that used to end in an ellipsis.
+     * <p>
+     * Public because the visual run measures the row's whole vocabulary through this very decision.
+     */
+    public Component refusedLine(Component reason) {
+        Component framed = WareworksLang.translateDirect(WareworksLang.TERMINAL_REFUSED, reason);
+        return fitsStatusRow(framed) ? framed : reason;
     }
 
     /**
@@ -1051,16 +1070,33 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private Component listStatusLine() {
         if (!listState.isOpen())
             return null;
-        return WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_STATUS,
-                LangNumberFormat.format(listState.entriesComplete()), LangNumberFormat.format(listState.entries()),
-                LangNumberFormat.format(listState.outstanding()),
-                WareworksLang.translateDirect(listState.state().langKey()));
+        return listStatusText(listState.state(), listState.entriesComplete(), listState.entries(),
+                listState.outstanding());
     }
 
     /** "List done: 4/4" — the receipt of a finished clipboard order. */
     private Component listDoneLine() {
+        return listDoneText(listState.entriesComplete(), listState.entries());
+    }
+
+    /**
+     * {@code "List 4/9, 320 left (fetching)"} — the clipboard order's own line, which <b>wins the status row</b> while
+     * the order has work to do ({@link #statusLine()}).
+     * <p>
+     * Public because the visual run measures it: three numbers whose ceilings are config values
+     * ({@code maxTerminalListEntries}, {@code maxTerminalRequestAmount}) leave this row's state column barely 48 px in
+     * German, which is why {@code gui.terminal.list.state.*} are single words and not the phrases they once were.
+     */
+    public static Component listStatusText(ListOrderState state, int complete, int entries, long outstanding) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_STATUS, LangNumberFormat.format(complete),
+                LangNumberFormat.format(entries), LangNumberFormat.format(outstanding),
+                WareworksLang.translateDirect(state.langKey()));
+    }
+
+    /** {@code "List done: 4/4"} — the receipt of a finished clipboard order; the visual run measures it too. */
+    public static Component listDoneText(int complete, int entries) {
         return WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_STATUS_DONE,
-                LangNumberFormat.format(listState.entriesComplete()), LangNumberFormat.format(listState.entries()));
+                LangNumberFormat.format(complete), LangNumberFormat.format(entries));
     }
 
     @Override
@@ -1453,8 +1489,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /** {@code "steps: 3"}: the badge of a chain's line, which opens its step panel. */
     private static Component stepBadge(PlanLine line) {
-        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_STEPS,
-                LangNumberFormat.format(line.members().size()));
+        return stepBadgeText(line.members().size());
     }
 
     /**
@@ -1462,8 +1497,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * item's own order — that order's own state, because then there is no earlier step left to name.
      */
     private static Component frontierText(ProductionScreenState.OrderView frontier) {
-        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_FRONTIER,
-                frontier.result().toStack().getHoverName());
+        return frontierText(frontier.result().toStack().getHoverName());
     }
 
     /** "Oak Planks x128": what the order makes, the part that gives way when the row is too narrow. */
@@ -1477,9 +1511,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * here, so the boundary is on the line itself and not only in a tooltip ({@code docs/warehouse-system.md} §3.5.4).
      */
     private static Component orderStateText(ProductionScreenState.OrderView order) {
-        Component state = WareworksLang.translateDirect(order.state().langKey());
-        return order.lostIngredients() ? WareworksLang.translateDirect(WareworksLang.TERMINAL_ORDER_LOST, state)
-                : state;
+        return orderStateText(order.state(), order.lostIngredients());
     }
 
     private static Component orderText(ProductionScreenState.OrderView order, Component name, Component amount,
@@ -1669,7 +1701,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * The phase and pause texts are the ones the goggles show ({@code gui.goggles.crane_phase.*}), i.e. whole short
      * sentences, while this row is {@link #ROW_WIDTH} px wide and fixed — so the prefix is what decides whether a
      * player reads the state or an ellipsis. In German it costs 93 of those pixels ("Regalbediengerät: "), which is why
-     * the most ordinary line a terminal has, the idle one, used to be drawn cut off; in English it costs 43 and the
+     * the most ordinary line a terminal has, the idle one, used to be drawn cut off; in English it costs 36 and the
      * longer phases came close. Dropping it is the right thing to drop: this row sits under the terminal's own buffer
      * and there is nothing else in the window it could be about, while the state is the information.
      * <p>
@@ -1684,6 +1716,36 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** Whether {@code text} is drawn in full in the status row; the measure {@link #statusTextsFit()} applies. */
     public boolean fitsStatusRow(Component text) {
         return font.width(text) <= ROW_WIDTH;
+    }
+
+    /**
+     * Room the <b>state column</b> of an order line has in the worst case: with an item name long enough to be cut to
+     * its {@link #MIN_ITEM_WIDTH} floor, and behind {@code badge} when the line is a chain's
+     * ({@link #renderOrderLine}). This is the budget every state text has to fit, in every language.
+     * <p>
+     * Public because the visual run measures the column's vocabulary against the screen's own arithmetic rather than
+     * against a number copied into the harness, where the two could drift apart unnoticed.
+     */
+    public int orderStateBudget(boolean finished, @Nullable Component badge) {
+        int reserved = finished ? 0 : cancelColumnWidth();
+        int badgeWidth = badge == null ? 0 : font.width(badge) + TEXT_GAP;
+        return Math.max(0, ROW_WIDTH - reserved - badgeWidth - MIN_ITEM_WIDTH - TEXT_GAP);
+    }
+
+    /** {@code "steps: 3"} for a chain of {@code steps} orders: the badge that shares the row with the state column. */
+    public static Component stepBadgeText(int steps) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_STEPS, LangNumberFormat.format(steps));
+    }
+
+    /** The state column's text for an order in {@code state}, as {@link #renderOrderLine} would draw it. */
+    public static Component orderStateText(ProductionOrderState state, boolean lost) {
+        Component text = WareworksLang.translateDirect(state.langKey());
+        return lost ? WareworksLang.translateDirect(WareworksLang.TERMINAL_ORDER_LOST, text) : text;
+    }
+
+    /** {@code "now: Oak Planks"} as a chain's state column shows it, for {@code name}. */
+    public static Component frontierText(Component name) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_FRONTIER, name);
     }
 
     @Override

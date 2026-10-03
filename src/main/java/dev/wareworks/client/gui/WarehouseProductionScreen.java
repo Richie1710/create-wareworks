@@ -15,6 +15,7 @@ import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.StoppedProduct;
 import dev.wareworks.core.production.ProductionEntry;
+import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.network.ProductionCancelPayload;
 import dev.wareworks.network.ProductionPatternPayload;
 import dev.wareworks.network.ProductionResumePayload;
@@ -77,6 +78,16 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private static final int COLOR_STOPPED_TINT = 0x60FF4040;
     private static final int COLOR_CELL_HOVER = 0x60FFFFFF;
     private static final int COLOR_TAB_SELECTED = 0x80FBDC7D;
+
+    /** Usable width of a row of text: the window without its two margins — 216 px, as in the terminal. */
+    public static final int ROW_WIDTH = ProductionMenuLayout.WIDTH - 2 * ProductionMenuLayout.MARGIN;
+    /** Free space kept between two texts that share a row. */
+    public static final int TEXT_GAP = 4;
+    /**
+     * Smallest width the item half of an order line keeps, the same floor the terminal's own order lines use
+     * ({@code WarehouseTerminalScreen#MIN_ITEM_WIDTH}): a name cut down to three letters names nothing at all.
+     */
+    public static final int MIN_ITEM_WIDTH = 54;
 
     private ProductionScreenState state = ProductionScreenState.NONE;
     private ProductionMenuLayout layout;
@@ -356,11 +367,49 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                         x + ProductionMenuLayout.MARGIN, y + layout.orderLineY(first), COLOR_DIM, false);
             return;
         }
-        for (int line = 0; line < orders.size(); line++) {
-            ProductionScreenState.OrderView order = orders.get(line);
-            graphics.drawString(font, orderLine(order), x + ProductionMenuLayout.MARGIN,
-                    y + layout.orderLineY(first + line), order.lostIngredients() ? COLOR_LOST : COLOR_TEXT, false);
-        }
+        for (int line = 0; line < orders.size(); line++)
+            renderOrderLine(graphics, x, y + layout.orderLineY(first + line), orders.get(line));
+    }
+
+    /**
+     * One order line, drawn in two parts so that the <b>state wins the row</b>: the item and its amount on the left,
+     * where a long name gives way, and where the order stands on the right.
+     * <p>
+     * It used to be one string ({@link #orderTooltipLine}) trimmed from the end, which put the item's name in front of
+     * the state and therefore cut the state first — the half that actually changes. The row is
+     * {@value #ROW_WIDTH} px and fixed, while an item name is bounded by nothing at all, so a single modded name was
+     * enough to leave a player reading "Some Very Long Item Name x64 - waiting…" with no state at all. This is the
+     * split the terminal's own order lines have had since M20 ({@code WarehouseTerminalScreen#renderOrderLine}), down
+     * to the {@link #MIN_ITEM_WIDTH} floor below which the state gives way instead. The tooltip holds both in full.
+     */
+    private void renderOrderLine(GuiGraphics graphics, int x, int top, ProductionScreenState.OrderView order) {
+        int color = order.lostIngredients() ? COLOR_LOST : COLOR_TEXT;
+        Component item = orderItemText(order);
+        int floor = Math.min(font.width(item), MIN_ITEM_WIDTH);
+        Component state = fitTo(orderStateText(order), Math.max(0, ROW_WIDTH - floor - TEXT_GAP));
+        int stateX = Math.max(ProductionMenuLayout.MARGIN,
+                ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN - font.width(state));
+        graphics.drawString(font, state, x + stateX, top, color, false);
+        int room = stateX - ProductionMenuLayout.MARGIN - TEXT_GAP;
+        graphics.drawString(font, fitTo(item, Math.max(0, room)), x + ProductionMenuLayout.MARGIN, top, color, false);
+    }
+
+    /** "Oak Planks x128": what the order makes, the part that gives way when the row is too narrow. */
+    private static Component orderItemText(ProductionScreenState.OrderView order) {
+        return WareworksLang.translateDirect(WareworksLang.GOGGLES_ITEM_COUNT, order.result().toStack().getHoverName(),
+                LangNumberFormat.format(order.amount()));
+    }
+
+    /**
+     * Where the order stands, as the row's right-hand column shows it.
+     * <p>
+     * An order that ended with ingredients already handed to a machine carries the short marker the terminal's own
+     * order line carries ({@code gui.terminal.order_lost}), from that one shared key: it is the same boundary on the
+     * same kind of row, and one wording for both screens is one thing for a player to learn. The sentence that says
+     * what it means is in this line's tooltip, in full ({@code gui.production.ingredients_lost}).
+     */
+    private static Component orderStateText(ProductionScreenState.OrderView order) {
+        return orderStateText(order.state(), order.waitingForStep(), order.lostIngredients());
     }
 
     /**
@@ -382,11 +431,8 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
      */
     private Component stoppedRow() {
         List<StoppedProduct> stopped = state.stopped();
-        if (stopped.size() == 1)
-            return fitToRow(WareworksLang.translateDirect(WareworksLang.PRODUCTION_STOPPED_LINE,
-                    stopped.getFirst().key().toStack().getHoverName()));
-        return fitToRow(WareworksLang.translateDirect(WareworksLang.PRODUCTION_STOPPED_LINE_MANY,
-                Component.literal(LangNumberFormat.format(stopped.size()))));
+        return fitToRow(stoppedRowText(stopped.size(),
+                stopped.size() == 1 ? stopped.getFirst().key().toStack().getHoverName() : Component.empty()));
     }
 
     /** What the safety stop is holding of the product of pattern slot {@code pattern}, if anything (M20). */
@@ -395,11 +441,12 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     }
 
     /**
-     * One order line. An order that ended without producing everything although ingredients had already been handed
-     * over says so on the line itself, not only in a tooltip: those items are not coming back
-     * ({@code warehouse-system.md} §3.5).
+     * One order line as a <b>tooltip</b> holds it: one whole sentence, uncut, where there is room for it. An order
+     * that ended without producing everything although ingredients had already been handed over says so in full here
+     * — those items are not coming back ({@code warehouse-system.md} §3.5) — while the row itself carries the short
+     * marker ({@link #orderStateText}).
      */
-    private Component orderLine(ProductionScreenState.OrderView order) {
+    private Component orderTooltipLine(ProductionScreenState.OrderView order) {
         Component name = order.result().toStack().getHoverName();
         Component amount = Component.literal(LangNumberFormat.format(order.amount()));
         // An order that is waiting for an earlier step of its own chain says that rather than its own state (M20,
@@ -408,9 +455,9 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         // sentence the terminal's step panel and this station's goggle line use, from the one shared key.
         Component status = WareworksLang.translateDirect(order.waitingForStep()
                 ? WareworksLang.PRODUCTION_WAITING_FOR_STEP : order.state().langKey());
-        return fitToRow(order.lostIngredients()
+        return order.lostIngredients()
                 ? WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER_LOST, name, amount, status)
-                : WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER, name, amount, status));
+                : WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER, name, amount, status);
     }
 
     /** The orders the window has room for, newest first — one fewer while the stopped row has a line. */
@@ -424,12 +471,47 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     }
 
     private Component fitToRow(Component line) {
-        int room = ProductionMenuLayout.WIDTH - 2 * ProductionMenuLayout.MARGIN;
-        if (font.width(line) <= room)
+        return fitTo(line, ROW_WIDTH);
+    }
+
+    /** {@code line} cut to {@code width} pixels if it is wider, with an ellipsis marking what was cut off. */
+    private Component fitTo(Component line, int width) {
+        if (font.width(line) <= width)
             return line;
-        int fits = room - font.width(CommonComponents.ELLIPSIS);
+        int fits = width - font.width(CommonComponents.ELLIPSIS);
         return Component.literal(fits <= 0 ? "" : font.plainSubstrByWidth(line.getString(), fits))
                 .append(CommonComponents.ELLIPSIS);
+    }
+
+    // --- what the dev harness measures -------------------------------------------------------------------------------
+
+    /**
+     * Room the <b>state column</b> of an order line has when the item's name is long enough to be cut to its floor:
+     * the worst case every state text of this screen has to fit, in every language ({@link #renderOrderLine}).
+     * <p>
+     * Public because the {@code terminal} visual run measures this screen's vocabulary against it. A translation that
+     * does not fit is a defect no screenshot of one station's one order can be trusted to show — the German
+     * "wartet auf einen fr&uuml;heren Schritt" was 172 px against this budget and nothing failed.
+     */
+    public static int orderStateBudget() {
+        return ROW_WIDTH - MIN_ITEM_WIDTH - TEXT_GAP;
+    }
+
+    /** The state column's text for an order in {@code state}, as {@link #renderOrderLine} would draw it. */
+    public static Component orderStateText(ProductionOrderState state, boolean waitingForStep, boolean lost) {
+        Component text = WareworksLang.translateDirect(waitingForStep
+                ? WareworksLang.PRODUCTION_WAITING_FOR_STEP : state.langKey());
+        return lost ? WareworksLang.translateDirect(WareworksLang.TERMINAL_ORDER_LOST, text) : text;
+    }
+
+    /**
+     * The stopped row as it is drawn, for {@code stopped} products — the row that leads with the item's name, so what
+     * follows the name is what a long name pushes off the end ({@link #stoppedRow}).
+     */
+    public static Component stoppedRowText(int stopped, Component name) {
+        return stopped == 1 ? WareworksLang.translateDirect(WareworksLang.PRODUCTION_STOPPED_LINE, name)
+                : WareworksLang.translateDirect(WareworksLang.PRODUCTION_STOPPED_LINE_MANY,
+                        LangNumberFormat.format(stopped));
     }
 
     @Override
@@ -477,7 +559,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         int order = orderAt(mouseX, mouseY);
         if (order != NONE) {
             ProductionScreenState.OrderView view = shownOrders().get(order);
-            tooltip.add(orderLine(view));
+            tooltip.add(orderTooltipLine(view));
             if (view.missing() > 0)
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_MISSING,
                         Component.literal(LangNumberFormat.format(view.missing()))).copy()

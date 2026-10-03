@@ -92,8 +92,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   space, so in German the most ordinary line of all — "Regalbediengerät: Wartet auf einen Auftrag" — was drawn with its
   end missing, and several of the longer English phases came within a few pixels of the same thing. The row now drops
   the "Crane:" label whenever keeping it would cut the text, and shows what the crane is doing in full instead; nothing
-  changes for the lines that already fitted. The only text that is still too long for the row is the one that says a
-  crane speed factor is 0 in the server config, which a crane's goggle overlay shows in full
+  changes for the lines that already fitted. Two kinds of text are still longer than the row and end in an ellipsis:
+  the line that says a crane speed factor is 0 in the server config, and the longest refusal reasons — four of the
+  eleven in English and seven in German, among them the one that says production has stopped. Both are readable in
+  full through engineer's goggles, which have no fixed row to cut
+- **The clipboard order's progress line is no longer cut off.** The row under the delivery slots counts a list down as
+  "List 2/9, 320 left (…)", and the word in brackets used to be a whole sentence — "waiting for your answer", in
+  German "wartet auf deine Antwort" — which did not fit beside three numbers and was drawn with its end missing, in
+  both languages. Each state is one word now (fetching, asking, paused, done), everywhere it appears: the status row,
+  the clipboard's own tooltip and the terminal's goggle line. What to do about it is on the list button right beside
+  the row, which changes its face and its tooltip with the same state
+- **Three German answers of the clipboard order ran past the end of their row.** Pressing the list button told you
+  that the question was back, asked you to answer it, or said the rest of the list would be tried again — and each of
+  those sentences was drawn with its end missing. They say the same thing in fewer words now
+- **A production station's order line cut away the state instead of the item's name.** The line reads
+  "Oak Planks x128 - waiting for the result", and because it was trimmed from the end, a long item name pushed the
+  half that actually changes off the row; the note that an ended order's ingredients are not coming back did not fit in either language
+  even with no name in the line at all. The item and its amount now stand on the left and the state on the right, so
+  the state always survives and a long name is what gives way — and the whole sentence is one hover away, in the
+  line's tooltip. In the terminal, where the same note appears, the German wording now says plainly that it is the
+  ingredients that are gone, which is what the English always said
+- **A production station's red "stopped" row was cut off in both languages.** It reads "Stopped: Diamond - click to
+  resume" now; the old wording did not fit the row even before the item's name was put into it. What stopped it and
+  what it cost are still in that row's tooltip
+- **A refused request shows the reason instead of running out of room.** The status row said "Request refused:" and
+  then ran out of space for the reason itself. It drops that label now whenever keeping it would cut the text — the
+  row is red already, and there is nothing else in the window it could be about — so seven of the eleven reasons are
+  readable in full in English and four in German, where it was three and one. The longest ones still end in an
+  ellipsis; a glance through engineer's goggles at the terminal shows them whole
 
 ## [0.6.0-alpha] - 2026-10-02
 

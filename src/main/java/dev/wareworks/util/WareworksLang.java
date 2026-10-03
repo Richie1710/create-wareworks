@@ -250,11 +250,12 @@ public final class WareworksLang {
      */
     public static final String PRODUCTION_RESUME_HINT = "production.resume_hint";
     /**
-     * {@code "Stopped: %1$s. Click to make it again"}: the row a production station's screen shows instead of its first
-     * order line while the safety stop holds exactly one of its products (M20).
+     * {@code "Stopped: %1$s - click to resume"}: the row a production station's screen shows instead of its first
+     * order line while the safety stop holds exactly one of its products (M20). It leads with the item's name, so
+     * everything after the name is what a long name pushes off the 216 px row — which is why it is this short.
      */
     public static final String PRODUCTION_STOPPED_LINE = "gui.production.stopped_line";
-    /** The same row for a station with several stopped products: {@code "Stopped: %1$s products. ..."} (M20). */
+    /** The same row for a station with several stopped products: {@code "Stopped: %1$s products - ..."} (M20). */
     public static final String PRODUCTION_STOPPED_LINE_MANY = "gui.production.stopped_line_many";
     /** {@code "%1$s: %2$s"}: one stopped product of that row's tooltip, the item first and then why it stopped (M20). */
     public static final String PRODUCTION_STOPPED_ITEM = "gui.production.stopped_item";
@@ -574,9 +575,16 @@ public final class WareworksLang {
     public static final String TERMINAL_LIST_RESUME = "gui.terminal.list.resume";
     /** Tooltip of the list button while a question of one portion is waiting for an answer. */
     public static final String TERMINAL_LIST_ANSWER = "gui.terminal.list.answer";
-    /** {@code "List: %1$s of %2$s entries, %3$s left - %4$s"}: the status line of a running order. */
+    /**
+     * {@code "List %1$s/%2$s, %3$s left (%4$s)"}: the status line of a running order, which wins the terminal's status
+     * row while the order has work to do.
+     * <p>
+     * Three numbers whose ceilings are config values leave the state in the brackets 64 px of that row in English and
+     * <b>48</b> in German, which is why the {@code gui.terminal.list.state.*} values are single words and not the
+     * phrases they once were.
+     */
     public static final String TERMINAL_LIST_STATUS = "gui.terminal.list.status";
-    /** {@code "List: %1$s of %2$s entries fetched"}: the status line of a finished order. */
+    /** {@code "List done: %1$s/%2$s"}: the receipt of a finished order. */
     public static final String TERMINAL_LIST_STATUS_DONE = "gui.terminal.list.status_done";
     /**
      * {@code "Entries not taken from the clipboard: %1$s"}: the entry cap cut the list. Named in the Fetch dialog and
@@ -609,7 +617,11 @@ public final class WareworksLang {
     public static final String PRODUCTION_HINT = "gui.production.hint";
     /** {@code "%1$s x%2$s - %3$s"}: one production order line (result, amount, state). */
     public static final String PRODUCTION_ORDER = "gui.production.order";
-    /** The same line for an order that ended with ingredients already handed to the machine. */
+    /**
+     * The same line for an order that ended with ingredients already handed to the machine. It is the line as a
+     * <b>tooltip</b> holds it; the row itself carries the short {@link #TERMINAL_ORDER_LOST} marker, because the whole
+     * sentence does not fit 216 px in either language ({@code warehouse-system.md} §3.5.4).
+     */
     public static final String PRODUCTION_ORDER_LOST = "gui.production.order_lost";
     /** {@code "Ingredient"}: what a grid cell is. */
     public static final String PRODUCTION_INGREDIENT = "gui.production.ingredient";
@@ -640,7 +652,10 @@ public final class WareworksLang {
     public static final String TERMINAL_PRODUCIBLE_AMOUNT = "gui.terminal.producible_amount";
     /** {@code "Production"}: label above the terminal's production order lines. */
     public static final String TERMINAL_PRODUCTION = "gui.terminal.production";
-    /** {@code "%1$s, not recovered"}: an ended order whose delivered ingredients are gone (§3.5.4), on the line. */
+    /**
+     * {@code "%1$s, not recovered"}: an ended order whose delivered ingredients are gone (§3.5.4), on the line. The
+     * production station's own order line uses this same marker, so one wording covers both screens.
+     */
     public static final String TERMINAL_ORDER_LOST = "gui.terminal.order_lost";
     /** {@code "Requested %1$s x%2$s, producing %3$s"}: an accepted request a production order was started for. */
     public static final String TERMINAL_PRODUCING = "gui.terminal.producing";

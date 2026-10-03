@@ -222,6 +222,13 @@ public final class ChecklistVisualScenario implements VisualScenario {
     private static final int STORE_TIMEOUT_TICKS = 2400;
     /** Game ticks the full destination is watched before the player empties it. */
     private static final int BLOCKED_TICKS = 80;
+    /** The language the one German shot of this run switches to, and the one it switches back to. */
+    private static final String GERMAN = "de_de";
+    private static final String ENGLISH = "en_us";
+    /** How long the answer to a press may hold the status row before the progress line gets it back. */
+    private static final int FEEDBACK_TIMEOUT_TICKS = 200;
+    /** How long a resource reload may take: a language switch rebuilds every atlas. */
+    private static final int LANGUAGE_RELOAD_TIMEOUT_TICKS = 600;
     private static final int SETTLE_TICKS = 4;
     /** Client ticks between two clicks on slots, kept above vanilla's 250 ms double-click window. */
     private static final int CLICK_GAP_TICKS = 8;
@@ -284,6 +291,9 @@ public final class ChecklistVisualScenario implements VisualScenario {
     public VisualWorldProfile worldProfile() {
         return VisualWorldProfile.playable(WORLD_FOLDER, WORLD_FOLDER, GameType.CREATIVE);
     }
+
+    /** The language switches of the one German shot, awaited like the language screen does. */
+    private final VisualLanguage language = new VisualLanguage(LANGUAGE_RELOAD_TIMEOUT_TICKS, SETTLE_TICKS);
 
     @Override
     public void setup(VisualScript script) {
@@ -468,6 +478,45 @@ public final class ChecklistVisualScenario implements VisualScenario {
                 .client("checklist: check that the status row still fits", ChecklistVisualScenario::checkStatusFits)
                 .waitTicks(SETTLE_TICKS)
                 .shot("started");
+        showTheRunningLineInGerman(script);
+    }
+
+    /**
+     * The one row of this feature a German client can get wrong, photographed in German: the progress line of a
+     * <b>running</b> order, which owns the terminal's 216 px status row while the list is being worked off.
+     * <p>
+     * The widths of the whole clipboard vocabulary are asserted elsewhere, once per language and at the ceilings the
+     * config allows rather than at the numbers this run happens to produce
+     * ({@code TerminalVisualScenario#checkRowVocabularyFits}) — that is the gate. This is the picture a human can
+     * look at beside it, because "the row is 216 px and the text is 214" is not the same claim as "a player can read
+     * it". The line used to end in an ellipsis here: the state in its brackets was a sentence
+     * ("wartet auf deine Antwort"), and three numbers leave those brackets 48 px in German.
+     * <p>
+     * The run goes back to English afterwards, because every assertion after this step reads English text.
+     */
+    private void showTheRunningLineInGerman(VisualScript script) {
+        language.switchTo(script, "checklist: ", GERMAN);
+        // The answer to pressing Fetch holds the row for four seconds and the language switch takes about as long, so
+        // without this wait the shot is a coin toss between the answer and the line it is supposed to show.
+        script.until("checklist: wait until the answer has faded and the progress line owns the row",
+                        context -> terminalScreen(context).feedbackLine().isEmpty(), FEEDBACK_TIMEOUT_TICKS)
+                .client("checklist: check that the German status row fits and is the progress line",
+                        ChecklistVisualScenario::checkGermanProgressLine)
+                .shot("started-de");
+        language.switchTo(script, "checklist: ", ENGLISH);
+    }
+
+    /**
+     * The row the German shot is about: it fits, and it really is the clipboard order's progress line rather than
+     * whatever else the terminal might have had to say at that moment.
+     */
+    private static void checkGermanProgressLine(VisualContext context) {
+        checkStatusFits(context);
+        WarehouseTerminalScreen terminal = terminalScreen(context);
+        String shown = terminal.shownStatusLine().getString();
+        if (!terminal.listState().isOpen() || !shown.contains("/"))
+            throw new VisualTestException("the German status row does not show the running list: '" + shown + "'");
+        LOGGER.info(PREFIX + "checklist: the German status row reads '{}'", shown);
     }
 
     // --- 4: the full destination ------------------------------------------------------------------------------------

@@ -1808,3 +1808,76 @@ you get tired of waiting, and put it back before judging check 160.
     right, or does it read as the button being slow to notice what you did? The alternative was a list that reorders
     the moment the server answers, which moved the row out from under the cursor that had just clicked it — say which
     of the two you would rather have.
+
+## AC. German lines that had to get shorter (the release audit)
+
+> The widths are all measured now — the `terminal` visual run walks the whole vocabulary of seven hard-clipped rows in
+> both languages on every pass, so no line here can grow past its row again without a gate failing. What a gate cannot
+> judge is whether the **shorter wording still says the right thing**, and that is what these four checks are for. Run
+> them on a German client (`de_de`) and then again in English.
+
+179. **The clipboard order's progress line.** Start a clipboard order at a terminal and read the line under the grid:
+    `Liste 1/4, 192 offen (holt)`. The word in brackets used to be a sentence (`wartet auf deine Antwort`,
+    `vorerst aufgegeben`) and was cut off in both languages — three numbers leave the brackets 48 px in German. It is
+    now one verb per state: **`holt`** while it is fetching, **`fragt`** while a portion raised a question,
+    **`pausiert`** after it stopped itself, `fertig` in the receipt. Provoke `fragt` (put an entry on the list that
+    costs more than the Fetch dialog's consent covered) and `pausiert` (let an entry the warehouse cannot serve stall
+    the order for a minute), and for each one ask: **does the one word, plus the button beside it, tell you what to
+    do?** The button is the other half of the answer on purpose — it turns into a green check mark with *Die Rückfrage
+    zu dieser Liste beantworten* for `fragt` and into the arrows with *Den Rest der Liste noch einmal versuchen* for
+    `pausiert`. If you would rather lose a number than that sentence, say so: the alternative is a second line shape
+    for the two states that are not running.
+180. **The three clipboard answers that got shorter.** Press the list button in the states that produce them and read
+    the answer in the status row: *Hier ist die Rückfrage noch einmal* (was `… die Rückfrage zu dieser Liste noch
+    einmal`, 251 px in a 216 px row), *Bitte beantworte die Rückfrage zur Liste* (was `… zu dieser Liste`) and *Der
+    Rest der Liste wird neu versucht* (was `… wird noch einmal versucht`). Each one lost a few words to fit. Do they
+    still name the same thing — in particular, is it still obvious **which** list "die Liste" is when you are standing
+    at one terminal of a warehouse that has several?
+181. **The production station's order line and its stopped row.** Open a production station with an order running and
+    one that ended badly. The line now puts the item and the amount on the left and the state on the **right**, so a
+    long item name can no longer push the state off the row — check it with something like *Poliertes
+    Schwarzsteinziegel*. An order that handed ingredients to your machine and then ended carries the short marker
+    **`, Zutaten weg`** instead of `, Zutaten nicht zurückgeholt`; the full sentence (*Zutaten, die deine Maschine
+    bereits genommen hat, kommen nicht zurück*) is in the line's tooltip. Is the short marker enough on the row, or
+    does it read as the *order* being gone rather than the ingredients? Then stop a product and read the red row:
+    **`Angehalten: Diamant - weitermachen`** (English: `Stopped: Diamond - click to resume`). German had no room for
+    the verb *anklicken* beside it. Does the row still read as something you can click?
+182. **A refused request without its label.** Click an item the warehouse cannot serve and watch the status row. A
+    refusal now drops its own `Anforderung abgelehnt: ` frame whenever keeping it would cut the reason — the row is
+    red already, and the frame costs 124 px in German. Check both halves: a **short** reason still comes framed
+    (`Anforderung abgelehnt: nicht auf Lager`), a **long** one comes bare (`du bist zu weit vom Terminal entfernt`).
+    Does the bare red sentence still read as a refusal, or does it look like the crane saying something?
+    * And the open decision behind it: **seven German reasons and four English ones still do not fit this row at all**
+      and end in an ellipsis — among them *zu viele laufende Herstellungsaufträge; warte auf einen oder gib einen auf*
+      (382 px) and *das Lager stellt es nicht mehr her; prüfe die Maschine und setze es fort* (372 px). They are the
+      **goggles'** sentences, shared with the port and terminal tooltips, and they all name a remedy after the cause;
+      the cause survives on the row and the remedy is what is cut. Put the goggles on after such a refusal and read
+      the full sentence there, then decide: is one goggle-glance an acceptable price, or should the terminal get a
+      short vocabulary of its own (eleven sentences, two languages)? Until you decide, every visual run prints all
+      eleven with their overflow.
+
+## AD. A world from the last release (the release audit)
+
+> The automated gate for this is `gametest.MigrationGameTests` (6 tests, `run/migration/README.txt`): the real
+> terminal bytes and the real player file of a pre-0.7.0 world, replayed against this build, plus a delivery caught in
+> flight. What those tests cannot do is open a **whole** world that the released build wrote — no such world exists on
+> the dev machine any more, and making one means running the released code (the README ends with the three commands).
+> So the last word is a human opening an old world and using it. Both checks below are about an existing save, so take
+> a copy of it first.
+
+183. **Open your oldest real world.** `run/saves/wareworks_showcase_gespielt` is the world you played, last written on
+    2026-09-16 — older than the release this build follows, which makes it the better test. Copy it, open the copy and
+    walk the warehouse: is it the warehouse you left? Check the things a save carries and a test cannot judge by
+    looking — the **addresses on your own signs** still name the same racks, the stock counts on the controller's
+    display match what is in the chests, your production patterns are still in the machines, the crane parks where it
+    parked. Then let it work: feed the input, pull from the output, and watch one crane trip end to end.
+184. **The terminal of a world that never had the new per-player data.** In that same old world, open a warehouse
+    terminal. It must come up with the list sorted **"most available first"** (`Meiste zuerst`), with no counts behind
+    it, because the order you may have had on screen in 0.6.0 lived in a static field of the screen and was never
+    saved — there is nothing to migrate, and the build before this one showed exactly this order after every restart.
+    The question for you: **does that feel like a loss?** If you habitually left the screen on "by name", you will now
+    have to press the button once more per world, after which the choice really is remembered (it is yours, per player,
+    at every terminal of that world). Then use the terminal for a while and watch "most used" fill up from zero: the
+    items you fetch climb, and nothing that is out of stock is ever sorted above something you can actually have. Last,
+    put a clipboard into the terminal's **new list slot** — it is empty in every old world, as it must be — and fetch a
+    list, to see the feature arrive in a warehouse that was built before it existed.

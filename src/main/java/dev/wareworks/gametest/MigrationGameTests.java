@@ -29,6 +29,9 @@ import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.TerminalPreferences;
+import dev.wareworks.content.station.WarehouseStationBlockEntity;
+import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.Heading;
@@ -39,13 +42,16 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.NetworkStop;
 import dev.wareworks.core.warehouse.RailNetwork;
+import dev.wareworks.registry.WareworksAttachments;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.core.BlockPos;
@@ -58,9 +64,13 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.attachment.AttachmentHolder;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -92,6 +102,15 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <p>
  * The aisle is the one the real save describes: controller at {@code x = 0}, dock at {@code x = 1} facing east along
  * {@code z = 3}, {@value #RAILS} rails, mast {@value #MAST} high.
+ * <p>
+ * <b>Since 0.7.0 the holder carries that milestone's gate too</b> (M23 issue #19, M24 issue #17), because those two
+ * milestones are the next ones that added something to a save: a terminal may now hold a clipboard and the order it is
+ * working off, and a <b>player</b> now carries the stock-list order they chose and what they keep asking for
+ * (ADR-037). The three tests below answer the three halves of that:
+ * {@link #migrationrealpre07terminalkeepsitsbufferandserves} replays the <b>real</b> terminal bytes of a world written
+ * before any of it existed, {@link #migrationplayerwithoutpreferencesgetsthedefaultorder} opens a player file that has
+ * no such attachment, and {@link #migrationinflightterminalrequestsurvivesthesave} catches a delivery in flight — the
+ * one state no saved world in {@code run/migration} holds, for the same reason M21's crane gate had to take it live.
  */
 @GameTestHolder(Wareworks.ID)
 @PrefixGameTestTemplate(false)
@@ -213,6 +232,37 @@ public final class MigrationGameTests {
     private static final ItemKey GOLD = ItemKey.of(new ItemStack(Items.GOLD_INGOT));
     private static final ItemKey DIAMOND = ItemKey.of(new ItemStack(Items.DIAMOND));
     private static final int GROWTH_TIMEOUT_TICKS = 2400;
+
+    // --- the 0.7.0 gate: a world saved by 0.6.0-alpha, before a terminal had a list slot (M23, M24) ----------------
+
+    /** Rails of the small aisle the 0.7.0 gate measures on: a terminal beside the dock and one stocked rack. */
+    private static final int PRE07_RAILS = 4;
+    /** The terminal's rack position, beside the dock, exactly where {@code TerminalUsageGameTests} places one. */
+    private static final RackPosition PRE07_TERMINAL = new RackPosition(0, 0, Side.RIGHT);
+    private static final RackPosition PRE07_STORAGE = new RackPosition(1, 0, Side.LEFT);
+    private static final int PRE07_IRON = 64;
+    private static final int PRE07_GOLD = 16;
+    private static final int PRE07_REQUESTED = 16;
+
+    /**
+     * The buffer of the real pre-0.7.0 terminal, {@code slot, item id, count} per line: the
+     * {@code wareworks:warehouse_terminal} of {@code run/migration/world-m21} at {@code (1, -60, -1)}, holding what the
+     * showcase world's two production loops had delivered into it. Its <b>whole</b> saved tag is
+     * {@code {Buffer: {Size: 9, Items: [...]}}} — not one key more.
+     */
+    private static final String[] REAL_TERMINAL_BUFFER = {
+            "0,create:shaft,6",
+            "1,minecraft:fire_charge,6"};
+    private static final int REAL_TERMINAL_SLOTS = 9;
+    private static final int REAL_SHAFTS = 6;
+    private static final int REAL_CHARGES = 6;
+    private static final ItemKey SHAFT = ItemKey.of(AllBlocks.SHAFT.asStack());
+
+    /**
+     * Key of a terminal's clipboard order inside its save ({@code TerminalListPersistence.LIST_ORDER_TAG}, which is
+     * package-private to the station package, like {@link #CRANE_TAG} is to the crane's).
+     */
+    private static final String LIST_ORDER_TAG = "ListOrder";
 
     private MigrationGameTests() {
     }
@@ -570,7 +620,325 @@ public final class MigrationGameTests {
                 .setValue(WarehouseInterfaceBlock.FACING, away));
     }
 
+    // --- the 0.7.0 gate: a terminal saved before it had a list slot ------------------------------------------------
+
+    /**
+     * The migration gate of 0.7.0 (M23 issue #19, M24 issue #17): the <b>real</b> terminal bytes of a world saved
+     * before a terminal had a clipboard slot open as the terminal they were, keep every item they held, and the
+     * warehouse serves them.
+     * <p>
+     * The bytes are the {@code wareworks:warehouse_terminal} of {@code run/migration/world-m21} at
+     * {@code (1, -60, -1)}, read out of that world's region files: a buffer of {@value #REAL_TERMINAL_SLOTS} slots
+     * holding {@value #REAL_SHAFTS} shafts and {@value #REAL_CHARGES} fire charges, and <b>nothing else at all</b>.
+     * That tag is the shape {@code v0.6.0-alpha} wrote: the release commit changed only {@code CHANGELOG.md} and
+     * {@code gradle.properties}, and M22 — the one milestone between that world and the release — added no save key
+     * (see {@code run/migration/README.txt}).
+     * <p>
+     * What this release added to that tag is two keys, both <b>optional</b>: {@code ListSlot} for a clipboard really
+     * lying in the new slot and {@code ListOrder} for an order really running
+     * ({@code WarehouseTerminalBlockEntity#writeStationData}). So the gate is in three parts: the old bytes carry
+     * neither (asserted on the fixture), loading them leaves the terminal at the documented default — empty slot, no
+     * order, no list on the screen — and writing it back writes <b>neither key back</b>, so a 0.6.0 world that is
+     * merely opened keeps the bytes it had. Then the migrated terminal is made to work for its living: it is still a
+     * member of its aisle, it takes a request, the crane really carries the iron into it, its old items are still
+     * there afterwards and the census over the whole test is unchanged. Last, the new slot is used for the first time,
+     * and only then does the save grow the new key.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void migrationrealpre07terminalkeepsitsbufferandserves(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, PRE07_RAILS).build(true);
+        aisle.storage(PRE07_STORAGE, IRON.toStack(PRE07_IRON));
+        aisle.terminal(PRE07_TERMINAL);
+        Map<ItemKey, Long> conserved = new HashMap<>();
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenExecute(() -> {
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag real = realPre07Terminal();
+                    // The bytes really are a pre-0.7.0 save: nothing this release writes is in them.
+                    helper.assertValueEqual(occurrences(real, WarehouseTerminalBlockEntity.LIST_SLOT_TAG), 0,
+                            "the real save has no clipboard slot");
+                    helper.assertValueEqual(occurrences(real, LIST_ORDER_TAG), 0, "and no clipboard order");
+                    helper.assertValueEqual(occurrences(real, WarehouseTerminalBlockEntity.LIST_STATE_TAG), 0,
+                            "and nothing of a list on a screen");
+
+                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(PRE07_TERMINAL);
+                    terminal.loadWithComponents(real, registries);
+
+                    // Every item it held is back, in the slots it held them in.
+                    helper.assertValueEqual(terminal.bufferedItems().count(SHAFT), (long) REAL_SHAFTS,
+                            "the shafts its sawmill loop made are still in it");
+                    helper.assertValueEqual(terminal.bufferedItems().count(FIRE_CHARGE), (long) REAL_CHARGES,
+                            "and the fire charges of its crafters");
+                    helper.assertValueEqual(terminal.menuBuffer().getStackInSlot(0).getCount(), REAL_SHAFTS,
+                            "the first slot holds what it held");
+                    helper.assertValueEqual(terminal.menuBuffer().getStackInSlot(1).getCount(), REAL_CHARGES,
+                            "and so does the second");
+
+                    // And the two things this release added are at their documented default for it.
+                    helper.assertTrue(terminal.listClipboard().isEmpty(), "its new list slot is empty");
+                    helper.assertFalse(terminal.hasListOrder(), "it has no clipboard order");
+                    helper.assertFalse(terminal.hasOpenListOrder(), "nor an open one");
+                    helper.assertFalse(terminal.listState().isOpen(), "and its screen would show no list");
+
+                    // It writes back what it read: a world that is merely opened keeps the bytes it had.
+                    CompoundTag again = terminal.saveWithoutMetadata(registries);
+                    helper.assertFalse(again.contains(WarehouseTerminalBlockEntity.LIST_SLOT_TAG),
+                            "it writes no clipboard slot back");
+                    helper.assertFalse(again.contains(LIST_ORDER_TAG), "nor a clipboard order");
+                    helper.assertValueEqual(again.getCompound(WarehouseStationBlockEntity.BUFFER_TAG)
+                                    .getList("Items", Tag.TAG_COMPOUND),
+                            real.getCompound(WarehouseStationBlockEntity.BUFFER_TAG).getList("Items", Tag.TAG_COMPOUND),
+                            "and the buffer it writes is the one it was given, entry for entry");
+                })
+                // The migrated terminal is still a member of its aisle, and the warehouse serves it.
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenExecute(() -> {
+                    conserved.putAll(ItemCensus.take(helper));
+                    Player player = playerAt(helper, aisle.rackPos(PRE07_TERMINAL));
+                    helper.assertTrue(aisle.terminalAt(PRE07_TERMINAL)
+                                    .requestFromTerminal(player, IRON, PRE07_REQUESTED).isAccepted(),
+                            "the migrated terminal takes a request");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(PRE07_TERMINAL, IRON), (long) PRE07_REQUESTED,
+                            "and the crane carries the iron into it");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> {
+                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(PRE07_TERMINAL);
+                    helper.assertValueEqual(terminal.bufferedItems().count(SHAFT), (long) REAL_SHAFTS,
+                            "the items of the old world are still there");
+                    helper.assertValueEqual(terminal.bufferedItems().count(FIRE_CHARGE), (long) REAL_CHARGES,
+                            "all of them");
+                    ItemCensus.assertEquals(helper, conserved, "while the migrated terminal was served");
+
+                    // Only when the new slot is really used does the save gain the new key (the clipboard itself is
+                    // deliberately no part of a census: ticking an entry off changes its components by design).
+                    helper.assertTrue(terminal.listSlot().insertItem(WarehouseTerminalBlockEntity.LIST_SLOT,
+                            AllBlocks.CLIPBOARD.asStack(), false).isEmpty(), "the new slot takes a clipboard");
+                    helper.assertFalse(terminal.listClipboard().isEmpty(), "which is then lying in it");
+                    helper.assertTrue(terminal.saveWithoutMetadata(helper.getLevel().registryAccess())
+                            .contains(WarehouseTerminalBlockEntity.LIST_SLOT_TAG),
+                            "and only now is there a clipboard slot in the save");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The migration gate of M24 (issue #17): a player who never had the new per-player data opens the world with the
+     * <b>documented default</b> — "most available first", no counts at all — and the terminal then starts learning
+     * from them.
+     * <p>
+     * A player's own file is where M24 put the chosen order and the counts, as a NeoForge data attachment inside
+     * {@code playerdata/&lt;uuid&gt;.dat} ({@code AttachmentHolder.ATTACHMENTS_NBT_KEY}, ADR-037). The real
+     * {@code playerdata/380df991-f603-344c-a090-369bad2a924a.dat} of {@code run/migration/world-m21} has <b>no
+     * {@code neoforge:attachments} key at all</b> (it has {@code NeoForgeData: {}} and nothing of this mod), which is
+     * what every 0.6.0 player file looks like, because 0.6.0 had no attachment to write.
+     * <p>
+     * The fixture is therefore built out of this build's own save of a player who <b>has</b> used a terminal, with that
+     * one attachment taken out again: byte for byte what 0.6.0 wrote for the same player, since this key is the only
+     * difference this release makes to a player file. Loading it into a fresh player is what opening the world does —
+     * {@code Entity#load} reads attachments only {@code if (compound.contains(ATTACHMENTS_NBT_KEY))} — and the player
+     * comes out with {@link TerminalSort#DEFAULT}, which is {@link TerminalSort#AMOUNT}, and an empty history. That
+     * the "most used" order of an empty history <b>is</b> the amount order is pinned by {@code TerminalSortTest}; what
+     * needs a world is this: that the absent choice is the default rather than a fault, that saving such a player
+     * writes none of it back, and that their first request starts the store and survives a save.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void migrationplayerwithoutpreferencesgetsthedefaultorder(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, PRE07_RAILS).build(true);
+        aisle.storage(PRE07_STORAGE, IRON.toStack(PRE07_IRON), GOLD.toStack(PRE07_GOLD));
+        aisle.terminal(PRE07_TERMINAL);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().countOf(IRON), (long) PRE07_IRON,
+                        "the iron is indexed"))
+                .thenExecute(() -> {
+                    String preferences = WareworksAttachments.TERMINAL_PREFERENCES.getId().toString();
+                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(PRE07_TERMINAL);
+
+                    // 1. A player of this build who has used a terminal: their own file carries the new data.
+                    Player used = playerAt(helper, aisle.rackPos(PRE07_TERMINAL));
+                    helper.assertTrue(terminal.requestFromTerminal(used, IRON, PRE07_REQUESTED).isAccepted(),
+                            "this player asks for iron");
+                    helper.assertTrue(TerminalPreferences.of(used).setSort(TerminalSort.NAME),
+                            "and chooses the order by name");
+                    CompoundTag savedNow = used.saveWithoutId(new CompoundTag());
+                    helper.assertValueEqual(occurrences(savedNow, preferences), 1,
+                            "this build writes their preferences into their own file");
+
+                    // 2. The same file as 0.6.0-alpha wrote it: that one attachment is simply not in it.
+                    CompoundTag pre07 = savedNow.copy();
+                    CompoundTag attachments = pre07.getCompound(AttachmentHolder.ATTACHMENTS_NBT_KEY);
+                    attachments.remove(preferences);
+                    if (attachments.isEmpty())
+                        pre07.remove(AttachmentHolder.ATTACHMENTS_NBT_KEY);
+                    helper.assertValueEqual(occurrences(pre07, preferences), 0,
+                            "a 0.6.0 player file holds none of it");
+
+                    // 3. Opening that world: the default, not a fault.
+                    Player migrated = playerAt(helper, aisle.rackPos(PRE07_TERMINAL));
+                    migrated.load(pre07);
+                    helper.assertTrue(TerminalPreferences.existing(migrated).isEmpty(),
+                            "nothing was invented for a player who had none");
+                    helper.assertValueEqual(TerminalPreferences.of(migrated).sort(), TerminalSort.DEFAULT,
+                            "the absent order is the default");
+                    helper.assertValueEqual(TerminalPreferences.of(migrated).sort(), TerminalSort.AMOUNT,
+                            "which is most available first, exactly what the build before this one showed");
+                    helper.assertTrue(TerminalPreferences.of(migrated).counts().isEmpty(), "with no counts at all");
+                    helper.assertTrue(TerminalPreferences.of(migrated).isDefault(),
+                            "so there is nothing about them to save");
+                    helper.assertValueEqual(occurrences(migrated.saveWithoutId(new CompoundTag()), preferences), 0,
+                            "and saving them again writes none of it back: an old world pays nothing");
+
+                    // 4. And the feature starts for them: the first request counts and survives a save.
+                    helper.assertTrue(terminal.requestFromTerminal(migrated, GOLD, 1).isAccepted(),
+                            "the migrated terminal serves them");
+                    helper.assertValueEqual(TerminalPreferences.of(migrated).counts().size(), 1,
+                            "their first count is there");
+                    CompoundTag afterUse = migrated.saveWithoutId(new CompoundTag());
+                    helper.assertValueEqual(occurrences(afterUse, preferences), 1, "now there is something to save");
+                    Player rejoined = playerAt(helper, aisle.rackPos(PRE07_TERMINAL));
+                    rejoined.load(afterUse);
+                    helper.assertValueEqual(TerminalPreferences.of(rejoined).usage().countFor(GOLD), 1L,
+                            "and it comes back on the next join");
+                    helper.assertValueEqual(TerminalPreferences.of(rejoined).sort(), TerminalSort.DEFAULT,
+                            "with the order they never changed");
+
+                    // Nobody else's data was touched by any of this.
+                    helper.assertValueEqual(TerminalPreferences.of(used).sort(), TerminalSort.NAME,
+                            "the other player keeps their own order");
+                    helper.assertValueEqual(TerminalPreferences.of(used).usage().countFor(GOLD), 0L,
+                            "and their own counts");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A world saved by 0.6.0-alpha <b>in the middle of a delivery</b> finishes that delivery here, and no item of it
+     * is lost.
+     * <p>
+     * No fixture can carry this: the real worlds in {@code run/migration} were all saved by a parked crane with no open
+     * request, as M21's own gate records ({@link #migrationcranejobreloadsonastraightaisle}). The honest substitute is
+     * the same one M21 used — take the state <b>live</b> and prove the save of it is one 0.6.0 could have written.
+     * That argument is exact here, because the three block entities a delivery is spread over have <b>identical</b>
+     * writers in this release and in 0.6.0: {@code ControllerPersistence} and the whole of {@code content.crane} are
+     * unchanged since the release tag, and a terminal only grows a key when a clipboard is really in its slot. The
+     * saved tags are asserted to hold none of this release's keys, and to really hold the request and the job.
+     * <p>
+     * The load half is then done on <b>detached</b> block entities, for the reason the crane gate gives (loading into a
+     * live kinetic block entity replaces its network bookkeeping without the chunk load that re-establishes it): the
+     * request comes back with its destination and its amount, the crane comes back with its job and the items in its
+     * head, and the live warehouse the measurement was taken on has to finish the delivery, with the census over the
+     * whole run unchanged.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void migrationinflightterminalrequestsurvivesthesave(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, PRE07_RAILS).build(true);
+        aisle.storage(PRE07_STORAGE, IRON.toStack(PRE07_IRON));
+        aisle.terminal(PRE07_TERMINAL);
+        Map<ItemKey, Long> conserved = new HashMap<>();
+        AtomicReference<CompoundTag> savedController = new AtomicReference<>();
+        AtomicReference<CompoundTag> savedDock = new AtomicReference<>();
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().countOf(IRON), (long) PRE07_IRON,
+                        "the iron is indexed"))
+                .thenExecute(() -> {
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    conserved.putAll(ItemCensus.take(helper));
+                    Player player = playerAt(helper, aisle.rackPos(PRE07_TERMINAL));
+                    helper.assertTrue(aisle.terminalAt(PRE07_TERMINAL)
+                                    .requestFromTerminal(player, IRON, PRE07_REQUESTED).isAccepted(),
+                            "a player asks the terminal for iron");
+                })
+                .thenWaitUntil(() -> aisle.assertCarrying(CranePhase.TRAVEL_TO_TARGET, IRON, PRE07_REQUESTED))
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag controller = aisle.controller().saveWithoutMetadata(registries);
+                    CompoundTag dock = aisle.dock().saveWithoutMetadata(registries);
+                    CompoundTag terminal = aisle.terminalAt(PRE07_TERMINAL).saveWithoutMetadata(registries);
+
+                    // The save really caught the delivery in flight.
+                    helper.assertValueEqual(controller.getList("Requests", Tag.TAG_COMPOUND).size(), 1,
+                            "the open request is in the controller's save");
+                    helper.assertTrue(dock.getCompound(CRANE_TAG).contains("Job"),
+                            "and the job is in the crane's");
+
+                    // And it is a save 0.6.0-alpha could have written: none of this release's keys is in any of it.
+                    for (CompoundTag tag : List.of(controller, dock, terminal)) {
+                        helper.assertValueEqual(occurrences(tag, WarehouseTerminalBlockEntity.LIST_SLOT_TAG), 0,
+                                "no clipboard slot anywhere in it");
+                        helper.assertValueEqual(occurrences(tag, LIST_ORDER_TAG), 0, "no clipboard order");
+                        helper.assertValueEqual(occurrences(tag, WarehouseTerminalBlockEntity.LIST_STATE_TAG), 0,
+                                "no list on a screen");
+                        helper.assertValueEqual(occurrences(tag, AttachmentHolder.ATTACHMENTS_NBT_KEY), 0,
+                                "and nothing of a player in a block's save");
+                    }
+                    savedController.set(controller);
+                    savedDock.set(dock);
+                })
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+
+                    WarehouseControllerBlockEntity loaded = freshController(helper, aisle.controller());
+                    loaded.loadWithComponents(savedController.get(), registries);
+                    helper.assertValueEqual(loaded.openRequests().size(), 1, "the request comes back");
+                    RetrievalRequest<ItemKey, BlockPos> request = loaded.openRequests().get(0);
+                    helper.assertValueEqual(request.key(), IRON, "for the iron it asked for");
+                    helper.assertValueEqual(request.destination(), aisle.absoluteRackPos(PRE07_TERMINAL),
+                            "to the terminal that asked");
+
+                    StackerCraneBlockEntity dock = freshDock(helper, aisle.dock());
+                    dock.loadWithComponents(savedDock.get(), registries);
+                    helper.assertValueEqual(dock.craneState().job().map(TransportJob::type),
+                            Optional.of(JobType.RETRIEVE), "the crane comes back on its retrieval job");
+                    helper.assertValueEqual(dock.heldItems().count(IRON), PRE07_REQUESTED,
+                            "with the items still in its head");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(PRE07_TERMINAL, IRON), (long) PRE07_REQUESTED,
+                            "and the warehouse the measurement was taken on finished the delivery");
+                    aisle.assertIdleAndEmpty();
+                    helper.assertTrue(aisle.controller().openRequests().isEmpty(), "with no request left open");
+                })
+                .thenExecute(() -> ItemCensus.assertEquals(helper, conserved, "across the in-flight save"))
+                .thenSucceed();
+    }
+
     // --- helpers --------------------------------------------------------------------------------------------------
+
+    /** A survival player standing at the test-relative position, so a terminal's reach check passes. */
+    private static Player playerAt(GameTestHelper helper, BlockPos pos) {
+        Player player = helper.makeMockPlayer(GameType.SURVIVAL);
+        Vec3 center = Vec3.atCenterOf(helper.absolutePos(pos));
+        player.moveTo(center.x, center.y, center.z);
+        return player;
+    }
+
+    /** The terminal tag of the pre-0.7.0 showcase world, rebuilt from its own bytes and tag types. */
+    private static CompoundTag realPre07Terminal() {
+        CompoundTag save = new CompoundTag();
+        CompoundTag buffer = new CompoundTag();
+        buffer.putInt("Size", REAL_TERMINAL_SLOTS);
+        ListTag items = new ListTag();
+        for (String line : REAL_TERMINAL_BUFFER) {
+            String[] parts = line.split(",", -1);
+            CompoundTag entry = new CompoundTag();
+            entry.putInt("Slot", Integer.parseInt(parts[0]));
+            entry.put("Item", itemId(parts[1]));
+            entry.putInt("Count", Integer.parseInt(parts[2]));
+            items.add(entry);
+        }
+        buffer.put("Items", items);
+        save.put(WarehouseStationBlockEntity.BUFFER_TAG, buffer);
+        return save;
+    }
 
     /** The controller tag of the pre-M21 showcase world, rebuilt from its own bytes and tag types. */
     private static CompoundTag realPre06Save() {

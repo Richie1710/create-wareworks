@@ -1593,21 +1593,54 @@ Networking decision and reasons: **ADR-019**.
     full in the grid's tooltip.
   * **The crane line drops its own label rather than its text** (M24 fix, `WarehouseTerminalScreen#craneStatusText`).
     The phase and pause texts of this row are the ones the goggles show (`gui.goggles.crane_phase.*`), i.e. whole short
-    sentences that nothing bounds, and the `"Crane: %s"` frame costs 43 px in English and **93** in German
+    sentences that nothing bounds, and the `"Crane: %s"` frame costs 36 px in English and **93** in German
     ("Regalbediengerät: "). So the row shows the prefixed form only while it fits and the bare state otherwise. Before
     this, the most ordinary German line a terminal has — `Regalbediengerät: Wartet auf einen Auftrag`, 219 px — was
     drawn cut off, which `index.txt` had been recording as `statusFits=false` for shots nobody read that far.
+  * **A refusal drops its own frame too**, for the same reason and by the same rule
+    (`WarehouseTerminalScreen#refusedLine`, the release audit). The reason sentences this row shows are the
+    **goggles' own** (`gui.goggles.request_rejection.*`): whole sentences that name what went wrong *and* what to do
+    about it, written for the goggle overlay and for the port and terminal block tooltips, where there is room. The
+    `"Request refused: %s"` frame costs 91 px in English and **124** in German, the row is already red, and a chain's
+    refusal has replaced that frame rather than filled it since M20 — so a plain refusal now does the same whenever
+    the framed form would not fit. It makes four English reasons and three German ones whole that used to end in an
+    ellipsis: seven of the eleven fit in English now and four in German, against three and one before it.
+  * **What the row still cannot hold** is listed, not tolerated: `crane_pause_reason.speed_factor_zero` (240 px
+    English, 297 German) and, in German, seven further rejection sentences (`production_busy` 382 px,
+    `production_paused` 372, `request_full` 353, `reserved` 272, `output_full` 261, `invalid_amount` 241,
+    `no_controller` 229; English keeps the first three and `reserved`). All of them name a remedy as well as a cause,
+    all of them are readable in full one goggle-glance away, and shortening them would take the remedy out of the
+    place it was written for. Giving the terminal a short vocabulary of its own — eleven sentences in two languages —
+    is a wording decision and not something to slip into a release. Until it is made, the run prints every one of
+    them with its overflow on every pass.
   * The dev harness asserts the widths instead of trusting a screenshot: `statusTextsFit()` (status line ≤ row, count
     clear of the inventory title) is checked at the request, merged and delivered steps of the `terminal` scenario, in
     the German half of its sort block, and is logged per shot in `index.txt`. Since M24 the scenario also walks the
-    row's **whole vocabulary** once per language (`checkStatusVocabularyFits`: every `CranePhase`, every
-    `CranePauseReason` that is one, "no aisle" and "no crane") and compares the texts that do not fit with an exact
-    expected set — because a state the run happens not to reach is a state no screenshot ever measured. That set holds
-    exactly one entry, `crane_pause_reason.speed_factor_zero` (240 px English, 297 German): it names a mistake in the
-    server config rather than a state of the machine, shortening it would drop the part that says where to look, and
-    the crane's goggle overlay has no fixed row to cut it. `CranePauseReason.NONE` is not in the vocabulary at all —
-    the row asks for a reason only while `TerminalScreenStatus#isPaused()`, which *is* "the reason is not NONE", and it
-    has no lang value to measure.
+    row's **whole vocabulary** once per language and compares the texts that do not fit with an exact expected set —
+    because a state the run happens not to reach is a state no screenshot ever measured. `CranePauseReason.NONE` is
+    not in the vocabulary at all — the row asks for a reason only while `TerminalScreenStatus#isPaused()`, which *is*
+    "the reason is not NONE", and it has no lang value to measure.
+* **Every hard-clipped row is measured, not only the status one** (`TerminalVisualScenario#checkRowVocabularyFits`,
+  the release audit). The M24 check measured the status row's crane words and nothing else, and the release it was
+  written for was one audit away from shipping six German clipboard lines, a German production state and both forms of
+  the German stopped row over their rows, with every gate green. The check now walks seven rows once per language, each against the budget of the **screen that
+  draws it** (`WarehouseTerminalScreen#orderStateBudget`, `WarehouseProductionScreen#orderStateBudget`) rather than
+  against a number copied into the harness, and reports every offender of every row in one message:
+  * the terminal's **status row** (216 px): the crane phases and pause reasons through `craneStatusText`, "no aisle",
+    "no crane", "reading stock", the waiting line, the whole **clipboard vocabulary** (the progress line in each state
+    it can be in while the order has work, the receipt, and all thirteen answers the list button can produce) and
+    every rejection through `refusedLine`;
+  * the **state column** of the terminal's order lines in its three widths: an open order (148 px, the cancel mark
+    keeps its column), a finished one (158 px, which gets it back) and a chain's (100 px English / 88 German, which
+    pays for its step badge out of this column);
+  * the production station's **order-line state column** (158 px) and its **stopped row**, once without the item's
+    name against the row minus the name's floor and once in the plural, which has no name in it, against the whole
+    row.
+  * Numbers are measured at the **ceilings the config allows** (`maxTerminalRequestAmount` 65536,
+    `maxTerminalListEntries` 1024), never at the amounts the run's own warehouse happens to hold: "it fits here" is
+    what every one of these defects looked like before it was found. The clipboard line's third number is a sum over
+    the whole list and so has a higher ceiling still; each further digit costs about 6 px, and the log line prints
+    every row's remaining slack so a reader can see how much room is left.
 * **Networking** (ADR-019): the server pushes to the one player whose menu is open, at most every 10 ticks and only
   what changed. The first push after opening carries the whole list (pages of at most 64 entries,
   `reset = true`); later pushes carry only entries whose amounts changed plus item types that left the index (total 0),
@@ -2002,6 +2035,16 @@ terminal had before M23 is unchanged.
   hiding every later request's progress behind a job that ended hours ago. The lasting receipt is where it belongs — on
   the clipboard's own slot tooltip, for as long as the clipboard lies there — and in the goggle lines, which **add** a
   line rather than displacing one and are the only sign from outside that the list is done.
+* **The state in that line is one word, and deliberately so** (the release audit). `List 1,024/1,024, 65,536 left
+  (…)` spends 152 px of the row's 216 on three numbers whose ceilings are config values, and 168 px in German — which
+  leaves the parentheses 64 px and **48 in German**. The phrases that first stood there ("waiting for your answer" 121
+  px, "given up for now" 85; German "wartet auf deine Antwort" 125, "vorerst aufgegeben" 103) were therefore cut in
+  both languages, in the very feature the release leads with. They are now `fetching` / `asking` / `paused` / `done`
+  and `holt` / `fragt` / `pausiert` / `fertig` — one third-person verb each, which is what a column wants. What a
+  player is to **do** about the state is not lost: the list button right beside the row follows the same state with
+  its own icon and its own full sentence (*Answer the question about this list*, *Try the rest of the list again*),
+  and the clipboard's slot tooltip carries the progress line plus whatever the entry cap left behind. The same four
+  words appear in the goggle line, which wanted a column too.
 * **A portion's question names what it is about.** A click's panel needs no item line, because the player just clicked
   the item; a portion's does, and it is the only question whose cost can be production alone
   (`RequestConfirmation#required(LIST)`), which an aisle without stock rules then drew as a title and nothing else. So
@@ -2276,9 +2319,23 @@ to a machine for an order nobody was waiting on.
 But it also **never takes an item back**: ingredients the crane already dropped into the production station stay
 there, and ingredients the player's machine already swallowed are gone from the warehouse's point of view. Wareworks
 does not reach into a machine, and it cannot know what a machine did with them. `ProductionOrder#deliveredIngredients`
-reports the amount, the screen says so on the order line itself ("…, ingredients not recovered", in gold) rather than
-only in a tooltip, and GameTests `productionordercancelled` and `productionordertimeout` assert exactly this: the
-delivered ingredients are still in the station afterwards and the item census is unchanged.
+reports the amount, the screen says so on the order line itself (in gold) rather than only in a tooltip, and GameTests
+`productionordercancelled` and `productionordertimeout` assert exactly this: the delivered ingredients are still in
+the station afterwards and the item census is unchanged.
+
+* **The marker on the line is short; the sentence is in the tooltip** (the release audit). The station's order line
+  used to be one string, `"%1$s x%2$s - %3$s, ingredients not recovered"`, trimmed from the end to the row's 216 px —
+  which put the unbounded item name *in front of* the state and so cut the state first, the one half of the line that
+  changes. Its fixed part alone measured 230 px in English and 250 in German with the shortest state in it, so **both**
+  languages were cut before the name even started. The row is now drawn in two parts, the way the terminal's own order
+  lines have been since M20 (`WarehouseProductionScreen#renderOrderLine`): the item and its amount on the left, where
+  a long name gives way down to the same 54 px floor, and the state right-aligned on the right, carrying the short
+  marker the terminal's line carries from the one shared key (`gui.terminal.order_lost`). The long sentence did not
+  disappear — it is the line's **tooltip** (`gui.production.order_lost`, uncut now that the tooltip no longer reuses
+  the trimmed row), above `gui.production.ingredients_lost`, which is the sentence that says what it means.
+* **`gui.production.waiting_for_step`** is "wartet auf frühere Schritte" and no longer "wartet auf einen früheren
+  Schritt", which measured 172 px against that 158 px column. It is the one shared key, so the terminal's step panel
+  and the station's goggle line read the shorter wording too, where both have room either way.
 
 A **finished** order still counts a delivery that reaches it (`ProductionOrder#withDelivered`), without moving its
 state or its deadline. A drop that was already in the crane's grabber when the order ended really does land in the
@@ -3129,10 +3186,18 @@ at the machine as well:
   both openings becomes a lit rose quartz lamp (`WarehouseProductionBlock.STOPPED`, the keeper's own
   `create:block/rose_quartz_lamp_powered`, so the stop looks the same wherever a player meets it); its **goggles** read
   "Stopped products: N" / "Ingredient items not recovered: N" / "Sneak-click the station to make them again", outranking
-  everything else that station says; and its **screen** turns the first order line into a red "Stopped: Diamond. Click to
-  make it again" and tints every stopped product's **pattern tab** in the keeper's pause red, with a tooltip naming the
-  item, the cause (the keeper's own `gui.keeper.paused.*` sentence), what was delivered and never came back, and how to
-  lift it. With a buffer of **25 slots or more** the window has no order line at all (`ProductionMenuLayout#orderLines()`
+  everything else that station says; and its **screen** turns the first order line into a red "Stopped: Diamond -
+  click to resume" and tints every stopped product's **pattern tab** in the keeper's pause red, with a tooltip naming
+  the item, the cause (the keeper's own `gui.keeper.paused.*` sentence), what was delivered and never came back, and
+  how to lift it.
+  * That row **leads with the item's name**, so everything after the name is what a long name pushes off the end, and
+    it was far too long to begin with (the release audit): "Stopped: %1$s products. Click to make them again" is 233
+    px against the 216 px row *with no name in it at all*, and the German sentence 313 px — both forms cut in both
+    languages. They now read "- click to resume" and, in German, "- weitermachen"; German has no room for the verb
+    *anklicken* beside it, and the row is the affordance, while its tooltip carries the cause and the cost. The
+    `terminal` visual run measures both forms, once against the row minus the name's floor and once, for the plural
+    that has no name, against the whole row.
+  With a buffer of **25 slots or more** the window has no order line at all (`ProductionMenuLayout#orderLines()`
   trades them for the height budget), and the stopped row then takes the **buffer's label row** instead — a label for
   slots that are self-evident, against the screen's only way back from the stop. *(Review fix: the row was simply dropped
   there, so the screen named a problem, offered no way out of it, and contradicted the block's own description.)*

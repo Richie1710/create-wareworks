@@ -193,10 +193,13 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_STOPPED), "Stopped products: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_RESUME_HINT),
                 "Sneak-click the station to make them again");
+        // The row is one of the window's fixed 216 px rows and it leads with the item's name, so everything after the
+        // name is what a long name pushes off the end. "Stopped: %1$s products. Click to make them again" measured 233
+        // px with no name in it at all, and the German sentence 313; the short form leaves the name its room in both.
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_STOPPED_LINE),
-                "Stopped: %1$s. Click to make it again");
+                "Stopped: %1$s - click to resume");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_STOPPED_LINE_MANY),
-                "Stopped: %1$s products. Click to make them again");
+                "Stopped: %1$s products - click to resume");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_STOPPED_ITEM), "%1$s: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STOCK_RULES), "Stock rules: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RULES_BELOW_MINIMUM), "Below minimum: %1$s");
@@ -446,11 +449,18 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_ENTRY), "%1$s: %2$s of %3$s");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_MORE), "More entries: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_ASK), "Fetch what there is?");
+        // One word each, because this is a **column**, not a sentence: it is drawn inside the parentheses of
+        // "List 4/9, 320 left (…)", and that frame already spends 152 of the status row's 216 px on three numbers
+        // whose ceilings are config values (maxTerminalListEntries, maxTerminalRequestAmount). The phrases these used
+        // to be ("waiting for your answer", "given up for now", 121 and 85 px against a 64 px column) were cut in
+        // English and far worse in German. What a player is to *do* about the state is one hover away and in full on
+        // the list button beside the row, whose icon and tooltip follow the very same state
+        // (TERMINAL_LIST_ANSWER/RESUME), and in the clipboard's own slot tooltip.
         for (ListOrderState state : ListOrderState.values()) {
             lang.accept(WareworksLang.key(state.langKey()), switch (state) {
                 case RUNNING -> "fetching";
-                case ASKING -> "waiting for your answer";
-                case PARKED -> "given up for now";
+                case ASKING -> "asking";
+                case PARKED -> "paused";
                 case DONE -> "done";
             });
         }
