@@ -1,5 +1,6 @@
 package dev.wareworks.gametest;
 
+import static dev.wareworks.gametest.WareworksGameTests.AISLE_PAIR_16X10X13;
 import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
 import static dev.wareworks.gametest.WareworksGameTests.EMPTY_7X5X7;
 import static dev.wareworks.gametest.WareworksGameTests.FLOOR_Y;
@@ -8,26 +9,40 @@ import static dev.wareworks.gametest.WareworksGameTests.MAX_RESERVED_INTERFACE_S
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.AllItems;
+import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
+import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
+import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
+import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollValueBehaviour;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.AisleAssignment;
 import dev.wareworks.content.controller.LocationReservationSummary;
+import dev.wareworks.content.controller.WarehouseControllerBlock;
+import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseLayout;
+import dev.wareworks.content.controller.WarehouseRegistry;
+import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.item.ItemTypeSummaries;
 import dev.wareworks.content.storage.AttachedInventorySummary;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
+import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.inventory.InventorySummary;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.GoggleObservers;
+import dev.wareworks.util.WareworksLang;
 import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -108,6 +123,43 @@ public final class WarehouseInterfaceGameTests {
     private static final int HEAVY_BOOKS = 27;
     private static final int LONG_NAME_LENGTH = 30_000;
     private static final int DAMAGED_PICKAXES = 3;
+    /** The widest address a member can ever have: the last aisle letter at the last level and position. */
+    private static final String WIDEST_ADDRESS = "Z-999-999R";
+    /** Exactly {@code AisleName.MAX_LENGTH} characters, for the widest assignment this packet has to fit (M25). */
+    private static final String LONGEST_AISLE_NAME = "ABCDEFGHIJKLMNOP";
+
+    // --- the bending warehouse of the aisle-naming test (M25, issue #15) ---
+    /** Test-relative z of aisle A, which runs east from the dock; the same L {@code CraneCornerGameTests} builds. */
+    private static final int CORNER_AISLE_Z = 3;
+    private static final int CORNER_FIRST_RAILS = 4;
+    private static final int CORNER_SECOND_RAILS = 3;
+    private static final BlockPos CORNER_CONTROLLER = new BlockPos(0, BASE_Y, CORNER_AISLE_Z);
+    private static final BlockPos CORNER_DOCK = new BlockPos(1, BASE_Y, CORNER_AISLE_Z);
+    private static final BlockPos CORNER_MOTOR = new BlockPos(1, FLOOR_Y, CORNER_AISLE_Z);
+    /** The corner block: the last rail of aisle A and the first of aisle B. */
+    private static final BlockPos CORNER = new BlockPos(1 + CORNER_FIRST_RAILS, BASE_Y, CORNER_AISLE_Z);
+    /** A rack on aisle A only: its left rack plane at {@code z = 2}, well away from aisle B's own planes. */
+    private static final BlockPos RACK_ON_A = new BlockPos(4, BASE_Y, 2);
+    private static final BlockPos CHEST_ON_A = new BlockPos(4, BASE_Y, 1);
+    /** A rack on aisle B only: its rack plane at {@code x = 4}, at a {@code z} aisle A does not reach. */
+    private static final BlockPos RACK_ON_B = new BlockPos(4, BASE_Y, 6);
+    private static final BlockPos CHEST_ON_B = new BlockPos(3, BASE_Y, 6);
+    /** Value-box index of letter B, the letter the second aisle already holds. */
+    private static final int LETTER_B = 1;
+    private static final String ORES = "Ores";
+    private static final String METALS = "Metals";
+    /** Long enough for the warehouse to be found, re-lettered on a scroll and re-linked afterwards. */
+    private static final int CORNER_TIMEOUT_TICKS = 600;
+    /**
+     * What the update tag of a <b>real bending warehouse with named aisles</b> may weigh (M25 review fix).
+     * <p>
+     * It is the same 4096 the controller's own tests use for a named summary, and for the same reason: the tight
+     * 2048-byte number was spent on the <b>network record</b> M21 put in that tag, long before a name was in it, and
+     * a six-aisle record on its own already takes the accounting past it. {@code CompoundTag#sizeInBytes} is a
+     * Java-heap estimate many times the real wire size, so this is a canary against a record that grows without
+     * bound, not a packet budget. The size is logged so the headroom is on record.
+     */
+    private static final int MAX_NAMED_CONTROLLER_SYNC_BYTES = 4096;
 
     private WarehouseInterfaceGameTests() {
     }
@@ -458,7 +510,8 @@ public final class WarehouseInterfaceGameTests {
      * The synced goggle summary carries item types and counts only: heavy item data (a shulker box full of written
      * pages, a huge custom name) never reaches the update tag, and items that differ only in components share a line. The
      * tag stays within {@link WareworksGameTests#MAX_INTERFACE_SYNC_BYTES}, and with the largest reservation summary (two
-     * item types with long ids per direction) on top within {@link WareworksGameTests#MAX_RESERVED_INTERFACE_SYNC_BYTES}.
+     * item types with long ids per direction) and the widest aisle assignment (the longest address with the longest
+     * aisle name, M25 issue #15) on top within {@link WareworksGameTests#MAX_RESERVED_INTERFACE_SYNC_BYTES}.
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void interfaceSummarySyncIsBounded(GameTestHelper helper) {
@@ -511,6 +564,13 @@ public final class WarehouseInterfaceGameTests {
                     reserved.write(reservationsTag);
                     CompoundTag reservedUpdateTag = updateTag.copy();
                     reservedUpdateTag.put(WarehouseInterfaceBlockEntity.RESERVATIONS_TAG, reservationsTag);
+                    // And on top of that the widest assignment a member can carry since M25 (issue #15): the longest
+                    // address with the longest aisle name. A rack wall is dozens of these blocks in one chunk packet,
+                    // so a name that fits "here" is not the question — the worst case is.
+                    CompoundTag assignmentTag = new CompoundTag();
+                    AisleAssignment.assigned(StorageAddress.parse(WIDEST_ADDRESS))
+                            .withAisleName(Optional.of(LONGEST_AISLE_NAME)).write(assignmentTag);
+                    reservedUpdateTag.put(WarehouseInterfaceBlockEntity.ASSIGNMENT_TAG, assignmentTag);
                     int reservedSize = reservedUpdateTag.sizeInBytes();
                     Wareworks.LOGGER.debug("Interface update tag: {} bytes, with the largest reservations {} bytes", size,
                             reservedSize);
@@ -520,6 +580,8 @@ public final class WarehouseInterfaceGameTests {
                     reservedClient.handleUpdateTag(reservedUpdateTag, registries);
                     helper.assertValueEqual(reservedClient.reservationSummary(), reserved,
                             "largest reservations after client sync");
+                    helper.assertValueEqual(reservedClient.aisleAssignment().aisleName(),
+                            Optional.of(LONGEST_AISLE_NAME), "and the aisle's name arrived with them");
                 })
                 .thenSucceed();
     }
@@ -637,7 +699,174 @@ public final class WarehouseInterfaceGameTests {
                 .thenSucceed();
     }
 
+    /**
+     * Naming an aisle through an interface (M25, issue #15): an interface names <b>its own</b> aisle, which is why the
+     * gesture needs no syntax at all — the block already knows which aisle it stands in.
+     * <p>
+     * Built as an L on {@code aisle_pair_16x10x13}: aisle A runs east from the dock to the corner at {@code x = 5},
+     * aisle B runs south out of it. One interface stands on A and one on B, and this is the test that could not be
+     * written on a straight warehouse:
+     * <ul>
+     * <li>The interface on <b>B names B</b>, not the aisle at the dock, and the one on A names A.</li>
+     * <li><b>Neither click touches the other aisle</b>, so two aisles never end up sharing a name.</li>
+     * <li>And the hard case: the controller's letter is scrolled <b>onto the letter the second aisle already holds</b>.
+     * The next re-link moves that aisle to the lowest free letter, and the names move with the letters — so when the
+     * dust settles the two aisles still have two different letters and each still carries the name it was given.
+     * Nothing a player can do here makes one name belong to two aisles.</li>
+     * <li>A plain name tag clears the aisle of the interface it was used on and leaves the other one alone.</li>
+     * </ul>
+     * With {@code aisle.maxBranches = 1} — the off switch that reproduces 0.5.0 — the second aisle is no part of the
+     * warehouse at all, so the interface on it belongs to no aisle and the click says so instead.
+     */
+    @GameTest(template = AISLE_PAIR_16X10X13, timeoutTicks = CORNER_TIMEOUT_TICKS)
+    public static void interfaceNamesItsOwnAisle(GameTestHelper helper) {
+        buildCorner(helper);
+        placeStorage(helper, RACK_ON_A, CHEST_ON_A, Direction.NORTH);
+        placeStorage(helper, RACK_ON_B, CHEST_ON_B, Direction.WEST);
+        boolean bends = WareworksConfig.maxBranches() > 1;
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    WarehouseControllerBlockEntity controller = cornerController(helper);
+                    helper.assertValueEqual(controller.warehouse().map(WarehouseLayout::branchCount),
+                            Optional.of(bends ? 2 : 1), "the warehouse bends exactly when it may");
+                    helper.assertValueEqual(controller.storageLocations().size(), bends ? 2 : 1,
+                            "the racks that belong to it have joined");
+                })
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = cornerController(helper);
+                    NamingClick.Teller player = NamingClick.player(helper);
+
+                    // The interface on the second aisle: with corners off it is part of no warehouse at all.
+                    NamingClick.use(helper, player, RACK_ON_B, Direction.EAST,
+                            NamingClick.renamed(Items.IRON_INGOT, METALS));
+                    if (!bends) {
+                        NamingClick.assertTold(helper, player, "a click on an aisle the warehouse does not have",
+                                WareworksLang.AISLE_NAME_NO_AISLE);
+                        helper.assertTrue(controller.hasNoAisleNames(), "and nothing was named");
+                        return;
+                    }
+                    NamingClick.assertTold(helper, player, "naming through the interface on aisle B",
+                            WareworksLang.AISLE_NAMED);
+                    helper.assertValueEqual(player.argsOf(0), List.of("B", METALS),
+                            "the interface named ITS aisle, not the one at the dock");
+                    helper.assertValueEqual(controller.aisleName('B'), Optional.of(METALS), "aisle B is named");
+                    helper.assertTrue(controller.aisleName('A').isEmpty(), "and aisle A still is not");
+
+                    NamingClick.use(helper, player, RACK_ON_A, Direction.SOUTH,
+                            NamingClick.renamed(Items.IRON_INGOT, ORES));
+                    helper.assertValueEqual(player.argsOf(0), List.of("A", ORES), "the one on aisle A named A");
+                    helper.assertValueEqual(controller.aisleName('A'), Optional.of(ORES), "both aisles are named");
+                    helper.assertValueEqual(controller.aisleName('B'), Optional.of(METALS), "and with their own names");
+                })
+                // The hard case: the dock aisle is scrolled onto the letter the second aisle holds.
+                .thenExecute(() -> {
+                    if (!bends)
+                        return;
+                    WarehouseControllerBlockEntity controller = cornerController(helper);
+                    ScrollValueBehaviour letter = BlockEntityBehaviour.get(controller, ScrollValueBehaviour.TYPE);
+                    if (letter == null) {
+                        helper.fail("the controller has no aisle letter value box", CORNER_CONTROLLER);
+                        return;
+                    }
+                    letter.setValue(LETTER_B);
+                })
+                // The next re-link is what sorts the letters out; until it runs, both aisles really do read the same
+                // letter - and so the same name - which is the behaviour the design accepts and documents.
+                .thenWaitUntil(() -> {
+                    if (!bends)
+                        return;
+                    char onA = aisleLetterOf(helper, RACK_ON_A);
+                    char onB = aisleLetterOf(helper, RACK_ON_B);
+                    helper.assertTrue(onA != onB, "the two aisles have two different letters again");
+                })
+                .thenExecute(() -> {
+                    if (!bends)
+                        return;
+                    WarehouseControllerBlockEntity controller = cornerController(helper);
+                    char onA = aisleLetterOf(helper, RACK_ON_A);
+                    char onB = aisleLetterOf(helper, RACK_ON_B);
+                    helper.assertValueEqual(onA, 'B', "the dock aisle took the letter it was scrolled to");
+                    helper.assertValueEqual(onB, 'A', "and the other aisle moved to the lowest free one");
+                    helper.assertValueEqual(controller.aisleName(onA), Optional.of(ORES),
+                            "the dock aisle still carries the name it was given");
+                    helper.assertValueEqual(controller.aisleName(onB), Optional.of(METALS),
+                            "and so does the other one: the names moved with the letters");
+                    helper.assertValueEqual(controller.aisleNames().size(), 2, "two aisles, two names, no sharing");
+
+                    // What this warehouse's own chunk packet weighs (M25 review fix). Everything else that measures
+                    // the controller's named summary crafts it on top of a ONE-aisle fixture, so until here nothing
+                    // weighed a real bending warehouse with real names on it - which is the shape both of M25's byte
+                    // numbers are written about. Measured where such a warehouse already stands rather than building
+                    // a second one for it.
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    int bytes = controller.getUpdateTag(registries).sizeInBytes();
+                    Wareworks.LOGGER.debug("Controller update tag of a bending warehouse with {} names: {} bytes",
+                            controller.aisleNames().size(), bytes);
+                    helper.assertTrue(bytes < MAX_NAMED_CONTROLLER_SYNC_BYTES,
+                            "a bending warehouse with named aisles must keep its update tag under "
+                                    + MAX_NAMED_CONTROLLER_SYNC_BYTES + " bytes, but it has " + bytes);
+                    WarehouseControllerBlockEntity client = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER
+                            .create(controller.getBlockPos(), controller.getBlockState());
+                    if (client == null) {
+                        helper.fail("could not create a detached warehouse controller", CORNER_CONTROLLER);
+                        return;
+                    }
+                    client.handleUpdateTag(controller.getUpdateTag(registries), registries);
+                    helper.assertValueEqual(client.summary(), controller.summary(),
+                            "and the whole summary survives the round trip");
+
+                    // A name tag clears the aisle it was used on, and only that one.
+                    NamingClick.Teller player = NamingClick.player(helper);
+                    NamingClick.use(helper, player, RACK_ON_B, Direction.EAST, NamingClick.blankNameTag());
+                    NamingClick.assertTold(helper, player, "a name tag on the interface of the other aisle",
+                            WareworksLang.AISLE_NAME_CLEARED);
+                    helper.assertTrue(controller.aisleName(onB).isEmpty(), "its aisle has no name any more");
+                    helper.assertValueEqual(controller.aisleName(onA), Optional.of(ORES), "the other one still has its");
+                })
+                .thenSucceed();
+    }
+
     // --- helpers -------------------------------------------------------------------------------------------------
+
+    /** Motor, dock, controller, aisle A's rails east of the dock and aisle B running south out of the corner block. */
+    private static void buildCorner(GameTestHelper helper) {
+        helper.setBlock(CORNER_MOTOR, AllBlocks.CREATIVE_MOTOR.getDefaultState()
+                .setValue(CreativeMotorBlock.FACING, Direction.UP));
+        helper.setBlock(CORNER_DOCK, WareworksBlocks.STACKER_CRANE.getDefaultState()
+                .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, Direction.EAST));
+        for (int x = 1; x <= CORNER_FIRST_RAILS; x++)
+            helper.setBlock(CORNER_DOCK.east(x), WarehouseRailBlock.along(Direction.Axis.X));
+        for (int z = 1; z <= CORNER_SECOND_RAILS; z++)
+            helper.setBlock(CORNER.south(z), WarehouseRailBlock.along(Direction.Axis.Z));
+        helper.setBlock(CORNER_CONTROLLER, WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState()
+                .setValue(WarehouseControllerBlock.FACING, Direction.EAST));
+    }
+
+    /** A chest behind an interface facing {@code away} from the rails. */
+    private static void placeStorage(GameTestHelper helper, BlockPos rack, BlockPos chest, Direction away) {
+        helper.setBlock(chest, Blocks.CHEST);
+        placeInterface(helper, rack, away);
+    }
+
+    private static WarehouseControllerBlockEntity cornerController(GameTestHelper helper) {
+        WarehouseControllerBlockEntity be = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER
+                .getNullable(helper.getLevel(), helper.absolutePos(CORNER_CONTROLLER));
+        if (be == null) {
+            helper.fail("missing warehouse controller", CORNER_CONTROLLER);
+            throw new AssertionError("unreachable");
+        }
+        return be;
+    }
+
+    /** The letter of the aisle the interface at the test-relative {@code pos} stands in. */
+    private static char aisleLetterOf(GameTestHelper helper, BlockPos pos) {
+        WarehouseInterfaceBlockEntity be = interfaceAt(helper, pos);
+        return be.aisleToName().map(WarehouseRegistry.MemberAisle::aisle).orElseGet(() -> {
+            helper.fail("the interface belongs to no aisle", pos);
+            throw new AssertionError("unreachable");
+        });
+    }
 
     private static CompoundTag entry(String itemId, long count) {
         CompoundTag tag = new CompoundTag();

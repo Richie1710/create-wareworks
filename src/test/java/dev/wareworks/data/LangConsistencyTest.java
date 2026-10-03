@@ -35,9 +35,42 @@ class LangConsistencyTest {
     private static final Path HAND_WRITTEN_EN_US = Path.of("src/main/resources/assets/wareworks/lang/en_us.json");
 
     private static final Pattern STRING = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"");
-    private static final Pattern PLACEHOLDER = Pattern.compile("%(?:\\d+\\$)?[sd]");
+    /**
+     * What counts as a placeholder for the parity check. {@code %%} is in the list since M25: it is a visible
+     * character — the percent sign of {@code gui.goggles.percent} — so a translation that dropped it would show a bare
+     * number, and without it here nothing would notice.
+     */
+    private static final Pattern PLACEHOLDER = Pattern.compile("%(?:\\d+\\$)?[sd]|%%");
+    /**
+     * The <b>only</b> shapes {@code TranslatableContents} accepts: {@code %%}, {@code %s} and {@code %<n>$s}
+     * ({@code FORMAT_PATTERN} = {@code %(?:(\d+)\$)?([A-Za-z%]|$)}, and {@code decomposeTemplate} throws for a format
+     * group whose letter is not {@code s} and for a plain segment that still holds a {@code %}).
+     */
+    private static final Pattern VALID_FORMAT = Pattern.compile("%(?:%|(?:\\d+\\$)?s)");
     /** Characters a plan refusal may spend beside the item's name (M20); see the test that uses it. */
     private static final int MAX_REFUSAL_CHARS = 32;
+    /**
+     * Blocks wide of the display board the {@code display} visual scenario builds, and the characters one of its rows
+     * holds: {@code FlapDisplayBlockEntity#getMaxCharCount()} is {@code (xSize * 16 - 2) / 3.5}, and
+     * {@code FlapDisplayLayout#loadDefault} gives the row one section that wide. Spelled out rather than imported,
+     * because this suite runs without Minecraft.
+     */
+    private static final int BOARD_BLOCKS = 6;
+    private static final int BOARD_CHARS = (int) ((BOARD_BLOCKS * 16f - 2f) / 3.5f);
+    /**
+     * Stand-in for the one argument of a throughput row, six characters wide: enough for the widest share a board can
+     * show ({@code "100 %"}, German, through {@code gui.goggles.percent}) and for a five-digit grouped count
+     * ({@code "99,999"}), which is far more than a crane moves in a minute.
+     */
+    private static final String BOARD_ARGUMENT = "123456";
+    /**
+     * The character budget {@code WareworksLang#aisleNamesLine} reserves for its row's label and for the mark that
+     * counts the names it had no room for, and the longest name a player can give an aisle
+     * ({@code AisleName#MAX_LENGTH}). Spelled out for the same reason as everything else here.
+     */
+    private static final int NAMES_LABEL_CHARS = 7;
+    private static final int NAMES_MORE_CHARS = 6;
+    private static final int NAME_CHARS = 16;
 
     @Test
     void englishComesOnlyFromDatagen() {
@@ -121,12 +154,124 @@ class LangConsistencyTest {
     }
 
     /**
-     * The two keys of the test above, spelled out here rather than read from {@code WareworksLang}: this test suite runs
+     * <b>Every percent sign in either file is one Minecraft accepts</b> (M25, issue #16, ADR-039), i.e. part of
+     * {@code %%}, {@code %s} or {@code %<n>$s} and nothing else.
+     * <p>
+     * This is the one lang mistake that costs nothing at build time and everything at run time, and it does not even
+     * crash: {@code TranslatableContents.decomposeTemplate} throws for a stray {@code %}, for a trailing one and for
+     * any format letter but {@code s} — and {@code decompose()} <b>catches</b> it and falls back to
+     * {@code FormattedText.of(template)}. The player is then shown the raw template, say
+     * {@code "Auslastung: %1$s%% der letzten Minute"}, with nothing in any log to say why.
+     * <p>
+     * It guards all the keys of both files, not just the one that wants a percent sign. In particular it closes the
+     * gap {@link #PLACEHOLDER} leaves open on its own: that pattern matches {@code %d}, which looks safe in a diff and
+     * is fatal at run time.
+     */
+    @Test
+    void everyPercentSignIsAFormatMinecraftAccepts() throws IOException {
+        for (Map.Entry<String, Path> lang : Map.of("en_us", GENERATED_EN_US, "de_de", HAND_WRITTEN_DE_DE).entrySet()) {
+            Map<String, String> texts = readFlatJson(lang.getValue());
+            assertFalse(texts.isEmpty(), lang.getKey() + " was not parsed");
+            texts.forEach((key, value) -> {
+                Matcher matcher = VALID_FORMAT.matcher(value);
+                int at = 0;
+                while ((at = value.indexOf('%', at)) >= 0) {
+                    assertTrue(matcher.region(at, value.length()).lookingAt(),
+                            lang.getKey() + ": " + key + " has a percent sign that is neither %% nor %s at index " + at
+                                    + ": " + value);
+                    at = matcher.end();
+                }
+            });
+        }
+    }
+
+    /**
+     * The four rows of the Crane Throughput display source, the line that replaces them while the window is filling
+     * and the one for a link without a crane all fit a display board row, <b>in both languages</b> (M25, issue #16).
+     * <p>
+     * A display line is never clipped to a target's columns on the server ({@code WarehouseDisplays#limit} explains
+     * why), so a row that is too long is cut by the board itself and the player reads half a word. German is where
+     * that happens first — {@code "Kein Regalbediengerät"} is more than twice the length of {@code "No crane"} — and
+     * characters are a crude stand-in for flaps, but a board row really is monospaced, so here they are the unit.
+     */
+    @Test
+    void theThroughputBoardRowsFitADisplayBoard() throws IOException {
+        for (Map.Entry<String, Path> lang : Map.of("en_us", GENERATED_EN_US, "de_de", HAND_WRITTEN_DE_DE).entrySet()) {
+            Map<String, String> texts = readFlatJson(lang.getValue());
+            for (String relativeKey : WareworksLangKeys.THROUGHPUT_BOARD_KEYS) {
+                String key = "wareworks." + relativeKey;
+                String text = texts.get(key);
+                assertTrue(text != null, lang.getKey() + " has no text for " + key);
+                String filled = text.replace("%1$s", BOARD_ARGUMENT);
+                assertTrue(filled.length() <= BOARD_CHARS, lang.getKey() + ": " + key + " needs " + filled.length()
+                        + " of the " + BOARD_CHARS + " characters a " + BOARD_BLOCKS + "-wide board row holds: '"
+                        + filled + "'");
+            }
+        }
+    }
+
+    /**
+     * The {@code Names:} row of the Warehouse Summary source fits a display board row <b>with a name on it</b>, in
+     * both languages (M25, issue #15 — review fix).
+     * <p>
+     * This is the other half of a bound that lives in two places. The row is built within a character budget derived
+     * from the target's own width ({@code WareworksLang#aisleNamesLine}), and that budget subtracts a <b>constant</b>
+     * for the label, because a display source runs on the server and may not resolve its own text there
+     * ({@code WarehouseDisplays#limit} explains why). So the budget is only honest as long as no translation of this
+     * label is wider than the constant — which is what this test holds both files to, for the plain row and for the
+     * one that marks the names it had no room for.
+     * <p>
+     * Measured as the label alone, the way the production code reserves it, and then once more as a whole row filled
+     * to that budget. The one case no bound can reach is a <b>single</b> name longer than the budget: the row always
+     * carries at least one entry, because dropping it would leave an empty list, and cutting a player's text in half
+     * is worse than letting the target do it.
+     */
+    @Test
+    void theNamesBoardRowFitsADisplayBoard() throws IOException {
+        for (Map.Entry<String, Path> lang : Map.of("en_us", GENERATED_EN_US, "de_de", HAND_WRITTEN_DE_DE).entrySet()) {
+            Map<String, String> texts = readFlatJson(lang.getValue());
+            for (String relativeKey : WareworksLangKeys.NAMES_BOARD_KEYS) {
+                String key = "wareworks." + relativeKey;
+                String text = texts.get(key);
+                assertTrue(text != null, lang.getKey() + " has no text for " + key);
+                boolean marksTheRest = relativeKey.endsWith("_more");
+                // The label is everything but the list itself; the mark that may follow it is reserved separately.
+                String label = text.replace("%1$s", "").replace("%2$s", "");
+                int reserved = marksTheRest ? NAMES_LABEL_CHARS + NAMES_MORE_CHARS : NAMES_LABEL_CHARS;
+                assertTrue(label.length() <= reserved, lang.getKey() + ": " + key + " keeps " + label.length()
+                        + " characters for its label and mark, but WareworksLang reserves " + reserved + ": '" + label
+                        + "'");
+                // And a whole row filled right up to the budget that reservation leaves still fits the board. "A "
+                // is the letter and its space, which every entry carries.
+                int budget = BOARD_CHARS - reserved;
+                String list = "A " + "X".repeat(budget - 2);
+                String filled = text.replace("%1$s", list).replace("%2$s", "26");
+                assertTrue(filled.length() <= BOARD_CHARS, lang.getKey() + ": " + key + " filled to its own "
+                        + budget + "-character budget needs " + filled.length() + " of the " + BOARD_CHARS
+                        + " characters a " + BOARD_BLOCKS + "-wide board row holds: '" + filled + "'");
+            }
+        }
+        // The budget of the plain row really does hold the longest name a player can give, so a warehouse with one
+        // named aisle is never cut on a board of this size — which is the case the feature ships for.
+        assertTrue(NAMES_LABEL_CHARS + 2 + NAME_CHARS <= BOARD_CHARS, "a single longest name must fit a "
+                + BOARD_BLOCKS + "-wide board row");
+    }
+
+    /**
+     * The keys of the tests above, spelled out here rather than read from {@code WareworksLang}: this test suite runs
      * without Minecraft, and that class pulls in {@code Component}.
      */
     private static final class WareworksLangKeys {
         private static final String GOGGLES_PRODUCTION_STOPPED = "gui.goggles.production_stopped";
         private static final String DISPLAY_AISLE_LINE_STOPPED = "display_source.aisle.line_stopped";
+        /** The two forms of the Warehouse Summary source's names row (M25, issue #15). */
+        private static final List<String> NAMES_BOARD_KEYS = List.of("display_source.aisle.line_names",
+                "display_source.aisle.line_names_more");
+        /** Every line the Crane Throughput source can put on a board (M25, issue #16). */
+        private static final List<String> THROUGHPUT_BOARD_KEYS = List.of("display_source.throughput.line_trips",
+                "display_source.throughput.line_items", "display_source.throughput.line_busy",
+                "display_source.throughput.line_turning", "display_source.throughput.measuring",
+                "display_source.throughput.no_crane");
 
         private WareworksLangKeys() {
         }

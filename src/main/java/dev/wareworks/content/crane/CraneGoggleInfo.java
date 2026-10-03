@@ -5,11 +5,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
+import org.jetbrains.annotations.Nullable;
+
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.item.ItemTypeSummaries;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.ChatFormatting;
@@ -29,9 +32,10 @@ import net.minecraft.world.item.Item;
  * so. Before M21 there was a single letter here, which was right because there was a single aisle; with a warehouse
  * that bends it would name every rack of every aisle with the letter of the one at the dock.
  * <p>
- * The synced size is bounded: a few enum names, at most {@value #MAX_HELD_ENTRIES} item ids, one job summary and at
- * most {@link StorageAddress#AISLE_COUNT} letters (a warehouse can never have more branches than the address format
- * has letters); no item components ever leave the server. Reading never throws.
+ * The synced size is bounded: a few enum names, at most {@value #MAX_HELD_ENTRIES} item ids, one job summary, at most
+ * {@link StorageAddress#AISLE_COUNT} letters (a warehouse can never have more branches than the address format has
+ * letters) and the ten ints of a {@link CraneThroughput}; no item components ever leave the server. Reading never
+ * throws.
  *
  * @param phase        state machine phase
  * @param pauseReason  why the crane is paused, {@link CranePauseReason#NONE} if it is not
@@ -40,15 +44,20 @@ import net.minecraft.world.item.Item;
  * @param aisleLetters the aisle letter of each branch of the linked warehouse, branch {@value
  *                     RackPosition#FIRST_BRANCH} first; {@value #NO_LETTER} for a branch without one, and an empty
  *                     string without a controller (for addresses)
+ * @param throughput   what the machine got done in the rolling minute behind it (M25, issue #16, ADR-039), or empty
+ *                     when nothing has been measured, nothing worked and nothing was delivered — a measurement with
+ *                     nothing in it is normalised away here, so a parked crane's tooltip and its update tag are
+ *                     byte-for-byte what they were before this feature
  */
 public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Optional<CraneJobSummary> job,
-                              List<KeyCount<Item>> held, String aisleLetters) {
+                              List<KeyCount<Item>> held, String aisleLetters,
+                              Optional<CraneThroughput> throughput) {
     /** Most held entries synced. */
     public static final int MAX_HELD_ENTRIES = 4;
     /** Stands for a branch that carries no aisle letter, so the letters of the branches behind it stay readable. */
     public static final char NO_LETTER = '?';
     public static final CraneGoggleInfo NONE = new CraneGoggleInfo(CranePhase.IDLE, CranePauseReason.NONE,
-            Optional.empty(), List.of(), "");
+            Optional.empty(), List.of(), "", Optional.empty());
 
     private static final String PHASE = "Phase";
     private static final String PAUSE = "Pause";
@@ -61,6 +70,8 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
      * exactly what the first character means now, so a crane saved then reads back with the same address.
      */
     private static final String LETTER = "Letter";
+    /** Save and packet key of the throughput, as {@link CraneThroughput#pack()} (M25, issue #16). */
+    private static final String THROUGHPUT = "Throughput";
 
     public CraneGoggleInfo {
         if (phase == null)
@@ -71,6 +82,20 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
             job = Optional.empty();
         held = held == null ? List.of() : List.copyOf(held.subList(0, Math.min(held.size(), MAX_HELD_ENTRIES)));
         aisleLetters = sanitizeLetters(aisleLetters);
+        // A window that holds nothing worth showing is no window: the status and pause lines already say that the
+        // machine is standing still, and the mod's rule is to leave a zero out entirely rather than print it.
+        throughput = throughput == null ? Optional.empty() : throughput.filter(measured -> !measured.isEmpty());
+    }
+
+    /**
+     * This summary with {@code measured} as its throughput — {@code null} or a window with nothing in it meaning none.
+     * Returns {@code this} when nothing changes, so the common case (nobody is watching the dock) allocates nothing.
+     */
+    public CraneGoggleInfo withThroughput(@Nullable CraneThroughput measured) {
+        Optional<CraneThroughput> wanted = measured == null || measured.isEmpty() ? Optional.empty()
+                : Optional.of(measured);
+        return wanted.equals(throughput) ? this
+                : new CraneGoggleInfo(phase, pauseReason, job, held, aisleLetters, wanted);
     }
 
     /**
@@ -137,9 +162,27 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
 
     /**
      * Adds the crane lines for goggles (client only): status, pause reason, current job with its route and, if
-     * {@code withHeld}, the held items or "Grabber empty".
+     * {@code withHeld}, the held items or "Grabber empty" — and the throughput headline, if one was measured.
+     * <p>
+     * The short form of {@link #addGoggleLines(List, int, boolean, boolean, boolean)}: no breakdown, and therefore no
+     * question about whether the warehouse bends.
      */
     public void addGoggleLines(List<Component> tooltip, int indent, boolean withHeld) {
+        addGoggleLines(tooltip, indent, withHeld, false, false);
+    }
+
+    /**
+     * Adds the crane lines for goggles (client only).
+     *
+     * @param withHeld whether to list what the handling head carries
+     * @param detailed whether to add the throughput breakdown and the trip counts below the headline; the dock shows
+     *                 them, the controller shows the headline alone because its tooltip is already long
+     * @param bending  whether the warehouse has more than one aisle, which decides whether the breakdown names the
+     *                 turning share at all: a straight aisle structurally never yaws, so the term would be a permanent
+     *                 {@code 0 %} there
+     */
+    public void addGoggleLines(List<Component> tooltip, int indent, boolean withHeld, boolean detailed,
+            boolean bending) {
         WareworksLang.craneStatus(phase).forGoggles(tooltip, indent);
         if (pauseReason != CranePauseReason.NONE)
             WareworksLang.cranePaused(pauseReason.langKey()).forGoggles(tooltip, indent);
@@ -149,8 +192,15 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
             WareworksLang.craneRoute(address(summary.source()), address(summary.target())).forGoggles(tooltip,
                     indent + 1);
         });
-        if (!withHeld)
-            return;
+        if (withHeld)
+            addHeldLines(tooltip, indent);
+        // Last, and only when something was really measured: the numbers answer "is the machine my bottleneck", which
+        // is the question a player asks after reading what it is doing right now, not before.
+        throughput.ifPresent(measured -> CraneThroughputLines.addGoggleLines(tooltip, indent, measured, detailed,
+                bending));
+    }
+
+    private void addHeldLines(List<Component> tooltip, int indent) {
         if (held.isEmpty()) {
             WareworksLang.translate(WareworksLang.GOGGLES_CRANE_HEAD_EMPTY).style(ChatFormatting.DARK_GRAY)
                     .forGoggles(tooltip, indent);
@@ -181,6 +231,9 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
         tag.put(HELD, heldTag);
         if (!aisleLetters.isEmpty())
             tag.putString(LETTER, aisleLetters);
+        // Omitted entirely while nothing was measured, which is every dock nobody has looked at through goggles and
+        // every crane that has stood still for a minute (M25, issue #16).
+        throughput.ifPresent(measured -> tag.putIntArray(THROUGHPUT, measured.pack()));
     }
 
     /** Reads a summary written by {@link #write}. Never throws; invalid data reads as empty values. */
@@ -196,6 +249,8 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
         return new CraneGoggleInfo(CranePhase.byName(tag.getString(PHASE)).orElse(CranePhase.IDLE),
                 CranePauseReason.byName(tag.getString(PAUSE)),
                 tag.contains(JOB, Tag.TAG_COMPOUND) ? CraneJobSummary.read(tag.getCompound(JOB)) : Optional.empty(), held,
-                tag.getString(LETTER));
+                tag.getString(LETTER),
+                tag.contains(THROUGHPUT, Tag.TAG_INT_ARRAY) ? CraneThroughput.unpack(tag.getIntArray(THROUGHPUT))
+                        : Optional.empty());
     }
 }

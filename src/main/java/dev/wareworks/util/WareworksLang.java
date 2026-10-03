@@ -1,10 +1,15 @@
 package dev.wareworks.util;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.SortedMap;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.inventory.InventorySummary;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.JobType;
@@ -51,6 +56,14 @@ public final class WareworksLang {
     public static final String GOGGLES_NO_AISLE = "gui.goggles.no_aisle";
     /** {@code "Address: %1$s"}: address of an aligned member, e.g. {@code A-03-07R}. */
     public static final String GOGGLES_ADDRESS = "gui.goggles.address";
+    /**
+     * {@code "Address: %1$s (%2$s)"}: the same address, on an aisle a player has named (M25, issue #15, ADR-038).
+     * <p>
+     * The name is in brackets <b>behind</b> the address and never instead of it: the address is what the terminal, the
+     * crane's lines and every report speak, and the name is the label beside it. This is the highest-value surface of
+     * the whole feature, because it is the block a player is standing at.
+     */
+    public static final String GOGGLES_ADDRESS_NAMED = "gui.goggles.address_named";
     /** {@code "Misaligned"}: a member at a rack position with the wrong facing. */
     public static final String GOGGLES_MISALIGNED = "gui.goggles.misaligned";
     /**
@@ -128,6 +141,20 @@ public final class WareworksLang {
      * "aisle": a storage address, the dock's {@link #GOGGLES_CRANE_ON_AISLE} line and the controller's aisle list.
      */
     public static final String GOGGLES_WAREHOUSE_LETTER = "gui.goggles.warehouse_letter";
+    /**
+     * {@code "Warehouse %1$s — %2$s"}: the same line for a warehouse whose <b>dock</b> aisle a player has named
+     * (M25, issue #15, ADR-038). The letter stays first and keeps its place, because it is what every other surface
+     * and {@code /wareworks chunks} name this warehouse by; the name is what was added.
+     */
+    public static final String GOGGLES_WAREHOUSE_LETTER_NAMED = "gui.goggles.warehouse_letter_named";
+    /**
+     * The dark-grey hint that teaches the naming gesture, on the controller's goggles and only while no name is
+     * visible on them at all (M25, issue #15, ADR-038) — so it teaches until that tooltip has a name to show.
+     * <p>
+     * It is what pays for not overriding {@code bypassesInput}: the gesture is "click the face off the little box in
+     * the middle", which nothing else on the block would ever suggest ({@code AisleNaming}).
+     */
+    public static final String GOGGLES_AISLE_NAME_HINT = "gui.goggles.aisle_name_hint";
     /** Controller status {@code READY}. */
     public static final String GOGGLES_STATUS_READY = "gui.goggles.controller_status.ready";
     /** Controller status {@code NO_DOCK}. */
@@ -185,6 +212,29 @@ public final class WareworksLang {
     public static final String RAIL_CLOSED = "rail.closed";
     /** Action bar text after a wrench opened a warehouse rail again. */
     public static final String RAIL_OPENED = "rail.opened";
+    /**
+     * {@code "Aisle %1$s is now \"%2$s\""}: action bar text after a naming click gave an aisle a name (M25, issue #15).
+     * <p>
+     * The four {@code message.*} keys are the one group in this file that belongs to <b>no single block</b>: the same
+     * gesture, and therefore the same four sentences, are reached from a warehouse controller and from a warehouse
+     * interface ({@code AisleNaming}), so naming them after either block would be a lie about where they are used.
+     */
+    public static final String AISLE_NAMED = "message.aisle_named";
+    /** {@code "Aisle %1$s has no name any more"}: a name tag took the name off an aisle that had one (M25). */
+    public static final String AISLE_NAME_CLEARED = "message.aisle_name_cleared";
+    /**
+     * {@code "Aisle %1$s is now \"%2$s\" (shortened)"}: {@link #AISLE_NAMED} for a name that was longer than
+     * {@code AisleName.MAX_LENGTH}, so the player is shown what was really stored (M25).
+     * <p>
+     * <b>One message and not a second one beside {@link #AISLE_NAMED}</b> (M25 review fix). All four of these are
+     * action-bar text, and the client's HUD keeps exactly one of those at a time — {@code Gui#setOverlayMessage}
+     * assigns its field rather than queueing — so two messages sent in one tick mean the player only ever reads the
+     * second. A cut name was the one case that sent two, which cost the reader the very thing the gesture exists to
+     * tell them: <i>which aisle</i> the name went on.
+     */
+    public static final String AISLE_NAMED_CUT = "message.aisle_named_cut";
+    /** Action bar text for a naming click on a block that belongs to no warehouse aisle yet (M25). */
+    public static final String AISLE_NAME_NO_AISLE = "message.aisle_name_no_aisle";
     /** {@code "Open requests: %1$s"}: open retrieval requests of a controller. */
     public static final String GOGGLES_OPEN_REQUESTS = "gui.goggles.open_requests";
     /** {@code "Warehouse Input:"}: goggle header of a warehouse input. */
@@ -457,6 +507,54 @@ public final class WareworksLang {
     public static final String GOGGLES_CRANE_HOLDING = "gui.goggles.crane_holding";
     /** {@code "Grabber empty"}. */
     public static final String GOGGLES_CRANE_HEAD_EMPTY = "gui.goggles.crane_head_empty";
+    /**
+     * {@code "%1$s%%"}: a number as a percentage, and the <b>only value in the whole mod that carries a percent
+     * sign</b> (M25, issue #16, ADR-039).
+     * <p>
+     * It is one key, not a sign written into each of the five lines that need one, because a literal percent in a lang
+     * value is a trap: {@code TranslatableContents} accepts only {@code %s} and {@code %%}, and {@code decompose()}
+     * <b>catches</b> the exception a bad one throws and falls back to the raw template — so the player silently reads
+     * {@code "Auslastung: %1$s%% der letzten Minute"} instead of a crash anybody would have noticed. German puts a
+     * space before the sign, which is the other reason the sign belongs in one place.
+     */
+    public static final String GOGGLES_PERCENT = "gui.goggles.percent";
+    /**
+     * {@code "Busy: %1$s of the last minute"}: the headline of a crane's throughput — the share of the rolling minute
+     * the machine was travelling, turning or standing at a rack (M25, issue #16, ADR-039).
+     * <p>
+     * "Busy" and not "Working" or "Utilisation": waiting for a target is working on a job and is not busy, and "busy"
+     * is the natural complement of the {@code Idle} the status line already prints.
+     */
+    public static final String GOGGLES_CRANE_BUSY = "gui.goggles.crane_busy";
+    /**
+     * {@code "Busy: %1$s of the last %2$s s"}: the same headline while the window is not yet a full minute — after a
+     * chunk load, a reload or a gap. The label carries the length that was really observed and <b>nothing is
+     * extrapolated</b>: nine trips in 23 s are never scaled up to a minute.
+     */
+    public static final String GOGGLES_CRANE_BUSY_PARTIAL = "gui.goggles.crane_busy_partial";
+    /**
+     * {@code "Blocked: %1$s"}: the share of the window the machine had a job and got nowhere — no target, held
+     * leftovers, a reroute, or travel that covered no ground. Omitted entirely at zero.
+     * <p>
+     * "Blocked" and not "Waiting", forced by the lang file rather than by taste: {@link #DISPLAY_CRANE_IDLE} has
+     * already spent German's {@code Wartet} on <i>Idle</i>, so English follows German here and the pair stays 1:1.
+     */
+    public static final String GOGGLES_CRANE_BLOCKED = "gui.goggles.crane_blocked";
+    /**
+     * {@code "Travel %1$s · at the rack %2$s"}: where the busy share went, on a warehouse of one straight aisle. Each
+     * share is printed for itself and none is derived as the remainder of the others, so no two numbers on this line
+     * can contradict each other and nothing claims a total of exactly 100.
+     */
+    public static final String GOGGLES_CRANE_BREAKDOWN = "gui.goggles.crane_breakdown";
+    /**
+     * {@code "Travel %1$s · turning %2$s (%3$s corners) · at the rack %4$s"}: the same breakdown on a warehouse that
+     * bends. The turning term exists only here, because a straight aisle structurally never yaws and a permanent
+     * {@code 0 %} would teach nothing; the corner count is exact rather than estimated, because
+     * {@code CranePose#yawDelta} already answers in signed quarter turns.
+     */
+    public static final String GOGGLES_CRANE_BREAKDOWN_TURNING = "gui.goggles.crane_breakdown_turning";
+    /** {@code "Trips: %1$s · items: %2$s"}: jobs completed and items delivered inside the window. */
+    public static final String GOGGLES_CRANE_TRIPS = "gui.goggles.crane_trips";
     /** {@code "Last planning: %1$s"}; the argument is a {@code NoJobReason} text. */
     public static final String GOGGLES_LAST_PLAN = "gui.goggles.last_plan";
     /** Prefix of the planning result texts, {@code gui.goggles.no_job_reason.<reason>} ({@link #noJobReasonKey}). */
@@ -707,7 +805,7 @@ public final class WareworksLang {
     /** What the {@code x} at the end of a chain's line does, on its tooltip. */
     public static final String TERMINAL_PLAN_CANCEL_HINT = "gui.terminal.plan.cancel_hint";
     /**
-     * Name of the aisle summary display source in Create's Display Link screen. The four display source names must
+     * Name of the aisle summary display source in Create's Display Link screen. The five display source names must
      * carry exactly these keys: Create builds them as {@code <namespace>.display_source.<registry path>}
      * ({@code DisplaySource#getName}), so the path of the registry entry and the tail of the key are the same string.
      */
@@ -718,6 +816,12 @@ public final class WareworksLang {
     public static final String DISPLAY_SOURCE_FILTERED_STOCK = "display_source.filtered_stock";
     /** Name of the crane status display source. */
     public static final String DISPLAY_SOURCE_CRANE_STATUS = "display_source.crane_status";
+    /**
+     * Name of the crane throughput display source (M25, issue #16, ADR-039). Its tail is the registry path
+     * {@code crane_throughput}, by the rule above; its <b>line</b> keys live under {@code display_source.throughput.}
+     * instead, so that the family of the board's rows reads as one block in both lang files.
+     */
+    public static final String DISPLAY_SOURCE_CRANE_THROUGHPUT = "display_source.crane_throughput";
     /** {@code "Aisle %1$s: %2$s"}: aisle letter and short status on a display. */
     public static final String DISPLAY_AISLE_LINE_AISLE = "display_source.aisle.line_aisle";
     /**
@@ -771,6 +875,30 @@ public final class WareworksLang {
      */
     public static final String DISPLAY_AISLE_LINE_AISLES_CUT = "display_source.aisle.line_aisles_cut";
     /**
+     * {@code "Names: %1$s"}: the aisles a player has named, as {@code "A Ores · B Metals"} (M25, issue #15, ADR-038).
+     * Left out entirely while no aisle of the warehouse has a name, and the <b>last</b> line of this source, so it is
+     * the first thing a short board drops — {@code WarehouseDisplays#limit} drops the tail, and every other line of
+     * this source is either a number a player asked for or a diagnosis they have to act on (M25 review fix).
+     */
+    public static final String DISPLAY_AISLE_LINE_NAMES = "display_source.aisle.line_names";
+    /**
+     * {@code "Names: %1$s (+%2$s)"}: the same, with the number of names the row had no characters left for
+     * ({@link #aisleNamesLine}). A count and not a bare mark, because a player who named six aisles has to be able to
+     * tell "two more" from "four more"; short, because the room it takes is room the names lose.
+     */
+    public static final String DISPLAY_AISLE_LINE_NAMES_MORE = "display_source.aisle.line_names_more";
+    /**
+     * Characters {@link #aisleNamesLine} keeps for the {@code Names:} label of its own row, in <b>any</b> language.
+     * <p>
+     * It has to be a constant: a display source runs on the server, where resolving the line would resolve it against
+     * the server's language and show every player that one ({@code WarehouseDisplays#limit} spells this out), so the
+     * real label cannot be measured here. {@code LangConsistencyTest#theNamesBoardRowFitsADisplayBoard} holds both
+     * languages to it, which is what makes the reservation true rather than hopeful.
+     */
+    public static final int DISPLAY_NAMES_LABEL_CHARS = 7;
+    /** Characters kept on top of that for the {@code (+N)} mark of {@link #DISPLAY_AISLE_LINE_NAMES_MORE}. */
+    public static final int DISPLAY_NAMES_MORE_CHARS = 6;
+    /**
      * {@code "No warehouse"}: the source block belongs to no loaded warehouse, and this is then the whole output
      * of the Warehouse Summary source — which is why it speaks of a warehouse like every other line of it
      * (M22 review fix). The key keeps its path, because only the text changed.
@@ -814,6 +942,42 @@ public final class WareworksLang {
     public static final String DISPLAY_CRANE_LINE_TARGET = "display_source.crane.line_target";
     /** {@code "Holding %1$s"}: what the handling head carries. */
     public static final String DISPLAY_CRANE_LINE_HOLDING = "display_source.crane.line_holding";
+    /**
+     * {@code "Trips: %1$s"}: jobs the crane finished inside the measured minute, first row of the Crane Throughput
+     * board (M25, issue #16, ADR-039).
+     * <p>
+     * The four rows of this source are <b>fixed and never optional</b>, unlike the crane's goggle lines: a four-row
+     * board shows four rows and {@code WarehouseDisplays#limit} drops the tail, so a row that came and went with its
+     * own value would move the three below it. A zero is therefore printed here, where the goggles leave it out.
+     */
+    public static final String DISPLAY_THROUGHPUT_LINE_TRIPS = "display_source.throughput.line_trips";
+    /** {@code "Items: %1$s"}: items delivered inside the measured minute, second row of the board. */
+    public static final String DISPLAY_THROUGHPUT_LINE_ITEMS = "display_source.throughput.line_items";
+    /**
+     * {@code "Busy: %1$s"}: the share of the minute the machine was working, third row of the board. Shorter than the
+     * goggle headline ({@link #GOGGLES_CRANE_BUSY}) because it needs no "of the last minute": this source only shows
+     * numbers once the window really holds one ({@link #DISPLAY_THROUGHPUT_MEASURING}).
+     */
+    public static final String DISPLAY_THROUGHPUT_LINE_BUSY = "display_source.throughput.line_busy";
+    /** {@code "Turning: %1$s"}: the share of the minute the machine was swinging at a corner, fourth row. */
+    public static final String DISPLAY_THROUGHPUT_LINE_TURNING = "display_source.throughput.line_turning";
+    /**
+     * {@code "Measuring"}: the whole output of the Crane Throughput source while the rolling window is not yet a full
+     * minute — after a chunk load, a reload or a gap.
+     * <p>
+     * A board cannot carry the caveat the goggles carry ({@link #GOGGLES_CRANE_BUSY_PARTIAL} names the real length),
+     * because {@code WarehouseDisplays#limit} would drop it off a four-row board and leave the numbers standing alone.
+     * Showing a number about ten seconds as if it were about a minute is the one thing this source must not do, so it
+     * says it is still measuring instead.
+     */
+    public static final String DISPLAY_THROUGHPUT_MEASURING = "display_source.throughput.measuring";
+    /**
+     * {@code "No crane"}: the source block is not a stacker crane dock, and this is then the whole output of the
+     * Crane Throughput source — the degraded case, worded like {@link #DISPLAY_AISLE_NO_AISLE} is for the warehouse
+     * summary. It reads the same as {@link #DISPLAY_AISLE_STATUS_NO_DOCK} on purpose: a player meets "no crane" as one
+     * state, whether a warehouse has no dock or a link lost the dock it was pointed at.
+     */
+    public static final String DISPLAY_THROUGHPUT_NO_CRANE = "display_source.throughput.no_crane";
     /** {@code "Incoming: %1$s x%2$s"}: items a crane job is bringing to a storage location. */
     public static final String GOGGLES_RESERVED_INCOMING = "gui.goggles.reserved_incoming";
     /** {@code "Reserved for pickup: %1$s x%2$s"}: items reserved inside a storage location for a crane job. */
@@ -885,6 +1049,53 @@ public final class WareworksLang {
         };
         return translate(key, item.getDescription(), number(amount).style(ChatFormatting.GOLD))
                 .style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * A share as "78 %", through the one key in the mod that carries a percent sign
+     * ({@link #GOGGLES_PERCENT}).
+     */
+    public static LangBuilder percent(int share) {
+        return translate(GOGGLES_PERCENT, number(share));
+    }
+
+    /**
+     * "Busy: 78% of the last minute", or "of the last 23 s" while the rolling window is shorter than that (M25, issue
+     * #16). The length comes from the throughput itself, so the label can never claim a minute the machine did not
+     * run.
+     */
+    public static LangBuilder craneBusy(CraneThroughput measured) {
+        LangBuilder share = percent(measured.busyShare()).style(ChatFormatting.WHITE);
+        if (measured.isFullMinute())
+            return translate(GOGGLES_CRANE_BUSY, share).style(ChatFormatting.GRAY);
+        return translate(GOGGLES_CRANE_BUSY_PARTIAL, share,
+                number(measured.observedSeconds()).style(ChatFormatting.WHITE)).style(ChatFormatting.GRAY);
+    }
+
+    /** "Blocked: 4%" — gold, because it is the one share of the four a player is meant to act on. */
+    public static LangBuilder craneBlocked(CraneThroughput measured) {
+        return translate(GOGGLES_CRANE_BLOCKED, percent(measured.blockedShare()).style(ChatFormatting.WHITE))
+                .style(ChatFormatting.GOLD);
+    }
+
+    /**
+     * "Travel 54% · turning 6% (9 corners) · at the rack 18%", or the same line without the turning term on a
+     * warehouse of one straight aisle, which can never turn at all.
+     */
+    public static LangBuilder craneBreakdown(CraneThroughput measured, boolean bending) {
+        LangBuilder travel = percent(measured.travelShare()).style(ChatFormatting.WHITE);
+        LangBuilder stop = percent(measured.stopShare()).style(ChatFormatting.WHITE);
+        if (!bending)
+            return translate(GOGGLES_CRANE_BREAKDOWN, travel, stop).style(ChatFormatting.GRAY);
+        return translate(GOGGLES_CRANE_BREAKDOWN_TURNING, travel,
+                percent(measured.turnShare()).style(ChatFormatting.WHITE),
+                number(measured.corners()).style(ChatFormatting.WHITE), stop).style(ChatFormatting.GRAY);
+    }
+
+    /** "Trips: 9 · items: 412" with both counts highlighted. */
+    public static LangBuilder craneTrips(CraneThroughput measured) {
+        return translate(GOGGLES_CRANE_TRIPS, number(measured.trips()).style(ChatFormatting.GOLD),
+                number(measured.items()).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
     }
 
     /** "From A-01-00R to A-01-03L" with both addresses highlighted. */
@@ -1042,10 +1253,92 @@ public final class WareworksLang {
         return translate(GOGGLES_ADDRESS, text(address).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
     }
 
+    /**
+     * "Address: B-03-07R" and, on an aisle somebody named, "Address: B-03-07R (Ores)" (M25, issue #15).
+     * <p>
+     * One method rather than two call sites, so no member of a warehouse can ever show the address in one form and
+     * another member in the other. The name is drawn white, like every other piece of text a player wrote
+     * ({@link #storageFilter}, {@link #attachedInventory}), and the address keeps the gold it always had.
+     *
+     * @param name the aisle's name, or empty where it has none
+     */
+    public static LangBuilder address(String address, Optional<String> name) {
+        return name.filter(text -> !text.isEmpty())
+                .map(text -> translate(GOGGLES_ADDRESS_NAMED, text(address).style(ChatFormatting.GOLD),
+                        text(text).style(ChatFormatting.WHITE)).style(ChatFormatting.GRAY))
+                .orElseGet(() -> address(address));
+    }
+
     /** "Warehouse X" with the letter highlighted ({@link #GOGGLES_WAREHOUSE_LETTER}). */
     public static LangBuilder warehouseLetter(char letter) {
         return translate(GOGGLES_WAREHOUSE_LETTER, text(String.valueOf(letter)).style(ChatFormatting.GOLD))
                 .style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Warehouse A" and, once the aisle at the dock has a name, "Warehouse A — Ores" (M25, issue #15).
+     *
+     * @param name the dock aisle's name, or empty where it has none
+     */
+    public static LangBuilder warehouseLetter(char letter, Optional<String> name) {
+        return name.filter(text -> !text.isEmpty())
+                .map(text -> translate(GOGGLES_WAREHOUSE_LETTER_NAMED,
+                        text(String.valueOf(letter)).style(ChatFormatting.GOLD),
+                        text(text).style(ChatFormatting.WHITE)).style(ChatFormatting.GRAY))
+                .orElseGet(() -> warehouseLetter(letter));
+    }
+
+    /**
+     * "Names: A Ores · B Metals", or "Names: A Ores (+2)" where the row has no room for the rest: the named aisles of
+     * a warehouse in letter order, for a display board of {@code columns} characters (M25, issue #15).
+     * <p>
+     * The list itself is built rather than translated, like the aisle list of {@link #networkAisles}: it is letters and
+     * text a player wrote, which read the same in every language. The letters stay, because a name without its letter
+     * cannot be matched to the address the terminal speaks.
+     * <p>
+     * <b>Bounded by characters and not only by entries</b> (M25 review fix). A name is up to
+     * {@code AisleName.MAX_LENGTH} characters of a player's own choosing, so an entry bound alone said nothing about
+     * the width of the row: six of them with their separators are 113 characters, where a six-block display board row
+     * holds 26 and a sign holds 15 — and a target cuts a line it cannot show, which the display scenario's own
+     * {@code checkFits} treats as a failed run. Whole entries are dropped, never half a name, and what was dropped is
+     * counted on the row rather than left out silently, the way {@link #networkAisles} and
+     * {@link #DISPLAY_AISLE_LINE_AISLES_CUT} already mark a list they had to shorten. At least one entry is always
+     * named, like {@code listed} itself guarantees: a row that cannot hold one name is a row every line of this
+     * source overflows.
+     *
+     * @param names   the named aisles in letter order
+     * @param listed  how many of them the line may name at the very most
+     * @param columns characters the target's row holds ({@code DisplayTargetStats#maxColumns}), label included
+     */
+    public static MutableComponent aisleNamesLine(SortedMap<Character, String> names, int listed, int columns) {
+        List<String> entries = new ArrayList<>(Math.min(names.size(), Math.max(1, listed)));
+        for (Map.Entry<Character, String> entry : names.entrySet()) {
+            if (entries.size() >= Math.max(1, listed))
+                break;
+            entries.add(entry.getKey() + " " + entry.getValue());
+        }
+        int all = entries.size();
+        // Fit as many whole entries as the row holds beside its label; if that is not all of them, fit them again with
+        // room for the "(+N)" mark as well, so the mark can never be the thing that overflows the row.
+        int shown = fitting(entries, columns - DISPLAY_NAMES_LABEL_CHARS);
+        if (shown < all)
+            shown = fitting(entries, columns - DISPLAY_NAMES_LABEL_CHARS - DISPLAY_NAMES_MORE_CHARS);
+        String list = String.join(AISLE_SEPARATOR, entries.subList(0, shown));
+        if (shown >= all && all == names.size())
+            return translateDirect(DISPLAY_AISLE_LINE_NAMES, list);
+        return translateDirect(DISPLAY_AISLE_LINE_NAMES_MORE, list, number(names.size() - shown));
+    }
+
+    /** How many of {@code entries}, joined by {@link #AISLE_SEPARATOR}, fit {@code budget} characters; at least one. */
+    private static int fitting(List<String> entries, int budget) {
+        int width = 0;
+        for (int shown = 0; shown < entries.size(); shown++) {
+            int next = width + entries.get(shown).length() + (shown > 0 ? AISLE_SEPARATOR.length() : 0);
+            if (shown > 0 && next > budget)
+                return shown;
+            width = next;
+        }
+        return entries.size();
     }
 
     /** A line with one highlighted number, e.g. "Storage locations: 12", for a key with one {@code %1$s}. */

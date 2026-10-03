@@ -29,6 +29,7 @@ import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRulePause;
 import dev.wareworks.core.stock.StockRules;
 import dev.wareworks.core.warehouse.AisleMembership;
+import dev.wareworks.core.warehouse.AisleNames;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import net.minecraft.core.BlockPos;
@@ -45,6 +46,7 @@ import net.minecraft.util.Mth;
  * Layout:     { Facing: "east", Length: int, Height: int }            (absent without dock; the branch at the dock)
  * Network:    { Branches: [ { D: int[2] origin offset from the dock, H: "south", L: int, C: "B" } ],
  *               Lines:    [ { A: 0|1, F: int, D: int[2], C: "B" } ] }  (absent while the warehouse is one aisle)
+ * Names:      [ { C: "A", N: "Ores" } ]                                (absent while no aisle has a name, M25)
  * Locations:  [ { X: int, Y: int, Side: "L"|"R", Kind: "STORAGE"|"INPUT"|"OUTPUT",
  *                 Stock: [ { Item: &lt;ItemKey&gt;, Count: long } ] } ]    (Stock only for STORAGE)
  * Misaligned: int[] (x, y, side ordinal) per position
@@ -76,6 +78,19 @@ final class ControllerPersistence {
      * contradict the rails that are there.
      */
     static final String NETWORK_TAG = "Network";
+    /**
+     * The names a player has given this warehouse's aisles (M25, issue #15, ADR-038), keyed by aisle letter and
+     * written only while at least one aisle has one:
+     * <pre>
+     * Names: [ { C: "A", N: "Ores" }, { C: "B", N: "Metals" } ]
+     * </pre>
+     * <b>Top level, deliberately not inside {@link #NETWORK_TAG}.</b> {@link #writeNetwork} returns having written
+     * nothing at all while the warehouse is one straight aisle with no pinned line, which is every warehouse built
+     * before M21 — and those are exactly the warehouses a name is most useful on. Keeping the names in their own tag
+     * lets a one-aisle warehouse carry one, and it leaves the "a straight warehouse has no {@code Network} tag"
+     * property of that method untouched.
+     */
+    static final String NAMES_TAG = "Names";
     static final String LOCATIONS_TAG = "Locations";
     static final String MISALIGNED_TAG = "Misaligned";
     static final String REQUESTS_TAG = "Requests";
@@ -152,6 +167,13 @@ final class ControllerPersistence {
     private static final String HEADING = "H";
     private static final String BRANCH_LENGTH = "L";
     private static final String LETTER = "C";
+    /** The name of one aisle inside {@link #NAMES_TAG}; the letter it belongs to is written as {@link #LETTER}. */
+    private static final String NAME = "N";
+    /**
+     * Entries of {@link #NAMES_TAG} one read walks. A warehouse has at most {@value StorageAddress#AISLE_COUNT} aisle
+     * letters, so a longer list is not one this mod wrote, and the rest of it is ignored rather than walked.
+     */
+    private static final int MAX_SAVED_NAMES = StorageAddress.AISLE_COUNT;
     private static final String LINE_AXIS = "A";
     private static final String LINE_FIXED = "F";
     /** Ints of a branch origin offset: dx, dz (every branch lies at the dock's own level). */
@@ -304,6 +326,53 @@ final class ControllerPersistence {
         if (text.length() != 1 || !StorageAddress.isValidAisle(text.charAt(0)))
             return Optional.empty();
         return Optional.of(text.charAt(0));
+    }
+
+    /**
+     * Writes the aisle names, and <b>nothing at all</b> while no aisle of this warehouse has one — which is every
+     * warehouse up to 0.7.0, so such a save stays byte for byte what it was (see {@link #NAMES_TAG}).
+     * <p>
+     * The names come out of {@link AisleNames#entries()}, which is already bounded to the aisle letters, in letter
+     * order and re-sanitised, so there is nothing left to check here and the bytes of two equal name tables are equal.
+     */
+    static void writeNames(CompoundTag tag, AisleNames names) {
+        if (names.isEmpty())
+            return;
+        ListTag list = new ListTag();
+        names.entries().forEach((letter, name) -> {
+            CompoundTag entry = new CompoundTag();
+            entry.putString(LETTER, String.valueOf(letter));
+            entry.putString(NAME, name);
+            list.add(entry);
+        });
+        tag.put(NAMES_TAG, list);
+    }
+
+    /**
+     * Reads the aisle names; an absent, malformed or over-long entry is <b>skipped</b>, exactly as in
+     * {@link #readNetwork}, because the input is a save, a command or a hand-edited world and one unusable entry must
+     * not cost the readable ones.
+     * <p>
+     * The tag is only walked here: {@link AisleNames#AisleNames(Map)} does the per-entry filtering — a letter that is
+     * not an aisle letter and a name that sanitises to blank are dropped there, each at the cost of itself and nothing
+     * else — and the table is bounded by the {@value StorageAddress#AISLE_COUNT} aisle letters whatever the list
+     * claims, so a crafted tag cannot widen it.
+     * <p>
+     * The walk itself stops after {@value #MAX_SAVED_NAMES} entries, because a warehouse has no more aisle letters
+     * than that and a longer list is therefore not one this mod wrote. A letter listed twice inside that window keeps
+     * the last of its entries; nothing this mod writes ever lists one twice.
+     */
+    static AisleNames readNames(CompoundTag tag) {
+        if (!tag.contains(NAMES_TAG, Tag.TAG_LIST))
+            return new AisleNames();
+        ListTag list = tag.getList(NAMES_TAG, Tag.TAG_COMPOUND);
+        Map<Character, String> names = new LinkedHashMap<>();
+        int entries = Math.min(list.size(), MAX_SAVED_NAMES);
+        for (int i = 0; i < entries; i++) {
+            CompoundTag entry = list.getCompound(i);
+            letterOf(entry.getString(LETTER)).ifPresent(letter -> names.put(letter, entry.getString(NAME)));
+        }
+        return new AisleNames(names);
     }
 
     static Optional<SavedLayout> readLayout(CompoundTag tag) {

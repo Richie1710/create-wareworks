@@ -99,13 +99,18 @@ final class AisleFixture {
     AisleFixture build(boolean withMotor) {
         if (withMotor)
             placeMotor();
-        helper.setBlock(dock, WareworksBlocks.STACKER_CRANE.getDefaultState()
-                .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, AISLE));
+        placeDock();
         for (int x = 1; x <= rails; x++)
             helper.setBlock(dock.relative(AISLE, x),
                     WareworksBlocks.WAREHOUSE_RAIL.getDefaultState().setValue(WarehouseRailBlock.AXIS, AISLE.getAxis()));
         placeController();
         return this;
+    }
+
+    /** The dock, facing down the aisle — also after the old one was broken, which leaves the controller alone. */
+    void placeDock() {
+        helper.setBlock(dock, WareworksBlocks.STACKER_CRANE.getDefaultState()
+                .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, AISLE));
     }
 
     void placeMotor() {

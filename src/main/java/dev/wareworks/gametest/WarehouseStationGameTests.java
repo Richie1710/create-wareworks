@@ -170,6 +170,27 @@ public final class WarehouseStationGameTests {
     private static final int DELIVERED = 2;
     private static final int LONG_NAME_LENGTH = 20_000;
     private static final int MAX_UPDATE_TAG_BYTES = 2048;
+    /**
+     * What a station's update tag may weigh once its aisle has a <b>name</b> on it (M25, issue #15 — review fix).
+     * <p>
+     * A second number rather than a bigger one, exactly as the warehouse interface has had two bounds since M4 and the
+     * warehouse controller since M25: one for the state almost every block of a warehouse is in, one for the worst
+     * case a player can put it in. And it is a second number because <b>the tight one had no room left</b>, which is
+     * the thing nobody had measured: on this fixture a station's tag is about <b>1861</b> accounting bytes before any
+     * name — 187 under its own 2048 — and the widest assignment costs <b>292</b> of them, because
+     * {@code CompoundTag#sizeInBytes} charges {@code 28 + 2*key.length() + 36} per entry and
+     * {@code 36 + 2*text.length()} per string, so the longest address and a 16-character name together are far more
+     * than the twenty-odd bytes they really send.
+     * <p>
+     * Which is also why this is a <b>canary and not a packet budget</b>: that accounting is a Java-heap estimate many
+     * times the real wire size (the same reading {@code CraneThroughputGameTests} and the interface's own two bounds
+     * are written on). What it guards is a record that grows without anybody noticing.
+     */
+    private static final int MAX_NAMED_UPDATE_TAG_BYTES = 4096;
+    /** The widest address a member can ever have: the last aisle letter at the last level and position. */
+    private static final String WIDEST_ADDRESS = "Z-999-999R";
+    /** Exactly {@code AisleName.MAX_LENGTH} characters, for the widest assignment this packet has to fit (M25). */
+    private static final String LONGEST_AISLE_NAME = "ABCDEFGHIJKLMNOP";
     private static final double DROP_RADIUS = 1.0;
     private static final int HOPPER_TIMEOUT_TICKS = 300;
     private static final int HOPPER_IDLE_TICKS = 24;
@@ -471,6 +492,30 @@ public final class WarehouseStationGameTests {
                     helper.assertFalse(update.contains(WarehouseStationBlockEntity.BUFFER_TAG), "no buffer in client packets");
                     helper.assertTrue(update.sizeInBytes() < MAX_UPDATE_TAG_BYTES,
                             "update tag must stay small, but has " + update.sizeInBytes() + " bytes");
+
+                    // And with the widest aisle assignment a station can carry since M25 (issue #15): the longest
+                    // address with the longest aisle name on it. Measured here because this one record rides the
+                    // client packet of every station kind — input, output, warehouse port and production station —
+                    // and this is the gate that bounds all four; the interface has its own (M25 review fix). The
+                    // worst case is crafted rather than built, because the fixture of this test has no warehouse to
+                    // name an aisle of, and "a name that fits here" was never the question.
+                    //
+                    // It gets its OWN bound, and the first run of this assertion is why: the plain tag is already
+                    // about 1861 of its 2048 accounting bytes here, and the widest assignment costs 292 more, so the
+                    // tight number had no room left for a name. See MAX_NAMED_UPDATE_TAG_BYTES.
+                    StationGoggleSummary named = withWidestName(input.summary());
+                    CompoundTag namedTag = new CompoundTag();
+                    named.write(namedTag);
+                    CompoundTag namedUpdate = update.copy();
+                    namedUpdate.put(WarehouseStationBlockEntity.SUMMARY_TAG, namedTag);
+                    int namedBytes = namedUpdate.sizeInBytes();
+                    Wareworks.LOGGER.debug("Station update tag: {} bytes, with the widest named assignment {} bytes",
+                            update.sizeInBytes(), namedBytes);
+                    helper.assertTrue(namedBytes < MAX_NAMED_UPDATE_TAG_BYTES,
+                            "a named aisle must not take the station's update tag past "
+                                    + MAX_NAMED_UPDATE_TAG_BYTES + " bytes, but it has " + namedBytes);
+                    helper.assertValueEqual(StationGoggleSummary.read(namedTag).assignment().aisleName(),
+                            Optional.of(LONGEST_AISLE_NAME), "and the name reads back off the packet");
                     WarehouseInputBlockEntity client = freshInput(helper, input);
                     client.handleUpdateTag(update, registries);
                     helper.assertValueEqual(client.summary(), input.summary(), "goggle summary after client sync");
@@ -974,6 +1019,18 @@ public final class WarehouseStationGameTests {
     }
 
     // --- helpers ---------------------------------------------------------------------------------------------------
+
+    /**
+     * {@code summary} with the widest aisle assignment a station can carry (M25, issue #15): the longest address, on
+     * the longest name a player can give an aisle. Everything else is left exactly as the real station published it.
+     */
+    private static StationGoggleSummary withWidestName(StationGoggleSummary summary) {
+        AisleAssignment widest = AisleAssignment.assigned(StorageAddress.parse(WIDEST_ADDRESS))
+                .withAisleName(Optional.of(LONGEST_AISLE_NAME));
+        return new StationGoggleSummary(widest, summary.buffer(), summary.openRequests(), summary.requestedItems(),
+                summary.deliveredItems(), summary.lastRejection(), summary.exportedItems(), summary.portArmed(),
+                summary.collect());
+    }
 
     /** Dock, rails, controller, a chest with diamonds behind an interface, aligned and misaligned stations. */
     private static void buildStationAisle(GameTestHelper helper) {

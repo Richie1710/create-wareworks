@@ -29,6 +29,7 @@ import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.NetworkGoggleInfo;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.CraneGoggleInfo;
@@ -45,6 +46,7 @@ import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
@@ -68,7 +70,8 @@ import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 /**
- * Scenario "display": the four Display Link sources on real display targets ({@code docs/warehouse-system.md} §10, M14).
+ * Scenario "display": the five Display Link sources on real display targets ({@code docs/warehouse-system.md} §10, M14,
+ * M25).
  * <p>
  * Layout, relative to the dock (the scene origin; the aisle runs east, so a positive x offset is along the aisle and a
  * negative z offset is the left rack side): the usual powered aisle with {@value #RAILS} rails, a controller behind the
@@ -77,19 +80,27 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * wall of display boards at {@code z = }{@value #WALL_Z}, each driven by its own creative motor through a cogwheel:
  * <ul>
  * <li>"Crane Status" on the dock, shown on a {@value #BOARD_WIDTH}x{@value #BOARD_HEIGHT} board,</li>
- * <li>"Aisle Summary" on the controller, on a board of the same size,</li>
- * <li>"Stock List" on the terminal, on a board of the same size,</li>
+ * <li>"Aisle Summary" on the controller, on a board one row <b>taller</b> ({@value #AISLE_BOARD_HEIGHT}), because that
+ * is the one source with more than four lines to give: below the four core ones it names the aisles a player
+ * <b>named</b> (M25, issue #15), and a four-line board is exactly where that line is dropped,</li>
+ * <li>"Stock List" on the terminal, on a {@value #BOARD_WIDTH}x{@value #BOARD_HEIGHT} board,</li>
  * <li>"Aisle Summary" on a stray terminal that belongs to no aisle, on a small
- * {@value #SMALL_BOARD_WIDTH}x1 board — the degraded case, which must read "No aisle".</li>
+ * {@value #SMALL_BOARD_WIDTH}x1 board — the degraded case, which must read "No aisle",</li>
+ * <li>"Crane Throughput" on the dock's <b>second</b> face (M25, issue #16): what the machine got done in the minute
+ * behind it, on a board of the standard size, because the source writes exactly four rows — or the single word
+ * "Measuring" while its window is still short, which is what a freshly built warehouse really shows.</li>
  * </ul>
  * "Stock of the Filtered Item" sits on the output, whose request filter names {@link #FILTERED_ITEM}, and writes to a row
  * of {@value #NIXIE_TUBES} nixie tube blocks on a pedestal south of the aisle, where that output stands.
  * <p>
  * Tour per pass: the whole wall, an overview of warehouse and wall, then one close-up per board and one of the nixie row.
  * Then the aisle changes — the first pass powers the crane on, the second refills the input — and the same displays are
- * read and shot again, so a screenshot pair shows that the text follows the warehouse. Every shot is preceded by an
+ * read and shot again, so a screenshot pair shows that the text follows the warehouse. The first pass then feeds the
+ * warehouse once more and takes the whole wall again <b>in German</b>, which is the only gate on whether a translated
+ * row fits the flaps of a real board. Every shot is preceded by an
  * assertion of what the displays really carry: the lines are compared against the controller's own numbers (letter,
- * status, locations in use, item types, stock, the filtered item's total) and every section must fit the width of its
+ * status, locations in use, item types, stock, the names, the filtered item's total, the crane's minute) and every
+ * section must fit the width of its
  * board, so a wrong or clipped line fails the run instead of quietly making a bad screenshot.
  */
 public final class DisplayVisualScenario implements VisualScenario {
@@ -116,6 +127,12 @@ public final class DisplayVisualScenario implements VisualScenario {
     /** Top row of every board: above the racks, so nothing of the warehouse stands in front of them. */
     private static final int BOARD_TOP_Y = 3;
     private static final int BOARD_WIDTH = 6;
+    /**
+     * Characters one row of a {@value #BOARD_WIDTH}-block board holds, by Create's own arithmetic
+     * ({@code FlapDisplayBlockEntity#getMaxCharCount()}): what a source is handed as {@code maxColumns}, and what the
+     * names row of the Warehouse Summary source sizes itself to (M25, issue #15).
+     */
+    private static final int BOARD_CHARS = (int) ((BOARD_WIDTH * 16f - 2f) / 3.5f);
     private static final int BOARD_HEIGHT = 2;
     private static final int SMALL_BOARD_WIDTH = 3;
     /**
@@ -128,12 +145,31 @@ public final class DisplayVisualScenario implements VisualScenario {
     /** The face of every board (and the rotation axis of the cogwheels that drive them). */
     private static final Direction BOARD_FACING = Direction.SOUTH;
 
-    /** The four boards of the wall, west to east, with a free column between them so none merges into its neighbour. */
+    /**
+     * The aisle summary board is one row <b>taller</b> than the others, because it is the one source that has more
+     * than four lines to give: the four a board of every size shows, and below them the optional ones — the aisles a
+     * warehouse is made of, and the <b>names</b> a player gave them (M25, issue #15). On a four-line board the names
+     * line is exactly what {@link WarehouseDisplays#limit} drops, which is the whole point of putting it last, so a
+     * board that could never show it would prove nothing about it.
+     */
+    private static final int AISLE_BOARD_HEIGHT = 3;
+
+    /** The five boards of the wall, west to east, with a free column between them so none merges into its neighbour. */
     private static final Board CRANE_BOARD = new Board("crane", 0, BOARD_WIDTH, BOARD_HEIGHT);
-    private static final Board AISLE_BOARD = new Board("aisle", 8, BOARD_WIDTH, BOARD_HEIGHT);
+    private static final Board AISLE_BOARD = new Board("aisle", 8, BOARD_WIDTH, AISLE_BOARD_HEIGHT);
     private static final Board STOCK_BOARD = new Board("stock", 16, BOARD_WIDTH, BOARD_HEIGHT);
     private static final Board NO_AISLE_BOARD = new Board("noaisle", 24, SMALL_BOARD_WIDTH, 1);
-    private static final List<Board> BOARDS = List.of(CRANE_BOARD, AISLE_BOARD, STOCK_BOARD, NO_AISLE_BOARD);
+    /** "Crane Throughput" on the dock, the second source that block offers (M25, issue #16). */
+    private static final Board THROUGHPUT_BOARD = new Board("throughput", 28, BOARD_WIDTH, BOARD_HEIGHT);
+    private static final List<Board> BOARDS =
+            List.of(CRANE_BOARD, AISLE_BOARD, STOCK_BOARD, NO_AISLE_BOARD, THROUGHPUT_BOARD);
+    /** West end of the backing wall: one column before the westmost board, so no board ends at a bare edge. */
+    private static final int WALL_WEST = -2;
+    /** East end of the backing wall and of the cleared plaza: one column past the easternmost board. */
+    private static final int WALL_EAST =
+            BOARDS.stream().mapToInt(board -> board.x0() + board.width()).max().orElseThrow();
+    /** The middle of the wall, which is what the camera that shows all of it has to be centred on. */
+    private static final double WALL_CENTRE = (WALL_WEST + WALL_EAST) / 2.0;
 
     /** The warehouse terminal that belongs to no aisle, in front of the small board. */
     private static final BlockPos STRAY_TERMINAL = new BlockPos(25, 0, -6);
@@ -152,6 +188,13 @@ public final class DisplayVisualScenario implements VisualScenario {
 
     // --- stock -------------------------------------------------------------------------------------------------------
 
+    /**
+     * The name a player gave this warehouse's aisle (M25, issue #15). Player text, so it is the same in both
+     * languages — which is exactly what makes the German board pass worth taking: what changes around it is the
+     * translated {@code Names:} label, and a label is what a board row runs out of flaps for.
+     */
+    private static final String AISLE_NAME = "Ores";
+
     /** The item the output's request filter names, so the nixie row has something to count. */
     private static final Item FILTERED_ITEM = Items.IRON_INGOT;
     /**
@@ -168,25 +211,50 @@ public final class DisplayVisualScenario implements VisualScenario {
     /** Fed to the input in the second pass, so its shots show a warehouse that changed again. */
     private static final List<ItemStack> SECOND_DELIVERY = List.of(new ItemStack(Items.DIAMOND, 32),
             new ItemStack(Items.EMERALD, 16), new ItemStack(Items.REDSTONE, 40));
+    /**
+     * Fed in the German chapter, so the German boards carry <b>numbers a crane really earned</b> rather than the row
+     * of zeroes a machine that has stood still through a resource reload would otherwise report. Every amount stays
+     * below the pre-stocked coal, so the stock list keeps its one unmistakable first row throughout the run.
+     */
+    private static final List<ItemStack> GERMAN_DELIVERY = List.of(new ItemStack(Items.LAPIS_LAZULI, 24),
+            new ItemStack(Items.AMETHYST_SHARD, 16), new ItemStack(Items.BRICK, 32));
 
     private static final int CLEAR_MARGIN = 4;
     private static final int CLEAR_HEIGHT = 8;
+
+    /** Five boards, two passes and a German chapter with a resource reload in it: far above the default four minutes. */
+    private static final long RUN_TIMEOUT_MILLIS = 12L * 60L * 1000L;
 
     private static final int SCENE_READY_TIMEOUT_TICKS = 900;
     private static final int BOARDS_READY_TIMEOUT_TICKS = 400;
     private static final int PULL_TIMEOUT_TICKS = 400;
     private static final int JOB_TIMEOUT_TICKS = 1200;
     private static final int ALL_STORED_TIMEOUT_TICKS = 2400;
-    /** Longer than the slowest passive refresh of the four sources (100 ticks), plus room for the sync to the client. */
+    /**
+     * Until the crane's rolling window holds a whole minute, which is when the throughput source stops saying
+     * "Measuring" and starts giving numbers ({@code CraneThroughputDisplaySource}). A minute of ticks plus room for
+     * the pull that follows and for a server that is not running at twenty ticks a second.
+     */
+    private static final int FULL_MINUTE_TIMEOUT_TICKS = 2400;
+    /** Longer than the slowest passive refresh of the five sources (100 ticks), plus room for the sync to the client. */
     private static final int REFRESH_WAIT_TICKS = 130;
     private static final int SETTLE_TICKS = 4;
+    /** A language switch rebuilds every texture atlas, so the reload needs its own, longer budget. */
+    private static final int RELOAD_TIMEOUT_TICKS = 1200;
+    private static final String ENGLISH = "en_us";
+    private static final String GERMAN = "de_de";
     /** Polls between two "still waiting" lines of a wait step. */
     private static final int UNREADY_LOG_INTERVAL = 20;
 
     // --- camera views (relative to the lower corner of the dock) -----------------------------------------------------
 
-    /** The whole wall from the south, high enough that the racks between camera and wall stay below the sight line. */
-    private static final CameraView WALL = CameraView.of("wall", 13.0, 4.6, 3.5, 13.0, 2.8, -9.0);
+    /**
+     * The whole wall from the south, high enough that the racks between camera and wall stay below the sight line.
+     * Centred on the wall and far enough back for all of it: the fifth board (M25) put six more columns on the east
+     * end, and a camera that kept the old framing would have left the newest board out of the one shot that claims to
+     * show the wall.
+     */
+    private static final CameraView WALL = CameraView.of("wall", WALL_CENTRE, 5.4, 7.5, WALL_CENTRE, 2.4, WALL_Z);
     /** Warehouse and wall together, from above the west end of the aisle. */
     private static final CameraView OVERVIEW = CameraView.of("overview", -2.0, 7.5, 7.5, 12.0, 2.5, -5.0);
     /**
@@ -200,6 +268,13 @@ public final class DisplayVisualScenario implements VisualScenario {
     /** The two moments of every pass: the displays as they stand, and again after the warehouse changed under them. */
     private static final String RESTING = "resting";
     private static final String UPDATED = "updated";
+    /** Rows the throughput source writes once its window holds a whole minute ({@code CraneThroughputDisplaySource}). */
+    private static final int ROWS_WITH_NUMBERS = 4;
+    /** Shot label of the German chapter, which reads and photographs the same wall in the other language. */
+    private static final String GERMAN_MOMENT = "german";
+
+    /** Switches the client's language for the German chapter ({@link VisualLanguage}). */
+    private final VisualLanguage language = new VisualLanguage(RELOAD_TIMEOUT_TICKS, SETTLE_TICKS);
 
     /** What the displays must carry, built from the controller's own numbers on the server thread. */
     private volatile Expectation expectation = Expectation.EMPTY;
@@ -215,13 +290,16 @@ public final class DisplayVisualScenario implements VisualScenario {
 
     @Override
     public void setup(VisualScript script) {
-        script.server("display: clear the area and place the creative motor", DisplayVisualScenario::placeMotor)
+        script.client("display: give the run its own time budget",
+                        context -> context.watchdog().rearm(RUN_TIMEOUT_MILLIS, "display run"))
+                .server("display: clear the area and place the creative motor", DisplayVisualScenario::placeMotor)
                 .server("display: build the aisle with its stations and pre-stocked racks",
                         DisplayVisualScenario::buildAisle)
                 .server("display: build the display wall, the nixie row and the stray terminal",
                         DisplayVisualScenario::buildDisplays)
                 .serverUntil("display: wait until the controller has indexed every rack", this::sceneReady,
                         SCENE_READY_TIMEOUT_TICKS)
+                .server("display: a player names the aisle", DisplayVisualScenario::nameTheAisle)
                 .serverUntil("display: wait until every display board turns fast enough", this::boardsRunning,
                         BOARDS_READY_TIMEOUT_TICKS)
                 .server("display: attach the display links to their source blocks",
@@ -256,11 +334,18 @@ public final class DisplayVisualScenario implements VisualScenario {
         }
         script.serverUntil("display: wait until the crane stored everything", DisplayVisualScenario::allStored,
                         ALL_STORED_TIMEOUT_TICKS)
+                // The "resting" moment above read the throughput board while its window was still short, which is the
+                // honest "Measuring" case. The numbers are what the source is for, so the run waits for them before
+                // the second reading (M25, issue #16).
+                .serverUntil("display: wait until the crane's window holds a whole minute", this::windowIsAFullMinute,
+                        FULL_MINUTE_TIMEOUT_TICKS)
                 .waitTicks(REFRESH_WAIT_TICKS);
         readAndCheck(script, UPDATED);
         script.client("display: check that the displays followed the warehouse", this::checkChanged)
                 .shotFrom(WALL, UPDATED).shotFrom(AISLE_BOARD.view(), UPDATED).shotFrom(STOCK_BOARD.view(), UPDATED)
-                .shotFrom(NIXIE, UPDATED);
+                .shotFrom(THROUGHPUT_BOARD.view(), UPDATED).shotFrom(NIXIE, UPDATED);
+        if (pass == VisualPass.FLYWHEEL)
+            germanChapter(script);
     }
 
     @Override
@@ -270,6 +355,42 @@ public final class DisplayVisualScenario implements VisualScenario {
         return String.format(Locale.ROOT, "crane=%s items=%d types=%d filtered=%s aisle='%s' stock0='%s' crane0='%s'",
                 crane, expected.items(), expected.itemTypes(), expected.filtered(), boardLine(context, AISLE_BOARD, 0),
                 boardLine(context, STOCK_BOARD, 0), boardLine(context, CRANE_BOARD, 0));
+    }
+
+    /**
+     * The same wall in German, which is the only gate on whether a translated row <b>fits the flaps of a real
+     * board</b>.
+     * <p>
+     * A display board caches the string it draws when the packet arrives ({@code FlapDisplaySection#refresh}), so a
+     * language switch alone changes nothing a camera could see: every link is pulled again afterwards, and only then
+     * are the boards read, checked and photographed. {@link #checkFits} is what this chapter is for — German is where
+     * a row runs out of flaps first, and "Kein Regalbediengerät" is 21 characters against "No crane"'s 8.
+     * <p>
+     * The expectation is re-read too, because the sources hand out <b>translatable components</b> and the integrated
+     * server resolves them through the very language the client just loaded: the German check is therefore German on
+     * both sides, and not a German board compared against English text.
+     */
+    private void germanChapter(VisualScript script) {
+        language.switchTo(script, "display: ", GERMAN);
+        // A resource reload costs real seconds, and the crane's window is a rolling minute: without fresh work the
+        // German throughput board would honestly, and uselessly, read four zeroes. So the warehouse is given something
+        // to do first, and the boards are only read once it has done it.
+        script.server("display: feed the warehouse once more, so the German boards carry earned numbers",
+                        DisplayVisualScenario::feedGermanDelivery)
+                .serverUntil("display: wait until the crane stored the German delivery",
+                        DisplayVisualScenario::allStored, ALL_STORED_TIMEOUT_TICKS)
+                .server("display: pull every link again, so the boards rebuild their rows in German",
+                        DisplayVisualScenario::repullEveryLink)
+                .waitTicks(REFRESH_WAIT_TICKS);
+        readAndCheck(script, GERMAN_MOMENT);
+        script.shotFrom(WALL, GERMAN_MOMENT).shotFrom(AISLE_BOARD.view(), GERMAN_MOMENT)
+                .shotFrom(THROUGHPUT_BOARD.view(), GERMAN_MOMENT).shotFrom(CRANE_BOARD.view(), GERMAN_MOMENT)
+                .shotFrom(STOCK_BOARD.view(), GERMAN_MOMENT).shotFrom(NO_AISLE_BOARD.view(), GERMAN_MOMENT);
+        language.switchTo(script, "display: ", ENGLISH);
+        script.server("display: pull every link again, so the boards read English for the next pass",
+                        DisplayVisualScenario::repullEveryLink)
+                .waitTicks(REFRESH_WAIT_TICKS);
+        readAndCheck(script, "back in english");
     }
 
     /** Reads every display on the server, then compares what the client really carries against it. */
@@ -289,7 +410,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         BlockPos dock = new BlockPos(DOCK_X, level.getHeight(Heightmap.Types.WORLD_SURFACE, DOCK_X, DOCK_Z), DOCK_Z);
         context.setOrigin(dock);
         for (BlockPos pos : BlockPos.betweenClosed(dock.offset(-CLEAR_MARGIN, 0, WALL_Z - 2),
-                dock.offset(NO_AISLE_BOARD.x0() + SMALL_BOARD_WIDTH + CLEAR_MARGIN, CLEAR_HEIGHT, NIXIE_CLEAR_Z)))
+                dock.offset(WALL_EAST + CLEAR_MARGIN, CLEAR_HEIGHT, NIXIE_CLEAR_Z)))
             level.setBlockAndUpdate(pos.immutable(), Blocks.AIR.defaultBlockState());
         level.setBlockAndUpdate(dock.below(),
                 AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.UP));
@@ -343,9 +464,8 @@ public final class DisplayVisualScenario implements VisualScenario {
     private static void buildDisplays(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        int wallEast = NO_AISLE_BOARD.x0() + SMALL_BOARD_WIDTH + 1;
-        for (BlockPos pos : BlockPos.betweenClosed(dock.offset(-2, 0, WALL_Z - 1),
-                dock.offset(wallEast, BOARD_TOP_Y + 1, WALL_Z - 1)))
+        for (BlockPos pos : BlockPos.betweenClosed(dock.offset(WALL_WEST, 0, WALL_Z - 1),
+                dock.offset(WALL_EAST, BOARD_TOP_Y + 1, WALL_Z - 1)))
             level.setBlockAndUpdate(pos.immutable(), Blocks.POLISHED_ANDESITE.defaultBlockState());
 
         for (Board board : BOARDS)
@@ -366,6 +486,27 @@ public final class DisplayVisualScenario implements VisualScenario {
                 .setValue(WarehouseTerminalBlock.FACING, Direction.SOUTH));
     }
 
+    /**
+     * Names the warehouse's one aisle, by the letter the warehouse itself gave it (M25, issue #15, ADR-038) — never by
+     * a letter this file assumed, which is the one way a naming check can pass while naming the wrong aisle.
+     * <p>
+     * It is the <b>name</b> and not the gesture that the board is about, so the name goes in through the controller's
+     * own setter rather than through a right-click; the click itself is covered by the GameTests, which can assert
+     * what the player was told as well.
+     */
+    private static void nameTheAisle(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server.overworld(), context.origin());
+        char letter = controller.aisleLetter();
+        String stored = controller.setAisleName(letter, AISLE_NAME);
+        if (!stored.equals(AISLE_NAME))
+            throw new VisualTestException("aisle " + letter + " was stored as '" + stored + "' instead of '"
+                    + AISLE_NAME + "'");
+        if (controller.namedAisles().size() != 1)
+            throw new VisualTestException("this warehouse has one aisle and should carry one name, but carries "
+                    + controller.namedAisles());
+        LOGGER.info(PREFIX + "display: aisle {} is now called '{}'", letter, stored);
+    }
+
     /** The terminal on the plaza, far outside every aisle, that makes the small board read "No aisle". */
     private static BlockPos strayTerminal(BlockPos dock) {
         return dock.offset(STRAY_TERMINAL.getX(), STRAY_TERMINAL.getY(), STRAY_TERMINAL.getZ());
@@ -383,6 +524,11 @@ public final class DisplayVisualScenario implements VisualScenario {
 
         // The dock's north face: its top carries the crane's mast, and the rack position beside it is never visited.
         link(level, dock, Direction.NORTH, CRANE_BOARD.controllerPos(dock), WareworksDisplaySources.CRANE_STATUS);
+        // The dock's south face, for its second source (M25, issue #16): one block can drive two boards, and the two
+        // sources are deliberately separate rather than four more lines on "Crane Status", which already fills a
+        // four-row board.
+        link(level, dock, Direction.SOUTH, THROUGHPUT_BOARD.controllerPos(dock),
+                WareworksDisplaySources.CRANE_THROUGHPUT);
         link(level, dock.relative(AISLE.getOpposite()), Direction.UP, AISLE_BOARD.controllerPos(dock),
                 WareworksDisplaySources.AISLE_SUMMARY);
         link(level, layout.rackPos(TERMINAL), Direction.UP, STOCK_BOARD.controllerPos(dock),
@@ -486,6 +632,10 @@ public final class DisplayVisualScenario implements VisualScenario {
         fillInput(server.overworld(), layout(context.origin()).rackPos(INPUT), SECOND_DELIVERY);
     }
 
+    private static void feedGermanDelivery(MinecraftServer server, VisualContext context) {
+        fillInput(server.overworld(), layout(context.origin()).rackPos(INPUT), GERMAN_DELIVERY);
+    }
+
     private static boolean allStored(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
@@ -507,6 +657,10 @@ public final class DisplayVisualScenario implements VisualScenario {
         WarehouseControllerBlockEntity controller = controller(level, dock);
         StockView<ItemKey, RackPosition> stock = controller.stockIndex();
 
+        // The four lines a board of every size shows, and below them the names a player gave the aisles — the one
+        // optional line of this source that this warehouse has anything to say on (M25, issue #15). It is last on
+        // purpose, so a four-row board drops it rather than a number a player asked for, which is why the aisle board
+        // of this wall is a row taller than the others.
         List<String> aisleLines = List.of(
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_AISLE,
                         String.valueOf(controller.aisleLetter()),
@@ -517,7 +671,13 @@ public final class DisplayVisualScenario implements VisualScenario {
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES,
                         WareworksLang.number(stock.distinctKeys())).getString(),
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEMS,
-                        WareworksLang.number(stock.totalItems())).getString());
+                        WareworksLang.number(stock.totalItems())).getString(),
+                // Built with the board's own character count, exactly as the source builds it: the row is bounded by
+                // the width of the target as well as by an entry count (M25 review fix), so an expectation that left
+                // the width out would be a second, kinder rule than the one that runs.
+                WareworksLang.aisleNamesLine(controller.namedAisles(), NetworkGoggleInfo.NAMES_LISTED, BOARD_CHARS)
+                        .getString());
+        List<String> throughputLines = readThroughputLines(level, dock);
 
         ItemKey top = null;
         long topCount = 0L;
@@ -533,8 +693,67 @@ public final class DisplayVisualScenario implements VisualScenario {
         // Kept before this reading replaces it, so the check after the warehouse changed has something to compare with.
         previousItems = expectation.items();
         expectation = new Expectation(aisleLines, stock.distinctKeys(), stock.totalItems(),
-                top == null ? "" : top.getItem().getDescription().getString(), topCount, filtered, "");
+                top == null ? "" : top.getItem().getDescription().getString(), topCount, filtered, "",
+                throughputLines);
         LOGGER.info(PREFIX + "display: the warehouse reads {}", expectation);
+    }
+
+    /**
+     * What the throughput board must carry, read off the dock and <b>pulled in the same server tick</b> (M25, issue
+     * #16).
+     * <p>
+     * The pull is what makes this check possible at all: the window is a <b>rolling</b> minute, so every share moves
+     * while it rolls, and a reading taken a few ticks before or after the board's own pull would differ from it by a
+     * percent or two for no reason a reader could ever see. Reading and pulling together is the same trick
+     * {@link #expectJob} uses on the crane's job.
+     * <p>
+     * Four rows once the window holds a whole minute, and the single {@code Measuring} line before that — a board
+     * cannot carry the "of the last 23 s" caveat the goggles carry, so it says nothing rather than something
+     * misleading. Which of the two is expected comes from the dock's own answer, never from an assumption about how
+     * long the run has taken.
+     */
+    private static List<String> readThroughputLines(ServerLevel level, BlockPos dock) {
+        CraneThroughput measured = crane(level, dock).throughput();
+        linkAt(level, dock.relative(Direction.SOUTH)).updateGatheredData();
+        // This warehouse is one straight aisle, so the machine structurally never yaws: a turn here would be a bug in
+        // the measurement, and the zero it prints instead is exactly what the fixed-row rule is for.
+        if (measured.turnTicks() != 0 || measured.corners() != 0)
+            throw new VisualTestException("the crane of a straight aisle reports " + measured.turnTicks()
+                    + " turning tick(s) and " + measured.corners() + " corner(s): " + measured);
+        if (!measured.isFullMinute())
+            return List.of(
+                    WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_MEASURING).getString());
+        return List.of(
+                WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_TRIPS,
+                        WareworksLang.number(measured.trips())).getString(),
+                WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_ITEMS,
+                        WareworksLang.number(measured.items())).getString(),
+                WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_BUSY,
+                        WareworksLang.percent(measured.busyShare())).getString(),
+                WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_TURNING,
+                        WareworksLang.percent(measured.turnShare())).getString());
+    }
+
+    /** Pulls every link again, so every board rebuilds the text it draws — e.g. after a language switch. */
+    private static void repullEveryLink(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        BranchLayout layout = layout(dock);
+        for (BlockPos source : List.of(dock.relative(Direction.NORTH), dock.relative(Direction.SOUTH),
+                dock.relative(AISLE.getOpposite()).above(), layout.rackPos(TERMINAL).above(),
+                layout.rackPos(OUTPUT).above(), strayTerminal(dock).above()))
+            linkAt(level, source).updateGatheredData();
+    }
+
+    /**
+     * Whether the crane's rolling window holds a whole minute, i.e. whether the throughput board has stopped saying
+     * "Measuring". A board placed in a freshly built world says it for the first 1200 ticks, which is honest and is
+     * asserted at the "resting" moment — but the numbers are what the source is for, so the run waits for them.
+     */
+    private boolean windowIsAFullMinute(MinecraftServer server, VisualContext context) {
+        CraneThroughput measured = crane(server.overworld(), context.origin()).throughput();
+        return measured.isFullMinute()
+                || logUnready("the crane's window holds " + measured.observedSeconds() + " s of a minute");
     }
 
     /**
@@ -561,7 +780,8 @@ public final class DisplayVisualScenario implements VisualScenario {
             throw new VisualTestException("the crane lost its job before it could be read");
         Expectation previous = expectation;
         expectation = new Expectation(previous.aisleLines(), previous.itemTypes(), previous.items(),
-                previous.topName(), previous.topCount(), previous.filtered(), String.join(" | ", lines));
+                previous.topName(), previous.topCount(), previous.filtered(), String.join(" | ", lines),
+                previous.throughputLines());
         LOGGER.info(PREFIX + "display: the crane reports {}", lines);
     }
 
@@ -592,11 +812,33 @@ public final class DisplayVisualScenario implements VisualScenario {
         assertLine(boardLines(context, NO_AISLE_BOARD).getFirst(),
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_NO_AISLE).getString(),
                 "the board of the terminal without an aisle");
+        checkThroughput(context);
 
         for (Board board : BOARDS)
             checkFits(context, board);
-        LOGGER.info(PREFIX + "display: aisle {} | stock {} | crane {} | nixie '{}'", aisle, stock,
-                boardLines(context, CRANE_BOARD), nixieText(context));
+        LOGGER.info(PREFIX + "display: aisle {} | stock {} | crane {} | throughput {} | nixie '{}'", aisle, stock,
+                boardLines(context, CRANE_BOARD), boardLines(context, THROUGHPUT_BOARD), nixieText(context));
+    }
+
+    /**
+     * The throughput board against the dock's own reading of the same server tick (M25, issue #16).
+     * <p>
+     * Its two rules are deliberately the opposite of the goggle lines' and both are asserted here. <b>The rows are
+     * fixed and a zero is printed</b> — {@code Turning: 0 %} on this straight aisle, which is the whole reason the
+     * rule exists: a row that came and went with its value would move the three below it and push one off a four-row
+     * board. And <b>while the window is short the board says one word</b> and no numbers, because a number about
+     * twenty seconds shown as if it were about a minute is the one thing this source must not do.
+     */
+    private void checkThroughput(VisualContext context) {
+        List<String> expected = expectation.throughputLines();
+        List<String> shown = boardLines(context, THROUGHPUT_BOARD);
+        for (int i = 0; i < shown.size(); i++) {
+            String want = i < expected.size() ? expected.get(i) : "";
+            assertLine(shown.get(i).trim(), want.trim(), "throughput board line " + i);
+        }
+        if (!expected.isEmpty() && expected.size() != 1 && expected.size() != ROWS_WITH_NUMBERS)
+            throw new VisualTestException("the throughput source writes either one line or " + ROWS_WITH_NUMBERS
+                    + " of them, never " + expected.size() + ": " + expected);
     }
 
     /** The crane status board, checked against the job the server read a moment ago. */
@@ -812,11 +1054,12 @@ public final class DisplayVisualScenario implements VisualScenario {
     }
 
     /**
-     * What the displays must carry: the four aisle summary lines, the numbers behind them, the first stock list row, the
-     * output's filtered total and — while a job runs — the crane status lines, joined for the log.
+     * What the displays must carry: the aisle summary lines (the four core ones and the names line below them), the
+     * numbers behind them, the first stock list row, the output's filtered total, — while a job runs — the crane
+     * status lines, joined for the log, and the rows of the throughput board.
      */
     private record Expectation(List<String> aisleLines, int itemTypes, long items, String topName, long topCount,
-            String filtered, String craneLines) {
-        static final Expectation EMPTY = new Expectation(List.of(), 0, 0L, "", 0L, "", "");
+            String filtered, String craneLines, List<String> throughputLines) {
+        static final Expectation EMPTY = new Expectation(List.of(), 0, 0L, "", 0L, "", "", List.of());
     }
 }

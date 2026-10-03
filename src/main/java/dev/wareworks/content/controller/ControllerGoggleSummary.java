@@ -4,6 +4,7 @@ import java.util.Optional;
 
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.warehouse.AisleName;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 
@@ -55,11 +56,20 @@ import net.minecraft.nbt.Tag;
  *                          {@link ChunkKeepReason#isHolding()}, and how many the aisle's footprint would need while it
  *                          is refused. A single number rather than two, so the tag stays as bounded as the record's
  *                          contract requires
+ * @param aisleName         the name a player gave the aisle at the <b>dock</b> — the whole warehouse of every build
+ *                          that never bends (M25, issue #15, ADR-038). Empty, and absent from the synced tag, for
+ *                          every warehouse nobody named. It cannot ride {@link #network}, whose {@code of()} is empty
+ *                          for a warehouse that neither bends nor stops short, which is where a name matters most
  * @param network           the rail network the warehouse is made of, when it has anything beyond a clean straight
  *                          aisle to say about it (M21, issue #1, ADR-033): more than one aisle, or a discovery that
  *                          stopped short. Empty — and absent from the synced tag — for every warehouse that never
  *                          bends, which is every warehouse built before M21 ({@link NetworkGoggleInfo})
- * @param crane             the linked crane's goggle data (empty without a loaded, linked dock)
+ * @param crane             the linked crane's goggle data (empty without a loaded, linked dock), including — since
+ *                          M25 (issue #16, ADR-039) — what the machine got done in the rolling minute behind it, which
+ *                          {@code WarehouseControllerBlockEntity#createSummary} merges in fresh. It rides inside
+ *                          {@link CraneGoggleInfo} and is deliberately <b>not</b> a field of its own here: this record
+ *                          already carries the crane, so the measurement cost no new component in a 25-component
+ *                          record whose own note below explains why that matters
  * @param lastPlanReason    why the last planning run created no job (empty if it created one or never ran)
  */
 public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, int mastHeight, int storageLocations,
@@ -69,6 +79,7 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                                       int misaligned, int itemTypes, long totalItems, int openRequests,
                                       int productionOrders, int stockRules, int rulesBelowMinimum, int rulesAtMaximum,
                                       int rulesPaused, ChunkKeepReason chunkKeepReason, int chunkKeepChunks,
+                                      Optional<String> aisleName,
                                       Optional<NetworkGoggleInfo> network,
                                       Optional<CraneGoggleInfo> crane,
                                       Optional<NoJobReason> lastPlanReason) {
@@ -94,6 +105,7 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
     private static final String CHUNK_KEEP = "ChunkKeep";
     private static final String CHUNK_KEEP_CHUNKS = "ChunkKeepChunks";
     private static final String MISALIGNED = "Misaligned";
+    private static final String AISLE_NAME = "AisleName";
     private static final String ITEM_TYPES = "ItemTypes";
     private static final String TOTAL_ITEMS = "TotalItems";
     private static final String OPEN_REQUESTS = "OpenRequests";
@@ -126,6 +138,10 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         if (chunkKeepReason == null)
             chunkKeepReason = ChunkKeepReason.NONE;
         chunkKeepChunks = Math.max(0, chunkKeepChunks);
+        // Re-sanitised here and not only where it is stored, so a malformed packet or a hand-edited tag can never put
+        // a name on a goggle line that the spelling rule would not allow (M25). A blank name is "no name".
+        aisleName = aisleName == null ? Optional.<String>empty()
+                : aisleName.map(AisleName::sanitize).filter(name -> !name.isEmpty());
         if (network == null)
             network = Optional.empty();
         if (crane == null)
@@ -153,20 +169,21 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes,
                 totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused,
-                ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty(), Optional.empty());
+                ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     /**
      * This summary without crane data and planning result (the counts only, filtered locations included). The chunk
      * loading state is kept: it is a property of the aisle, not of the crane, and it reads {@link ChunkKeepReason#NONE}
      * for every aisle while the feature is off. The network is kept for the same reason — it is the shape of the rails,
-     * not of the machine — and is empty for every warehouse that does not bend.
+     * not of the machine — and is empty for every warehouse that does not bend. So is the aisle's name, which is a
+     * label a player wrote on the warehouse.
      */
     public ControllerGoggleSummary withoutCrane() {
         return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes, totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum,
-                rulesPaused, chunkKeepReason, chunkKeepChunks, network, Optional.empty(), Optional.empty());
+                rulesPaused, chunkKeepReason, chunkKeepChunks, aisleName, network, Optional.empty(), Optional.empty());
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -216,6 +233,9 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
             tag.putString(CHUNK_KEEP, chunkKeepReason.name());
             tag.putInt(CHUNK_KEEP_CHUNKS, chunkKeepChunks);
         }
+        // Left out while nobody has named the aisle at the dock, which is every warehouse built before M25 (issue #15).
+        // A missing key reads back as "no name", and this tag is part of every chunk packet.
+        aisleName.ifPresent(name -> tag.putString(AISLE_NAME, name));
         // Left out entirely for a warehouse of one aisle whose rails simply end (M21, issue #1): that is every
         // warehouse built before M21, and its packet must not grow by a single byte for a feature it does not use.
         network.ifPresent(info -> {
@@ -246,7 +266,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 tag.getLong(TOTAL_ITEMS), tag.getInt(OPEN_REQUESTS), tag.getInt(PRODUCTION_ORDERS),
                 tag.getInt(STOCK_RULES), tag.getInt(RULES_BELOW_MINIMUM), tag.getInt(RULES_AT_MAXIMUM),
                 tag.getInt(RULES_PAUSED), ChunkKeepReason.byName(tag.getString(CHUNK_KEEP)),
-                tag.getInt(CHUNK_KEEP_CHUNKS), network, crane, reasonByName(tag.getString(LAST_PLAN)));
+                tag.getInt(CHUNK_KEEP_CHUNKS), Optional.of(tag.getString(AISLE_NAME)), network, crane,
+                reasonByName(tag.getString(LAST_PLAN)));
     }
 
     private static Optional<NoJobReason> reasonByName(String name) {

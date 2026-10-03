@@ -54,16 +54,25 @@ public final class CraneStateMachine<K, L> {
     /**
      * Result of one transition.
      *
-     * @param state   the new state
-     * @param effects effects to execute in order (unmodifiable)
-     * @param changed whether the state changed or effects were produced; false for events that do not apply
-     * @param <K>     item key type
-     * @param <L>     location type
+     * @param state             the new state
+     * @param effects           effects to execute in order (unmodifiable)
+     * @param changed           whether the state changed or effects were produced; false for events that do not apply
+     * @param quarterTurnsSwung quarter turns the motion of this transition really spent, as a magnitude and 0 for
+     *                          every event that moves nothing (M25, issue #16). It is reported here rather than
+     *                          derived from the two poses by the caller, because only {@link #move} holds the route a
+     *                          tick was stepped with — and a tick's budget can cross several legs, where the shortest
+     *                          arc between the end poses is not the swing that was spent
+     *                          ({@link CraneMotion#quarterTurnsSwung}). Measured, never saved and never synced
+     * @param <K>               item key type
+     * @param <L>               location type
      */
-    public record Transition<K, L>(CraneState<K, L> state, List<CraneEffect<K, L>> effects, boolean changed) {
+    public record Transition<K, L>(CraneState<K, L> state, List<CraneEffect<K, L>> effects, boolean changed,
+            double quarterTurnsSwung) {
         public Transition {
             Objects.requireNonNull(state, "state");
             effects = List.copyOf(effects);
+            if (!Double.isFinite(quarterTurnsSwung) || quarterTurnsSwung < 0.0)
+                throw new IllegalArgumentException("quarterTurnsSwung must be a finite magnitude: " + quarterTurnsSwung);
         }
     }
 
@@ -114,8 +123,11 @@ public final class CraneStateMachine<K, L> {
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(event, "event");
         List<CraneEffect<K, L>> effects = new ArrayList<>();
+        // One cell, written only by move() and only for a tick: the swing the motion really spent, which the two end
+        // poses cannot tell the caller on a route with more than one leg per tick (see Transition#quarterTurnsSwung).
+        double[] swung = new double[1];
         CraneState<K, L> next = switch (event) {
-            case CraneEvent.Tick<K, L> tick -> tick(state, tick.speeds(), effects);
+            case CraneEvent.Tick<K, L> tick -> tick(state, tick.speeds(), effects, swung);
             case CraneEvent.JobAssigned<K, L> assigned -> assign(state, assigned.job(), effects);
             case CraneEvent.PickResult<K, L> result -> picked(state, result.picked(), effects);
             case CraneEvent.DropResult<K, L> result -> dropped(state, result.delivered(), result.leftover(), effects);
@@ -127,7 +139,7 @@ public final class CraneStateMachine<K, L> {
             case CraneEvent.Paused<K, L> ignored -> state.withPaused(true);
             case CraneEvent.Resumed<K, L> ignored -> state.withPaused(false);
         };
-        return new Transition<>(next, effects, !next.equals(state) || !effects.isEmpty());
+        return new Transition<>(next, effects, !next.equals(state) || !effects.isEmpty(), swung[0]);
     }
 
     /**
@@ -141,26 +153,29 @@ public final class CraneStateMachine<K, L> {
         Objects.requireNonNull(state, "state");
         List<CraneEffect<K, L>> effects = new ArrayList<>();
         CraneState<K, L> next = sanitize(state, effects);
-        return new Transition<>(next, effects, !next.equals(state) || !effects.isEmpty());
+        // Sanitising a loaded state moves no machine: it repairs a phase and recomputes a target pose, and the window
+        // must not credit a swing to a tick that never ran (the same rule CraneExecution#resuming applies to trips).
+        return new Transition<>(next, effects, !next.equals(state) || !effects.isEmpty(), 0.0);
     }
 
     // --- events --------------------------------------------------------------------------------------------------
 
-    private CraneState<K, L> tick(CraneState<K, L> state, CraneSpeeds speeds, List<CraneEffect<K, L>> effects) {
+    private CraneState<K, L> tick(CraneState<K, L> state, CraneSpeeds speeds, List<CraneEffect<K, L>> effects,
+            double[] swung) {
         CraneState<K, L> s = state.withPreviousPose(state.pose());
         if (s.paused() || speeds.isStopped())
             return s;
         return switch (s.phase()) {
-            case IDLE -> move(s, speeds);
+            case IDLE -> move(s, speeds, swung);
             case COMPLETE -> enter(s, CranePhase.IDLE, effects);
             case TRAVEL_TO_SOURCE, EXTEND_SOURCE, RETRACT_SOURCE, TRAVEL_TO_TARGET, EXTEND_TARGET, RETRACT_TARGET -> {
-                CraneState<K, L> moved = move(s, speeds);
+                CraneState<K, L> moved = move(s, speeds, swung);
                 yield CraneMotion.isAt(moved.pose(), moved.target()) ? motionComplete(moved, effects) : moved;
             }
             case PICK, DROP -> transferTick(s, effects);
             case REROUTE -> enter(s, CranePhase.HOLDING, effects); // the reroute request was not answered
             case HOLDING, WAITING_FOR_TARGET -> {
-                CraneState<K, L> moved = move(s, speeds);
+                CraneState<K, L> moved = move(s, speeds, swung);
                 int left = moved.retryTicks() - 1;
                 if (left > 0)
                     yield moved.withRetryTicks(left);
@@ -174,14 +189,19 @@ public final class CraneStateMachine<K, L> {
      * One motion tick along the route the network answers right now. A crane that stays on its own branch needs no
      * route at all — {@link CraneMotion} then drives it straight at the target and turns it towards the target's own
      * yaw — which is why a warehouse of one aisle never asks the network a question.
+     * <p>
+     * This is also the only place that can say how far the machine really <b>swung</b> in the tick, because it is the
+     * only place that holds the route, so it adds that to {@code swung} for {@link Transition#quarterTurnsSwung()} —
+     * with the route it already asked for, never a second query.
      */
-    private CraneState<K, L> move(CraneState<K, L> s, CraneSpeeds speeds) {
+    private CraneState<K, L> move(CraneState<K, L> s, CraneSpeeds speeds, double[] swung) {
         CranePose pose = s.pose();
         CranePose target = s.target();
-        if (pose.branch() == target.branch())
-            return CraneMotion.step(s, speeds, null, network.turnPenaltyBlocks());
-        CraneRoute route = network.route(pose.branch(), pose.x(), target.branch(), target.x()).orElse(null);
-        return CraneMotion.step(s, speeds, route, network.turnPenaltyBlocks());
+        CraneRoute route = pose.branch() == target.branch() ? null
+                : network.route(pose.branch(), pose.x(), target.branch(), target.x()).orElse(null);
+        CraneState<K, L> moved = CraneMotion.step(s, speeds, route, network.turnPenaltyBlocks());
+        swung[0] += CraneMotion.quarterTurnsSwung(pose, moved.pose(), route);
+        return moved;
     }
 
     private CraneState<K, L> transferTick(CraneState<K, L> s, List<CraneEffect<K, L>> effects) {

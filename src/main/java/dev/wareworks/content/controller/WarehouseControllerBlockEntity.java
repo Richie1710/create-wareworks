@@ -1,6 +1,7 @@
 package dev.wareworks.content.controller;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -11,6 +12,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.function.Function;
@@ -94,6 +97,8 @@ import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.warehouse.AisleMembership;
+import dev.wareworks.core.warehouse.AisleName;
+import dev.wareworks.core.warehouse.AisleNames;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.MembershipChanges;
@@ -296,6 +301,26 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private WarehouseLayout layout;
     /** The aisle letters and origin ends pinned to the lines of rails ({@link BranchTable}). Saved with the network. */
     private final BranchTable branchTable = new BranchTable();
+    /**
+     * The names a player has given this warehouse's aisles (M25, issue #15, ADR-038). Saved in its own top-level tag
+     * ({@link ControllerPersistence#NAMES_TAG}).
+     * <p>
+     * <b>Written on a player's click and never otherwise.</b> There is no tick path, no derivation and no scan: a
+     * naming click calls {@link #setAisleName} or {@link #clearAisleName}, which saves and syncs once, and a changed
+     * aisle letter carries the name with it ({@link #onAisleLetterChanged}). That is the whole write surface, which is
+     * also why a label does not flicker when a chunk unloads or a dock is rebuilt — the names outlive the warehouse
+     * they decorate and are lost only with the controller itself.
+     */
+    private final AisleNames names = new AisleNames();
+    /**
+     * The aisle letter the value box carried before the change being handled, so {@link #onAisleLetterChanged} can
+     * move a name off it <b>whether or not this controller has a warehouse right now</b> (M25 review fix).
+     * <p>
+     * Not saved, and it does not have to be: the value box's own value is, and this is read back from it in
+     * {@link #read}. {@code ScrollValueBehaviour#read} assigns its field directly without the callback, so a load can
+     * never be mistaken for a scroll.
+     */
+    private char carriedAisleLetter = StorageAddress.FIRST_AISLE;
     private ControllerStatus status = ControllerStatus.NO_DOCK;
 
     // --- server only, not saved ---
@@ -489,6 +514,92 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** The aisle letter of the value box. */
     public char aisleLetter() {
         return aisleLetter == null ? StorageAddress.FIRST_AISLE : aisleLetter.letter();
+    }
+
+    /** The name a player gave the aisle with this letter (M25, issue #15); empty when it has none. Server. */
+    public Optional<String> aisleName(char aisle) {
+        return names.nameOf(aisle);
+    }
+
+    /** Every named aisle of this warehouse, in letter order; an unmodifiable snapshot. Server. */
+    public SortedMap<Character, String> aisleNames() {
+        return names.entries();
+    }
+
+    /** Whether no aisle of this warehouse has a name — the case every surface has to cost nothing for. Server. */
+    public boolean hasNoAisleNames() {
+        return names.isEmpty();
+    }
+
+    /**
+     * The names of the aisles this warehouse <b>really has</b>, in letter order; what the display board shows
+     * (M25, issue #15, ADR-038). Empty without a warehouse. Server.
+     * <p>
+     * Filtered by the warehouse's own letters, unlike {@link #aisleNames()}, which is the whole saved table. A name
+     * can outlive the aisle it was given to — an aisle torn down leaves its label behind on purpose, so that rebuilding
+     * it brings the label back — and a board is a surface that names rows of <i>this</i> warehouse, so a label with no
+     * aisle behind it must not stand on one. The controller's goggles filter it the same way for free, because they
+     * list the aisles themselves and read the name per aisle.
+     */
+    public SortedMap<Character, String> namedAisles() {
+        if (names.isEmpty())
+            return Collections.emptySortedMap();
+        WarehouseLayout shown = layout;
+        if (shown == null)
+            return Collections.emptySortedMap();
+        SortedMap<Character, String> named = new TreeMap<>();
+        String letters = shown.branchLetters();
+        for (int aisle = 0; aisle < letters.length(); aisle++) {
+            char letter = letters.charAt(aisle);
+            names.nameOf(letter).ifPresent(name -> named.put(letter, name));
+        }
+        return Collections.unmodifiableSortedMap(named);
+    }
+
+    /**
+     * Names the aisle with this letter, as a player's click does ({@link AisleNaming}): {@code raw} goes through
+     * {@link AisleName#sanitize}, and a text that sanitises to blank clears the name rather than storing an invisible
+     * one. Saves and syncs once, and only when something really changed.
+     *
+     * @return the name as it is now stored, or {@link AisleName#NONE} when the aisle ends up unnamed
+     */
+    public String setAisleName(char aisle, @Nullable String raw) {
+        String name = AisleName.sanitize(raw);
+        if (names.nameOf(aisle).orElse(AisleName.NONE).equals(name))
+            return name;
+        if (!names.set(aisle, name))
+            return AisleName.NONE; // not an aisle letter: nothing to name
+        nameChanged();
+        return name;
+    }
+
+    /**
+     * Takes the name off the aisle with this letter.
+     *
+     * @return whether there was a name to take off, so a caller can leave an already-unnamed aisle unmentioned
+     */
+    public boolean clearAisleName(char aisle) {
+        if (!names.clear(aisle))
+            return false;
+        nameChanged();
+        return true;
+    }
+
+    /**
+     * The one write path of the name table: save it and let the clients that draw it know.
+     * <p>
+     * The goggle summary is <b>rebuilt here</b>, not only in {@link #onGoggleObserved()}. That method is the only
+     * other place that calls {@link #createSummary()}, so without this the packet a naming click sends would carry
+     * the summary from the last time somebody looked at the block — and the new line would wait for the next look
+     * instead of appearing on the click that caused it. It costs a handful of field reads, once per player click
+     * (ADR-026), and it is what makes a name visible at the moment a player gives it, including on a controller a
+     * player is looking at while naming an aisle through one of its interfaces.
+     */
+    private void nameChanged() {
+        setChanged();
+        if (level != null && !level.isClientSide && !isVirtual() && !isRemoved())
+            summary = createSummary();
+        sendData();
     }
 
     public ControllerStatus status() {
@@ -4718,9 +4829,34 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     private void onAisleLetterChanged(int index) {
-        if (level == null || level.isClientSide || layout == null)
+        if (level == null || level.isClientSide)
             return;
-        applyLayout(layout.withLetter(AisleLetterBehaviour.letterOf(index)));
+        char letter = AisleLetterBehaviour.letterOf(index);
+        char before = carriedAisleLetter;
+        carriedAisleLetter = letter;
+        // The name follows the letter it was given to (M25, issue #15), and it does so BEFORE the layout is looked at
+        // (M25 review fix). The names deliberately outlive a dock that was lost, moved or turned, and the value box
+        // deliberately still scrolls then - so "no layout" is a state in which a letter really does move and a name
+        // really has to move with it. Returning early left the name on the old letter, and because the rename is a
+        // swap, scrolling back then moved it onto the letter the warehouse had just taken: a state no further scroll
+        // could repair.
+        //
+        // The old letter comes from this controller's own field rather than from the layout, for the same reason:
+        // without a layout there is no letter to read there. ScrollValueBehaviour#setValue has already written its
+        // own field by the time it calls this back, which is why the previous value cannot be read off the box.
+        //
+        // It is a SWAP, not an overwrite, because scrolling the box is reversible and the table's answer to it has to
+        // be too: scrolling back restores exactly what was there. It also mirrors what the next re-link does to the
+        // letters themselves - BranchTable#assign gives branch 0 this box's letter and moves the branch that held it
+        // to the lowest free one - so each name stays with the aisle the player gave it to.
+        if (before != letter && !names.isEmpty()) {
+            names.rename(before, letter);
+            // setChanged() and sendData() once, so the moved name is saved and drawn. applyLayout does both for a
+            // warehouse that has one; without a layout nothing else would.
+            nameChanged();
+        }
+        if (layout != null)
+            applyLayout(layout.withLetter(letter));
     }
 
     // --- lifecycle -----------------------------------------------------------------------------------------------
@@ -4791,12 +4927,26 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private static final int GOGGLE_AISLES_LISTED = 6;
 
-    /** One {@code "letter length"} entry per aisle, in aisle order, for {@link WareworksLang#networkAisles}. */
-    private static List<String> aisleEntries(NetworkGoggleInfo network) {
+    /**
+     * One {@code "letter length"} entry per aisle, in aisle order, for {@link WareworksLang#networkAisles} — and
+     * {@code "letter name"} for an aisle a player has named (M25, issue #15, ADR-038).
+     * <p>
+     * The name <b>replaces</b> the length rather than being added to it. The warehouse's total rails are already on
+     * the line above ({@link WareworksLang#networkSize}), the line's own budget is six entries ("six letters and six
+     * numbers is about as much as one line carries"), and a length is what a player stops caring about once the aisle
+     * has a name: "Aisles: A Ores, B Metals, C 14" is one line a player reads at a glance, while
+     * "A Ores 16, B Metals 14, C 14" is not.
+     * <p>
+     * Public so that the tests which assert this line build it from the one implementation instead of a copy of it:
+     * a second copy of the rule is a second rule ({@code CombVisualScenario}).
+     */
+    public static List<String> aisleEntries(NetworkGoggleInfo network) {
         List<String> entries = new ArrayList<>(network.aisleCount());
-        for (int aisle = 0; aisle < network.aisleCount(); aisle++)
-            entries.add(network.letterOf(aisle).map(String::valueOf).orElse("?") + " "
-                    + network.aisleLengths().get(aisle));
+        for (int aisle = 0; aisle < network.aisleCount(); aisle++) {
+            String letter = network.letterOf(aisle).map(String::valueOf).orElse("?");
+            String length = String.valueOf(network.aisleLengths().get(aisle));
+            entries.add(letter + " " + network.nameOf(aisle).orElse(length));
+        }
         return entries;
     }
 
@@ -4822,8 +4972,15 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 collectingPortCount(), membership.productionCount(),
                 membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
                 productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
-                chunkKeepReason, chunkKeepChunks, networkInfo(),
-                linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), dispatch.lastReason());
+                chunkKeepReason, chunkKeepChunks, aisleName(aisleLetter()), networkInfo(),
+                // A fresh throughput snapshot on top of the dock's cached record (M25, issue #16, ADR-039). The dock
+                // keeps its published goggle data free of the measurement on purpose — it publishes several times a
+                // second while the crane works, and a line that came and went that often would flicker for ever — so
+                // the number has to be merged in where it is really wanted. Here that is safe and exact, because this
+                // method runs in exactly two places, neither of them a tick: an observation (throttled to one packet a
+                // second) and a naming click.
+                linkedDockEntity().map(dock -> dock.goggleInfo().withThroughput(dock.throughput())),
+                dispatch.lastReason());
     }
 
     /**
@@ -4844,14 +5001,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (shown == null)
             return Optional.empty();
         return linkedDockEntity().flatMap(StackerCraneBlockEntity::discoveredNetwork)
-                .flatMap(network -> NetworkGoggleInfo.of(network, shown.branchLetters()));
+                .flatMap(network -> NetworkGoggleInfo.of(network, shown.branchLetters(), names));
     }
 
     @Override
     public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
         ControllerGoggleSummary shown = summary;
         WareworksLang.translate(WareworksLang.GOGGLES_WAREHOUSE_CONTROLLER).forGoggles(tooltip);
-        WareworksLang.warehouseLetter(aisleLetter()).forGoggles(tooltip, 1);
+        // "Warehouse A", and "Warehouse A — Ores" once the aisle at the dock has a name (M25, issue #15, ADR-038).
+        // The name travels in the synced summary, never read off the server's table, because this runs on the client.
+        WareworksLang.warehouseLetter(aisleLetter(), shown.aisleName()).forGoggles(tooltip, 1);
         switch (shown.status()) {
             case READY -> WareworksLang.translate(WareworksLang.GOGGLES_STATUS_READY).style(ChatFormatting.GREEN)
                     .forGoggles(tooltip, 1);
@@ -4942,10 +5101,45 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             chunkKeepLine(shown).forGoggles(tooltip, 1);
         shown.crane().ifPresent(crane -> {
             WareworksLang.translate(WareworksLang.GOGGLES_STACKER_CRANE).style(ChatFormatting.GRAY).forGoggles(tooltip, 1);
+            // The short form, which is what the throughput adds here: the busy headline and, above zero, the blocked
+            // share — the two numbers a player came to this block for ("is the crane my bottleneck, and is anything
+            // holding it"). The breakdown and the trip counts stay on the dock (M25, issue #16, ADR-039). This
+            // tooltip is already 14 lines for an ordinary working warehouse and about 28 for a built-out one, so two
+            // is what it can afford, and not showing the held items keeps it to two.
             crane.addGoggleLines(tooltip, 2, false);
         });
         shown.lastPlanReason().ifPresent(reason -> WareworksLang.lastPlan(reason).forGoggles(tooltip, 1));
+        // What a player has to do to see a name here at all (M25, issue #15, ADR-038). It is the last line of the
+        // tooltip and dark grey, so it never pushes a number anybody asked for out of the way.
+        if (showsNamingHint(shown))
+            WareworksLang.translate(WareworksLang.GOGGLES_AISLE_NAME_HINT).style(ChatFormatting.DARK_GRAY)
+                    .forGoggles(tooltip, 1);
         return true;
+    }
+
+    /**
+     * Whether the controller's goggles teach the naming gesture (M25, issue #15, ADR-038): only while <b>no name is
+     * visible on them at all</b>, so it teaches until this tooltip can show a name of its own.
+     * <p>
+     * The gate is deliberately "nothing on this tooltip carries a name" and not "the warehouse has no name anywhere".
+     * The two synced carriers are the whole truth a client has; a stale name left on a letter this warehouse has no
+     * aisle for any more would be invisible either way, so hiding the hint for it would hide it for nothing; and the
+     * alternative is a third synced value that exists only to suppress a hint.
+     * <p>
+     * <b>Where the two readings really differ, said plainly</b> (M25 review fix), because the words elsewhere used to
+     * promise more than this: {@link ControllerGoggleSummary#aisleName()} is the <b>dock</b> aisle's name only, and
+     * {@link NetworkGoggleInfo#names} lists {@value NetworkGoggleInfo#NAMES_LISTED} aisles. So on a warehouse of more
+     * than six aisles whose only named aisle is the seventh or later, this keeps returning {@code true} while the
+     * name is saved, drawn on that aisle's members' address lines and drawn on the display board's names row. A hint
+     * that outstays its welcome, not a wrong number — and the price of exactness is a 26th component on a record
+     * whose own javadoc warns that an added argument silently shifts every count after it.
+     * <p>
+     * Its own method so that the rule has exactly one implementation: the tooltip draws it and
+     * {@code gametest.WarehouseControllerGameTests#aisleNameSurfaces} asserts it, on a dedicated server where a goggle
+     * line cannot be built at all ({@code LangBuilder#forGoggles} measures the client font).
+     */
+    public static boolean showsNamingHint(ControllerGoggleSummary shown) {
+        return shown.aisleName().isEmpty() && shown.network().filter(NetworkGoggleInfo::hasNames).isEmpty();
     }
 
     /**
@@ -4981,6 +5175,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         ControllerPersistence.writeLayout(tag, layout);
         // Only a warehouse that really bends writes anything here, so a straight aisle saves the bytes it always did.
         ControllerPersistence.writeNetwork(tag, layout, branchTable);
+        // And only a warehouse somebody has named writes anything here, so a world from 0.7.0 saves byte for byte what
+        // it did before the names existed (M25, issue #15).
+        ControllerPersistence.writeNames(tag, names);
         ControllerPersistence.writeLocations(tag, membership, stock.readOnlyView(), registries);
         ControllerPersistence.writeRequests(tag, requests.requests(), worldPosition, registries);
         ControllerPersistence.writeProductionOrders(tag, productionOrders.all(), registries);
@@ -5037,10 +5234,18 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         super.read(tag, registries, clientPacket);
         aisleLetter.value = Mth.clamp(aisleLetter.value, AisleLetterBehaviour.FIRST_INDEX, AisleLetterBehaviour.LAST_INDEX);
+        // The letter a name has to be carried off when the box is next scrolled (M25). Read back from the box, which
+        // is saved, so no second value goes into the save file.
+        carriedAisleLetter = aisleLetter();
         if (clientPacket) {
             summary = ControllerGoggleSummary.read(tag.getCompound(SUMMARY_TAG));
             return;
         }
+        // Read unconditionally, and deliberately NOT gated on the layout the way the records, requests and orders
+        // below are: names are labels a player wrote, not state derived from the rails, so they survive a dock that
+        // was lost, moved or turned exactly as they survive a chunk unload (M25, issue #15). Rebuild the dock and the
+        // labels are back. Only breaking the controller takes them away, with everything else it knows.
+        names.copyFrom(ControllerPersistence.readNames(tag));
         Direction facing = facing();
         // Records are warehouse-local: a layout saved for another direction (e.g. a rotated structure) is dropped.
         layout = ControllerPersistence.readLayout(tag)

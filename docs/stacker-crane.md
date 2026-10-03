@@ -375,3 +375,100 @@ Classes: `core.crane.CraneSoundCues` (pure Java: when a cue plays; JUnit `CraneS
 * **Hooks**: `CraneExecution#tick` passes the pose before and after the tick; `performPick` / `performDrop` pass the real amounts; the dock's `onPhaseChanged(from, to)` hook (the state is already the new one) plays the arm cues. Ponder and virtual block entities never run `CraneExecution`, so they stay silent.
 * **Deviation: no client-side loop.** A looping moving sound would need a client `TickableSoundInstance` that follows the synced pose and stops on unload; short server cues cover start, motion, arm and transfers without client code, and the kinetic hum at the dock still comes from Create's `KineticBlockEntity#tickAudio`.
 * **Verification**: `CraneSoundCuesTest` (10 tests: silence while idle and paused, start once and stop at the target, start rate limit, clacks at joints with rate limit, lift every half level both ways, volume by speed, arm cues only when the arm moves, transfers only for real amounts, validation). The `aisle` visual smoke test counts every sound the client starts to play (`PlaySoundEvent`, before the volume check, so the muted test client counts too) and fails unless all eight crane events were heard. **M4 review fix:** the server-side wiring is also covered by GameTests in `gametest.CraneSoundGameTests`, which record NeoForge's `PlayLevelSoundEvent.AtPosition` (fired by `ServerLevel#playSeededSound`) inside the test area. `cranesoundsfollowthejob` runs a store job paused by losing rotation mid-travel: exactly one pick sound at the input and one drop sound at the storage location, two arm extend and two retract sounds, one travel start and one stop (no new start after the pause), rail clacks, no lift sound on level 0, and not a single sound during the 40 paused ticks. `cranezeropickissilent` checks that the arm sounds play at an emptied source but the zero pick plays no pick or drop sound. Before, only the pure cue logic and the dev-only visual test covered sounds, so a broken hook (sounds played on the client, `onPhaseChanged` not calling them, a paused crane or a zero pick making noise) would have passed `build` and `runGameTestServer`.
+
+## 9. What the machine got done (M25, issue #16)
+
+A crane that looks busy and a crane that *is* busy are hard to tell apart by watching it, so the dock measures itself: a **rolling minute** of what the machine was doing, shown on its own goggles. Design in **ADR-039**.
+
+### 9.1 Six buckets, and why each is drawn where it is
+`core.crane.CraneActivity` classifies **every** server tick into exactly one of six mutually exclusive buckets, in a fixed precedence. The six therefore always sum to the ticks that were observed, which is the property every share on the tooltip rests on.
+
+| bucket | test | why this line and not another |
+|---|---|---|
+| `PAUSED` | `state.paused()` | the world stopped the machine. The *reason* lives in `content.crane.CranePauseReason` and has its own goggle line, so only the boolean crosses into `core.*` |
+| `IDLE` | no job | **the drive home included**: `HomeReturn.isWaiting` already counts a returning crane as waiting and the `Status:` line already reads *Idle*, so the two surfaces cannot disagree. Counting the return as travel would make a warehouse that parks its crane look busier than one that does not |
+| `TURNING` | the tick swung (the swing measured along the route, §9.2) | a tick that both turned and drove counts **wholly** as turning, the same approximation `CraneSoundCues` already makes when it suppresses the rail clack during a swing (§8). The turning share is therefore an upper bound, at most ~3 ticks per corner at the default speed and penalty (0.25 % of a minute), and it errs on the side that makes corners look expensive |
+| `TRAVELLING` | the tick moved along the rails or lifted | the arm is **not** motion: extending and retracting happen while the machine stands at a rack |
+| `AT_A_STOP` | phase in `EXTEND_SOURCE, PICK, RETRACT_SOURCE, EXTEND_TARGET, DROP, RETRACT_TARGET, COMPLETE` | deliberately the **planner's own** definition of a stop (`core.job.TravelTimeModel#stopTicks`: extend, transfer, retract), so the measured share is comparable with what the planner predicted instead of being a second, private definition |
+| `BLOCKED` | a job, but nothing moved and no stop: `WAITING_FOR_TARGET`, `HOLDING`, `REROUTE`, **and a `TRAVEL_*` tick that covered no ground** | the stranded case. A crane standing still in `TRAVEL_TO_TARGET` because a rail was broken is *not* paused, so without this bucket the machine would read "travelling 100 %" while doing nothing |
+
+The last step is an exhaustive `switch` over `CranePhase` with **no `default`**, so a phase added later is a compile error instead of a tick that quietly counts as blocked.
+
+### 9.2 The window
+`core.crane.ThroughputWindow`: 60 buckets of 20 ticks, one per second, with running sums so `snapshot()` is O(1) however often a watching player asks. `core.crane.CraneThroughput` is that snapshot — ten raw numbers (the six bucket counts, the observed ticks, trips, items, corners), never percentages, so there is one source of truth and every assertion is exact.
+
+* **Never saved.** Game time is contiguous across a restart, so saved buckets would be arithmetically defensible and would still claim a minute of work for a machine that stood still. `CranePersistence` is untouched, so there is no migration and no new byte in any crane save.
+* **A gap contributes nothing, neither idle nor working.** `record` first rolls the ring over every whole second that has elapsed, zeroing each bucket it moves onto and subtracting it from the sums — so a chunk unload shrinks the observed ticks by exactly the ticks that were in the seconds it skipped. Bounded at 60 steps; a gap of a minute or more, and a game time that moves backwards (a `/time set`), clear the ring instead.
+* **The corner count is measured over exactly the ticks the turning share is.** The two are printed as one phrase —
+  "turning 6 % (9 corners)" — so a count taken over a wider set of ticks than the share beside it is a contradiction
+  inside one line. With the precedence above that leaves out one real case: the **drive home** has no job, so it is
+  `IDLE` even while it crosses a corner, and on a bending warehouse — the only kind that prints a turning term at all
+  — it crosses them regularly. "turning 0 % (11 corners)" was the shape of the reading that counted them (M25 review
+  fix).
+* **The swing of a tick is measured leg by leg along its route**, not as the shortest arc between the two end poses.
+  One tick is one budget of `vx` blocks spent along the whole route (§5.2), so with `crane.turnPenaltyBlocks` at or
+  near 0 — a documented instant turn — a tick can finish several legs, and every hand-over is a quarter turn. The arc
+  answers within ±2 quarters, so two corners in opposite directions net **zero** (the tick would not even count as a
+  turn), three in one direction read as one and four read as zero. `CraneMotion#quarterTurnsSwung` walks the legs
+  instead, exactly as `blocksDriven` already does for the wheels and for the same reason, and the state machine
+  reports it from the route it already asked for — never a second route query on the crane's tick path. At the
+  default penalty the two readings are identical, because one quarter turn there already spends a whole tick's budget.
+* **`observedTicks` is the denominator, never a fixed 1200.** A window that has run for ten seconds holds ten seconds of ticks; dividing those by a minute would make every crane read low for the first minute after every chunk load and teach the player the opposite of the truth. The label carries the real length instead — "of the last 23 s" — and **nothing is ever extrapolated**: nine trips in 23 s are never scaled up to a minute.
+* Each of the three working shares is **computed from its own ticks** and none is derived as the remainder of the others, so nothing claims a total of exactly 100 — and the **busy headline is their sum**, so the breakdown really does add up to the number above it. Flooring the whole and each part independently is arithmetically defensible and reads as a contradiction: `floor((a+b+c)/n)` can exceed `floor(a/n) + floor(b/n) + floor(c/n)` by up to two, which is how "Busy: 85 %" came to stand over "Travel 48 % · turning 7 % · at the rack 29 %" in the shipped screenshots. Summing can only ever understate the busy share, never overstate it (M25 review fix). **One state is still short of it, knowingly:** the turning term is printed only on a warehouse that bends *right now*, while the window remembers a minute — so for up to 60 s after a player breaks the last junction of a bending warehouse the headline still contains the turning share while the line under it names travel and the rack only. It resolves itself as the ring rolls; the alternative would show a straight warehouse a term its own shape makes impossible (`CraneThroughput#busyShare`).
+* Memory: 60 × 9 ints, about 2 kB per loaded dock, one dock per warehouse. Quarter turns are accumulated as integer thousandths of a turn, so the running sum stays exact under eviction and a finished corner counts exactly once.
+
+### 9.3 The cost per tick
+One call at the end of `CraneExecution#tick`, where the pose before and the state after are already in scope beside `sounds.afterTick`:
+
+```java
+CraneTickMotion motion = CraneTickMotion.of(before.pose(), after.pose());
+window.record(now, CraneActivity.of(after, motion), motion.quarterTurns());
+```
+
+That is one four-field record, an exhaustive `switch`, two array writes and four adds. No collection, no map lookup, no world access, no block entity lookup, no scan, and nothing published. `CraneTickMotion.of` does the same arithmetic `CraneSoundCues#motion` does on its four method-locals, with the same `EPSILON = 1e-9`; the sound cues are **not** refactored (they are reached through a stateful class on the crane's hot path), and `CraneTickMotionTest` pins a table of pose pairs on which the two readings must agree, so the duplication is held in place by a test instead of by a signature change.
+
+Trips and items are credited where they happen: `window.addTrip()` in the `ReportComplete` arm and `window.addItems(delivered)` in the `ReportDelivered` arm of `CraneExecution#execute`. A tick's effects run before its own classification, so a credit in the first tick of a new second lands on the second before it and is forgotten a second early — under one second of attribution, and not worth per-tick state to remove. **A resume credits nothing**: `CraneStateMachine#resume`'s sanitising can complete a job that was already delivered before the save, and a `resuming` flag around `CraneExecution#resume` keeps that out of the window, so a freshly loaded dock never opens with a trip it did not make.
+
+### 9.4 Who sees it, and when anything goes on the wire
+The numbers ride the dock's existing goggle tag (`CraneGoggleInfo`, one `int[10]`, about 44 accounting bytes) and are **omitted entirely** while the window holds nothing worth showing — which is every parked crane and every dock nobody has looked at. No `WareworksNetwork.VERSION` bump: the version gate guards custom payloads, and a missing update-tag key reads as absent.
+
+The dock is a `GoggleObservers.Observable` with its own `SyncThrottle(20)`. This is the one thing the existing publish path cannot do: a working crane publishes several times a second anyway, but a **parked** crane publishes nothing at all, so without the observer a player would read "Busy: 85 %" off a machine that has stood still for five minutes. `onGoggleObserved()` takes a fresh snapshot, marks a sync pending only if it differs, and sends at most one packet a second. The server's cached `goggleInfo` deliberately does **not** carry the measurement — it is rebuilt several times a second for a working crane, so a measurement rebuilt with it would flicker in and out of the client's copy; it is merged in at write time instead, from one nullable field the observer owns.
+
+The one genuinely new traffic case is a **just-parked, watched** dock: about one packet a second for the minute its window takes to decay to nothing, and then quiet of its own accord.
+
+### 9.5 The lines on the dock
+Four, on the dock, below the held-items block, and hidden entirely while the window is empty — so a parked crane's tooltip is what it was before this feature existed.
+
+```
+  Busy: 78% of the last minute                             Auslastung: 78 % der letzten Minute
+  Blocked: 4%                                              Blockiert: 4 %
+  Travel 54% · turning 6% (9 corners) · at the rack 18%    Fahren 54 % · Drehen 6 % (9 Ecken) · Am Regal 18 %
+  Trips: 9 · items: 412                                    Fahrten: 9 · Gegenstände: 412
+```
+
+(the separator is the middle dot the display sources already use)
+
+* **"Busy"**, not "Working" or "Utilisation": waiting for a target is working on a job and is not busy, and *busy* is the natural complement of the *Idle* the status line already prints.
+* **"Blocked"**, not "Waiting", forced by the lang file rather than by taste: `display_source.crane.idle` has already spent German's *Wartet* on *Idle*, so English follows German and the pair stays 1:1. The line is gold (it is the one share a player is meant to act on) and omitted at zero.
+* The **turning term exists only on a warehouse that bends** (`networkGeometry().branchCount() > 1`, the gate the size line already uses): a straight aisle structurally never yaws, so the term would be a permanent `0 %`. Two lang keys, one with it and one without.
+* The breakdown and the trip counts are `detailed` lines. `CraneGoggleInfo#addGoggleLines` takes that flag, so dropping the dock to two lines later is one argument and no record, packet, lang or test change.
+* Exactly **one** value in the whole mod carries a percent sign: `gui.goggles.percent` = `%1$s%%` (German `%1$s %%`, with the space German typography wants). A literal percent in a lang value is a trap rather than a crash — `TranslatableContents` accepts only `%s` and `%%`, and `decompose()` **catches** the exception a bad template throws and falls back to the raw text, so the player would silently read `Auslastung: %1$s%% der letzten Minute`. `LangConsistencyTest#everyPercentSignIsAFormatMinecraftAccepts` therefore checks **every** key of both lang files, not just this one: that is the shape of mistake nothing else would ever notice.
+
+### 9.6 The other two surfaces
+The same record is read in two more places, and each gets only what it can carry.
+
+**The warehouse controller's goggles: two lines.** Inside the crane block it already shows, below the job and its route:
+
+```
+  Busy: 78% of the last minute                             Auslastung: 78 % der letzten Minute
+  Blocked: 4%                                              Blockiert: 4 %
+```
+
+That tooltip is already 14 lines for an ordinary working warehouse and about 28 for a built-out one, so two is what it can afford — and they are the two a player walked to the controller for ("is the crane my bottleneck, and is anything holding it"). It is the `detailed = false` form of the very same `CraneGoggleInfo#addGoggleLines` the dock calls, so there is no second place that decides what a share means. The number is a **fresh** snapshot merged into the summary in `WarehouseControllerBlockEntity#createSummary`, not the dock's cached `goggleInfo`, which carries no measurement at all (§9.4): that method runs in exactly two places, neither of them a tick — an observation, throttled to one packet a second, and a naming click — so the merge is both safe and exact. `ControllerGoggleSummary` itself gains **no field**: it already carries the crane's record, which is the whole reason the measurement was put there and not on it (ADR-039).
+
+**A Display Link: four rows.** `wareworks:crane_throughput` on the dock, the fifth display source — `warehouse-system.md` §10.1 has its rows, its `Measuring` rule and why it is a second source rather than four more lines on `Crane Status`. It reads `StackerCraneBlockEntity#throughput()` live on the server rather than the synced record, so a board reads the same whether or not anybody is wearing goggles.
+
+### 9.7 Verification
+`ThroughputWindowTest`, `CraneActivityTest` and `CraneTickMotionTest` (53 JUnit cases) pin the arithmetic, the precedence of the six buckets over all 13 phases × 6 motions × paused × hasJob, the ring's rolling, forgetting, gap and clear rules, the warm-up guard (100 ticks of pure work must read 100 %), and the agreement with `CraneSoundCues`. `gametest.CraneThroughputGameTests` pins what needs a world: the buckets adding up over a real store job with one trip and the exact items; a crane that turns at a corner booking turning and corners, and a straight one booking neither; a parked crane booking only idle and paused and therefore showing nothing; the update tag carrying no throughput at all until the dock is observed and exactly the server's record afterwards; and a resumed save crediting no trip. Goggle *lines* cannot be built in a GameTest at all — `LangBuilder#forGoggles` measures `Minecraft.getInstance().font`, which a dedicated server has not got — so `CornerVisualScenario` builds the four dock lines through the real renderer and the real lang files, in **English and then in German**, from crafted numbers whose five shares are all different: it asserts that each line is translated text with the numbers it was given (no `wareworks.…` key, no raw `%1$s` template, no unresolved `%%`), that the corner count is printed only on a warehouse that bends, that the blocked line is left out at zero, and that a window with nothing in it adds no line at all. Since the M25 evidence pass the same scenario also **photographs** the dock's own tooltip and the controller's single line, in both languages, at the end of a minute of real work that really holds corners. That camera was the hard part: the dock's outline is a three-pixel rail bed whose one large face — the top — carries the mast-height value box, which Create's overlay refuses to draw a tooltip over, so `dockView` looks **down on the north strip** of that face and lands its ray 0.12 along it, 0.38 clear of the box's 0.25-radius sphere; `GoggleShots` fails the run with that very message if the clearance is ever lost.
+
+The two surfaces of §9.6 are pinned where they live. `gametest.DisplayLinkGameTests` covers the board: `displaysourcesregistered` holds the dock's two sources **in order** (`Crane Status` first, so no link already hung on a dock changes what it shows), `cranethroughputwhilemeasuring` holds the one-line `Measuring` and `No crane` cases, and `cranethroughputnumbersonboard` fills the window to a whole minute with the crane standing still, runs a real store job on top of it and compares all four rows against the dock's own record. `LangConsistencyTest#theThroughputBoardRowsFitADisplayBoard` holds every one of those rows inside a board row's flap count in **both** languages — German is where a row runs out of flaps first. The controller's two lines come out of the same `addGoggleLines` the dock's do and are covered by the same checks; `WarehouseControllerGameTests#controllerGoggleSummary` keeps its synced summary inside 2048 bytes with the measurement in it.

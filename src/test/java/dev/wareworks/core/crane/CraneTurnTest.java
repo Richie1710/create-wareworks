@@ -45,6 +45,14 @@ class CraneTurnTest {
     private static final NetworkGeometry SPLIT = new NetworkGeometry(List.of(
             BranchGeometry.first(Heading.EAST, 8),
             new BranchGeometry(1, 20, 20, Heading.SOUTH, 5)), 6);
+    /** Four short aisles in a zigzag, so one tick's travel budget can cross three corners at once. */
+    private static final NetworkGeometry ZIGZAG = new NetworkGeometry(List.of(
+            BranchGeometry.first(Heading.EAST, 2),
+            new BranchGeometry(1, 2, 0, Heading.SOUTH, 2),
+            new BranchGeometry(2, 2, 2, Heading.EAST, 2),
+            new BranchGeometry(3, 4, 2, Heading.SOUTH, 2)), 6);
+    /** A shaft fast enough to cross the whole {@link #ZIGZAG} in one tick. */
+    private static final CraneSpeeds FAST = new CraneSpeeds(16.0, 16.0, 16.0);
 
     private static final CraneNetwork NETWORK = CraneNetwork.of(CORNER, PENALTY);
     private static final CraneNetwork BROKEN = CraneNetwork.of(SPLIT, PENALTY);
@@ -363,6 +371,32 @@ class CraneTurnTest {
         double expected = RouteModel.route(CORNER, 0, 5.0, 1, 3.0).orElseThrow().blocks();
         assertEquals(expected, driveOdometer(NETWORK, start, target, 0.0), EPSILON);
         assertEquals(6.0, expected, EPSILON, "three blocks to the corner and three down the second aisle");
+    }
+
+    /**
+     * The swing of a tick is measured leg by leg along its route, exactly as the blocks driven are, because one tick's
+     * budget can finish several legs (M25 review fix, issue #16).
+     * <p>
+     * With {@code crane.turnPenaltyBlocks = 0} — a documented instant turn — and a fast enough shaft, a crane crosses
+     * a whole zigzag in one tick. The three quarter turns it really spent are what the goggles' corner count is made
+     * of; the shortest arc between the two end poses reads <b>one</b>, because the first and the third cancel.
+     */
+    @Test
+    void theSwingOfATickIsCountedLegByLegAndNotAsTheNetArc() {
+        CraneNetwork instant = CraneNetwork.of(ZIGZAG, 0.0);
+        CranePose start = CranePose.at(0, 0.0, 0.0, Side.LEFT, Heading.EAST);
+        CranePose target = CranePose.at(3, 1.0, 0.0, Side.LEFT, Heading.SOUTH);
+        CraneRoute route = RouteModel.route(ZIGZAG, 0, 0.0, 3, 1.0).orElseThrow();
+        CranePose after = CraneMotion.step(start, target, FAST, route, 0.0);
+        assertEquals(target, after, "the whole zigzag fits in one tick of this shaft with free turns");
+        assertEquals(3.0, CraneMotion.quarterTurnsSwung(start, after, route), EPSILON,
+                "three corners: east, south, east, south");
+        assertEquals(1.0, Math.abs(CranePose.yawDelta(start.yaw(), after.yaw())), EPSILON,
+                "while the two end poses alone read one, because the first and the third corner cancel");
+        assertEquals(3.0, CraneTickMotion.of(start, after, CraneMotion.quarterTurnsSwung(start, after, route))
+                .quarterTurns(), EPSILON);
+        // Without a route there is no leg to walk, and a warehouse of one aisle has no corner to miss.
+        assertEquals(1.0, CraneMotion.quarterTurnsSwung(start, after, null), EPSILON);
     }
 
     @Test

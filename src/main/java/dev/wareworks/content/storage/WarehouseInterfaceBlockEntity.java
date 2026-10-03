@@ -104,7 +104,13 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
     public static final int MAX_FILTER_DETAIL_LINES = 4;
 
     private static final String SUMMARY_TAG = "GoggleSummary";
-    private static final String ASSIGNMENT_TAG = "AisleAssignment";
+    /**
+     * Client packet key of the aisle assignment. Public because the worst case this packet has to fit is asserted
+     * against it ({@code gametest.WarehouseInterfaceGameTests#interfaceSummarySyncIsBounded}): since M25 the
+     * assignment can carry the aisle's name, and a block of a rack wall is the one place where a few bytes per block
+     * add up ({@code AisleAssignment}).
+     */
+    public static final String ASSIGNMENT_TAG = "AisleAssignment";
     /** Client packet key of the "this filter has no effect" flag; written only while it is set. */
     private static final String FILTER_SHADOWED_TAG = "FilterShadowed";
     /** Client packet key of the reservation summary; written only while something is reserved. */
@@ -299,6 +305,20 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
     /** The aisle assignment as of the last goggle observation (server) or sync (client). */
     public AisleAssignment aisleAssignment() {
         return assignment;
+    }
+
+    /**
+     * Server: the aisle a naming click on this interface means (M25, issue #15) — <b>its own</b>, resolved freshly
+     * through the registry rather than read off the synced assignment, which is only as new as the last goggle
+     * observation and is {@code NONE} on an interface nobody has looked at. Empty while this interface stands at no
+     * rack position of a loaded warehouse, or stands at one with the wrong facing.
+     * <p>
+     * No new arithmetic: the interface already knows its own {@code StorageAddress}, and an address names its aisle by
+     * letter — which is why naming aisle B by clicking something standing in aisle B needs no syntax.
+     */
+    public Optional<WarehouseRegistry.MemberAisle> aisleToName() {
+        return level == null || level.isClientSide ? Optional.empty()
+                : WarehouseRegistry.aisleOf(level, worldPosition, this);
     }
 
     /** The reservations of this storage location as of the last goggle observation (server) or sync (client). */

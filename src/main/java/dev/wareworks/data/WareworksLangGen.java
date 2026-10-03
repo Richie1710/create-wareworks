@@ -81,7 +81,21 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.RAIL_CLOSED),
                 "Rail closed: no warehouse runs through it any more");
         lang.accept(WareworksLang.key(WareworksLang.RAIL_OPENED), "Rail opened: it joins the rails it touches again");
+        // M25 (issue #15, ADR-038): the four sentences a naming click answers with. The quotes are part of the
+        // sentence, so a name that is a single word still reads as a name and a name with a space still reads as one.
+        //
+        // Each is one WHOLE answer, because the client's HUD holds exactly one action-bar message at a time: a cut
+        // name is told in a single sentence that still names its aisle, never in a second message that would replace
+        // the first before anything was drawn (M25 review fix).
+        lang.accept(WareworksLang.key(WareworksLang.AISLE_NAMED), "Aisle %1$s is now \"%2$s\"");
+        lang.accept(WareworksLang.key(WareworksLang.AISLE_NAME_CLEARED), "Aisle %1$s has no name any more");
+        lang.accept(WareworksLang.key(WareworksLang.AISLE_NAMED_CUT), "Aisle %1$s is now \"%2$s\" (shortened)");
+        lang.accept(WareworksLang.key(WareworksLang.AISLE_NAME_NO_AISLE),
+                "This is not part of a warehouse aisle yet");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ADDRESS), "Address: %1$s");
+        // The name is in brackets behind the address, never instead of it: the address is what the terminal, the
+        // crane's own lines and every report speak, and the name is the label a player put beside it.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ADDRESS_NAMED), "Address: %1$s (%2$s)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED), "Misaligned");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_UNREACHABLE_AISLE),
                 "The crane cannot reach this aisle");
@@ -95,6 +109,11 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_PRIORITY), "Priority: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_CONTROLLER), "Warehouse Controller:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_LETTER), "Warehouse %1$s");
+        // The letter keeps its place and the name follows it: the letter is what every other surface, and
+        // /wareworks chunks, names this warehouse by (M25, issue #15, ADR-038).
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_LETTER_NAMED), "Warehouse %1$s — %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_AISLE_NAME_HINT),
+                "Right-click with a renamed item to name an aisle");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_NO_DOCK), "No stacker crane in front");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STATUS_DOCK_MISALIGNED),
@@ -333,6 +352,16 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_ROUTE), "From %1$s to %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HOLDING), "Holding:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HEAD_EMPTY), "Grabber empty");
+        // The crane's throughput (M25, issue #16, ADR-039). GOGGLES_PERCENT is the only value in the whole mod with a
+        // percent sign in it, which is why every share goes through it instead of writing the sign five times.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PERCENT), "%1$s%%");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_BUSY), "Busy: %1$s of the last minute");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_BUSY_PARTIAL), "Busy: %1$s of the last %2$s s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_BLOCKED), "Blocked: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_BREAKDOWN), "Travel %1$s · at the rack %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_BREAKDOWN_TURNING),
+                "Travel %1$s · turning %2$s (%3$s corners) · at the rack %4$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_TRIPS), "Trips: %1$s · items: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_LAST_PLAN), "Last planning: %1$s");
         for (NoJobReason reason : NoJobReason.values()) {
             lang.accept(WareworksLang.key(WareworksLang.noJobReasonKey(reason)), switch (reason) {
@@ -619,6 +648,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_STOCK_LIST), "Stock List");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_FILTERED_STOCK), "Stock of the Filtered Item");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_STATUS), "Crane Status");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_THROUGHPUT), "Crane Throughput");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLE), "Warehouse %1$s: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS), "Locations: %1$s / %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES), "Item types: %1$s");
@@ -633,6 +663,12 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS), "Chunks: %1$s held");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES), "Aisles: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES_CUT), "Aisles: %1$s (cut short)");
+        // M25 (issue #15, ADR-038): the aisles a player named, letters and all, last of the optional lines and only
+        // while there is a name. The second form carries how many names the row had no characters left for: a name is
+        // up to sixteen characters of a player's own choosing, so the row is bounded by the target's width and not
+        // only by an entry count, and a list it had to shorten says so (M25 review fix).
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_NAMES), "Names: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_NAMES_MORE), "Names: %1$s (+%2$s)");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_NO_AISLE), "No warehouse");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_READY), "Ready");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_STATUS_NO_DOCK), "No crane");
@@ -648,6 +684,15 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_JOB), "%1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_TARGET), "To %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_HOLDING), "Holding %1$s");
+        // The crane's throughput on a board (M25, issue #16, ADR-039): four fixed rows, so a four-row board drops
+        // nothing, and one line instead of all four while the rolling minute is not full yet. The shares go through
+        // GOGGLES_PERCENT like every other share in the mod, so no row carries a percent sign of its own.
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_THROUGHPUT_LINE_TRIPS), "Trips: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_THROUGHPUT_LINE_ITEMS), "Items: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_THROUGHPUT_LINE_BUSY), "Busy: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_THROUGHPUT_LINE_TURNING), "Turning: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_THROUGHPUT_MEASURING), "Measuring");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_THROUGHPUT_NO_CRANE), "No crane");
 
         for (RequestRejection rejection : RequestRejection.values()) {
             lang.accept(WareworksLang.key(rejection.langKey()), switch (rejection) {

@@ -34,6 +34,7 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneResync;
 import dev.wareworks.core.crane.CraneState;
+import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.job.CraneKinematics;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.TransportJob;
@@ -43,8 +44,10 @@ import dev.wareworks.core.warehouse.CraneRoute;
 import dev.wareworks.core.warehouse.NetworkStop;
 import dev.wareworks.core.warehouse.RailGraph;
 import dev.wareworks.core.warehouse.RailNetwork;
+import dev.wareworks.util.GoggleObservers;
 import dev.wareworks.util.Headings;
 import dev.wareworks.util.LogThrottle;
+import dev.wareworks.util.SyncThrottle;
 import dev.wareworks.util.WareworksLang;
 import net.createmod.catnip.lang.LangBuilder;
 import net.minecraft.ChatFormatting;
@@ -96,7 +99,10 @@ import net.minecraft.world.phys.Vec3;
  * <p>
  * <b>Sync.</b> Clients receive the pose, target, phase and pause flag ({@link CranePersistence#writeSync}) and a bounded
  * {@link CraneGoggleInfo} on every phase, job, target, head, pause or geometry change and every
- * {@link CraneExecution#MOVING_SYNC_INTERVAL_TICKS} while moving. The client runs the same {@link CraneMotion} towards the
+ * {@link CraneExecution#MOVING_SYNC_INTERVAL_TICKS} while moving. The dock is additionally
+ * {@link GoggleObservers.Observable}: while a player really looks at it through goggles it refreshes its throughput
+ * and syncs a change at most once a second ({@link #onGoggleObserved}), which is the only way a <b>parked</b> crane's
+ * numbers can stay honest. The client runs the same {@link CraneMotion} towards the
  * synced target every tick (previous poses for partial-tick rendering, M4) and snaps only when its own pose has really
  * drifted ({@link CraneResync#diverges}).
  * <p>
@@ -104,7 +110,7 @@ import net.minecraft.world.phys.Vec3;
  * the job; {@link #clearContent()} (commands, structures) empties the head without drops, so {@code /clone ... move}
  * cannot duplicate held items. Saving never throws, loading is bounded ({@link InventoryGrabber#load}).
  */
-public class StackerCraneBlockEntity extends KineticBlockEntity implements Clearable {
+public class StackerCraneBlockEntity extends KineticBlockEntity implements Clearable, GoggleObservers.Observable {
     public static final int MIN_MAST_HEIGHT = AisleGeometry.MIN_HEIGHT;
     public static final int DEFAULT_MAST_HEIGHT = 4;
     /** Parking pose: aisle position 0 at dock level, arm retracted. */
@@ -190,7 +196,14 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     private CraneNetwork cachedCraneNetwork;
     /** Server: the authoritative crane state (saved). Client: the synced pose, target and phase (no job). */
     private CraneState<ItemKey, RackPosition> craneState = CraneState.idle(HOME_POSE);
-    /** Server: goggle data as of the last publication. Client: as synced. */
+    /**
+     * Server: goggle data as of the last publication. Client: as synced.
+     * <p>
+     * The throughput is deliberately <b>not</b> in here on the server: {@link #refreshGoggleInfo} rebuilds this field
+     * several times a second for a working crane, and a measurement rebuilt from scratch each time would either flicker
+     * in and out of the client's copy or force the dock to snapshot its window on every publish. It is merged in at
+     * {@linkplain #write write} time instead, from {@link #observedThroughput}.
+     */
     private CraneGoggleInfo goggleInfo = CraneGoggleInfo.NONE;
     /** Client: whether a crane packet arrived (the first one always snaps). */
     private boolean clientSynced;
@@ -204,6 +217,27 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     // --- server only (M3) ---
     private final InventoryGrabber head = new InventoryGrabber(this::onHeadChanged);
     private final CraneExecution execution = new CraneExecution(this);
+    /**
+     * Server: the throughput snapshot that goes out with the next client packet, or {@code null} while <b>nobody has
+     * looked at this dock through goggles</b> and the numbers therefore do not exist as far as any client is concerned
+     * (M25, issue #16, ADR-039).
+     * <p>
+     * This is what keeps the feature free for everybody else: a dock <b>nobody has looked at</b> never snapshots its
+     * window, never grows its update tag by a byte and never sends a packet it would not have sent anyway.
+     * <p>
+     * Once it has been looked at, the last snapshot keeps riding the packets the dock sends anyway until an
+     * observation replaces it — about 44 bytes, and never a packet of its own. There is deliberately no "stopped
+     * looking" hook to clear it: a player who is not looking sees nothing either way, one who looks again has it
+     * refreshed within {@value GoggleObservers#SCAN_INTERVAL_TICKS} ticks, and a machine that goes idle nulls it by
+     * itself as soon as its window decays to nothing.
+     */
+    @Nullable
+    private CraneThroughput observedThroughput;
+    /**
+     * Server: at most one throughput sync per {@value GoggleObservers#SUMMARY_SYNC_MIN_INTERVAL_TICKS} ticks, shared
+     * with every other observed goggle summary in the mod.
+     */
+    private final SyncThrottle throughputSync = new SyncThrottle(GoggleObservers.SUMMARY_SYNC_MIN_INTERVAL_TICKS);
 
     public StackerCraneBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -614,6 +648,45 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         return goggleInfo;
     }
 
+    /**
+     * Server: a <b>fresh</b> snapshot of what the machine got done in the rolling minute behind it (M25, issue #16,
+     * {@code docs/stacker-crane.md} §9). {@link CraneThroughput#EMPTY} on a client, in a Ponder level and for a
+     * virtual block entity, none of which runs {@link CraneExecution}.
+     * <p>
+     * Fresh and not cached on purpose: a caller that wants these numbers wants them now, and the window decays even
+     * while the machine stands still, so a cached copy would be as stale as the last phase change.
+     */
+    public CraneThroughput throughput() {
+        if (level == null || level.isClientSide || isVirtual())
+            return CraneThroughput.EMPTY;
+        return execution.throughput();
+    }
+
+    /**
+     * A player looks at the dock through goggles (server): take a fresh throughput snapshot and sync a change
+     * (throttled to one packet a second).
+     * <p>
+     * <b>This is the one thing the existing publish path cannot do.</b> A working crane publishes several times a
+     * second anyway — on every phase, job, target, head or pause change and every
+     * {@value CraneExecution#MOVING_SYNC_INTERVAL_TICKS} ticks while moving — but a <b>parked</b> crane publishes
+     * nothing at all, so without this a player would read "Busy: 85 %" off a machine that has stood still for five
+     * minutes. The one genuinely new traffic case is therefore a just-parked, watched dock: it syncs about once a
+     * second for the minute its window takes to decay to nothing, and then goes quiet of its own accord.
+     */
+    @Override
+    public void onGoggleObserved() {
+        if (level == null || level.isClientSide || isVirtual() || isRemoved())
+            return;
+        CraneThroughput measured = execution.throughput();
+        CraneThroughput next = measured.isEmpty() ? null : measured;
+        if (!Objects.equals(next, observedThroughput)) {
+            observedThroughput = next;
+            throughputSync.markPending();
+        }
+        if (throughputSync.tryConsume(level.getGameTime()))
+            sendData(); // otherwise throttled: a later observation sends it
+    }
+
     /** The crane pose for rendering at {@code partialTicks} between the previous and the current tick (M4). */
     public CranePose renderPose(float partialTicks) {
         return craneState.interpolatedPose(partialTicks);
@@ -689,8 +762,9 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         warehouseNetwork = network == null || network.branchCount() < 2 ? null : network;
         cachedWarehouse = null;
         craneState = CraneState.displayed(pose, target, phase);
+        // No throughput: a shown pose is a picture, and a Ponder scene or a visual scenario measures nothing.
         goggleInfo = new CraneGoggleInfo(phase, CranePauseReason.NONE, Optional.empty(), held,
-                goggleInfo.aisleLetters());
+                goggleInfo.aisleLetters(), Optional.empty());
         clientSynced = true;
         return true;
     }
@@ -776,10 +850,14 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         sendData();
     }
 
+    /**
+     * Rebuilds the published goggle data from the live state. The throughput is left out on purpose and merged in at
+     * write time instead ({@link #goggleInfo}), so this stays what it always was: a cheap rebuild of what changed.
+     */
     private void refreshGoggleInfo() {
         goggleInfo = new CraneGoggleInfo(craneState.phase(), execution.pauseReason(),
                 craneState.job().map(CraneJobSummary::of), CraneGoggleInfo.heldByType(head.held()),
-                linkedControllerEntity().map(StackerCraneBlockEntity::aisleLettersOf).orElse(""));
+                linkedControllerEntity().map(StackerCraneBlockEntity::aisleLettersOf).orElse(""), Optional.empty());
     }
 
     /**
@@ -998,7 +1076,11 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
             tag.putBoolean(CONTROLLER_LINKED_TAG, controllerLinked);
             tag.put(CranePersistence.SYNC_TAG, CranePersistence.writeSync(craneState, restingYaw()));
             CompoundTag goggles = new CompoundTag();
-            goggleInfo.write(goggles);
+            // The throughput is merged in here and nowhere else, so every client packet carries the same numbers
+            // whether it was sent because the crane moved or because somebody is watching it. Without an observer
+            // observedThroughput is null and withThroughput returns this very record, so nothing is allocated and
+            // nothing is written (M25, issue #16).
+            goggleInfo.withThroughput(observedThroughput).write(goggles);
             tag.put(GOGGLE_TAG, goggles);
             return;
         }
@@ -1118,7 +1200,9 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         else
             WareworksLang.translate(WareworksLang.GOGGLES_NO_CONTROLLER).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
-        goggleInfo.addGoggleLines(tooltip, 1, true);
+        // The dock is the surface that shows the whole throughput block: it is the machine itself, its tooltip is the
+        // shorter of the two, and a number a player has to crouch for is a number nobody finds (M25, issue #16).
+        goggleInfo.addGoggleLines(tooltip, 1, true, true, network.branchCount() > 1);
 
         List<Component> kineticStats = new ArrayList<>();
         if (super.addToGoggleTooltip(kineticStats, isPlayerSneaking)) {

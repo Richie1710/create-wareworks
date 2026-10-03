@@ -3,6 +3,7 @@ package dev.wareworks.content.display;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.SortedMap;
 
 import com.simibubi.create.api.behaviour.display.DisplaySource;
 import com.simibubi.create.content.redstone.displayLink.DisplayLinkContext;
@@ -20,10 +21,13 @@ import net.minecraft.network.chat.MutableComponent;
 /**
  * Display Link source "Warehouse Summary" ({@code docs/warehouse-system.md} §10): the warehouse's letter and status,
  * the counted inventories in use, the item types and its total stock — <b>four lines on every warehouse</b> — and below
- * them, only when there is something to say, the aisles it is made of, its ports, its stock rules, its stopped products
- * and its held chunks. Every one of those is below the four, because a four-tube board shows four rows and
- * {@link WarehouseDisplays#limit} drops the tail: an optional line above them would cost a player a number they asked
- * for.
+ * them, only when there is something to say, the aisles it is made of, its ports, its stock rules, its stopped
+ * products, its held chunks and last of all the names a player gave its aisles. Every one of those is below the four,
+ * because a four-tube board shows four rows and {@link WarehouseDisplays#limit} drops the tail: an optional line above
+ * them would cost a player a number they asked for.
+ * <p>
+ * The order of the optional lines is the order in which a short board may lose them, youngest loss last: the names are
+ * a label a player chose, while every line above them is a count they asked for or a state they have to act on.
  * <p>
  * It speaks for the <b>whole warehouse</b>, not for one of its aisles — one controller owns every aisle of its rail
  * network and keeps one stock index for all of them (ADR-033) — which is why its first line and its name say
@@ -128,6 +132,30 @@ public class AisleSummaryDisplaySource extends DisplaySource {
         if (controller.chunkKeepReason().isHolding())
             lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS,
                     WareworksLang.number(controller.chunkKeepChunks())));
+        // The aisles a player named (M25, issue #15, ADR-038), as "A Ores · B Metals".
+        //
+        // LAST of all, and that is a decision and not a place (M25 review fix). WarehouseDisplays.limit drops the
+        // tail, so whichever line is last is the one a short board loses — and everything above it is either a number
+        // a player asked for or a state they have to go and look at a machine for ("Stopped products" above is the
+        // sharpest of those). A label a player chose is the one row this source can afford to lose, so it is the row
+        // that goes. It used to sit under the aisles line, where naming an aisle could push a diagnosis off a board
+        // that was already full.
+        //
+        // It is left out entirely while no aisle has a name, which is every warehouse before M25. The names come
+        // straight from the controller rather than from the synced record, because this runs on the server, and from
+        // namedAisles() rather than from the whole saved table, because a label outlives the aisle it was given to
+        // and a board names rows of THIS warehouse.
+        //
+        // The row is bounded by the target's own characters as well as by NetworkGoggleInfo.NAMES_LISTED entries, and
+        // says how many names it had no room for: six 16-character names are 113 characters, where this board row
+        // holds 26 (see WareworksLang.aisleNamesLine).
+        //
+        // The LETTER stays in front of every name. A name on its own could not be matched to the address the terminal,
+        // the crane's lines and every report speak, and a board that says "Ores" without saying which aisle that is
+        // would be the one surface of this feature a player cannot act on.
+        SortedMap<Character, String> names = controller.namedAisles();
+        if (!names.isEmpty())
+            lines.add(WareworksLang.aisleNamesLine(names, NetworkGoggleInfo.NAMES_LISTED, stats.maxColumns()));
         return WarehouseDisplays.limit(lines, stats);
     }
 

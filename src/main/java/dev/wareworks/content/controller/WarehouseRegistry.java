@@ -268,6 +268,36 @@ public final class WarehouseRegistry {
     }
 
     /**
+     * The aisle a member belongs to, from the <b>same single scan</b> as {@link #assignmentOf}: the loaded controller
+     * that owns it and the letter of its aisle. Empty exactly for the two assignment states that carry no address of
+     * their own — {@link AisleAssignment.State#NONE} and {@link AisleAssignment.State#MISALIGNED}.
+     * <p>
+     * One scan, and not {@link #findController} beside {@link #assignmentOf}, because those two resolve by different
+     * rules where a rack plane belongs to two parallel aisles, so asking both could pair one warehouse's controller
+     * with the other one's letter. A caller that needs both has to get them from one answer.
+     * <p>
+     * An aisle the rails no longer join to the crane ({@link AisleAssignment.State#UNREACHABLE}) is included: the
+     * member really is that location of that aisle and keeps its address, so there is a letter to answer with.
+     */
+    public static Optional<MemberAisle> aisleOf(Level level, BlockPos pos, WarehouseMember member) {
+        AlignedMember aligned = scan(level, pos, member).aligned();
+        return aligned == null ? Optional.empty()
+                : Optional.of(new MemberAisle(aligned.controller(), aligned.address().aisle()));
+    }
+
+    /**
+     * A warehouse member's aisle: the loaded controller whose warehouse contains it, and the letter that warehouse
+     * gives that aisle ({@link #aisleOf}).
+     */
+    public record MemberAisle(WarehouseControllerBlockEntity controller, char aisle) {
+        public MemberAisle {
+            Objects.requireNonNull(controller, "controller");
+            if (!StorageAddress.isValidAisle(aisle))
+                throw new IllegalArgumentException("aisle letter must be A-Z: " + aisle);
+        }
+    }
+
+    /**
      * The goggle data of the storage member at {@code pos} from one scan: its {@link #assignmentOf assignment} and the
      * reservations of its location in that aisle ({@link WarehouseControllerBlockEntity#reservationSummaryAt}), which are
      * {@link LocationReservationSummary#NONE} unless it is aligned at a rack position of a loaded controller.
@@ -305,9 +335,12 @@ public final class WarehouseRegistry {
             // An aisle the rails no longer join to the crane says so on its members' own goggles (M22, issue #2):
             // the member really is this location of this aisle and keeps its stock, but nothing is planned towards it,
             // and a player standing at it has to be told THAT rather than reading an address that looks fine.
-            return aligned.controller().craneCanReach(aligned.rack())
+            AisleAssignment assignment = aligned.controller().craneCanReach(aligned.rack())
                     ? AisleAssignment.assigned(aligned.address())
                     : AisleAssignment.unreachable(aligned.address());
+            // The name of the aisle this member belongs to, from the very controller the address came from (M25, issue
+            // #15): one funnel for every member kind, so no two of them can show the address with and without it.
+            return assignment.withAisleName(aligned.controller().aisleName(aligned.address().aisle()));
         }
         return scan.misaligned() ? AisleAssignment.MISALIGNED : AisleAssignment.NONE;
     }

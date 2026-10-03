@@ -22,6 +22,7 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.BranchGeometry;
 import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.crane.CraneActivity;
 import dev.wareworks.core.crane.CraneEffect;
 import dev.wareworks.core.crane.CraneEvent;
 import dev.wareworks.core.crane.CraneNetwork;
@@ -29,8 +30,11 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.crane.CraneStateMachine;
+import dev.wareworks.core.crane.CraneThroughput;
+import dev.wareworks.core.crane.CraneTickMotion;
 import dev.wareworks.core.crane.CraneTimings;
 import dev.wareworks.core.crane.HomeReturn;
+import dev.wareworks.core.crane.ThroughputWindow;
 import dev.wareworks.core.job.CraneKinematics;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.JobType;
@@ -55,7 +59,8 @@ import net.minecraft.world.level.Level;
  * left the warehouse altogether); every
  * {@value #LOCATION_CHECK_INTERVAL_TICKS} ticks (and right after entering a travel phase or a geometry change) check that
  * the job's locations still exist (at most two lookups); derive the pause reason (no rotation, overstressed, a needed
- * chunk not loaded); apply the tick event and every event its effects produce in the same tick; publish changes.
+ * chunk not loaded); apply the tick event and every event its effects produce in the same tick; book the tick into the
+ * rolling throughput window ({@link #recordThroughput}, one record and a counter); publish changes.
  * <p>
  * <b>Effects.</b> {@code PerformPick} / {@code PerformDrop} resolve the location ({@link TransferContexts#resolve}): not
  * loaded → no answer (the machine repeats it every unpaused tick), missing → {@code SourceMissing} /
@@ -102,6 +107,33 @@ final class CraneExecution {
      * before it goes home and never drives off in the tick a world opens.
      */
     private int idleTicks;
+    /**
+     * Quarter turns the machine really swung in the tick being applied, summed over every transition of it
+     * ({@link CraneStateMachine.Transition#quarterTurnsSwung()}, M25 review fix).
+     * <p>
+     * It comes from the state machine and not from the two end poses, because a tick's travel budget can cross several
+     * legs of a route while {@code CranePose#yawDelta} answers along the shortest arc: two corners taken in opposite
+     * directions net zero, three in one direction read as one. Reset at the top of every tick, read once by
+     * {@link #recordThroughput}. Derived, never saved and never synced.
+     */
+    private double tickQuarterTurnsSwung;
+    /**
+     * What the machine got done in the rolling minute behind it (M25, issue #16, ADR-039). Derived, never saved and
+     * never synced from here: the dock asks for a snapshot only while a player really looks at it through goggles.
+     * <p>
+     * Game time is contiguous across a restart, so saving the buckets would be arithmetically defensible and would
+     * still claim a minute of work for a machine that stood still. Nothing in {@link CranePersistence} is touched.
+     */
+    private final ThroughputWindow window = new ThroughputWindow();
+    /**
+     * Whether a loaded state is being made consistent right now ({@link #resume}), so the reports that come out of
+     * {@code CraneStateMachine#resume}'s sanitising are not counted as work.
+     * <p>
+     * This matters for exactly one case and it would be wrong by exactly one trip: a job that was already delivered
+     * before the save resumes through {@code enter(COMPLETE)}, which emits {@code ReportComplete} — and a window that
+     * has not run a single tick would then open with "1 trip" on a machine that has not moved since the world loaded.
+     */
+    private boolean resuming;
     private long nextLocationCheckTick = CHECK_NOW;
     private long nextMovingSyncTick = CHECK_NOW;
     private long nextControllerLookupTick = CHECK_NOW;
@@ -121,6 +153,14 @@ final class CraneExecution {
     /** The crane's sounds (motion, arm, transfers; {@code docs/stacker-crane.md} §8). */
     CraneSounds sounds() {
         return sounds;
+    }
+
+    /**
+     * What the machine got done in the rolling minute behind it ({@code docs/stacker-crane.md} §9). O(1) and one small
+     * record, so a watching player may ask once a second without a budget worry.
+     */
+    CraneThroughput throughput() {
+        return window.snapshot();
     }
 
     /** A saved state was read: make it consistent and resume it on the next tick. */
@@ -176,6 +216,7 @@ final class CraneExecution {
 
     void tick(Level level) {
         long now = level.getGameTime();
+        tickQuarterTurnsSwung = 0.0;
         linkControllerIfNeeded(now);
         if (resumePending) {
             resumePending = false;
@@ -204,12 +245,35 @@ final class CraneExecution {
 
         CraneState<ItemKey, RackPosition> after = crane.craneState();
         sounds.afterTick(level, crane, before.pose(), after, speeds);
+        recordThroughput(now, before, after);
         if (after.phase() != before.phase() || !after.target().equals(before.target())
                 || !after.job().equals(before.job()))
             syncRequested = true;
         if (after.isMoving() && now >= nextMovingSyncTick)
             syncRequested = true;
         publishIfRequested(level);
+    }
+
+    /**
+     * Books this tick into the rolling window: one classification and one counter increment (M25, issue #16).
+     * <p>
+     * <b>What it costs, because this is the only per-tick path the feature has:</b> one {@link CraneTickMotion} record
+     * (four fields), an exhaustive {@code switch} over the phase, and two array writes plus four adds inside
+     * {@link ThroughputWindow#record}. No allocation beyond that record, no collection, no map lookup, no world
+     * access, no scan, and nothing is published — the dock syncs these numbers only while a player really looks at it.
+     * <p>
+     * The poses are the same two {@link CraneSounds#afterTick} compares, read at the same two points of the tick with
+     * the same epsilon, and the state is {@code after}, so the pause this tick decided is the pause that is booked.
+     * <p>
+     * The <b>swing</b> is the one thing the two poses cannot say: it comes from {@link #tickQuarterTurnsSwung}, which
+     * the state machine filled from the route it stepped the tick with. On the default configuration the two readings
+     * are identical — one quarter turn already spends a whole tick's travel budget — and they part company exactly
+     * where the pose pair goes wrong, on a tick that crossed more than one corner (M25 review fix).
+     */
+    private void recordThroughput(long now, CraneState<ItemKey, RackPosition> before,
+            CraneState<ItemKey, RackPosition> after) {
+        CraneTickMotion motion = CraneTickMotion.of(before.pose(), after.pose(), tickQuarterTurnsSwung);
+        window.record(now, CraneActivity.of(after, motion), motion.quarterTurns());
     }
 
     /**
@@ -311,16 +375,26 @@ final class CraneExecution {
         return current;
     }
 
-    /** Resumes a loaded state: head and job in step first, then {@link CraneStateMachine#resume}. */
+    /**
+     * Resumes a loaded state: head and job in step first, then {@link CraneStateMachine#resume}.
+     * <p>
+     * The whole call is marked as {@link #resuming}, so the throughput window does not count the reports that
+     * sanitising a saved state produces as work this machine did (see that field).
+     */
     private void resume(Level level) {
-        reconcileHeadWithJob(level);
-        CraneStateMachine<ItemKey, RackPosition> stateMachine = machine();
-        CraneStateMachine.Transition<ItemKey, RackPosition> transition = stateMachine.resume(crane.craneState());
-        crane.setCraneState(transition.state());
-        Deque<CraneEvent<ItemKey, RackPosition>> events = new ArrayDeque<>();
-        for (CraneEffect<ItemKey, RackPosition> effect : transition.effects())
-            execute(level, effect, events);
-        drain(level, stateMachine, events);
+        resuming = true;
+        try {
+            reconcileHeadWithJob(level);
+            CraneStateMachine<ItemKey, RackPosition> stateMachine = machine();
+            CraneStateMachine.Transition<ItemKey, RackPosition> transition = stateMachine.resume(crane.craneState());
+            crane.setCraneState(transition.state());
+            Deque<CraneEvent<ItemKey, RackPosition>> events = new ArrayDeque<>();
+            for (CraneEffect<ItemKey, RackPosition> effect : transition.effects())
+                execute(level, effect, events);
+            drain(level, stateMachine, events);
+        } finally {
+            resuming = false;
+        }
         syncRequested = true;
     }
 
@@ -354,6 +428,7 @@ final class CraneExecution {
                 return;
             }
             crane.setCraneState(transition.state());
+            tickQuarterTurnsSwung += transition.quarterTurnsSwung();
             for (CraneEffect<ItemKey, RackPosition> effect : transition.effects())
                 execute(level, effect, events);
         }
@@ -371,9 +446,12 @@ final class CraneExecution {
                     crane.linkedControllerEntity().ifPresent(controller -> controller.onCranePicked(crane, picked.job()));
             case CraneEffect.ReportDelivered<ItemKey, RackPosition> delivered -> reportDelivered(delivered);
             case CraneEffect.ReportRerouted<ItemKey, RackPosition> rerouted -> reportRerouted(rerouted);
-            case CraneEffect.ReportComplete<ItemKey, RackPosition> complete ->
-                    crane.linkedControllerEntity().ifPresent(controller -> controller.onCraneJobFinished(crane,
-                            complete.job()));
+            case CraneEffect.ReportComplete<ItemKey, RackPosition> complete -> {
+                if (!resuming)
+                    window.addTrip();
+                crane.linkedControllerEntity().ifPresent(controller -> controller.onCraneJobFinished(crane,
+                        complete.job()));
+            }
             case CraneEffect.ReportAbort<ItemKey, RackPosition> abort ->
                     crane.linkedControllerEntity().ifPresent(controller -> controller.onCraneJobAborted(crane,
                             abort.job(), abort.reason()));
@@ -470,6 +548,12 @@ final class CraneExecution {
     }
 
     private void reportDelivered(CraneEffect.ReportDelivered<ItemKey, RackPosition> delivered) {
+        // Credited to the second the window stands on, i.e. the second of the last tick it booked. The effects of a
+        // tick run before its own classification, so a delivery in the first tick of a new second is credited to the
+        // second before it and forgotten a second early. That is the whole error, it is under one second of
+        // attribution, and it is not worth per-tick state to remove.
+        if (!resuming)
+            window.addItems(delivered.delivered());
         boolean requestOpen = crane.linkedControllerEntity()
                 .map(controller -> controller.onCraneDelivered(crane, delivered.job(), delivered.target(),
                         delivered.delivered()))

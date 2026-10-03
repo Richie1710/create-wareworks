@@ -1881,3 +1881,110 @@ you get tired of waiting, and put it back before judging check 160.
     items you fetch climb, and nothing that is out of stock is ever sorted above something you can actually have. Last,
     put a clipboard into the terminal's **new list slot** — it is empty in every old world, as it must be — and fetch a
     list, to see the feature arrive in a warehouse that was built before it existed.
+
+## AE. Name your aisles (M25, issue #15)
+
+> Everything about the mechanism is automated: the gesture and what survives it (`aislenaming`,
+> `aislenamingwithoutawarehouse`, `aislenamepersistence`, `aislenamefollowsitsletter`, `interfacenamesitsownaisle`),
+> the five surfaces (`aislenamesurfaces`, `aislesummarywithnames`) and the real goggle tooltips in both languages
+> (`./gradlew runVisualTest -Pwareworks.visualTest=comb`, shots `goggles-named-controller`, `goggles-named-rack` and
+> their `-de` twins). What follows is only what a person can judge.
+
+185. **Is the off-centre right-click findable, and is the hint what finds it?** Build a warehouse, put the goggles on
+    and look at the controller **before naming anything**: the last line is a quiet grey "Right-click with a renamed
+    item to name an aisle". Now do it — name an item in an anvil, right-click the **face** of the controller a little
+    away from the little box in the middle — and watch the hint go, because the tooltip now has a name of its own on
+    it. (On a warehouse of **more** than six aisles whose only named aisle is the seventh or later, the hint stays:
+    neither of the two values this tooltip is sent carries that name, while the aisle's own blocks and the display
+    board show it. Known, and documented in ADR-038 — tell us if it bothers you, because the fix is a new synced value
+    whose only job is to hide a hint.) The questions: did the hint tell
+    you enough, or did you first click the box in the middle and get the value panel instead? Would you have found the
+    gesture without it? And is one grey line the right price, or should the box have given up its clicks (it will not:
+    that would cost the aisle letter and, on an interface, its filter and priority slot for every renamed item in
+    hand)?
+186. **Does a named aisle list read at a glance — and is dropping the length right?** Name four or five aisles of a
+    comb and read the controller's aisle line: a named aisle shows its **name** where an unnamed one shows its rail
+    count, so the line reads "Aisles: A Ores · B Metals · C 14 · D Tools". This is the one open design decision of
+    the feature. With six aisles named and six names of ten to sixteen characters, does that line still read at a
+    glance, or does it run off the tooltip? **It runs off it**, and the number is measured rather than guessed: the
+    `comb` visual run prints a `MEASURED` line for the warehouse it builds (four aisles, three of them named with
+    short names: 199 px of the 510 px a goggle tooltip has at this window size, 39 %) and for the widest list the
+    design allows (six aisles of sixteen characters: **721 px, 141 %** of the same room). A goggle line is **never
+    wrapped** — Create's `GoggleOverlayRenderer` passes `maxTextWidth = -1`, so an over-long line is drawn past the
+    edge of its own box — so the question is not whether it wraps but how long a name you can give six aisles before
+    it does. About ten characters each is the crossing point. And do you **miss the length** once the name is there —
+    the warehouse's total rails are on the line above, but per aisle the number is gone. If you want both, say so: it
+    is one method body (`WarehouseControllerBlockEntity#aisleEntries`) plus one lang value in each language, and the
+    honest version is to drop the line's budget from six aisles to four in the same change.
+187. **Do the names fit, in German, on the two surfaces that have a width?** Switch the game to German, name an aisle
+    with a sixteen-character name and look at: the controller's own line (`Lager A — Erze`), a rack's address
+    (`Adresse: B-03-07R (Erze)`) and a **Warehouse Summary display board** (`Namen: A Erze · B Metalle`). A goggle
+    tooltip has no fixed width, but it is not wrapped either (see 186), so the first two look wrong rather than break
+    — do they? The board is the one that
+    really cuts — but since the M25 review it **sizes the row to the board**: on a narrow board it names as many
+    aisles as fit and counts the rest ("Namen: A Erze (+2)"). Build it four flaps wide, then wider, and check that
+    what you read is always a whole name and never half a word; the one case nothing can save is a **single** name
+    longer than the row, because the alternative is cutting text you typed. Note the width at which one sixteen-
+    character name stops fitting, because a board row that is cut shows text no source ever produced.
+188. **Does a name make the warehouse easier to use, or only prettier?** Live with it for a session in a warehouse of
+    at least three aisles. Walk to a block and read its address with the name behind it; order something at the
+    terminal and notice that the terminal says nothing about names at all (deliberately — its title row is the one
+    text row in the screen nothing measures, and a name there would render through "Warehouse Terminal"). Then decide
+    the two things only use can answer: is the **address plus name** enough, or did you want the name in the terminal
+    and on the request answers too? And did you ever want to name a **single rack** rather than a whole aisle — if so,
+    what would you have called it, and where would you have expected to read it?
+
+## AF. What the crane got done (M25, issue #16)
+
+> The mechanism is automated: the six buckets and the ring in JUnit (`ThroughputWindowTest`, `CraneActivityTest`,
+> `CraneTickMotionTest`, 53 cases), and the world behaviour in GameTests (`cranethroughputcountsarealjob`,
+> `cranethroughputbooksaturnatacorner`, `cranethroughputofaparkedcrane`, `dockthroughputsyncsonlywhileobserved`,
+> `cranethroughputcreditsnotripforaresumedjob`). The four lines themselves are built by the real renderer and the
+> real lang files, in both languages, by `./gradlew runVisualTest -Pwareworks.visualTest=corner`, which asserts
+> that each is translated text carrying the right numbers and that the corner count, the blocked line and the
+> whole block are left out exactly where they should be. The controller's two lines come out of the same builder, and
+> the display board is covered by `displaysourcesregistered`, `cranethroughputwhilemeasuring` and
+> `cranethroughputnumbersonboard` plus `LangConsistencyTest#theThroughputBoardRowsFitADisplayBoard`, which holds every
+> board row inside a row's flap count in both languages. Since the M25 evidence pass both tooltips are also
+> **photographed**: `corner` shoots the dock's four lines and the controller's one, in English and in German, at the
+> end of a minute of real work that really holds corners — the dock through a camera that looks down on the north
+> strip of its top face, because its outline is a three-pixel rail bed and its one large face carries the mast-height
+> value box Create's overlay refuses to draw over. What follows is only what a person can judge: a photograph shows
+> that a line fits one frame, not whether the number reads as a diagnosis, whether four lines earn their place, or
+> whether the figures stay believable while they move — which is what questions 189 to 191 ask you to look at with
+> your own eyes.
+
+189. **Does "Busy" read as a diagnosis rather than a score, and are four lines right?** Build a warehouse that bends,
+    feed it steadily and read the dock through goggles while it works: "Busy: 78% of the last minute", "Blocked: 4%",
+    "Travel 54% · turning 6% (9 corners) · at the rack 18%", "Trips: 9 · items: 412". The questions only playing can
+    answer: does **"Busy"** read as *is this machine my bottleneck* — or does it read like a mark out of ten, so that
+    78 % feels like a failing grade on a warehouse that is simply not busy? Is **four lines** what the dock can
+    afford, on a tooltip that already runs to a dozen, or is the breakdown one line too many? (If it is, the retreat
+    is already built in: `CraneGoggleInfo#addGoggleLines` takes a `detailed` flag, so dropping the dock to the
+    headline and "Blocked" is one argument at `StackerCraneBlockEntity#addToGoggleTooltip` and nothing else.) And is
+    **"Blocked"** the word for "it has a job and is getting nowhere" — remembering that "Waiting" was not available,
+    because German already spends *Wartet* on *Idle*.
+190. **Do the lines fit, in German, and do they tell the truth while you watch them?** Switch the game to German and
+    read the same four lines: "Auslastung: 78 % der letzten Minute", "Blockiert: 4 %", "Fahren 54 % · Drehen 6 %
+    (9 Ecken) · Am Regal 18 %", "Fahrten: 9 · Gegenstände: 412". The third is the long one — does it still fit a
+    goggle tooltip beside the job lines above it, or does it wrap? Then watch the numbers move for a few minutes and
+    judge whether they stay believable: stand in front of the dock as a job starts and finishes and see the trips
+    climb; walk away for two minutes and come back, and check that the label says "der letzten 23 s" while the window
+    refills rather than claiming a minute; park the crane with nothing to do and watch the whole block **disappear**
+    within a minute rather than freezing on its last reading; and cut the rotation and confirm that the pause line
+    says why while the shares simply stop growing. Anything that reads as a stale number is a bug worth reporting,
+    because every one of those cases is supposed to be visible.
+191. **Are two lines the right amount on the controller, and does a board of four numbers tell you anything?** Walk
+    to the **warehouse controller** of a working warehouse and read it through goggles: at the end of its crane block
+    it now says "Busy: 78% of the last minute" and, whenever something is holding the machine up, "Blocked: 4%". The
+    tooltip is long — is that pair worth its place there, or did you scroll past it looking for the stock numbers? Did
+    you want the breakdown here too, or were you glad it stayed on the dock? Then put a **Display Link** on the dock,
+    pick **"Crane Throughput"** in its screen (it is the second entry; "Crane Status" is still the first, so an older
+    link of yours shows what it always did) and point it at a display board of four rows: "Trips: 9", "Items: 412",
+    "Busy: 78%", "Turning: 6%". Watch it for a few minutes and judge whether a board of those four is something you
+    would really build into a warehouse, or whether a different four would have been more use. Then switch the game
+    to **German** — "Fahrten", "Gegenstände", "Auslastung", "Drehen", and "Kein Regalbediengerät" on a board whose
+    dock you have just broken — and check with your own eyes that no row is cut off by the flaps on the board size you
+    actually built, not just on the six-wide one the test assumes. Finally, break the warehouse's crane rotation and
+    confirm that a freshly placed board says **"Messung läuft"** rather than a number, and keeps saying it until the
+    machine has really run a minute.

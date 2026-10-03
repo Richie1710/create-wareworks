@@ -10,6 +10,7 @@ import com.tterrag.registrate.util.nullness.NonNullUnaryOperator;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.display.AisleSummaryDisplaySource;
 import dev.wareworks.content.display.CraneStatusDisplaySource;
+import dev.wareworks.content.display.CraneThroughputDisplaySource;
 import dev.wareworks.content.display.FilteredStockDisplaySource;
 import dev.wareworks.content.display.StockListDisplaySource;
 import net.minecraft.world.level.block.Block;
@@ -54,6 +55,10 @@ public final class WareworksDisplaySources {
     /** What the stacker crane is doing, what it carries and where it is going. */
     public static final RegistryEntry<DisplaySource, CraneStatusDisplaySource> CRANE_STATUS =
             REGISTRATE.displaySource("crane_status", CraneStatusDisplaySource::new).register();
+
+    /** What the stacker crane got done in the minute behind it: trips, items, busy share and turning share (M25). */
+    public static final RegistryEntry<DisplaySource, CraneThroughputDisplaySource> CRANE_THROUGHPUT =
+            REGISTRATE.displaySource("crane_throughput", CraneThroughputDisplaySource::new).register();
 
     private WareworksDisplaySources() {
     }

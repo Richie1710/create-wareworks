@@ -6,6 +6,9 @@ import static dev.wareworks.gametest.WareworksGameTests.EMPTY_7X5X7;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
@@ -40,6 +43,7 @@ import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksDisplaySources;
@@ -68,9 +72,9 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
 /**
- * GameTests of the four Display Link sources ({@code docs/warehouse-system.md} §10, M14): they are registered and bound
- * to the right blocks, and a real {@code AllBlocks.DISPLAY_LINK} placed on a Wareworks block delivers the expected text
- * to a real display target, degraded cases included.
+ * GameTests of the five Display Link sources ({@code docs/warehouse-system.md} §10, M14 and M25): they are registered
+ * and bound to the right blocks, and a real {@code AllBlocks.DISPLAY_LINK} placed on a Wareworks block delivers the
+ * expected text to a real display target, degraded cases included.
  * <p>
  * <b>Targets.</b> A <b>lectern</b> keeps the {@code Component} of every line as it was built, so multi-line sources are
  * asserted there by lang key and arguments. A <b>nixie tube row</b> serializes the line to JSON and parses it back,
@@ -112,6 +116,18 @@ public final class DisplayLinkGameTests {
     private static final BlockPos STRAY_OUTPUT = new BlockPos(12, BASE_Y, 5);
 
     // --- display targets ---
+    /** More rows than the warehouse summary source can ever fill, so a check reads every line it produced. */
+    private static final int UNLIMITED_ROWS = 16;
+    /**
+     * Characters a row of a six-block display board, a sign and a lectern page hold — Create's own numbers
+     * ({@code FlapDisplayBlockEntity#getMaxCharCount()} is {@code (xSize * 16 - 2) / 3.5}; {@code SignDisplayTarget}
+     * and {@code LecternDisplayTarget} answer 15 and 256 flat). What the names row has to size itself to (M25).
+     */
+    private static final int SIX_BLOCK_BOARD_CHARS = 26;
+    private static final int SIGN_CHARS = 15;
+    private static final int LECTERN_CHARS = 256;
+    /** As many names as a warehouse ever syncs ({@code NetworkGoggleInfo.NAMES_LISTED}). */
+    private static final int NAMES_LISTED = 6;
     /** Eight tubes give 16 columns; a shorter row would cut every line down to nothing. */
     private static final int NIXIE_TUBES = 8;
     private static final BlockPos NIXIE_ROW = new BlockPos(6, BASE_Y, 6);
@@ -125,6 +141,10 @@ public final class DisplayLinkGameTests {
     /** A display board only accepts text above Create's medium speed level. */
     private static final int BOARD_RPM = 64;
 
+    /** The name the display-board test gives aisle A, and one for a letter the warehouse has no aisle for (M25). */
+    private static final String AISLE_NAME = "Ores";
+    private static final String OTHER_AISLE_NAME = "Metals";
+
     private static final int STORED_IRON = 40;
     private static final int STORED_DIAMONDS = 12;
     private static final int STORED_EMERALDS = 7;
@@ -136,6 +156,12 @@ public final class DisplayLinkGameTests {
     private static final int TIE_PULLS = 5;
     private static final int STORE_JOB_IRON = 32;
     private static final int JOB_TIMEOUT_TICKS = 1200;
+    /**
+     * Room for the crane's rolling window to fill up to a whole minute ({@code ThroughputWindow.WINDOW_TICKS} = 1200)
+     * and then run a job on top of it (M25, issue #16). The GameTest server ticks as fast as it can, so this is a
+     * fraction of a second of wall clock, not a minute of waiting.
+     */
+    private static final int FULL_MINUTE_TIMEOUT_TICKS = 2400;
     private static final int PAUSE_SETTLE_TICKS = 3;
     private static final int BOARD_SETTLE_TICKS = 20;
 
@@ -149,9 +175,13 @@ public final class DisplayLinkGameTests {
     // --- registration ----------------------------------------------------------------------------------------------
 
     /**
-     * The four sources are in Create's registry under their {@code wareworks} ids, their names use exactly the lang keys
+     * The five sources are in Create's registry under their {@code wareworks} ids, their names use exactly the lang keys
      * the generated English carries, and every bound block offers them in the declared order while rail, input and
      * production station and stock keeper offer none.
+     * <p>
+     * The <b>order</b> on the dock is the load-bearing part since M25 (issue #16): a Display Link screen preselects the
+     * first source a block offers, so "Crane Status" has to stay first or every link a player has already hung on a
+     * dock would quietly change what it shows.
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void displaysourcesregistered(GameTestHelper helper) {
@@ -163,6 +193,8 @@ public final class DisplayLinkGameTests {
                 WareworksLang.DISPLAY_SOURCE_FILTERED_STOCK);
         assertRegistered(helper, WareworksDisplaySources.CRANE_STATUS, "crane_status",
                 WareworksLang.DISPLAY_SOURCE_CRANE_STATUS);
+        assertRegistered(helper, WareworksDisplaySources.CRANE_THROUGHPUT, "crane_throughput",
+                WareworksLang.DISPLAY_SOURCE_CRANE_THROUGHPUT);
 
         List<BlockState> blocks = List.of(WareworksBlocks.STACKER_CRANE.getDefaultState(),
                 WareworksBlocks.WAREHOUSE_RAIL.getDefaultState(), WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState(),
@@ -170,7 +202,9 @@ public final class DisplayLinkGameTests {
                 WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState(), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState(),
                 WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState());
-        List<List<DisplaySource>> expected = List.of(List.of(WareworksDisplaySources.CRANE_STATUS.get()), List.of(),
+        List<List<DisplaySource>> expected = List.of(
+                List.of(WareworksDisplaySources.CRANE_STATUS.get(), WareworksDisplaySources.CRANE_THROUGHPUT.get()),
+                List.of(),
                 List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get()),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()), List.of(),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()),
@@ -266,6 +300,90 @@ public final class DisplayLinkGameTests {
                     // board watching this aisle has to be able to show it and not only the goggles.
                     helper.assertValueEqual(argText(args[2]), number(1), "rules refusing their item");
                     helper.assertValueEqual(aisle.controller().stockRulesAtMaximum(), 1, "the controller's own count");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A warehouse whose aisles a player has named gets one more line, naming them (M25, issue #15, ADR-038).
+     * <p>
+     * Three separate promises, because each is a way this line could go wrong:
+     * <ul>
+     * <li>it is <b>absent</b> while no aisle has a name, which is every warehouse before M25 — a display has few rows,
+     * and a line reading "Names:" with nothing after it would push the item count off a four-tube board;</li>
+     * <li>it sits <b>below the four core lines</b> and changes none of them, which is the rule every optional line of
+     * this source follows and the one a reordering has already broken once (M22 review fix) — and it is the
+     * <b>last</b> line of all, below the diagnostic ones, so that naming an aisle can never push a state a player has
+     * to act on off a board that was already full (M25 review fix);</li>
+     * <li>a name left behind by an aisle a player <b>tore down</b> does not reach it. A label outlives its aisle on
+     * purpose, so that rebuilding the aisle brings the label back — but a board names rows of <i>this</i> warehouse,
+     * and a row for an aisle it does not have is a row a player cannot act on.</li>
+     * </ul>
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void aislesummarywithnames(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STOCKED, IRON.toStack(STORED_IRON), DIAMOND.toStack(STORED_DIAMONDS));
+        aisle.storage(EMPTY_STORAGE);
+        aisle.storage(SECOND_EMPTY_STORAGE);
+        // A stock keeper, so this warehouse really has a diagnostic line for the names to end up under.
+        aisle.stockKeeper(KEEPER);
+        lectern(helper, LECTERN);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 0))
+                .thenExecute(() -> {
+                    link(helper, aisle.controllerPos(), Direction.UP, LECTERN, WareworksDisplaySources.AISLE_SUMMARY);
+                    assertFullSummary(helper, lecternPages(helper, LECTERN), 1, 3, 2, STORED_IRON + STORED_DIAMONDS);
+                    helper.assertValueEqual(lecternPages(helper, LECTERN).size(), 4,
+                            "a warehouse nobody named shows exactly the four core lines");
+
+                    aisle.controller().setAisleName('A', AISLE_NAME);
+                    // A name for a letter this warehouse has no aisle for: saved, and shown nowhere.
+                    aisle.controller().setAisleName('D', OTHER_AISLE_NAME);
+                    linkAt(helper, aisle.controllerPos().relative(Direction.UP)).updateGatheredData();
+
+                    List<Component> lines = lecternPages(helper, LECTERN);
+                    helper.assertValueEqual(lines.size(), 5, "the names line is added to the four counts");
+                    // The four core lines are untouched, which is what "below them" has to mean.
+                    assertFullSummary(helper, lines.subList(0, 4), 1, 3, 2, STORED_IRON + STORED_DIAMONDS);
+                    assertKey(helper, lines.get(4), WareworksLang.DISPLAY_AISLE_LINE_NAMES, "names line");
+                    Object[] args = argsOf(helper, lines.get(4), "names line");
+                    helper.assertValueEqual(args.length, 1, "the line carries one list");
+                    helper.assertValueEqual(argText(args[0]), "A " + AISLE_NAME,
+                            "the letter stays in front of the name, and only aisles this warehouse has are named");
+                    helper.assertValueEqual(aisle.controller().aisleName('D'), Optional.of(OTHER_AISLE_NAME),
+                            "the label of the aisle that is gone is still saved");
+
+                    // And it is the LAST line, not merely one below the counts: a stock rule adds a line of its own,
+                    // and the names have to end up under that too. WarehouseDisplays.limit drops the tail, so
+                    // whichever line is last is the one a short board loses - and a label a player chose is the only
+                    // row here that is not a number they asked for or a machine they have to go and look at.
+                    WarehouseStockKeeperBlockEntity keeper = aisle.stockKeeperAt(KEEPER);
+                    keeper.editRule(0, StockKeeperRules.FIELD_ITEM, EMERALD, 0L);
+                    keeper.editRule(0, StockKeeperRules.FIELD_MINIMUM, null, RULE_MINIMUM);
+                })
+                // The counts a display reads are the controller's own, refreshed by its rule tick.
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().governingStockRuleCount(), 1,
+                        "the stock keeper's rule governs, or the line below it proves nothing"))
+                .thenExecute(() -> {
+                    linkAt(helper, aisle.controllerPos().relative(Direction.UP)).updateGatheredData();
+                    List<Component> withRule = lecternPages(helper, LECTERN);
+                    helper.assertValueEqual(withRule.size(), 6, "four counts, the stock rules and the names");
+                    assertKey(helper, withRule.get(4), WareworksLang.DISPLAY_AISLE_LINE_RULES, "stock rules line");
+                    assertKey(helper, withRule.get(5), WareworksLang.DISPLAY_AISLE_LINE_NAMES,
+                            "the names line is the last of all");
+
+                    // And it goes again with the name, rather than standing there empty. Read off the source itself
+                    // and not off the lectern: a lectern book keeps the pages it was written once, so a line that is
+                    // gone leaves its old page behind - which is the target's business, not this source's.
+                    helper.assertTrue(aisle.controller().clearAisleName('A'), "the name is taken off");
+                    DisplayLinkBlockEntity link = linkAt(helper, aisle.controllerPos().relative(Direction.UP));
+                    helper.assertValueEqual(
+                            provideText(helper, link, WareworksDisplaySources.AISLE_SUMMARY, UNLIMITED_ROWS).size(), 5,
+                            "and the line is gone with the last name of an aisle this warehouse has, leaving the"
+                                    + " four counts and the stock rules");
+                    assertTheRowFitsItsBoard(helper);
                 })
                 .thenSucceed();
     }
@@ -634,6 +752,100 @@ public final class DisplayLinkGameTests {
                 .thenSucceed();
     }
 
+    // --- crane throughput ------------------------------------------------------------------------------------------
+
+    /**
+     * A crane whose rolling window is not yet a whole minute puts <b>one</b> line on the board, "Measuring", and no
+     * numbers at all (M25, issue #16, ADR-039): a four-row board cannot carry the "of the last 23 s" caveat the
+     * goggles carry, because {@code WarehouseDisplays#limit} would drop it off the end and leave the numbers standing
+     * alone — so a number about a few seconds must never stand there as if it were about a minute.
+     * <p>
+     * The same test covers the degraded case below it: with no dock under the link at all the source says "No crane".
+     * A link cannot reach that on its own — {@code DisplayLinkBlockEntity#updateGatheredData} drops a source the
+     * moment its block stops offering it — so the source is asked directly, which is what makes the branch worth
+     * having and worth testing.
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void cranethroughputwhilemeasuring(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STOCKED);
+        lectern(helper, LECTERN);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 0))
+                .thenExecute(() -> {
+                    helper.assertFalse(aisle.dock().throughput().isFullMinute(),
+                            "a crane this freshly built cannot have run a minute");
+                    DisplayLinkBlockEntity link = link(helper, aisle.dockPos(), Direction.UP, LECTERN,
+                            WareworksDisplaySources.CRANE_THROUGHPUT);
+                    List<Component> pages = lecternPages(helper, LECTERN);
+                    helper.assertValueEqual(pages.size(), 1, "one line while the window is still filling");
+                    assertKey(helper, pages.get(0), WareworksLang.DISPLAY_THROUGHPUT_MEASURING, "the measuring line");
+
+                    helper.setBlock(aisle.dockPos(), Blocks.STONE);
+                    List<MutableComponent> withoutCrane =
+                            provideText(helper, link, WareworksDisplaySources.CRANE_THROUGHPUT, UNLIMITED_ROWS);
+                    helper.assertValueEqual(withoutCrane.size(), 1, "one line without a crane");
+                    assertKey(helper, withoutCrane.get(0), WareworksLang.DISPLAY_THROUGHPUT_NO_CRANE,
+                            "the no-crane line");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Once the window really holds a minute the board carries <b>four fixed rows</b>, and every number on them is the
+     * dock's own: the trips and the items of that minute, the share of it the machine was working and the share it
+     * spent swinging round corners. Both shares go through the mod's one percent key, so no row carries a percent sign
+     * of its own.
+     * <p>
+     * The minute is filled with the crane standing still <b>before</b> the job, not after it: the window is rolling,
+     * so a trip counted in its first seconds would have been rolled off again by the time the sixtieth second arrived,
+     * and the test would be asserting against an empty minute without saying so.
+     * <p>
+     * The rows are fixed and a zero is printed — the turning share of a straight aisle is exactly that — because a row
+     * that came and went with its value would move the three below it, and on a four-row board one of them off the
+     * end. That is the opposite of the crane's goggle lines, which leave every zero out, and it is deliberate.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = FULL_MINUTE_TIMEOUT_TICKS)
+    public static void cranethroughputnumbersonboard(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STOCKED);
+        aisle.input(INPUT);
+        lectern(helper, LECTERN);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 1, 0))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.dock().throughput().isFullMinute(),
+                        "the window fills up to a whole minute with the crane standing still"))
+                .thenExecute(() -> aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT)), IRON.toStack(STORE_JOB_IRON)))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.storedAt(STOCKED, IRON), (long) STORE_JOB_IRON,
+                        "the iron was stored"))
+                // The drop is not the end of the job: the arm still has to retract before the machine reports a
+                // finished trip, so the row is read once the window really holds one.
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.dock().throughput().trips(), 1,
+                        "the finished job was counted as one trip"))
+                .thenExecute(() -> {
+                    link(helper, aisle.dockPos(), Direction.UP, LECTERN, WareworksDisplaySources.CRANE_THROUGHPUT);
+                    CraneThroughput measured = aisle.dock().throughput();
+                    helper.assertTrue(measured.isFullMinute(), "and the window still holds a whole minute");
+                    helper.assertValueEqual(measured.items(), STORE_JOB_IRON, "it delivered the whole batch");
+                    helper.assertTrue(measured.busyShare() > 0, "a share of the minute was work");
+                    helper.assertValueEqual(measured.turnShare(), 0, "and a straight aisle never turns");
+
+                    List<Component> pages = lecternPages(helper, LECTERN);
+                    helper.assertValueEqual(pages.size(), 4, "trips, items, busy and turning");
+                    assertCountRow(helper, pages.get(0), WareworksLang.DISPLAY_THROUGHPUT_LINE_TRIPS, measured.trips(),
+                            "the trips row");
+                    assertCountRow(helper, pages.get(1), WareworksLang.DISPLAY_THROUGHPUT_LINE_ITEMS, measured.items(),
+                            "the items row");
+                    assertShareRow(helper, pages.get(2), WareworksLang.DISPLAY_THROUGHPUT_LINE_BUSY,
+                            measured.busyShare(), "the busy row");
+                    assertShareRow(helper, pages.get(3), WareworksLang.DISPLAY_THROUGHPUT_LINE_TURNING,
+                            measured.turnShare(), "the turning row");
+                })
+                .thenSucceed();
+    }
+
     // --- sign ----------------------------------------------------------------------------------------------------
 
     /**
@@ -697,6 +909,56 @@ public final class DisplayLinkGameTests {
         if (link == null)
             helper.fail("missing display link block entity", pos);
         return link;
+    }
+
+    /**
+     * The names row sizes itself to the row it is going on (M25, issue #15 — review fix), which the warehouses above
+     * cannot show: a name is up to {@code AisleName.MAX_LENGTH} characters a player chose, so six of them with
+     * separators are 113 characters where a six-block board row holds 26 and a sign holds 15.
+     * <p>
+     * Asserted against {@code WareworksLang#aisleNamesLine} itself rather than through a board, because what is being
+     * checked is the <b>rule</b> — whole entries only, never half a name; the rest counted rather than silently
+     * dropped; and always at least one entry, because an empty list is worse than a row the target cuts. A GameTest
+     * and not a JUnit case because the line is a {@code Component}.
+     */
+    private static void assertTheRowFitsItsBoard(GameTestHelper helper) {
+        SortedMap<Character, String> three = new TreeMap<>();
+        three.put('A', "Ores");
+        three.put('B', "Metals");
+        three.put('C', "Gravel");
+        // A six-block board row: 26 characters. Two names and their label are 24 and would fit - but not together
+        // with the mark that says a third was left out, and the mark is not optional: the point of the row is that
+        // what it leaves out is counted rather than dropped in silence. So it names one and counts two, and the whole
+        // row is 18 characters: less than the board could show, and all of it true.
+        MutableComponent onABoard = WareworksLang.aisleNamesLine(three, NAMES_LISTED, SIX_BLOCK_BOARD_CHARS);
+        assertKey(helper, onABoard, WareworksLang.DISPLAY_AISLE_LINE_NAMES_MORE, "three names on a six-block board");
+        Object[] args = argsOf(helper, onABoard, "three names on a six-block board");
+        helper.assertValueEqual(argText(args[0]), "A Ores", "the names that fit beside the mark, whole");
+        helper.assertValueEqual(argText(args[1]), number(2), "and the ones that did not are counted");
+        helper.assertTrue(onABoard.getString().length() <= SIX_BLOCK_BOARD_CHARS,
+                "the whole row must fit the board it was built for: '" + onABoard.getString() + "'");
+
+        // Two names on the same board: they fit without a mark, so nothing is counted and nothing is left out.
+        SortedMap<Character, String> two = new TreeMap<>(three.headMap('C'));
+        MutableComponent bothOnABoard = WareworksLang.aisleNamesLine(two, NAMES_LISTED, SIX_BLOCK_BOARD_CHARS);
+        assertKey(helper, bothOnABoard, WareworksLang.DISPLAY_AISLE_LINE_NAMES, "two names on a six-block board");
+        helper.assertValueEqual(argText(argsOf(helper, bothOnABoard, "two names")[0]), "A Ores · B Metals",
+                "both of them, whole");
+        helper.assertTrue(bothOnABoard.getString().length() <= SIX_BLOCK_BOARD_CHARS,
+                "and that row fits too: '" + bothOnABoard.getString() + "'");
+
+        // Wide enough for all three: the plain key, nothing counted.
+        MutableComponent onALectern = WareworksLang.aisleNamesLine(three, NAMES_LISTED, LECTERN_CHARS);
+        assertKey(helper, onALectern, WareworksLang.DISPLAY_AISLE_LINE_NAMES, "three names with room for them");
+        helper.assertValueEqual(argText(argsOf(helper, onALectern, "all three")[0]), "A Ores · B Metals · C Gravel",
+                "all three, in letter order");
+
+        // A row too narrow for even one: one whole name all the same, because cutting a player's own text is worse.
+        MutableComponent onASign = WareworksLang.aisleNamesLine(three, NAMES_LISTED, SIGN_CHARS);
+        assertKey(helper, onASign, WareworksLang.DISPLAY_AISLE_LINE_NAMES_MORE, "three names on a sign");
+        Object[] signArgs = argsOf(helper, onASign, "three names on a sign");
+        helper.assertValueEqual(argText(signArgs[0]), "A Ores", "the first, whole and never half a word");
+        helper.assertValueEqual(argText(signArgs[1]), number(2), "the other two counted");
     }
 
     /** What the source would write onto a target with {@code rows} rows, through the link's real context. */
@@ -839,6 +1101,23 @@ public final class DisplayLinkGameTests {
         helper.assertValueEqual(argText(argsOf(helper, held, "held item")[0]),
                 Items.IRON_INGOT.getDescription().getString(), "held item");
         helper.assertValueEqual(argText(argsOf(helper, held, "held amount")[1]), number(STORE_JOB_IRON), "held amount");
+    }
+
+    /** A throughput board row whose one argument is a plain count. */
+    private static void assertCountRow(GameTestHelper helper, Component line, String key, long expected, String what) {
+        assertKey(helper, line, key, what);
+        helper.assertValueEqual(argText(argsOf(helper, line, what)[0]), number(expected), what + "'s number");
+    }
+
+    /**
+     * A throughput board row whose one argument is a share — which is a nested component, because every share in the
+     * mod goes through the single key that carries a percent sign ({@link WareworksLang#GOGGLES_PERCENT}, ADR-039).
+     */
+    private static void assertShareRow(GameTestHelper helper, Component line, String key, int share, String what) {
+        assertKey(helper, line, key, what);
+        Component percent = (Component) argsOf(helper, line, what)[0];
+        assertKey(helper, percent, WareworksLang.GOGGLES_PERCENT, what + "'s percent sign");
+        helper.assertValueEqual(argText(argsOf(helper, percent, what)[0]), number(share), what + "'s share");
     }
 
     private static void assertNumber(GameTestHelper helper, BlockPos tube, long expected, String what) {

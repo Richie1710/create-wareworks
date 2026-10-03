@@ -35,6 +35,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.content.crane.CraneJobSummary;
+import dev.wareworks.content.crane.StackerCraneBlock;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
@@ -50,6 +51,7 @@ import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
+import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
@@ -58,6 +60,7 @@ import dev.wareworks.util.WareworksLang;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -199,6 +202,8 @@ public final class CornerVisualScenario implements VisualScenario {
     private static final int MOMENT_TIMEOUT_TICKS = 3600;
     private static final int ALL_STORED_TIMEOUT_TICKS = 6000;
     private static final int DELIVERY_TIMEOUT_TICKS = 2400;
+    /** A language switch rebuilds every atlas, so the reload needs its own, longer budget. */
+    private static final int RELOAD_TIMEOUT_TICKS = 1200;
     /** Player height above the scene between camera moves, so a creative player never lands and stops flying. */
     private static final int FLY_HEIGHT = 12;
 
@@ -234,6 +239,11 @@ public final class CornerVisualScenario implements VisualScenario {
     private static final String TURN_MOMENT = "turn";
     /** The one moment during which no new items may be fed: what comes back is counted against what went in. */
     private static final String RETRIEVE_MOMENT = "retrieve";
+    /** The chapter that reads what the machine got done, for the diagnostic line of a wait that is still waiting. */
+    private static final String THROUGHPUT_MOMENT = "throughput";
+
+    private static final String ENGLISH = "en_us";
+    private static final String GERMAN = "de_de";
 
     // --- cameras ----------------------------------------------------------------------------------------------------
 
@@ -292,6 +302,25 @@ public final class CornerVisualScenario implements VisualScenario {
     private static final double GOGGLE_EYE_BACK = 0.9;
     private static final double GOGGLE_TOP_FACE = 1.0;
 
+    /**
+     * Goggle camera for the <b>dock</b> (M25, issue #16): north of it and above, looking down on the north strip of
+     * the rail bed's top face — see {@link #dockView}. The eye is lower and nearer than {@link #GOGGLE_EYE_HEIGHT},
+     * because the face it aims at is {@value StackerCraneBlock#BED_HEIGHT_PIXELS} px off the ground and the ray has
+     * to stay inside the player's reach while landing clear of the value box in the middle of that face.
+     */
+    private static final double DOCK_EYE_HEIGHT = 3.2;
+    private static final double DOCK_EYE_BACK = 2.2;
+    /** The top face of the dock's rail bed, i.e. the whole height of the block a camera can land a ray on. */
+    private static final double DOCK_TOP_FACE = StackerCraneBlock.BED_HEIGHT_PIXELS / 16.0;
+    /**
+     * How far along the dock's top face, measured from its north edge, the goggle ray lands. The mast-height value box
+     * is a sphere of radius {@code ValueBoxTransform#getScale() / 2 = 0.25} around the middle of that face
+     * ({@code MastHeightValueBox}), and Create's goggle overlay returns before its first line while a value box the
+     * crosshair really hits is alive ({@code GoggleOverlayRenderer}) — so this is the clearance that makes the dock's
+     * tooltip photographable at all. {@link GoggleShots} fails the run with that very message if it is ever lost.
+     */
+    private static final double DOCK_TARGET_Z = 0.12;
+
     // --- run state (server steps write, the client status line reads) -------------------------------------------------
 
     private volatile AABB censusBox = new AABB(BlockPos.ZERO);
@@ -306,6 +335,8 @@ public final class CornerVisualScenario implements VisualScenario {
     private int waitingPolls;
     /** The machine's own pose at the frozen moment, read on the server and checked against what the client draws. */
     private volatile CranePose poseAtMoment = StackerCraneBlockEntity.HOME_POSE;
+    /** Switches the client's language for the second half of the throughput line check ({@link VisualLanguage}). */
+    private final VisualLanguage language = new VisualLanguage(RELOAD_TIMEOUT_TICKS, SETTLE_TICKS);
 
     /** A storage location of the warehouse and the item its store filter dedicates it to. */
     private record Rack(RackPosition position, Item item) {
@@ -449,12 +480,14 @@ public final class CornerVisualScenario implements VisualScenario {
 
         if (pass == VisualPass.FLYWHEEL) {
             rackGoggleShots(script);
+            throughputChapter(script);
             retrieveThroughTheOutput(script);
             script.client("corner: every check passed",
                     context -> LOGGER.info(PREFIX + "corner: ALL CHECKS PASSED (the machine turns at the corner, the "
                             + "corner racks are served, the rack inside the bend belongs to the aisle it faces, every "
-                            + "item reached the rack it was addressed to, the census is exact, and a retrieval comes "
-                            + "back round the bend)"));
+                            + "item reached the rack it was addressed to, the census is exact, the dock reports what "
+                            + "it got done in a minute with a real turn in it and the controller repeats its "
+                            + "headline, in English and in German, and a retrieval comes back round the bend)"));
         }
         if (pass == VisualPass.values()[VisualPass.values().length - 1])
             script.client("corner: check that the turn was heard", CornerVisualScenario::assertTurnSounds);
@@ -927,6 +960,282 @@ public final class CornerVisualScenario implements VisualScenario {
         GoggleShots.reach(script, NAME, 0.0);
     }
 
+    // --- the crane's throughput lines (M25, issue #16) ------------------------------------------------------------
+
+    /**
+     * Crafted numbers for the line check, one full minute's worth: the six buckets sum to 1200, and every share comes
+     * out a different value (busy 78 %, blocked 2 %, travel 54 %, turning 6 %, at the rack 18 %), so a line that
+     * swapped two of its arguments could not read right by accident.
+     */
+    private static final CraneThroughput LINE_SAMPLE =
+            new CraneThroughput(1200, 240, 0, 648, 72, 216, 24, 9, 412, 9);
+    /** The same minute with nothing ever blocked, so the blocked line has to be left out entirely. */
+    private static final CraneThroughput UNBLOCKED_SAMPLE =
+            new CraneThroughput(1200, 264, 0, 648, 72, 216, 0, 9, 412, 9);
+
+    /**
+     * The whole throughput chapter, in English and then in German: the machine's <b>own</b> four lines on the dock and
+     * the two the controller repeats, each photographed with the numbers the client really holds, and around them the
+     * crafted-number line checks that cover the cases a real warehouse cannot be put into on demand.
+     * <p>
+     * Both halves are needed and neither replaces the other. The <b>shots</b> prove that the lines reach a player at
+     * all — that the dock's three-pixel rail bed can be aimed at, that the measurement arrives only because somebody
+     * is looking, and that four more lines still fit a tooltip that already runs long. The <b>line checks</b> prove
+     * the shapes a live warehouse will not produce to order: a straight aisle's breakdown, a window with nothing
+     * blocked, and a window that has seen nothing at all.
+     * <p>
+     * It ends by waiting until everything it fed is stored again, because the retrieval that follows counts what comes
+     * back out of the warehouse against what went into it ({@link #assertDelivered}).
+     */
+    private void throughputChapter(VisualScript script) {
+        script.server("corner: the run is looking at what the machine got done",
+                (server, context) -> moment = THROUGHPUT_MOMENT);
+        throughputGoggleShots(script, "");
+        script.client("corner: the throughput lines render in English", CornerVisualScenario::checkThroughputLines);
+        language.switchTo(script, "corner: ", GERMAN);
+        throughputGoggleShots(script, "-de");
+        script.client("corner: the throughput lines render in German", CornerVisualScenario::checkThroughputLines);
+        language.switchTo(script, "corner: ", ENGLISH);
+        script.serverUntil("corner: wait until everything the throughput shots fed is stored again", this::allStored,
+                ALL_STORED_TIMEOUT_TICKS);
+    }
+
+    /**
+     * The two surfaces that carry the measurement, in whichever language the client has loaded: the <b>dock</b>, which
+     * shows the whole block, and the <b>controller</b>, which repeats the headline alone.
+     * <p>
+     * Both are shot with the machine <b>standing idle at the end of a minute of real work</b>, which is the one state
+     * in which a reader can judge the number: nothing is moving while the tooltip is read, and "Busy: 85 % of the last
+     * minute" is plainly a claim about the minute behind it rather than about the moment of the shot. The machine
+     * itself is left where its last job ended — it has no home point here, so idle means standing still, not standing
+     * on the dock — and the aisle behind the tooltip is what shows how far it got. {@link #idleAfterATurn} is what
+     * makes the state honest: it holds until the window really holds travel, a stop and a <b>corner</b>, and feeds the
+     * warehouse again if the rolling minute has forgotten the turn in the meantime.
+     */
+    private void throughputGoggleShots(VisualScript script, String suffix) {
+        script.serverUntil("corner: wait until the machine is idle after a measured minute with a turn in it",
+                this::idleAfterATurn, MOMENT_TIMEOUT_TICKS);
+        GoggleShots.reach(script, NAME, GoggleShots.vanillaReach());
+        fly(script);
+        String dockLabel = "goggles-throughput-dock" + suffix;
+        GoggleShots.shot(script, NAME, dockView(dockLabel), dockLabel, dock -> dock,
+                CornerVisualScenario::dockThroughputSynced, CornerVisualScenario::checkDockThroughputGoggles);
+        fly(script);
+        String controllerLabel = "goggles-throughput-controller" + suffix;
+        GoggleShots.shot(script, NAME, controllerView(controllerLabel), controllerLabel,
+                CornerVisualScenario::controllerPos, CornerVisualScenario::controllerThroughputSynced,
+                CornerVisualScenario::checkControllerThroughputGoggles);
+        GoggleShots.reach(script, NAME, 0.0);
+    }
+
+    /**
+     * One poll before a throughput shot: everything stored, the machine standing idle, and the rolling minute still
+     * holding travel, a stop and at least one corner.
+     * <p>
+     * The corner is the point of the whole scenario and the reason this is a wait rather than a read: the window is a
+     * <b>rolling</b> minute, so a turn taken early in a long storing run is forgotten again before the shot. When that
+     * has happened the poll puts another stream in through {@link #keepTheWarehouseBusy}, the machine turns again, and
+     * the next idle moment has a fresh corner in it. Feeding here is safe because the chapter waits for everything to
+     * be stored again before the retrieval counts what comes back.
+     */
+    private boolean idleAfterATurn(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        if (!allStored(server, context))
+            return false;
+        StackerCraneBlockEntity crane = dock(level, dock);
+        CraneThroughput measured = crane.throughput();
+        if (measured.corners() > 0 && measured.travelTicks() > 0 && measured.stopTicks() > 0) {
+            LOGGER.info(PREFIX + "corner: the machine is idle and its minute holds {}", measured);
+            return true;
+        }
+        LOGGER.info(PREFIX + "corner: the measured minute has forgotten the turn ({}); feeding the warehouse again",
+                measured);
+        keepTheWarehouseBusy(level, dock, crane);
+        return false;
+    }
+
+    /**
+     * The camera for the dock's own tooltip: north of the block and above, looking down on the <b>north strip</b> of
+     * its rail bed's top face.
+     * <p>
+     * The dock is the hardest goggle target in the mod, and this is the only way to aim at it. The block is a
+     * {@value StackerCraneBlock#BED_HEIGHT_PIXELS} px rail bed with a small end stop, so its four side faces are three
+     * pixels tall — far too little for a camera that has to keep its player's feet out of the ground — and the one
+     * large face it has, the top, carries the centred mast-height value box. Create's goggle overlay returns before
+     * its first line while a value box the crosshair really hits is alive, so the ray lands {@value #DOCK_TARGET_Z}
+     * along that face instead of in the middle of it ({@link #DOCK_TARGET_Z}).
+     */
+    private static CameraView dockView(String label) {
+        return CameraView.of(label, BLOCK_CENTER, DOCK_EYE_HEIGHT, -DOCK_EYE_BACK, BLOCK_CENTER, DOCK_TOP_FACE,
+                DOCK_TARGET_Z);
+    }
+
+    /** The dock's measurement has reached the client, which only happens once the server saw the player look at it. */
+    private static boolean dockThroughputSynced(VisualContext context) {
+        return clientCrane(context).flatMap(crane -> crane.goggleInfo().throughput()).isPresent();
+    }
+
+    /**
+     * The dock's four lines, read off the tooltip Create is drawing and compared against the record the <b>client
+     * itself</b> holds — never against numbers this file made up, which is the one way a measurement shot can pass
+     * while showing something else.
+     */
+    private static void checkDockThroughputGoggles(VisualContext context) {
+        StackerCraneBlockEntity crane = clientCrane(context)
+                .orElseThrow(() -> new VisualTestException("the client has no dock to read the measurement from"));
+        CraneThroughput measured = crane.goggleInfo().throughput().orElseThrow(
+                () -> new VisualTestException("the dock's measurement has not reached the client"));
+        String locale = context.minecraft().getLanguageManager().getSelected();
+        requireBendingWarehouse(context);
+        // The content of the picture, and the reason this scenario and not 'aisle' is where it is taken: a machine
+        // that really swung round a corner inside the minute it is reporting on.
+        if (measured.corners() <= 0 || measured.turnShare() <= 0)
+            throw new VisualTestException("this shot is about a turning share a player can see; the dock reports "
+                    + measured.corners() + " corner(s) and a turning share of " + measured.turnShare() + " %");
+        if (measured.busyShare() <= 0)
+            throw new VisualTestException("the dock reports a busy share of 0 % after a minute of real work: "
+                    + measured);
+        List<String> lines = GoggleShots.lines(context, context.origin());
+        String busy = WareworksLang.craneBusy(measured).component().getString();
+        String breakdown = WareworksLang.craneBreakdown(measured, true).component().getString();
+        String trips = WareworksLang.craneTrips(measured).component().getString();
+        for (String line : List.of(busy, breakdown, trips))
+            GoggleShots.requireLine(lines, line);
+        requireNumbers(busy, locale, "the dock's busy headline", String.valueOf(measured.busyShare()));
+        requireNumbers(breakdown, locale, "the dock's breakdown", String.valueOf(measured.travelShare()),
+                String.valueOf(measured.turnShare()), String.valueOf(measured.corners()),
+                String.valueOf(measured.stopShare()));
+        requireNumbers(trips, locale, "the dock's trip counts", String.valueOf(measured.trips()),
+                String.valueOf(measured.items()));
+        String blocked = WareworksLang.craneBlocked(measured).component().getString();
+        // Nothing is printed at zero: a parked, unblocked machine must not carry a standing "Blocked: 0 %".
+        if (measured.blockedShare() > 0)
+            GoggleShots.requireLine(lines, blocked);
+        else
+            GoggleShots.requireNoLine(lines, blocked);
+        LOGGER.info(PREFIX + "corner: CHECK ({}) the dock's goggles read \"{}\" / \"{}\" / \"{}\" (blocked {} %)",
+                locale, busy, breakdown, trips, measured.blockedShare());
+    }
+
+    /** The controller's summary carries the dock's measurement, i.e. the number its own line is drawn from. */
+    private static boolean controllerThroughputSynced(VisualContext context) {
+        return controllerSummary(context).flatMap(ControllerGoggleSummary::crane)
+                .flatMap(CraneGoggleInfo::throughput).isPresent();
+    }
+
+    /**
+     * The controller repeats the <b>headline alone</b>: its tooltip already runs to the warehouse's size, its aisle
+     * list, its stock and the crane's whole status, and the breakdown and the trip counts belong to the machine
+     * itself (ADR-039). So this shot proves two things at once — that the busy line is there, and that the other two
+     * are not.
+     */
+    private static void checkControllerThroughputGoggles(VisualContext context) {
+        CraneGoggleInfo crane = controllerSummary(context).flatMap(ControllerGoggleSummary::crane)
+                .orElseThrow(() -> new VisualTestException("the controller's summary carries no crane"));
+        CraneThroughput measured = crane.throughput().orElseThrow(
+                () -> new VisualTestException("the controller's summary carries no measurement"));
+        String locale = context.minecraft().getLanguageManager().getSelected();
+        List<String> lines = GoggleShots.lines(context, controllerPos(context.origin()));
+        String busy = WareworksLang.craneBusy(measured).component().getString();
+        GoggleShots.requireLine(lines, busy);
+        requireNumbers(busy, locale, "the controller's busy headline", String.valueOf(measured.busyShare()));
+        for (boolean bending : List.of(true, false))
+            GoggleShots.requireNoLine(lines, WareworksLang.craneBreakdown(measured, bending).component().getString());
+        GoggleShots.requireNoLine(lines, WareworksLang.craneTrips(measured).component().getString());
+        LOGGER.info(PREFIX + "corner: CHECK ({}) the controller's goggles read \"{}\" and leave the breakdown and the "
+                + "trip counts to the dock", locale, busy);
+    }
+
+    /** Fails unless the warehouse the shot is about really bends, which is what makes the turning term appear. */
+    private static void requireBendingWarehouse(VisualContext context) {
+        NetworkGoggleInfo network = controllerSummary(context).flatMap(ControllerGoggleSummary::network)
+                .orElseThrow(() -> new VisualTestException("the controller's summary carries no network"));
+        if (network.aisleCount() < 2)
+            throw new VisualTestException("this shot is about a warehouse that bends, and the synced network has "
+                    + network.aisleCount() + " aisle(s)");
+    }
+
+    /**
+     * The throughput lines of the shapes a live warehouse cannot be put into on demand, built by the <b>real</b>
+     * renderer: the real lang files through {@code LangBuilder#forGoggles}, which needs the client's font and
+     * therefore cannot be reached from a GameTest at all.
+     * <p>
+     * This is the one check that would catch a missing lang key (the line would read {@code wareworks.gui.goggles.…}),
+     * a template whose argument count does not match its builder (Minecraft <b>catches</b> that and silently shows the
+     * raw template, so the line would read {@code Busy: %1$s of the last minute}) and a percent sign that was not
+     * written as {@code %%} (the whole value would come out raw). None of those crashes, which is exactly why a test
+     * has to look at the text.
+     */
+
+    private static void checkThroughputLines(VisualContext context) {
+        String locale = context.minecraft().getLanguageManager().getSelected();
+        // A warehouse that bends: four lines, and the breakdown names the turning share with its corner count.
+        List<String> bending = throughputLines(LINE_SAMPLE, true);
+        requireLineCount(bending, 4, locale, "a bending warehouse with something blocked");
+        requireNumbers(bending.get(0), locale, "the busy headline", "78");
+        requireNumbers(bending.get(1), locale, "the blocked line", "2");
+        requireNumbers(bending.get(2), locale, "the breakdown", "54", "6", "9", "18");
+        requireNumbers(bending.get(3), locale, "the trip counts", "9", "412");
+        if (!bending.get(2).contains("("))
+            throw new VisualTestException(locale + ": the breakdown of a bending warehouse must name the corner "
+                    + "count in brackets, but reads \"" + bending.get(2) + "\"");
+
+        // One straight aisle can never turn, so the turning term is left out rather than printed as a standing 0 %.
+        List<String> straight = throughputLines(LINE_SAMPLE, false);
+        requireLineCount(straight, 4, locale, "a straight warehouse with something blocked");
+        requireNumbers(straight.get(2), locale, "the straight breakdown", "54", "18");
+        if (straight.get(2).contains("("))
+            throw new VisualTestException(locale + ": a straight aisle never turns, so its breakdown must not name a "
+                    + "corner count, but reads \"" + straight.get(2) + "\"");
+
+        // Nothing blocked: that line is left out, so the breakdown moves up.
+        List<String> unblocked = throughputLines(UNBLOCKED_SAMPLE, true);
+        requireLineCount(unblocked, 3, locale, "a window in which nothing was ever blocked");
+        if (!unblocked.get(1).contains("("))
+            throw new VisualTestException(locale + ": with nothing blocked the breakdown must follow the headline, "
+                    + "but the second line reads \"" + unblocked.get(1) + "\"");
+
+        // And a window with nothing worth showing adds no line at all, which is what keeps a parked crane's tooltip
+        // exactly what it was before this feature existed.
+        List<String> empty = throughputLines(CraneThroughput.EMPTY, true);
+        requireLineCount(empty, 0, locale, "a window that has seen nothing");
+        LOGGER.info(PREFIX + "corner: CHECK ({}) the throughput lines read \"{}\" / \"{}\" / \"{}\" / \"{}\"", locale,
+                bending.get(0), bending.get(1), bending.get(2), bending.get(3));
+    }
+
+    /** The throughput lines alone, with the status line every crane tooltip starts with stripped off. */
+    private static List<String> throughputLines(CraneThroughput measured, boolean bending) {
+        List<Component> tooltip = new ArrayList<>();
+        CraneGoggleInfo.NONE.withThroughput(measured).addGoggleLines(tooltip, 1, false, true, bending);
+        List<String> lines = new ArrayList<>();
+        for (int line = 1; line < tooltip.size(); line++)
+            lines.add(tooltip.get(line).getString().trim());
+        return lines;
+    }
+
+    private static void requireLineCount(List<String> lines, int expected, String locale, String what) {
+        if (lines.size() != expected)
+            throw new VisualTestException(locale + ": " + what + " must add " + expected + " throughput line(s), but "
+                    + "added " + lines.size() + ": " + lines);
+    }
+
+    /** A line is really translated text with the numbers it was given, and not a key or a raw template. */
+    private static void requireNumbers(String line, String locale, String what, String... numbers) {
+        for (String residue : List.of("wareworks.", "%1$s", "%2$s", "%3$s", "%4$s", "%%")) {
+            if (line.contains(residue))
+                throw new VisualTestException(locale + ": " + what + " was not translated (\"" + residue + "\" is "
+                        + "still in it): \"" + line + "\"");
+        }
+        if (line.isBlank())
+            throw new VisualTestException(locale + ": " + what + " is blank");
+        for (String number : numbers) {
+            if (!line.contains(number))
+                throw new VisualTestException(locale + ": " + what + " must name " + number + ", but reads \"" + line
+                        + "\"");
+        }
+    }
+
     /** A rack of each aisle and the rack inside the bend, each with the address it really has. */
     private void rackGoggleShots(VisualScript script) {
         GoggleShots.reach(script, NAME, GoggleShots.vanillaReach());
@@ -1240,7 +1549,12 @@ public final class CornerVisualScenario implements VisualScenario {
      * one is under the crosshair ({@code GoggleOverlayRenderer}).
      */
     private static CameraView controllerView() {
-        return CameraView.of("goggles-controller", -1.5, 1.8, -2.6, -0.78, 0.21, -0.02);
+        return controllerView("goggles-controller");
+    }
+
+    /** The same view under another shot label, for the second controller shot of a pass. */
+    private static CameraView controllerView(String label) {
+        return CameraView.of(label, -1.5, 1.8, -2.6, -0.78, 0.21, -0.02);
     }
 
     private static CranePose frozenPose(VisualContext context) {

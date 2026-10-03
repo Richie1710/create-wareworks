@@ -6,8 +6,12 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Optional;
 
+import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
+import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollValueBehaviour;
+
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.CraneJobSummary;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
@@ -28,6 +32,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -83,6 +88,15 @@ public final class RackBranchGameTests {
 
     /** A branch that is not the first one, for the round trip no live warehouse can produce yet. */
     private static final int OTHER_BRANCH = 3;
+
+    /** Keys of the aisle-name tag (M25, issue #15), and the names and value-box index the carry test uses. */
+    private static final String NAMES = "Names";
+    private static final String LETTER_KEY = "C";
+    private static final int LETTER_D = 3;
+    /** A letter no aisle of this fixture ever holds, for the carry without a warehouse. */
+    private static final int LETTER_F = 5;
+    private static final String ORES = "Ores";
+    private static final String METALS = "Metals";
 
     private RackBranchGameTests() {
     }
@@ -166,6 +180,102 @@ public final class RackBranchGameTests {
         helper.assertValueEqual(CraneJobSummary.read(crafted), Optional.empty(), "a branch out of range is refused");
 
         helper.succeed();
+    }
+
+    /**
+     * A name follows the letter it was given to (M25, issue #15). Scrolling the controller's value box from A to D
+     * renames the aisle, and the label goes with it — on the block entity and in the save.
+     * <p>
+     * It is a <b>swap</b>, not an overwrite, and that is what makes the gesture safe: scrolling the box is reversible,
+     * so the table's answer to it has to be reversible too. Scrolling D back to A restores exactly what was there, and
+     * a letter change can therefore never destroy a name a player gave another aisle.
+     * <p>
+     * The last part is the case that needed both halves to hold at once (M25 review fix): <b>the dock is broken
+     * first</b>. Names deliberately outlive a lost dock and the value box deliberately still scrolls then, so a letter
+     * really moves while the controller has no warehouse — and the name has to move with it. It used to stay behind,
+     * and because the carry is a swap, scrolling back then moved it onto the letter the rebuilt warehouse had just
+     * taken, a state no further scroll could repair.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void aisleNameFollowsItsLetter(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+
+        helper.startSequence().thenIdle(SETTLE_TICKS).thenExecute(() -> {
+            WarehouseControllerBlockEntity controller = aisle.controller();
+            HolderLookup.Provider registries = helper.getLevel().registryAccess();
+            ScrollValueBehaviour letter = BlockEntityBehaviour.get(controller, ScrollValueBehaviour.TYPE);
+            if (letter == null) {
+                helper.fail("the controller has no aisle letter value box", aisle.controllerPos());
+                return;
+            }
+            helper.assertValueEqual(controller.setAisleName('A', ORES), ORES, "aisle A is named");
+            helper.assertValueEqual(controller.aisleName('A'), Optional.of(ORES), "and reads back");
+
+            letter.setValue(LETTER_D);
+            helper.assertValueEqual(controller.aisleLetter(), 'D', "the value box moved");
+            helper.assertValueEqual(controller.warehouse().flatMap(WarehouseLayout::letter), Optional.of('D'),
+                    "and so did the warehouse's own letter");
+            helper.assertTrue(controller.aisleName('A').isEmpty(), "A is nobody's aisle any more");
+            helper.assertValueEqual(controller.aisleName('D'), Optional.of(ORES), "the name went with the letter");
+            ListTag saved = controller.saveWithoutMetadata(registries).getList(NAMES, Tag.TAG_COMPOUND);
+            helper.assertValueEqual(saved.size(), 1, "one saved name");
+            helper.assertValueEqual(saved.getCompound(0).getString(LETTER_KEY), "D", "saved under the new letter");
+
+            // The other direction: a scroll is reversible, so this has to be too.
+            letter.setValue(0);
+            helper.assertValueEqual(controller.aisleName('A'), Optional.of(ORES), "scrolling back restores the name");
+            helper.assertTrue(controller.aisleName('D').isEmpty(), "and leaves nothing behind on D");
+
+            // A swap, not an overwrite: a second name on the letter being scrolled onto is moved, never dropped.
+            helper.assertValueEqual(controller.setAisleName('D', METALS), METALS, "a second aisle is named");
+            letter.setValue(LETTER_D);
+            helper.assertValueEqual(controller.aisleName('D'), Optional.of(ORES), "the dock aisle kept its name");
+            helper.assertValueEqual(controller.aisleName('A'), Optional.of(METALS),
+                    "and the name on the letter it took moved the other way, instead of being destroyed");
+            helper.assertValueEqual(controller.aisleNames().size(), 2, "both names are still there");
+        })
+                // Without a warehouse: break the dock, so the controller's layout is dropped while the names stay.
+                .thenExecute(() -> helper.setBlock(aisle.dockPos(), Blocks.AIR))
+                .thenWaitUntil(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertTrue(controller.warehouse().isEmpty(), "the broken dock took the warehouse away");
+                    helper.assertValueEqual(controller.aisleName('D'), Optional.of(ORES),
+                            "while the names outlive it, which is the whole point of keeping them");
+                })
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    ScrollValueBehaviour letter = BlockEntityBehaviour.get(controller, ScrollValueBehaviour.TYPE);
+                    if (letter == null) {
+                        helper.fail("the controller has no aisle letter value box", aisle.controllerPos());
+                        return;
+                    }
+                    letter.setValue(LETTER_F);
+                    helper.assertValueEqual(controller.aisleLetter(), 'F', "the box still scrolls without a dock");
+                    helper.assertValueEqual(controller.aisleName('F'), Optional.of(ORES),
+                            "and the name moved with the letter, dock or no dock");
+                    helper.assertTrue(controller.aisleName('D').isEmpty(), "nothing is left behind on D");
+                    ListTag saved = controller.saveWithoutMetadata(registries).getList(NAMES, Tag.TAG_COMPOUND);
+                    helper.assertValueEqual(saved.size(), 2, "both names are still saved");
+
+                    // Reversible here too: this is where leaving the name behind became unrepairable, because the
+                    // swap would then have moved it onto the letter the warehouse was about to take.
+                    letter.setValue(LETTER_D);
+                    helper.assertValueEqual(controller.aisleName('D'), Optional.of(ORES), "scrolling back restores it");
+                    helper.assertTrue(controller.aisleName('F').isEmpty(), "and leaves nothing on F");
+                })
+                // And the rebuilt warehouse finds its own label on the letter it comes back with.
+                .thenExecute(aisle::placeDock)
+                .thenWaitUntil(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertTrue(controller.warehouse().isPresent(), "the rebuilt dock brings the warehouse back");
+                    helper.assertValueEqual(controller.aisleLetter(), 'D', "on the letter the box carries");
+                    helper.assertValueEqual(controller.aisleName(controller.aisleLetter()), Optional.of(ORES),
+                            "and the label is on it");
+                    helper.assertValueEqual(controller.namedAisles().get('D'), ORES,
+                            "so every surface of this warehouse shows it again");
+                })
+                .thenSucceed();
     }
 
     // --- helpers ---------------------------------------------------------------------------------------------------

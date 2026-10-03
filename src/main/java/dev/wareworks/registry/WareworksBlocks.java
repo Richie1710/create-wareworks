@@ -56,7 +56,9 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .transform(WareworksStress.configuredImpact())
-                    .transform(DisplaySource.displaySource(WareworksDisplaySources.CRANE_STATUS))
+                    // Status first, so every link a player has already hung on a dock keeps its preselection (M25).
+                    .transform(WareworksDisplaySources.bind(WareworksDisplaySources.CRANE_STATUS,
+                            WareworksDisplaySources.CRANE_THROUGHPUT))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "item"))

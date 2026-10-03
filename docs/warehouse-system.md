@@ -1140,6 +1140,8 @@ Registered as `WareworksBlocks.WAREHOUSE_CONTROLLER` / `WareworksBlockEntityType
   * Soft metal properties, netherite sound, pickaxe only, `create:non_movable` + `c:relocation_not_supported`, drops itself.
   * `neighborChanged` from the block in front (dock placed, broken or rotated) requests a re-link.
   * The block entity ticks through Create's default `SmartBlockEntityTicker`.
+  * **M25 (issue #15):** a `useItemOn` override — the block's first — names the aisle at the dock from a held item
+    (`content.controller.AisleNaming`, §3.3.2). Everything else passes straight on.
 * **Model**: hand-made `models/block/warehouse_controller/block.json`, authored with the dock side facing north.
   * Brass casing body.
   * On the side that faces the player, a brass-framed recessed display (`create:block/redstone_requester` screen in a `create:block/railway_casing` recess) and a thin status lamp strip (`create:block/stock_link`).
@@ -1149,7 +1151,12 @@ Registered as `WareworksBlocks.WAREHOUSE_CONTROLLER` / `WareworksBlockEntityType
   * Range 0..25. `withFormatter` shows `A`..`Z` in the value box, and the `createBoard` override shows letters on the hold-to-edit board, with a milestone every 5 letters. Own clipboard key `AisleLetter`.
   * Active on every face except the one touching the dock and the bottom.
   * Default `A` by a field write in `addBehaviours` (the field has no initializer).
-  * The callback re-registers the layout with the new letter at once, so addresses change immediately.
+  * The callback re-registers the layout with the new letter at once, so addresses change immediately. **M25:** it also
+    carries the aisle's **name** with it (`AisleNames#rename`, below), as a swap rather than an overwrite — scrolling the
+    box is reversible, so scrolling back restores exactly what was there and a letter change can never destroy a name a
+    player gave another aisle. The swap mirrors what the next re-link does to the letters themselves: `BranchTable#assign`
+    gives branch 0 this box's letter and moves the branch that held it to the lowest free one, so each name stays with
+    the aisle it was given to.
 * **Link and status (`ControllerStatus`)**:
   * `NO_DOCK`: no dock at `pos + FACING`.
   * `DOCK_MISALIGNED`: a dock stands at `pos + FACING`, but faces another direction, so it belongs to no controller on this side. The state is the same as `NO_DOCK` (no aisle, nothing registered, no records, no requests), but it has its own goggle line. **M5 release audit:** both cases shared the message "No stacker crane in front", which a player reads while looking straight at a stacker crane; a dock placed or wrenched the wrong way round is the most likely build mistake, because the controller takes its facing from the player's look direction.
@@ -1170,7 +1177,7 @@ Registered as `WareworksBlocks.WAREHOUSE_CONTROLLER` / `WareworksBlockEntityType
 * **Goggles** (observer-driven through `GoggleObservers`): "Warehouse Controller:", "Warehouse X" (one line naming the whole warehouse by the letter of its **first** aisle, which is what the value box sets; it read "Aisle X" until the M22 surface sweep, where it named a four-aisle comb after one of its aisles), the status, "Aisle: L long, mast H high", "Storage locations: N", "Inputs: N, outputs: M", "Misaligned blocks: N" (only if > 0), "Item types: N", "Items stored: N", "Open requests: N"; from M3 on also the linked crane's status and job and the last planning result (§7.5). **M19:** above the crane block, one line about the aisle's chunk hold — what it holds and why, or what stops it from holding — omitted entirely while there is nothing to report, which is every aisle while `chunkLoading` is off (§11.7). **M21:** for a warehouse that really bends, "Warehouse: 41 rails, 3 aisles, mast 6 high" replaces the single-aisle size line and is followed by "Aisles: A 16 · B 12 · C 13" (at most six, then "and N more"); and whenever the rails stop short of something a player would want, one sentence per reason — "Warehouse stops at 148 64 -37: the warehouse has as many junctions as this server allows" — never merged into one message (the M5 `NO_DOCK` / `DOCK_MISALIGNED` lesson) and naming the block to walk to. `content.controller.NetworkGoggleInfo` carries both, nested in `ControllerGoggleSummary` exactly as `CraneGoggleInfo` is, and is **absent from the synced tag entirely** for a warehouse of one aisle whose rails simply end — which is every warehouse built before M21. It is present for a straight warehouse that stops at a **fault**, because that is the case it exists for: a player who has just run a straight aisle into a configured maximum has to be told where their warehouse now stops (until M22 the headline case was a T, which is an ordinary warehouse now). World coordinates rather than an address, because the block the walk stopped at is by definition outside the warehouse and has none. JUnit `NetworkGoggleInfoTest` plus the world half in `WarehouseNetworkGameTests#networkgogglesnametheaislesandwheretheystop`, which reads the line back out of the synced tag — the only path a player's screen ever sees.
   * Synced as a `ControllerGoggleSummary`: a status name and numbers only, so it has a fixed size.
   * Recomputed in O(1) on observation and sent only when changed, at most once per `GoggleObservers.SUMMARY_SYNC_MIN_INTERVAL_TICKS` (20, `SyncThrottle`).
-* **Persistence** (`ControllerPersistence`): `Layout {Facing, Length, Height}`, `Locations [{X, Y, Side, Kind, Stock [{Item: ItemKey, Count: long}]}]`, `Misaligned` (int array of x, y, side ordinal), `Requests [{Id: UUID, Item: ItemKey, Requested, Remaining, Destination: int[3] offset from the controller}]` in queue order.
+* **Persistence** (`ControllerPersistence`): `Layout {Facing, Length, Height}`, `Names [{C: "A", N: "Ores"}]` (M25, below), `Locations [{X, Y, Side, Kind, Stock [{Item: ItemKey, Count: long}]}]`, `Misaligned` (int array of x, y, side ordinal), `Requests [{Id: UUID, Item: ItemKey, Requested, Remaining, Destination: int[3] offset from the controller}]` in queue order.
   * Request destinations are relative to the controller, so they survive moving a structure without rotation. Requests are restored only together with the saved layout (like the records); invalid entries (no id, no item, bad destination, no remaining amount, repeated id) are skipped and `Remaining` is clamped to `Requested`.
   * Items are count-less `ItemKey`s next to `long` counts, so `ItemStack.save` never sees a count.
   * Writing skips a record that fails. Reading skips invalid entries, merges duplicate stock entries (saturating) and drops non-positive counts.
@@ -1180,6 +1187,161 @@ Registered as `WareworksBlocks.WAREHOUSE_CONTROLLER` / `WareworksBlockEntityType
 * **Tests**:
   * GameTests (`gametest.WarehouseControllerGameTests`): `controllerfullaisle` (also: content hint queued and read, silent change found by the round robin), `aislefulllayout` (dock with rails, controller, interfaces, one input and one output; geometry, member kinds, addresses of every kind, stock totals without station buffers, controller goggle summary), `controllersharedinventory` (review: double chest and vault behind two interfaces each), `controllerdockswitchrebuildsstock` (review), `controllerdocklinkowner` (review), `controllermembershipchanges`, `controllerdockstatus`, `controllerpersistence` (also: background verification queued), `controllerregistrationandremoval`, `controllergogglesummary`.
   * JUnit: `AisleMembershipTest`, `StockIndexTest` (restore, read-only view), `SnapshotQueueTest`, `SharedInventoriesTest`.
+
+#### 3.3.2 Aisle names (M25, issue #15, ADR-038)
+
+A player can give each aisle of a warehouse a **name**, so that a goggle line, an address and a display board can say
+"Ores" beside the letter instead of only `B`. The name is a label a player wrote; nothing in the warehouse's behaviour
+depends on it.
+
+* **Keyed by aisle letter**, in a bounded `core.warehouse.AisleNames` on the controller. A name decorates an address,
+  and an address names its aisle by letter, so a name keyed to the letter is exactly as correct as the address beside
+  it — wrong exactly when, and only when, the letter is wrong. The table is bounded by its **key space**: only the 26
+  aisle letters can be keys, so no save and no packet can make it grow. Branch-keyed names were rejected: they would be
+  *more* stable than the address beside them, so during the window in which two branches share a letter a player would
+  read `B — Ores` on one aisle and `B — Metals` on the other with no way to tell which `B` the terminal means — and
+  `BranchTable#remember` deliberately does not remember branch 0, so a branch-keyed table could not cover the dock
+  aisle at all.
+* **The spelling rule** is `core.warehouse.AisleName`, pure Java and **total**: every `String` and `null` map to a legal
+  name, and `sanitize` is idempotent, so the save, the packet and every surface that draws the name necessarily agree.
+  Characters the game cannot draw go (the section sign, the controls below the space, `DEL` — the same set
+  `StringUtil.isAllowedChatCharacter` rejects, mirrored inline because `core.*` has no Minecraft on its JUnit
+  classpath), whitespace is trimmed and internal runs collapse to one space in the game's wider sense
+  (`isWhitespace || isSpaceChar`, so a no-break space cannot make an invisible 16-character name), and what is left is
+  cut to `MAX_LENGTH = 16` — never through a surrogate pair, and any whitespace the cut exposes is trimmed again.
+  16 because a Create sign display target is 15 columns wide, because the controller's goggle line lists six aisles,
+  and because six names plus the dock aisle's then cost at most `MAX_NAME_SYNC_BYTES = 480` accounting bytes (462
+  measured) of the tags they ride in — which is the number the gates really guard, and not the same claim as "inside
+  2048": those tags were already close to that bound before any name, which is why the controller and the station
+  family each got a second, named bound of their own (see "The sync budget" below). `wouldCut` is **only** the
+  length, so the "shortened to ..." line never reports a change a player cannot perceive.
+* **The gesture** (`content.controller.AisleNaming`): a non-sneaking right-click with an item carrying
+  `DataComponents.CUSTOM_NAME` on a **warehouse controller** (which names the aisle at its dock) or on a **warehouse
+  interface** (which names *its own* aisle, resolved through `WarehouseRegistry#aisleOf` from the same single scan as
+  `assignmentOf`). A plain **name tag** clears. The item is never consumed, and only `Component#getString()` is ever
+  read from the component, never the component itself — a command can set it to a translate, hover or click component,
+  and a name is drawn on several surfaces and written into a save.
+  * Because an interface already knows its own `StorageAddress`, naming aisle B is a matter of clicking something that
+    stands in aisle B: **no syntax**, no leading-letter prefix and no "this warehouse has no aisle B" error.
+  * **No `bypassesInput` override anywhere.** `ValueSettingsInputHandler` `continue`s on
+    `!testHit(ray.getLocation())`, so only a click that really hits the value-box sphere is swallowed before the block
+    is asked; a click anywhere else on the face already falls through to `useItemOn`. An override would instead cost
+    the controller's aisle-letter box — and, on the interface, the one value box its only usable face carries — for
+    every renamed item in hand. The price is that the gesture is "click the face off the little box in the middle".
+  * **A wrench is never a naming item**, however it is named (`c:tools/wrench`). Create's own wrench acts from
+    `WrenchItem#useOn`, which runs only if `useItemOn` passed the click on, so without this exception a player who
+    named their wrench would lose rotation on exactly these two blocks — while a wrench from another mod, which
+    `WrenchEventHandler` handles in a cancelled event before the block is asked, would have kept working.
+  * A **clipboard** never reaches the gesture either: `ClipboardValueSettingsHandler` gates on the item and cancels the
+    event for any block entity with a `ClipboardCloneable` behaviour, so `AisleLetterBehaviour`'s copy and paste are
+    untouched. A **Mechanical Arm** is likewise cancelled client-side by `ArmInteractionPointHandler`.
+  * A non-sneaking click with a renamed **block** item names instead of placing; sneaking places as it always did.
+* **Feedback**, action bar only, four keys under `wareworks.message.*` — the one key group in `WareworksLang` that
+  belongs to no single block, because the same gesture is reached from two: `message.aisle_named`,
+  `message.aisle_name_cleared`, `message.aisle_named_cut` and `message.aisle_name_no_aisle`. A click on a block that
+  belongs to no aisle yet says so rather than doing nothing silently (the M20 lesson), and so does clearing an aisle
+  that had no name — the click is consumed either way, the sentence is true either way, and a consumed click that
+  answers nothing is a click nobody finds (M25 review fix). **One** message per click, always: a cut name is told in
+  the single sentence that also names its aisle (`message.aisle_named_cut`), because the client's HUD keeps exactly
+  one action-bar message at a time, so a second one sent in the same tick replaces the first before either is drawn.
+* **Saved** as a new **top-level** `Names` tag, never inside `Network`: `writeNetwork` returns having written nothing
+  while the warehouse is one straight aisle with no pinned line, and a one-aisle warehouse — every world built before
+  M21 — must be able to carry a name. A warehouse nobody named writes **no `Names` tag at all**, so a world from
+  0.7.0 saves byte for byte what it did before. Reading follows `readNetwork`'s habit: the walk stops after 26 entries,
+  and a bad letter, a blank name or an over-long one costs itself and nothing else.
+* **Written only on a player's click**: `setChanged()` + `sendData()` once, then nothing. No tick path, no derivation,
+  no scan.
+* **What a name survives.** A chunk unload; the dock being lost, moved or turned (`applyLayout`'s `branchTable.clear()`
+  and `clearAisleState()` do not touch the names, and the read is deliberately not gated on the layout — rebuild the
+  dock and the labels are back); an aisle extended, shortened or joined by a junction; a branch repinned; and the aisle
+  letter being scrolled. Lost **only** with the controller, together with the stock index, the pinned letters and the
+  jobs. An aisle torn down and a different one built on the same line may inherit the old name, because a new line
+  takes the lowest free letter — accepted: it is visible on two tooltips at once and one click fixes it.
+* **Where it is shown**: five existing lines and no new panel, so there is nothing a player has to go and find.
+  1. **The controller's own line**, `Warehouse A — Ores` / `Lager A — Erze`
+     (`gui.goggles.warehouse_letter_named`). The letter keeps its place in front, because it is what every other
+     surface and `/wareworks chunks` name this warehouse by.
+  2. **The controller's aisle list**, where a named aisle shows its **name where an unnamed one shows its length**:
+     `Aisles: A Ores · B Metals · C 14` / `Gänge: A Erze · B Metalle · C 14`. The warehouse's total rails are already
+     on the line above (`networkSize`), the line's budget is `GOGGLE_AISLES_LISTED = 6` entries ("six letters and six
+     numbers is about as much as one line carries"), and a length is what a player stops caring about once an aisle
+     has a name. One method builds the entries (`WarehouseControllerBlockEntity#aisleEntries`) and the tests build
+     them from it, because a copy of the rule is a second rule.
+  3. **Every member's address**, the highest-value surface because it is the block a player is standing at:
+     `Address: B-03-07R (Ores)` / `Adresse: B-03-07R (Erze)` (`gui.goggles.address_named`), through
+     `AisleAssignment#addGoggleLines`, so the interface, the input, the output, the port, the terminal, the station,
+     the stock keeper and the home point all gain it at once. The name is **behind** the address and never instead of
+     it: the address is what the terminal, the crane's own lines and every report speak.
+  4. **The Warehouse Summary display board**, one optional row and the **last** of that source's rows:
+     `Names: A Ores · B Metals` / `Namen: A Erze · B Metalle` (`display_source.aisle.line_names`), or
+     `Names: A Ores (+2)` / `Namen: A Erze (+2)` (`display_source.aisle.line_names_more`) where the row had no room
+     for the rest. Last of all, below the ports, rules, stopped-products and chunk rows: `WarehouseDisplays.limit`
+     drops the tail, so whichever row is last is the one a short board loses, and every row above this one is a count
+     a player asked for or a machine they have to go and look at, while this one is a label they chose.
+     It is bounded by the target's own **characters** as well as by `NetworkGoggleInfo.NAMES_LISTED` entries
+     (`WareworksLang#aisleNamesLine`): a name is up to 16 characters of a player's choosing, so six of them with
+     separators are 113 characters where a six-block board row holds 26 and a sign holds 15. Whole entries are
+     dropped, never half a name, and what was dropped is counted on the row. The share of the row kept for the label
+     is a constant, because a display source may not resolve its own text on the server (§10 — it would resolve
+     against the server's language and show every player that one); `LangConsistencyTest#theNamesBoardRowFitsADisplayBoard`
+     holds both language files to it. The **letter** stays in front of every name, because a name without its letter
+     cannot be matched to the address the terminal speaks, and it reads
+     `WarehouseControllerBlockEntity#namedAisles()` — the names of the aisles the warehouse really has, not the whole
+     saved table — because a label outlives the aisle it was given to and a board names rows of *this* warehouse.
+  5. **A dark-grey hint** on the controller's goggles, as the **last** line so it never pushes a number aside, and only
+     while no name is visible on that tooltip at all:
+     `Right-click with a renamed item to name an aisle` / `Rechtsklick mit umbenanntem Gegenstand benennt einen Gang`.
+     It is what pays for not overriding `bypassesInput`. The gate is one method
+     (`WarehouseControllerBlockEntity#showsNamingHint`) and is deliberately "nothing on this tooltip carries a name"
+     rather than "the warehouse has no name anywhere": the two synced carriers are the whole truth a client has, and
+     the alternative is a third synced value that exists only to suppress a hint. The one case where those differ:
+     on a warehouse of **more** than six aisles whose only named aisle is the seventh or later, `NetworkGoggleInfo`
+     carries no name (it lists six) and the dock aisle has none, so the hint keeps standing while the name is drawn on
+     that aisle's members and on the board. It is a hint that outstays its welcome, not a wrong number, and the price
+     of exactness is a 26th component on a record whose own javadoc warns about its arity.
+
+  **Not** the terminal's title row: that is the one hard-clipped text row of the screen nothing measures
+  (`renderTexts` has no `fitTo` and no collision check there, and `statusTextsFit()` covers only the status row), so
+  German `Lager A — Erze` beside `Lagerterminal` would silently render through itself. It needs a `titleRowFits()`
+  getter and a `MeasuredRow` in `TerminalVisualScenario#checkRowVocabularyFits` first.
+* **Synced** in three existing records, all empty for a warehouse nobody named and all riding block entity update
+  tags, so **no `WareworksNetwork.VERSION` bump**: the version gate guards custom payloads, and a missing update-tag
+  key reads as absent, so an old client simply shows no names.
+  * `ControllerGoggleSummary.aisleName` — the **dock** aisle's. It cannot ride `NetworkGoggleInfo`, whose `of()` is
+    empty for a warehouse that neither bends nor stops short, which is where a name matters most.
+  * `NetworkGoggleInfo.aisleNames` — the other aisles', as **one** string in aisle order separated by a newline (a
+    character `AisleName.sanitize` strips from every name, so the encoding needs no escaping), bounded to
+    `NAMES_LISTED = 6` fields with the trailing empty ones dropped so the encoding is canonical. One string and not a
+    list: a `StringTag` costs 36 accounting bytes of overhead each and a compound entry 64 more, so 26 of them would
+    have cost about 1.8 kB of the controller's budget against 312 for the worst case of one string.
+  * `AisleAssignment.aisleName` — the name of the aisle the member belongs to, attached in `WarehouseRegistry`'s single
+    assignment funnel so no two member kinds can show the address with and without it.
+* **The sync budget.** A named controller's update tag has a bound of its own rather than a bigger one
+  (`MAX_SUMMARY_SYNC_BYTES` stays 2048 for a warehouse nobody named, `MAX_NAMED_SUMMARY_SYNC_BYTES` is 4096), exactly
+  as a warehouse interface has had two bounds since M4. Measured, not assumed: the controller's tag is about 1905
+  accounting bytes on the GameTest fixture before any name and one 16-character name costs 150 of them, so the tight
+  number had no room left. What the gate really guards is the names' own cost, `MAX_NAME_SYNC_BYTES = 480` (462
+  measured for all seven at full length), because that is the number a later change could make unbounded.
+  One **real** bending warehouse with real names on it is weighed too, in `interfacenamesitsownaisle`, where such a
+  warehouse already stands — every other measurement crafts its worst case on top of a one-aisle fixture — and the
+  station family's own gate (`stationpersistence`) is taken with the widest named assignment in its packet, because
+  that one record rides the client packet of the input, the output, the port and the production station alike — and it
+  needed a second bound for it (`MAX_NAMED_UPDATE_TAG_BYTES = 4096`), because a station's tag is already about 1861 of
+  its 2048 accounting bytes before any name and the widest assignment costs 292 more. Every one of these numbers is a
+  canary against a record that grows unnoticed, never a packet budget: that accounting is a Java-heap estimate many
+  times the real wire size.
+* **Tests**: GameTests `aislenaming`, `aislenamingwithoutawarehouse` and `aislenamepersistence`
+  (`WarehouseControllerGameTests`), `aislenamefollowsitsletter` (`RackBranchGameTests`, the letter carry and the swap)
+  and `interfacenamesitsownaisle` (`WarehouseInterfaceGameTests`, on the bending `aisle_pair_16x10x13` warehouse: the
+  interface on aisle B names B, and after the dock aisle is scrolled onto B's letter the two aisles still have two
+  letters and each still carries its own name). The surfaces: `aislenamesurfaces`
+  (`WarehouseControllerGameTests` — the warehouse line, a member's address through the whole chain, the aisle list,
+  the hint in both directions, the byte budget and the 0.7.0 "no name, no key" promise),
+  `aislesummarywithnames` (`DisplayLinkGameTests` — the board row absent, present below the four core lines, and a
+  label of a torn-down aisle not reaching it) and the widest assignment in
+  `interfacesummarysyncisbounded`. JUnit `AisleNamesTest` covers the spelling rule and the table, and
+  `NetworkGoggleInfoTest` the synced encoding. The real tooltips are read and photographed in **both languages** by
+  the `comb` visual scenario, which names three of its four aisles and leaves the fourth unnamed.
 
 ### 3.4 Warehouse Terminal (`content.station`, M6)
 
@@ -4028,13 +4190,13 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 
-## 10. Stock displays (Display Link sources, M14)
+## 10. Stock displays (Display Link sources, M14 and M25)
 
-> Decision and reasons: **ADR-026**.
+> Decision and reasons: **ADR-026**, and **ADR-039** for the throughput source.
 
-Classes: `registry.WareworksDisplaySources` (the four registered sources and the `bind` transformer),
+Classes: `registry.WareworksDisplaySources` (the five registered sources and the `bind` transformer),
 `content.display.WarehouseDisplays` (shared plumbing) with `AisleSummaryDisplaySource`, `StockListDisplaySource`,
-`FilteredStockDisplaySource` and `CraneStatusDisplaySource`.
+`FilteredStockDisplaySource`, `CraneStatusDisplaySource` and `CraneThroughputDisplaySource`.
 
 A player's Create **Display Link** reads one of these sources off a Wareworks block and writes the text onto nixie
 tubes, a display board, a sign or a lectern. Wareworks adds no display block of its own and pushes nothing: the link
@@ -4046,6 +4208,7 @@ pulls on its own schedule, and every pull answers from state the controller and 
 | `wareworks:stock_list` | Stock List | warehouse controller, warehouse terminal | the most stocked item types with their amounts, one per line |
 | `wareworks:filtered_stock` | Stock of the Filtered Item | warehouse output, warehouse interface | one number: how many of the item in the block's filter slot the aisle holds |
 | `wareworks:crane_status` | Crane Status | stacker crane dock | what the crane is doing, the item and amount of its job, its target address, what the head holds |
+| `wareworks:crane_throughput` | Crane Throughput | stacker crane dock | four rows of what the crane **got done** in the rolling minute behind it: trips, items, busy share, turning share — or the single line `Measuring` while that minute is not full yet (M25, issue #16) |
 
 A block that offers two sources lists them in exactly this order, and the link's screen preselects the first one
 (`WareworksDisplaySources#bind`, §10.4). The **warehouse rail**, the **warehouse input** and the **warehouse production
@@ -4076,9 +4239,13 @@ Rules: 4 · below min 1 · at max 1    only while the aisle really applies stock
 Stopped products: 1                  only while the safety stop holds something (M15 part 2; since M20 it counts
                                      items no rule governs too, which is why it no longer says "Rules paused")
 Chunks: 4 held          only while the aisle really holds its own chunks loaded (M19, §11.7)
+Names: A Ores · B Metals  only while an aisle this warehouse really has carries a name (M25, issue #15); at most
+                        six, each with its letter in front, and only as many as the row's own characters hold -
+                        "(+2)" counts the rest. LAST of all, so it is the first row a short board drops: every row
+                        above it is a count a player asked for or a machine they have to go and look at
 ```
 
-The aisle-list line, the port line, the rule line, the stopped line and the chunk line are **left out entirely** unless they say something: a display has few rows, and
+The aisle-list line, the names line, the port line, the rule line, the stopped line and the chunk line are **left out entirely** unless they say something: a display has few rows, and
 "Rules: 0 · below min 0 · at max 0" or "Ports: 0 accepting" would push a number a player asked for off a four-tube
 board. The port count is the other explanation — next to the at-maximum count — for a warehouse input that is backing up,
 and it is the same number the controller's goggles show, so board and goggles agree (§3.2.3). The at-maximum count is
@@ -4089,6 +4256,12 @@ stock-rule block and no longer speaks of rules: a lost batch of any order arms t
 an intermediate of a chain that no rule governs, and the line can stand on an aisle with no stock keeper at all. Its
 wording is the production station's, because that station is where a player lifts it. All four counts are the controller's
 own cached numbers, so a pull stays a handful of field reads.
+
+The **names** line (M25, issue #15, §3.3.2) follows the same rule and sits directly under the aisle-list line, which is
+the other line about which aisles this warehouse has. It keeps the letter in front of every name, because a name
+without its letter cannot be matched to the address the terminal speaks, and it lists only aisles the warehouse really
+has: a label outlives the aisle it was given to on purpose, so that rebuilding the aisle brings the label back, but a
+board names rows of *this* warehouse.
 
 Both numbers of the "used / total" line are drawn from the same population, the **counted** inventories: locations that
 read an inventory another location already counts (§3.1.1 — a double chest behind two interfaces, an item vault behind
@@ -4137,12 +4310,43 @@ same word, so neither surface contradicts the port's own "Handed over: N".
 items like a `STORE`, but it is the warehouse *fetching* out of a machine, which is what a player is watching for while
 a production loop runs (§3.2.4). Here the job type alone is enough, so no packet field was needed.
 
+**Crane Throughput** (dock, M25, issue #16):
+
+```text
+Trips: 9                jobs the machine finished inside the measured minute
+Items: 412              items it delivered inside it
+Busy: 78%               the share of the minute it was travelling, turning or standing at a rack
+Turning: 6%             the share of the minute it was swinging at a corner
+```
+
+Its numbers come from the crane's own rolling window (`stacker-crane.md` §9), read **live on the server** through
+`StackerCraneBlockEntity#throughput()` — an O(1) snapshot of running sums, so a pull is a handful of field reads like
+every other source here. It deliberately does **not** read the record the dock syncs for goggles, which only exists
+while a player is really looking at the dock: a board must read the same whether or not anybody is wearing goggles.
+
+Three things about it are decided rather than incidental:
+
+* **Four fixed rows, and a zero is printed.** The crane's goggle lines leave every zero out; this source must not,
+  because a row that came and went with its value would move the three below it, and on a four-row board one of them
+  off the end (`WarehouseDisplays#limit`). The turning share of a straight aisle is therefore a printed `0%` here and
+  an omitted term there.
+* **`Measuring` instead of numbers while the minute is not full.** The goggles name the length they really saw ("of
+  the last 23 s"); a board cannot carry that caveat, because the limit above would drop it off the end and leave the
+  numbers standing alone. Showing a number about ten seconds as if it were about a minute is the one thing this source
+  must not do, so it says nothing else until `CraneThroughput#isFullMinute()`.
+* **A second source rather than four more lines on Crane Status.** That source already fills a four-row board, and the
+  tail is dropped, so appending to it would cost a player lines they already had. `Crane Status` stays **first** in the
+  dock's list, because the link's screen preselects the first source a block offers (§10.4) — otherwise every link
+  already hung on a dock would quietly change what it shows.
+
 ### 10.2 Refresh, rows and columns
 
 * A link that is **not** powered pulls every `getPassiveRefreshTicks()`: 100 ticks (5 s) for the three warehouse
   sources, Create's default, and **20 ticks** for the crane status, because a crane changes state far faster than a
-  warehouse fills up (Create's own fast source, the stopwatch, uses 20 as well). A **powered** link does not refresh at
-  all and pulls once when the signal ends — Create's behaviour, unchanged here.
+  warehouse fills up (Create's own fast source, the stopwatch, uses 20 as well). The crane **throughput** keeps the
+  default 100 and not the status's 20: a rolling minute does not change meaningfully every second, and a board that
+  flips its flaps to redraw identical numbers is noise. A **powered** link does not refresh at all and pulls once when
+  the signal ends — Create's behaviour, unchanged here.
 * Lines are cut to the target's `maxRows()` and **not** clipped to `maxColumns()`. Clipping would need
   `Component#getString()` on the server, which resolves the line against the **server's** language, so every player
   would be shown that one language and no client could translate the line any more. Targets clip themselves: a nixie
@@ -4157,13 +4361,15 @@ a production loop runs (§3.2.4). Here the job type alone is enough, so no packe
 
 ### 10.3 Degraded cases
 
-| Situation | Warehouse Summary | Stock List | Filtered Stock | Crane Status |
-|---|---|---|---|---|
-| Source block belongs to no aisle, or its controller's chunk is not loaded | one line `No aisle` | nothing | `0` | — |
-| Controller without a dock, or with a turned dock (`NO_DOCK`, `DOCK_MISALIGNED`) | only the status line | nothing: such a controller has no layout and no indexed location | its aisle is not registered either, so an output or interface beside it reads `0` | — |
-| Aisle indexed but empty | `Locations: 0 / 30`, `Item types: 0`, `Items: 0` | no line at all | `0` | — |
-| Filter slot empty, or holding a Create list, attribute or package filter | — | — | `0` | — |
-| Dock without a job | — | — | — | `Idle` plus `Empty` |
+| Situation | Warehouse Summary | Stock List | Filtered Stock | Crane Status | Crane Throughput |
+|---|---|---|---|---|---|
+| Source block belongs to no aisle, or its controller's chunk is not loaded | one line `No aisle` | nothing | `0` | — | — |
+| Controller without a dock, or with a turned dock (`NO_DOCK`, `DOCK_MISALIGNED`) | only the status line | nothing: such a controller has no layout and no indexed location | its aisle is not registered either, so an output or interface beside it reads `0` | — | — |
+| Aisle indexed but empty | `Locations: 0 / 30`, `Item types: 0`, `Items: 0` | no line at all | `0` | — | — |
+| Filter slot empty, or holding a Create list, attribute or package filter | — | — | `0` | — | — |
+| Dock without a job | — | — | — | `Idle` plus `Empty` | the rows it always shows; an idle minute simply reads `Busy: 0%` |
+| Dock loaded less than a minute ago, or its chunks were away | — | — | — | the state it is in | one line `Measuring` |
+| No dock under the link at all | — | — | — | the source is dropped by Create | one line `No crane` |
 
 A display therefore cannot tell "none in stock" from "not configured": keeping the filtered stock line numeric is what
 lets a display board use its number layout. Whether a block is part of no aisle at all or of one whose controller is
@@ -4174,7 +4380,7 @@ and a stale number would be the worse answer in either case.
 ### 10.4 Implementation notes
 
 * **Registration** (`registry.WareworksDisplaySources`, loaded from the `Wareworks` constructor **before**
-  `WareworksBlocks`, whose builders reference the entries): the four sources go into Create's registry
+  `WareworksBlocks`, whose builders reference the entries): the five sources go into Create's registry
   `CreateRegistries.DISPLAY_SOURCE` through `CreateRegistrate#displaySource(name, supplier)`, the path Create's own
   `AllDisplaySources` uses, not through a NeoForge `DeferredRegister` like the arm interaction point types of M12
   (ADR-025). Binding a source to a block needs a Registrate `RegistryEntry`, which a `DeferredHolder` is not
@@ -4197,10 +4403,16 @@ and a stale number would be the worse answer in either case.
   Create's `ValueListDisplaySource` formatting, because the player's own "shortened / full number" option and the
   two-column flap layout depend on it.
 * **Common code, server side.** A link gathers its text on the server and sends the finished lines to its target, so
-  none of the five classes imports a client class; the dedicated server loads them like any other content class.
-* **21 lang keys**, English generated, German hand-written. Create builds a source's name as
+  none of the six classes imports a client class; the dedicated server loads them like any other content class.
+* **21 lang keys** at M14, 39 by M25, English generated, German hand-written. Create builds a source's name as
   `<namespace>.display_source.<registry path>` (`DisplaySource#getName`), so the path of the registry entry and the
-  tail of the key are the same string; `WareworksLang` says so at the four name keys.
+  tail of the key are the same string; `WareworksLang` says so at the five name keys. The throughput rows put their
+  **shares** through `gui.goggles.percent`, the one value in the whole mod that carries a percent sign (ADR-039), so
+  no board row writes the sign itself — German puts a space before it, and a second place to get that wrong is a
+  second place to get it wrong silently: `TranslatableContents` *catches* a bad template and shows the raw text.
+  `LangConsistencyTest#everyPercentSignIsAFormatMinecraftAccepts` pins that for every key of both files, and
+  `#theThroughputBoardRowsFitADisplayBoard` pins every row of this source against a board row's flap count in both
+  languages — German is where a row runs out of flaps first (`Kein Regalbediengerät` against `No crane`).
 
 ### 10.5 Tests
 
@@ -4217,13 +4429,18 @@ and is therefore the target for line-by-line assertions by lang key and argument
 line to JSON and parses it back, which is the path of a display in a real world; a **display board** is the only target
 that goes through `provideFlapDisplayText`; a **sign** is the one that flattens the text on the server.
 
-* `displaysourcesregistered`: the four ids resolve in `CreateBuiltInRegistries.DISPLAY_SOURCE`, each name uses the
-  generated lang key, and `DisplaySource.getAll` returns the expected list, in the expected order, for all eight
-  Wareworks blocks — including the empty list for rail, input and production station.
+* `displaysourcesregistered`: the five ids resolve in `CreateBuiltInRegistries.DISPLAY_SOURCE`, each name uses the
+  generated lang key, and `DisplaySource.getAll` returns the expected list, in the expected order, for all nine
+  Wareworks blocks — including the empty list for rail, input and production station, and `Crane Status` **before**
+  `Crane Throughput` on the dock, which is what keeps every link already hung on a dock showing what it showed.
 * `aislesummaryoncontroller` / `aislesummaryonterminal`: the four lines by key and arguments, on a lectern, plus line 0
   on an eight-tube nixie row; the terminal resolves its controller through `WarehouseRegistry.findController`. Both
   fixtures keep the four numbers pairwise different (one stocked location out of three, holding two item types), so no
   two arguments of the summary can be swapped without a failure.
+* `aislesummarywithnames`: the names line (M25, issue #15) is absent while no aisle has a name, appears **below** the
+  four core lines without changing one of them, keeps the letter in front of the name, and does not carry a label left
+  behind by an aisle a player tore down. That it goes again with the last name is read off the source rather than off
+  the lectern, because a lectern book keeps a page it was written once — which is the target's business.
 * `aislesummarysharedinventory`: two interfaces on one double chest plus a third location read `1 / 2`, not `1 / 3` —
   an alias is not in the total.
 * `aislesummarydegraded`: a controller without a dock shows exactly the status line, a terminal outside any aisle
@@ -4241,6 +4458,15 @@ that goes through `provideFlapDisplayText`; a **sign** is the one that flattens 
 * `cranestatusidle` / `cranestatusonjob`: a parked crane reports exactly `Idle` and `Empty`; a store job reports
   activity, item with amount, target address and grabber before the pick, after it, and `Paused` once the rotation
   stops.
+* `cranethroughputwhilemeasuring`: a crane that has just been built puts exactly one line on the board, `Measuring`,
+  and no numbers — and with the dock taken out from under the link the source answers `No crane`. A link cannot reach
+  that second branch on its own (`DisplayLinkBlockEntity#updateGatheredData` drops a source the moment its block stops
+  offering it), so the source is asked directly, which is the only way to prove the branch is there.
+* `cranethroughputnumbersonboard`: the window is filled to a whole minute **with the crane standing still**, then a
+  real store job runs, and all four rows are read off a lectern and compared against the dock's own record, shares
+  through `gui.goggles.percent` and all. The minute is filled before the job rather than after it because the window
+  rolls: a trip counted in its first seconds would have been rolled off again by the sixtieth, and the test would be
+  asserting against an empty minute without saying so.
 * `displaylinkonsign`: all four aisle summary lines reach a sign as the server-side flattening of the components the
   source built, cut to the sign's own line width, and line 0 is the server's English text (`Warehouse A: Ready`) — the
   documented caveat of §10.2, pinned rather than merely survived. This test is what showed the caveat had been worded

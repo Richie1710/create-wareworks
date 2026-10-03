@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Give an aisle a name, with an item you already renamed.** Right-click a **warehouse controller** with an item you
+  have named in an anvil and the aisle in front of it is called that; right-click a **warehouse interface** and the
+  aisle *it stands in* is called that — so naming aisle B is a matter of clicking something that stands in aisle B,
+  with no syntax to remember and nothing to type. A plain **name tag** takes the name off again. The action bar answers
+  every click with exactly one line: which aisle is called what now, that the aisle has no name any more, or that the
+  block belongs to no aisle yet — and a name longer than 16 characters is shortened in that same line, so it still
+  tells you which aisle it went on. The item is never used up
+- **A name belongs to its aisle and stays there.** It survives saving and reloading, a chunk unload, a dock you break
+  and build again, and the aisle letter being scrolled from A to D — the name follows the letter, and scrolling back
+  puts everything where it was. Only breaking the controller takes the names away, together with everything else it
+  knows. Click the **face** of the block, a little away from the value box in the middle: that box still keeps every
+  click that hits it, a **wrench** still turns the block however you named it, the clipboard still copies the aisle
+  letter, and sneaking still places a renamed block the way it always did
+- **The name then stands wherever the letter stands.** With goggles on, the controller reads **"Warehouse A — Ores"**,
+  and its list of aisles gives each named one its name where it used to give a rail count: **"Aisles: A Ores · B
+  Metals · C 14"**. Standing at any block of the warehouse — an interface, an input, an output, a port, a terminal, a
+  production station, a stock keeper, a waiting place — its address now reads **"Address: B-03-07R (Ores)"**, which is
+  the line you see without looking anything up. A **Warehouse Summary** display board gets one more row,
+  **"Names: A Ores · B Metals"**, as the **last** row of all — under every count and every warning it already showed,
+  so naming an aisle can never push something you asked for off the board. The row also fits itself to the board it is
+  on: a narrow one names as many aisles as there is room for and counts the rest, **"Names: A Ores (+2)"**, instead of
+  being cut off in the middle of a word. The address itself never changes: the name stands beside it, because the
+  address is what the terminal and every report speak
+- **Until you have named something, the controller tells you how.** A quiet grey line at the end of its goggle text
+  says to right-click with a renamed item — and it goes as soon as that tooltip has a name of its own to show you
+- **The goggles say what the crane got done.** Look at a **stacker crane dock** through Engineer's Goggles and the
+  machine reports the last minute of its own work: **"Busy: 78% of the last minute"**, and under it **"Blocked: 4%"**
+  whenever something really held it up — a full output, a target it cannot reach, a rail somebody broke behind it.
+  Then where that time went: **"Travel 54% · turning 6% (9 corners) · at the rack 18%"** — the corners counted are
+  the ones it turned while working, so the count and the share beside it are about the same minute — and what came of
+  it,
+  **"Trips: 9 · items: 412"**. It answers the question you cannot answer by watching: is the crane the bottleneck,
+  or has it simply got nothing to do
+- **The numbers are honest about themselves.** A crane that has just been loaded, or whose chunks were away, says
+  **"of the last 23 s"** and never scales nine trips up to a minute. The minute a chunk spent unloaded counts as
+  neither work nor waiting, nothing is remembered across a restart — a machine that stood still all night does not
+  open the morning claiming it was busy — and the breakdown adds up to the busy share printed above it, instead of
+  the two being rounded apart. A crane with nothing to show shows nothing: a parked machine's tooltip reads
+  exactly as it did before. The turning share and the corner count only appear on a warehouse that bends, because a
+  straight aisle never turns
+- **The controller carries the two numbers you came for.** Look at a **warehouse controller** through goggles and its
+  crane block now ends with **"Busy: 78% of the last minute"** and, above zero, **"Blocked: 4%"** — enough to tell
+  whether the crane is your bottleneck without walking to the dock. The long breakdown stays on the dock, where the
+  machine is
+- **A display board can watch the crane's output.** A **Display Link** on a stacker crane dock offers a second source,
+  **"Crane Throughput"**: four rows with **"Trips: 9"**, **"Items: 412"**, **"Busy: 78%"** and **"Turning: 6%"**. The
+  rows never move, so a four-row board never loses one, and while the crane has not yet run a whole minute the board
+  says **"Measuring"** instead of showing a number about ten seconds as though it were about a minute. "Crane Status"
+  is still the source a link offers first, so every display you have already built keeps showing what it showed
+
 ## [0.7.0-alpha] - 2026-10-03
 
 ### Added

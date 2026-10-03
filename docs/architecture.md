@@ -35,7 +35,7 @@ dev.wareworks
 │                              WareworksCapabilities, WareworksTags, WareworksStress, WareworksMenuTypes;
 │                              WareworksArmInteractionPoints (Create mechanical arm interaction point types of the
 │                              stations, registered into Create's registry, M12, ADR-025);
-│                              WareworksDisplaySources (the four Create display link sources and the transformer that
+│                              WareworksDisplaySources (the five Create display link sources and the transformer that
 │                              binds two of them to one block in a fixed order, M14, ADR-026);
 │                              WareworksAttachments (the mod's NeoForge data attachment types, i.e. state that belongs
 │                              to a **player** and not to a block: today only TERMINAL_PREFERENCES, saved inside that
@@ -60,6 +60,11 @@ dev.wareworks
 │   │                          StockIndex, StockView, LocationCount, SnapshotQueue, SharedInventories (M2)
 │   ├── warehouse              aisle membership: LocationKind, LocationRecord, RackProbe, AisleMembership,
 │   │                          MembershipChanges (M2);
+│   │                          the names a player gives a warehouse's aisles (M25, issue #15, ADR-038): AisleName (the
+│   │                          one spelling rule — a total, idempotent sanitiser capped at 16 characters, never a
+│   │                          validator, so a save, a packet and every surface necessarily agree) and AisleNames (the
+│   │                          table, keyed by aisle letter and bounded by that key space, whose rename is a swap so a
+│   │                          scrolled letter can never destroy a name);
 │   │                          the rail network as pure integer maths (M21/M22, issues #1 and #2, ADR-033, ADR-035):
 │   │                          RailGraph (a set of dock-relative rail offsets flooded from the dock and decomposed into
 │   │                          maximal straight branches; the rails may split and close on themselves since M22),
@@ -90,7 +95,11 @@ dev.wareworks
 │   │                          snaps to a synced pose, M5); CraneNetwork (what the crane knows about its own rails:
 │   │                          the shape, its route table and the resting yaw at the dock, M21, ADR-033);
 │   │                          HomeReturn (where a crane with nothing to do waits and when it drives there: the whole
-│   │                          rule as one pure value, M21, ADR-034). Since M21
+│   │                          rule as one pure value, M21, ADR-034); CraneActivity / CraneTickMotion /
+│   │                          ThroughputWindow / CraneThroughput (what the machine got done in the rolling minute
+│   │                          behind it: the six mutually exclusive buckets every tick falls into, the pose change
+│   │                          one tick made, the 60-bucket ring with running sums, and the ten raw numbers a
+│   │                          surface reads — never saved, M25, issue #16, ADR-039). Since M21
 │   │                          CranePose carries the branch it stands on and a continuous yaw in quarter turns, and
 │   │                          CraneMotion gains exactly one precedence rule — turn towards the leg's heading with X
 │   │                          frozen — between "retract the arm" and "move X and Y"
@@ -164,6 +173,13 @@ dev.wareworks
 │   │                          AisleLetterBehaviour, WarehouseRegistry, WarehouseMember / StorageMember,
 │   │                          ControllerStatus, ControllerGoggleSummary, AisleAssignment, ControllerPersistence,
 │   │                          RequestRejection, RequestResult (M2); CraneDispatch (M3: planning, ledger, reroutes);
+│   │                          AisleNaming (the one gesture that names an aisle: a non-sneaking right-click with a
+│   │                          renamed item on a controller or an interface, a plain name tag to clear, shared by the
+│   │                          useItemOn of both blocks) and WarehouseRegistry.MemberAisle (a member's controller and
+│   │                          its aisle letter from one scan) (M25, issue #15, ADR-038); since M25 the names ride
+│   │                          three existing records — ControllerGoggleSummary carries the dock aisle's, NetworkGoggleInfo
+│   │                          the other aisles' as one newline-separated string bounded to NAMES_LISTED = 6, and
+│   │                          AisleAssignment the one of the aisle a member belongs to — and no payload changed;
 │   │                          LocationReservationSummary (bounded goggle data of a location's reservations, M4);
 │   │                          WarehouseRegistry.StorageObservation (assignment + reservations in one scan, M4 review);
 │   │                          AisleFilters (store filters **and** storage priorities of the aisle's storage locations,
@@ -193,7 +209,9 @@ dev.wareworks
 │   │   │                      themselves, ADR-033, ADR-035); CraneExecution,
 │   │   │                      CranePersistence, CraneGoggleInfo, CraneJobSummary, CranePauseReason, CranePauseDecision
 │   │                      (M3; the pause priority became a pure, unit-tested function in M5); CraneSounds
-│   │   │                      (server-played crane sounds, M4); MastHeightValueBox (value box on the rail bed, M4 review);
+│   │   │                      (server-played crane sounds, M4); CraneThroughputLines (the four throughput goggle
+│   │   │                      lines, M25, issue #16, ADR-039: the numbers stay pure, only the Components live here);
+│   │   │                      MastHeightValueBox (value box on the rail bed, M4 review);
 │   │   │                      CraneServerHooks (resets the once-per-server warning state on ServerStartingEvent, M5)
 │   │   └── head               HandlingHead (API), HeldItems, InventoryGrabber (MVP impl), TransferContext /
 │   │                          TransferContexts (storage interface, input, output; since M18 a fourth kind, the
@@ -241,10 +259,11 @@ dev.wareworks
 │                              TerminalPreferences (M24, issue #17, ADR-037: one player's chosen TerminalSort and
 │                              their TerminalUsage store, the two counting calls a player's request goes through, and
 │                              the versioned compound WareworksAttachments saves them as — no block owns it)
-│   └── display                the four Create display link sources a player may read off a Wareworks block
+│   └── display                the five Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
-│                              FilteredStockDisplaySource, CraneStatusDisplaySource. Common code, server side only
+│                              FilteredStockDisplaySource, CraneStatusDisplaySource and, since M25 (issue #16,
+│                              ADR-039), CraneThroughputDisplaySource. Common code, server side only
 ├── network                    WareworksNetwork (payload registration), the terminal screen payloads:
 │                              TerminalStockPayload, TerminalStatusPayload (server → client),
 │                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019),
@@ -323,7 +342,7 @@ dev.wareworks
 │                              player's machine, refusal, cancel, timeout and persistence, M11;
 │                              MechanicalArmGameTests: arm interaction point types, their fixed modes and real
 │                              powered arms at the stations, M12;
-│                              DisplayLinkGameTests: the four display sources, read through real display links on
+│                              DisplayLinkGameTests: the five display sources, read through real display links on
 │                              lecterns, nixie tubes, a display board and a sign, M14;
 │                              StockKeeperGameTests, StockRuleEnforcementGameTests, StockRestockGameTests and
 │                              TerminalConfirmationGameTests: the stock rules, what they do to a moving warehouse,
@@ -2643,6 +2662,289 @@ order**, which the issue raises as a
 possibility — the store already records recency, so it is a comparator and a lang key away, but three orders still fit
 a cycling button and a fourth would want a menu (open point in `docs/roadmap.md`).
 
+### ADR-038 — An aisle's name is keyed by its letter on the controller, and it is given with an item the player already renamed (M25, issue #15)
+
+*Context:* Issue #15 asks for aisles and racks a player can **name**, so that a goggle line, an address and a display
+board can say "Ores" beside the letter rather than only `B`. A warehouse has up to 26 aisles since M21, and three
+things about a name had to be decided before anything could be built: what it is attached to, how a player types it,
+and where it is kept. Two constraints are hard rules: `core.*` stays pure Java with no `Level` and no Minecraft on its
+JUnit classpath, and nothing may be scanned per tick. One more comes from the mod's own history: every `writeUtf` in
+`network/*` today carries an enum name or a derived address — no player-typed text has ever gone from a client to this
+mod's server.
+
+*Decision:*
+
+* **A name belongs to an aisle letter**, in a bounded `core.warehouse.AisleNames` (`Map<Character,String>`) on the
+  warehouse controller. A name decorates an address and an address names its aisle by letter, so a name keyed to the
+  letter is exactly as correct as the address beside it: it is wrong exactly when, and only when, the letter is wrong.
+  The table is bounded by its **key space** rather than by an enforced cap — only the 26 aisle letters can be keys, so
+  no save and no packet can make it grow.
+* **The gesture is a non-sneaking right-click with an item carrying `DataComponents.CUSTOM_NAME`**, on a warehouse
+  controller (which names the aisle at its dock) or on a warehouse **interface** (which names its own aisle). A plain
+  name tag clears. Nothing player-typed crosses the network: the text arrives inside an `ItemStack` the player is
+  holding, which vanilla's anvil has already filtered and capped at 50 characters, and only
+  `Component#getString()` is ever read from the component — a command can set it to a translate, hover or click
+  component, and a name is drawn on several surfaces and written into a save.
+* **Letting a member name its own aisle is what removes the syntax.** `AisleAssignment` already carries an
+  `Optional<StorageAddress>` and `StorageAddress` is `record StorageAddress(char aisle, …)`, so an interface already
+  knows its aisle letter server-side with zero new arithmetic. Naming aisle B is therefore a matter of clicking
+  something that stands in aisle B — no leading-letter prefix to teach, and no "this warehouse has no aisle B" error
+  case to write. `WarehouseRegistry#aisleOf` answers controller **and** letter from the same single scan as
+  `assignmentOf`, because the two resolve by different rules where a rack plane belongs to two parallel aisles and
+  asking both could pair one warehouse's controller with the other one's letter.
+* **16 characters, truncated rather than refused, and the cut is echoed.** A Create sign display target is 15 columns
+  wide, so 16 is the honest "this will be cut on a sign" number; the controller's goggle line already lists six
+  aisles; and 16 bounds what the names can cost a chunk packet at all — 462 accounting bytes for the seven a
+  warehouse can sync, measured and guarded in its own right (see the byte paragraph below, which is also why the
+  interface's budget and the controller's named one are not the same 2048). Vanilla's own
+  cap is 50 (`AnvilMenu.MAX_NAME_LENGTH`), so the mod truncates what a player is allowed to type instead of inventing
+  entry rules an anvil would have to enforce — and `AisleName#wouldCut` exists so they are told. The cut is reported
+  for the **length only**: a dropped formatting code or a collapsed double space changes text a player could not see,
+  and reporting a change nobody can perceive is noise — and it is reported **in the same sentence** that names the
+  aisle (`message.aisle_named_cut`), because the client's HUD holds one action-bar message at a time, so a second
+  message sent in the same tick replaces the first before either is drawn.
+* **The spelling rule is a total, idempotent sanitiser, not a validator** (`core.warehouse.AisleName`). A name arrives
+  from four places that cannot be trusted to agree — a held item, a saved tag, a block entity update tag and a
+  hand-edited world — so a validator would have to decide what to do when one of them says no, which is a decision at
+  the wrong end: by then the name is already in the save. `sanitize` is therefore total (every `String` and `null` map
+  to a legal name) and idempotent, which is what lets the save, the packet and every surface that draws the name
+  necessarily agree, and nothing in it throws. It mirrors `StringUtil.isAllowedChatCharacter` **inline** rather than
+  calling it, because `core.*` has no Minecraft on its JUnit classpath and the call would compile and then fail at
+  test runtime in the very gate that proves the rule.
+* **`Names` is a new top-level tag on the controller, never inside `Network`.** `ControllerPersistence#writeNetwork`
+  returns having written nothing while the warehouse is one straight aisle with no pinned line, and
+  `NetworkGoggleInfo#of` is likewise empty there — both deliberate and load-bearing. A one-aisle warehouse, which is
+  every world built before M21 and therefore most of them, has to be able to carry a name, and keeping `Names`
+  separate preserves the "a straight warehouse has no `Network` tag" property exactly. A warehouse nobody named writes
+  no `Names` tag at all, so a world from 0.7.0 saves byte for byte what it did before.
+* **Written only on a player's click**: `setChanged()` + `sendData()` once. No tick path, no derivation, no scan — the
+  table is one map write per click, and a warehouse with no names costs every surface nothing.
+* **A letter change carries the name, as a swap.** Scrolling the controller's value box is a reversible gesture, so
+  the table's answer to it has to be reversible too: `AisleNames#rename(from, to)` swaps, so scrolling back restores
+  exactly what was there and a letter change can never destroy a name a player gave another aisle. It also mirrors
+  what the next re-link does to the letters themselves (`BranchTable#assign` gives branch 0 the box's letter and moves
+  the branch that held it to the lowest free one), so each name stays with the aisle it was given to.
+* **No `bypassesInput` override anywhere.** Verified against the jar: `ValueSettingsInputHandler` walks the behaviours
+  and `continue`s on `!valueSettingsBehaviour.testHit(ray.getLocation())`, so only a click that really hits the
+  value-box sphere is cancelled, and a click anywhere else on the face already falls through to
+  `blockState.useItemOn`. An override would instead cost the controller's aisle-letter box — and, on an interface, the
+  one value box its only usable face carries, which is its store filter and its storage priority — for every renamed
+  item in hand, in exchange for a reach the gesture already has. The price is that the gesture is "click the face off
+  the little box in the middle", and a hint line on the controller's goggles pays it.
+* **A wrench is never a naming item, however it is named.** Create's own wrench acts from `WrenchItem#useOn`, which
+  runs *after* `useItemOn` and therefore only if the gesture passed the click on — so taking every renamed item would
+  have cost rotation on exactly the two blocks the gesture is added to, while a wrench from another mod, which
+  `WrenchEventHandler` handles in a cancelled event before the block is asked at all, would have kept working. The
+  test is the `c:tools/wrench` tag, the same one Create tests. A **clipboard** needs no exception:
+  `ClipboardValueSettingsHandler` gates on the item rather than its components and cancels the event for any block
+  entity with a `ClipboardCloneable` behaviour, so `AisleLetterBehaviour`'s copy and paste are untouched; a
+  **Mechanical Arm** is cancelled client-side by `ArmInteractionPointHandler` for the same reason.
+* **The names outlive the warehouse they decorate.** The read is deliberately not gated on the saved layout, unlike
+  the records, the requests and the production orders: a name is a label a player wrote, not state derived from the
+  rails, so it survives a chunk unload, a dock lost, moved or turned, an aisle extended or shortened and a branch
+  repinned. Rebuild the dock and the labels are back. Only breaking the controller takes them away, with everything
+  else it knows.
+* **A name is shown on five existing lines and no new panel.** Nothing is added that a player has to go and find: the
+  controller's own line becomes `Warehouse A — Ores`; its aisle list shows a named aisle's **name where an unnamed one
+  shows its length** (`Aisles: A Ores · B Metals · C 14`), because the warehouse's total rails are already on the line
+  above and that line's budget is six entries; every member's address gains the name **in brackets behind it**
+  (`Address: B-03-07R (Ores)`), which is the highest-value surface because it is the block a player is standing at;
+  the Warehouse Summary display board gains one optional row (`Names: A Ores · B Metals`); and the controller's
+  goggles carry a dark-grey **hint** that teaches the gesture, as the last line and only while no name is visible on
+  them at all. The name never replaces an address: the address is what the terminal, the crane's own lines and every
+  report speak.
+* **The board's row is last of all, and bounded by characters as well as by entries.** Two separate corrections to
+  where that row first landed. It sits **below the ports, rules, stopped-products and chunk rows**, not under the
+  aisle list, because `WarehouseDisplays#limit` drops the tail: whichever row is last is the one a short board loses,
+  and every row above it is a count a player asked for or a machine they have to go and look at, while this one is a
+  label they chose. And a name is up to 16 characters of their own choosing, so an entry bound said nothing about the
+  width of a row — six of them with separators are 113 characters, where a six-block board row holds 26 and a sign
+  holds 15. `WareworksLang#aisleNamesLine` therefore fits **whole** entries into a budget derived from the target's
+  own `maxColumns` and marks what it left out (`Names: A Ores (+2)`), the way the aisle list and `line_aisles_cut`
+  already mark a list they had to shorten. The label's share of that budget has to be a constant, because a display
+  source may not resolve its own text on the server (it would resolve against the server's language and show every
+  player that one), so `LangConsistencyTest#theNamesBoardRowFitsADisplayBoard` holds both language files to it.
+* **The hint's gate is "nothing on this tooltip carries a name", which is not quite "this warehouse has none".** The
+  two synced carriers are the whole truth a client has, and `NetworkGoggleInfo` carries six aisles' names; so on a
+  warehouse of **more** than six aisles whose only named aisle is the seventh or later, the hint keeps standing while
+  the name is drawn on that aisle's members and on the board. The alternative is a 26th component on
+  `ControllerGoggleSummary` — a record whose own javadoc warns that an added argument silently shifts every count
+  after it — existing only to suppress a hint, which is the worse trade. The words say what the gate does.
+* **Not the terminal's title row.** That is the one hard-clipped text row of the screen that nothing measures —
+  `renderTexts` draws the title left and `Warehouse A` right with no `fitTo` and no collision check, and
+  `statusTextsFit()` covers only the status row — so German `Lager A — Erze` beside `Lagerterminal` would silently
+  render through itself. Putting a name there needs a `titleRowFits()` getter and a `MeasuredRow` entry in
+  `TerminalVisualScenario#checkRowVocabularyFits`; that is the price of admission and it is not in this milestone.
+* **Three existing records carry it and no payload changes.** `ControllerGoggleSummary` gains the **dock** aisle's name
+  (it cannot ride `NetworkGoggleInfo`, whose `of()` is empty for a warehouse that neither bends nor stops short, which
+  is where a name matters most), `NetworkGoggleInfo` gains the other aisles' names, and `AisleAssignment` gains the
+  name of the aisle a member belongs to — resolved in `WarehouseRegistry`'s single assignment funnel, so no two member
+  kinds can show the address with and without it. All three ride block entity update tags, which are part of every
+  chunk packet, so there is **no `WareworksNetwork.VERSION` bump**: the version gate guards custom payloads, and a
+  missing update-tag key reads as absent, so an old client simply shows no names. The board reads the controller
+  directly, because a display source gathers on the server.
+* **The other aisles' names are one separated string, bounded to six.** A `StringTag` costs 36 accounting bytes of
+  overhead each and a compound entry 64 more, so a list of 26 of them would have cost about 1.8 kB of the controller's
+  budget; one string with a newline separator — a character `AisleName#sanitize` strips from every name, so the
+  encoding needs no escaping — costs 312 at the worst case. Six because that is as many as the controller's aisle line
+  and the board's names row ever draw, so nothing is synced that no surface could show.
+* **A named controller's update tag gets a bound of its own rather than a bigger one** (`MAX_SUMMARY_SYNC_BYTES` stays
+  2048, `MAX_NAMED_SUMMARY_SYNC_BYTES` is 4096), exactly as a warehouse interface has had two bounds since M4 — one
+  for the state almost every block is in, one for the state only a running job puts it in. Measured rather than
+  assumed: the controller's tag is about **1905** accounting bytes on the GameTest fixture before any name, and one
+  16-character name costs **150** of them, so the tight number had no room left. What is really guarded is the names'
+  own cost (`MAX_NAME_SYNC_BYTES` = 480, measured at 462 for all seven), because that is the number a later change
+  could make unbounded, while the size of a six-aisle summary is about the network record M21 put there — a crafted
+  six-aisle record alone takes the summary past 2048, which nothing measured before M25 and which this feature is not
+  the right place to answer for. One **real** bending warehouse with real names on it is weighed as well, where such a
+  warehouse already stands (`WarehouseInterfaceGameTests#interfaceNamesItsOwnAisle`), because every other measurement
+  crafts its worst case on top of a one-aisle fixture. The **station family** turned out to need the same treatment
+  and for the same reason, which is what measuring it found: that one `AisleAssignment` rides the client packet of the
+  input, the output, the warehouse port and the production station alike, a station's tag is already about **1861** of
+  its 2048 accounting bytes before any name, and the widest assignment (longest address plus a 16-character name)
+  costs **292** more — so it gets a second bound of its own (`MAX_NAMED_UPDATE_TAG_BYTES` = 4096) rather than a
+  bigger one, exactly like the interface and the controller. All of these are canaries against a record that grows
+  unnoticed, not packet budgets: `CompoundTag#sizeInBytes` is a Java-heap estimate many times the real wire size.
+
+*Alternatives rejected:* **keying a name to a rail line** the way `BranchTable` keys letters, which looks more stable
+and is worse — it would be *more* reliable than the address beside it, so during the window in which two branches
+share a letter a player would read `B — Ores` on one aisle and `B — Metals` on the other with no way to tell which `B`
+the terminal means; it also cannot cover the dock aisle at all, because `BranchTable#remember` deliberately does not
+remember branch 0, which is what keeps the whole `Network` tag empty for a warehouse of one aisle. **A leading-letter
+syntax** (`"B Ores"`), which exists only if the controller is assumed to be the sole surface and which an interface
+makes unnecessary. **A book and quill**, a second foreign API (`WritableBookContent` + `Filterable`) for no gain over
+a component the anvil has already filtered and capped. **A click on a rail**, which needs a new "which branch contains
+this position" pass and a new registry query, because `findController` resolves rack positions only. **A naming
+screen, menu or text field, and any client-to-server free text**, which means a new `MenuType`, a layout, a payload,
+edit-box focus handling and the whole validation burden — length, control characters, formatting codes, abuse on a
+public server — for text the anvil hands over for free. **A dedicated "aisle sign" block**, which would have to be
+*found* before anything could read it, while the controller already lists every aisle on one goggle line. And
+**per-storage-location names**, which have no gesture left (the aisle face of an interface is the only face a player
+can use, and its one value box is already the filter and the priority) and nowhere to show them (a terminal row
+aggregates one item type over every location); the substitute, reading the attached block's own `Nameable#getCustomName()`
+in `AttachedInventorySummary`, is noted for a later milestone because it adds a string to the record *and* to the
+synced tag that `interfaceSummarySyncIsBounded` guards.
+
+### ADR-039 — A crane's throughput is a rolling minute of six mutually exclusive buckets, measured on the dock, never saved, and synced only to a player who is looking at it (M25, issue #16)
+
+*Context:* Issue #16 asks the goggles to say what the crane **got done**, so that a player standing in front of a slow
+warehouse can tell "the machine is the bottleneck" from "the machine has nothing to do". The crane's server tick is the
+one genuinely hot path in the mod — one per dock per tick, for every loaded warehouse — so whatever is measured has to
+cost a handful of instructions and nothing else. Three further constraints decided the shape: `core.*` stays pure Java
+(no `Level`, no `BlockEntity`, no `content.*` import), the crane's save format is pinned by `MigrationGameTests` and
+by every world a player already has, and the dock's goggle data rides the chunk packet, which is why
+`CraneJobGameTests` guards its size at all.
+
+*Decision:*
+
+* **Six mutually exclusive buckets that sum to the observed ticks**, classified in `core.crane.CraneActivity` in a
+  fixed precedence: `PAUSED` > `IDLE` > `TURNING` > `TRAVELLING` > `AT_A_STOP` > `BLOCKED`. Three of the six
+  definitions are taken from the project rather than invented, so no two surfaces can disagree: the **drive home is
+  idle**, because `HomeReturn#isWaiting` already counts a returning crane as waiting and the `Status:` line already
+  reads *Idle*; `AT_A_STOP` is the **planner's own** stop (`TravelTimeModel#stopTicks`: extend, transfer, retract), so
+  the measured share is comparable with what the planner predicted; and a `TRAVEL_*` tick that **moved nothing is
+  blocked**, which is the stranded case a naive classifier prints as "travelling 100 %". The final step is an
+  exhaustive `switch` with no `default`, so a phase added later is a compile error.
+* **A mixed corner tick counts wholly as turning**, making the turning share an upper bound. `CraneMotion#travel`
+  knows the exact split, but changing its return changes a pure function the **client** also runs every tick for its
+  own animation and that four JUnit suites pin tick for tick. The error is at most ~3 ticks per corner at the default
+  speed and penalty — 0.25 % of a minute — it errs on the side that makes corners look expensive, and the shipped
+  sound code already makes the same approximation when it suppresses the rail clack during a swing.
+* **A rolling minute: 60 buckets of 20 ticks with running sums** (`core.crane.ThroughputWindow`), so a snapshot is
+  O(1) and a watching player may ask once a second for nothing. A gap contributes **nothing, neither idle nor
+  working**: the ring is rolled over every whole elapsed second first, each bucket it moves onto zeroed and subtracted
+  from the sums, bounded at 60 steps, and a gap of a minute or more or a backwards `/time set` clears it. About 2 kB
+  per loaded dock, one dock per warehouse.
+* **Never saved.** Game time is contiguous across a restart, so saved buckets would be arithmetically defensible and
+  would still claim a minute of work for a machine that stood still — and no label can rescue that. `CranePersistence`
+  and every migration test are therefore untouched, which is also what made this half of M25 the half that could wait
+  without ageing.
+* **`observedTicks` is the denominator, never a fixed 1200**, and the label carries the real length ("of the last
+  23 s") until the ring is full. Dividing a ten-second window by a minute would make every crane read low for the
+  first minute after every chunk load, which teaches the opposite of the truth. **Nothing is ever extrapolated.** Each
+  of the three working shares is computed from its own ticks and none is derived as the remainder of the others, so
+  nothing claims a total of exactly 100 — and the **busy headline is their sum**, so the breakdown adds up to the
+  number above it. Flooring the whole and each part independently lets `floor((a+b+c)/n)` exceed the sum of the floors
+  by up to two, which printed "Busy: 85 %" over three lines adding to 84 (M25 review fix).
+* **The carrier is a sixth component on `CraneGoggleInfo`** (`Optional<CraneThroughput>`, one `int[10]` of about 44
+  accounting bytes, omitted entirely while the window holds nothing worth showing), not a new field on
+  `ControllerGoggleSummary`. That record already carries `Optional<CraneGoggleInfo>` and the controller already prints
+  it through the very same `addGoggleLines` the dock calls, so the measurement reaches both surfaces for the price of
+  one file — and it leaves `ControllerGoggleSummary`, a 25-component record whose own javadoc warns about its arity,
+  entirely to ADR-038. The purity objection ("a measurement is not state") is answered by that record's own javadoc
+  and by its already carrying `pauseReason`, which is a diagnosis rather than state. No `WareworksNetwork.VERSION`
+  bump: the version gate guards custom payloads, and a missing update-tag key reads as absent.
+* **The dock becomes `GoggleObservers.Observable` with its own `SyncThrottle(20)`**, and that is the one thing the
+  existing publish path cannot do. A working crane publishes several times a second anyway, but a **parked** crane
+  publishes nothing at all, so without the observer a player would read "Busy: 85 %" off a machine that has stood
+  still for five minutes. The measurement is kept out of the server's cached `goggleInfo` and merged in at write time
+  from the one field the observer owns: `refreshGoggleInfo` rebuilds that cache several times a second for a working
+  crane, so a measurement rebuilt with it would flicker in and out of the client's copy twenty times a second. A dock
+  nobody watches therefore snapshots nothing, allocates nothing extra and writes not one byte more than it did before.
+  The one new traffic case is a just-parked, watched dock: about one packet a second for the minute its window takes
+  to decay, then quiet.
+* **`CraneSoundCues` is not refactored.** Both the obvious designs wanted the four motion booleans of
+  `CraneSoundCues#motion` extracted into the shared record. They lose on the call path: `motion` is reached through
+  `CraneSounds#afterTick`, so sharing means a two-hop signature change through a **stateful** class that decides every
+  crane sound, is pinned by `CraneSoundCuesTest` and `CraneSoundGameTests`, and whose behaviour the `aisle` visual
+  scenario fails on unless every crane sound was heard. What is bought is four lines of boolean arithmetic.
+  `core.crane.CraneTickMotion` computes them independently with the same `EPSILON = 1e-9`, and
+  `CraneTickMotionTest#agreesWithTheSoundCues` drives a fresh `CraneSoundCues` over a table of pose pairs and asserts
+  that the cues it plays agree with the record's own reading. Duplication a test pins beats a refactor of the sound
+  hot path.
+* **"Blocked", not "Waiting"**, forced by the lang file rather than by taste: `display_source.crane.idle` has already
+  spent German's *Wartet* on *Idle*, so English follows German here and the pair stays 1:1.
+* **Exactly one value in the mod carries a percent sign**, `gui.goggles.percent` = `%1$s%%` (German `%1$s %%`). A
+  literal percent is a trap and not a crash: `TranslatableContents#decomposeTemplate` accepts only `%s` and `%%`, and
+  `decompose()` **catches** what a bad template throws and falls back to the raw text, so the player would silently
+  read the untranslated template. Keeping the sign in one key also keeps the German space before it in one place.
+* **The turning term is printed only on a warehouse that bends** (`networkGeometry().branchCount() > 1`, the gate the
+  size line already uses), because a straight aisle structurally never yaws and a permanent `0 %` teaches nothing.
+* **The controller shows two of the lines and the dock all four**, through the `detailed` flag of the one
+  `addGoggleLines` both call — so there is no second place that decides what a share means. The controller's tooltip is
+  already 14 lines for an ordinary working warehouse and about 28 for a built-out one; the busy headline and the
+  blocked share are what it can afford and what a player walked to it for. The number is merged into the summary in
+  `createSummary()` as a **fresh** snapshot, which is exact because that method runs in exactly two places and neither
+  is a tick: an observation (throttled to one packet a second) and a naming click.
+* **A fifth Display Link source, on the dock only** (`wareworks:crane_throughput`, `warehouse-system.md` §10), with
+  **four fixed rows** and a printed zero — the opposite of the goggle lines, because a row that came and went with its
+  value would move the three below it and push one off a four-row board (`WarehouseDisplays#limit`). While the window
+  is not a full minute it emits the single line `Measuring`: a board cannot carry the "of the last 23 s" caveat, and
+  showing a number about ten seconds as if it were about a minute is the one thing it must not do. It reads
+  `throughput()` **live on the server** rather than the synced record, so a board reads the same whether or not
+  anybody is wearing goggles, and it keeps Create's default 100-tick passive refresh rather than the 20 of
+  `crane_status`, because a rolling minute does not change meaningfully every second. `CRANE_STATUS` stays **first**
+  in the dock's `bind(...)` list, so every link a player has already hung on a dock keeps its preselection.
+
+*Consequences:* The dock's tick does one record allocation, one exhaustive `switch`, two array writes and four adds
+more than it did; there is no scan, no lookup and no world access, and nothing is published. A parked crane's tooltip
+and its update tag are byte for byte what they were, because an empty window is normalised to "no measurement" in
+`CraneGoggleInfo`'s compact constructor. No crane save gained a byte, so there is no migration. The turning share is
+an upper bound and the trip counts can land on the second before their own by up to one second — both stated on the
+tooltip's own terms in `docs/stacker-crane.md` §9. The `detailed` flag on `addGoggleLines` is the cheap retreat if the
+dock's four lines read as too many: passing `false` drops it to two, with no record, packet, lang or test change.
+
+*Rejected:* **Saving the window**, and with it any history, graph or `/wareworks throughput` command — an hour of
+history answers a question nobody asks while standing in front of a slow warehouse, and it is the one thing that would
+force the measurement into a save file and into a migration. **The exact fractional turn/travel split**, which costs a
+signature change in a pure function the client runs every tick for 0.25 % of a minute per corner. **A theoretical
+maximum, and any "efficiency" derived from one**: `TravelTimeModel` and `CraneRoute#costBlocks` make "capacity 24
+trips/min vs. actual 11" two lines of arithmetic away, and it is the most misleading number this feature could print,
+because most of those missing trips had nothing to carry — a player would read 46 % and go hunting a fault in a
+warehouse that is simply not busy. **Any "what to do about it" line**: the six shares plus the existing pause reason
+already name the cause (100 % at a stop is the drivetrain, high blocked is a full target, high turning is the layout,
+high idle is nothing to do). **A config key for the window length**, because two players comparing "Busy 78 %" must be
+comparing the same thing; the partial-window key already carries a seconds argument, so a knob would cost one getter
+and no new string if it is ever wanted. **Trips broken down by job type**, which `ReportComplete` makes free to
+collect and which the stock index, the port counters and the production orders answer better. **Four more lines on `crane_status`**, whose four already fill a four-row board,
+so the tail would be dropped and a player would lose lines they had. **The same source on the controller**, where it
+would be a byte-for-byte copy today and must become a *sum* in the multi-crane milestone, which is the wrong thing to
+ship a path to now. And **Shift-gating the
+breakdown**: the flag is available (`GoggleOverlayRenderer` passes `isPlayerSneaking`, and Create itself branches on
+it), but no Wareworks block entity branches on it today, so using it would invent a mod-wide convention for three
+lines — and a number you must crouch to find is a number nobody finds.
+
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -2655,6 +2957,13 @@ a cycling button and a fourth would want a menu (open point in `docs/roadmap.md`
   saved queue or is forgotten on the next pass, which gives nothing back because what a line is missing does not depend
   on it. The question an order was asking is never saved: like every confirmation it is measured against the warehouse
   as it is now, so such an order comes back `RUNNING` and asks again.
+* The **names a player gives a warehouse's aisles** (M25, ADR-038) are one new top-level NBT key on the controller,
+  `Names` (`[{C: "A", N: "Ores"}]`), written only while at least one aisle has one — so a world from 0.7.0 saves byte
+  for byte what it did before. It is deliberately **not** inside `Network`, which a straight warehouse does not write
+  at all, because a one-aisle warehouse must be able to carry a name; and it is read **unconditionally**, not gated on
+  the saved layout the way the records and requests are, because a label a player wrote is not state derived from the
+  rails: it survives a dock lost, moved or turned, and only breaking the controller takes it away. The one write path
+  is a player's naming click, which saves and syncs once; nothing derives or rebuilds it.
 * A player's **terminal preferences** (M24, ADR-037) are the one piece of authoritative state that lives on a
   **player** and not in a block entity: the chosen order and the request counts, as a data attachment NeoForge saves
   inside `playerdata/<uuid>.dat` and copies onto the respawned player on death. The copy is

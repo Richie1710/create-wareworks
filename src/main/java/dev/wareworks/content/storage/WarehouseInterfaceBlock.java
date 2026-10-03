@@ -1,14 +1,22 @@
 package dev.wareworks.content.storage;
 
+import java.util.Optional;
+
 import org.jetbrains.annotations.Nullable;
 
 import com.mojang.serialization.MapCodec;
 import com.simibubi.create.content.equipment.wrench.IWrenchable;
 import com.simibubi.create.foundation.block.IBE;
 
+import dev.wareworks.content.controller.AisleNaming;
+import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelReader;
@@ -19,6 +27,7 @@ import net.minecraft.world.level.block.entity.BlockEntityTicker;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.phys.BlockHitResult;
 
 /**
  * The warehouse interface: placed in front of any inventory, it makes that inventory a storage location of an aisle
@@ -75,6 +84,30 @@ public class WarehouseInterfaceBlock extends HorizontalDirectionalBlock
         if (clicked.hasBlockEntity())
             return clickedFace.getOpposite();
         return context.getHorizontalDirection();
+    }
+
+    /**
+     * A right-click with a <b>renamed item</b> names the aisle this interface stands in, and a plain name tag takes the
+     * name off again ({@link AisleNaming}, M25, issue #15). Everything else — the wrench, a filter item, an empty hand,
+     * a sneaking placement — passes straight on, and the item is never consumed.
+     * <p>
+     * The interface names <b>its own</b> aisle: it already knows its {@code StorageAddress} server-side, and an address
+     * names its aisle by letter, so naming aisle B means clicking something standing in aisle B. An interface that
+     * belongs to no aisle, or stands at a rack position facing the wrong way, has no letter to name and says so.
+     * <p>
+     * No {@code bypassesInput} override is involved, which matters more here than on the controller: the aisle face of
+     * an interface is the only face a player can use, and the store filter and the storage priority share the one value
+     * box on it. A renamed filter item must still go into that slot (see {@link AisleNaming}).
+     */
+    @Override
+    protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
+                                              Player player, InteractionHand hand, BlockHitResult hit) {
+        if (!AisleNaming.isGesture(stack))
+            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+        Optional<WarehouseRegistry.MemberAisle> aisle =
+                level.getBlockEntity(pos) instanceof WarehouseInterfaceBlockEntity itf
+                        ? itf.aisleToName() : Optional.empty();
+        return AisleNaming.clicked(stack, level, player, aisle);
     }
 
     /**

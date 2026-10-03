@@ -153,6 +153,46 @@ public final class CraneMotion {
         return blocks;
     }
 
+    /**
+     * Quarter turns the machine really <b>swung</b> in one tick, as a magnitude: never the net rotation between the
+     * two poses.
+     * <p>
+     * The reason is the same one {@link #blocksDriven} exists for, and it bites harder here. A tick's budget is spent
+     * along the whole route, so with a small {@code crane.turnPenaltyBlocks} — 0 is a documented instant turn —
+     * {@link #step} can finish several legs in one tick. Every hand-over of a route is a quarter turn
+     * ({@code CraneRoute} enforces perpendicular legs), so a tick can contain two, three or four of them, while
+     * {@link CranePose#yawDelta} answers within {@code (-2, +2]}: two corners in opposite directions net <b>zero</b>
+     * — the tick would read as no turn at all — three in one direction read as one, and four read as zero.
+     * <p>
+     * So the swing is counted leg by leg along {@code route}: the turn onto each leg the tick crossed, and whatever is
+     * left of the turn onto the leg it ended on. Without a route — a warehouse of one straight aisle, or a tick whose
+     * poses the route cannot place — there is no corner to miss and the net reading is exact.
+     *
+     * @param route the route the tick was stepped with, or {@code null} for a warehouse of one aisle
+     */
+    public static double quarterTurnsSwung(CranePose before, CranePose after, @Nullable CraneRoute route) {
+        Objects.requireNonNull(before, "before");
+        Objects.requireNonNull(after, "after");
+        double net = Math.abs(CranePose.yawDelta(before.yaw(), after.yaw()));
+        if (route == null)
+            return net;
+        int from = route.legIndexAt(before.branch(), before.x());
+        int to = route.legIndexAt(after.branch(), after.x());
+        if (from < 0 || to < 0 || to <= from)
+            return net;
+        // The headings the machine turned towards, in the order travel() turns towards them: the leg it stood on (a
+        // turn it may still have been finishing), then every leg it handed over onto. The last of them is left to the
+        // hop below, because the tick may have ended part-way through it.
+        double swung = 0.0;
+        double yaw = before.yaw();
+        for (int leg = from; leg < to; leg++) {
+            double heading = CranePose.normalizeYaw(CranePose.yawOf(route.leg(leg).heading()));
+            swung += Math.abs(CranePose.yawDelta(yaw, heading));
+            yaw = heading;
+        }
+        return swung + Math.abs(CranePose.yawDelta(yaw, after.yaw()));
+    }
+
     /** Quarter turns per tick at these speeds: {@code vx / turnPenaltyBlocks}, {@link #INSTANT_TURN} without penalty. */
     public static double turnSpeed(CraneSpeeds speeds, double turnPenaltyBlocks) {
         Objects.requireNonNull(speeds, "speeds");

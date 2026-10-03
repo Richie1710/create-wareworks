@@ -58,6 +58,7 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.terminal.StockLine;
+import dev.wareworks.core.warehouse.AisleName;
 import dev.wareworks.core.warehouse.CraneRoute;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.NetworkStop;
@@ -66,6 +67,7 @@ import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.Headings;
 import dev.wareworks.util.WareworksLang;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -130,9 +132,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * farthest aisle, and its arm in the <b>shared</b> block, reached from aisle C rather than across from the run it is
  * also beside. The Flywheel pass adds the goggles that name the aisles and their letters (the controller's
  * "Warehouse: N rails, 4 aisles" over "Aisles: A 12 · B 3 · C 3 · D 3", a rack of the main run, a rack of the far
- * aisle, and both halves of the mirror pair with the address each really has), the terminal with one stock list for
- * the whole comb, a retrieval out of aisle C into the output on aisle D — two turns in one trip, the only shape where
- * that happens — and the <b>failure chapter</b>.
+ * aisle, and both halves of the mirror pair with the address each really has), the <b>names</b> a player gives three
+ * of those four aisles and the two surfaces that then carry them, in English and in German (M25, issue #15), the
+ * terminal with one stock list for the whole comb, a retrieval out of aisle C into the output on aisle D — two turns
+ * in one trip, the only shape where that happens — and the <b>failure chapter</b>.
  * <p>
  * <b>The failure chapter</b> is two different things a player can do, and they are told different things:
  * <ol>
@@ -270,6 +273,29 @@ public final class CombVisualScenario implements VisualScenario {
     /** The aisle length the failure chapter configures: short enough to take the last junction with it. */
     private static final int CUT_LENGTH = TEETH[2] - 1;
 
+    // --- the names the goggle chapter gives the comb's aisles (M25, issue #15, ADR-038) ---
+    /**
+     * The name of the far tooth, which is the aisle the named rack shot stands in, and the one name the address line
+     * of that shot has to carry.
+     */
+    private static final String FAR_AISLE_NAME = "Gravel";
+    /**
+     * Which branch gets which name, by <b>branch index</b> — the letters themselves are read off the warehouse.
+     * Aisle {@value #TOOTH_C} is deliberately left out, so every named line shows the mixed case a real warehouse
+     * shows: three aisles by name and one by its length.
+     */
+    private static final Map<Integer, String> NAMED_AISLES = Map.of(RackPosition.FIRST_BRANCH, "Ores",
+            TOOTH_B, "Metals", TOOTH_D, FAR_AISLE_NAME);
+    private static final String ENGLISH = "en_us";
+    private static final String GERMAN = "de_de";
+    /**
+     * Scaled pixels a goggle tooltip cannot use: Create places it at {@code width - tooltipTextWidth - 20} and
+     * {@code RemovedGuiUtils.drawHoveringText} then keeps its left edge at 4 ({@link #checkAisleListWidth}).
+     */
+    private static final int TOOLTIP_SIDE_SPACE = 24;
+    /** How long a language switch may take; it rebuilds every texture atlas. */
+    private static final int RELOAD_TIMEOUT_TICKS = 600;
+
     private static final int CLEAR_MARGIN = 5;
     private static final int CLEAR_HEIGHT = 8;
     private static final int CENSUS_MARGIN = 3;
@@ -406,6 +432,8 @@ public final class CombVisualScenario implements VisualScenario {
     private final Map<Item, Long> handedOut = new HashMap<>();
     /** The moment the run is photographing, for the shot log. */
     private volatile String moment = "none";
+    /** Switches the client's language for the second half of the name chapter ({@link VisualLanguage}). */
+    private final VisualLanguage language = new VisualLanguage(RELOAD_TIMEOUT_TICKS, SETTLE_TICKS);
     /** Polls spent waiting for the current moment (server thread), so a long wait says what it is waiting for. */
     private int waitingPolls;
     /** The machine's own pose at the frozen moment, read on the server and checked against what the client draws. */
@@ -609,6 +637,7 @@ public final class CombVisualScenario implements VisualScenario {
 
         if (pass == VisualPass.FLYWHEEL) {
             rackGoggleShots(script);
+            nameChapter(script);
             terminalShot(script);
             retrieveThroughTheOutput(script);
             failureChapter(script);
@@ -617,8 +646,10 @@ public final class CombVisualScenario implements VisualScenario {
                             + "lettered aisles, the machine turns off at a junction and drives straight through one, "
                             + "serves the rack at a junction and both shared blocks from the aisle each faces, every "
                             + "item reached the rack it was addressed to, goods from aisle C reach the one block on "
-                            + "aisle D, the census is exact, a closed rail takes an aisle out of the warehouse and an "
-                            + "aisle the crane cannot reach says so)"));
+                            + "aisle D, three named aisles read by name and the fourth by its length on the "
+                            + "controller's goggles and on a member's address in English and in German, the census is "
+                            + "exact, a closed rail takes an aisle out of the warehouse and an aisle the crane cannot "
+                            + "reach says so)"));
         }
         if (pass == VisualPass.values()[VisualPass.values().length - 1])
             script.client("comb: check that the turns were heard", CombVisualScenario::assertTurnSounds);
@@ -1269,6 +1300,9 @@ public final class CombVisualScenario implements VisualScenario {
         GoggleShots.requireLine(lines, aisleListLine(network));
         GoggleShots.requireNoLine(lines, WareworksLang
                 .aisleSize(summary.aisleLength(), summary.mastHeight()).component().getString());
+        // Nothing is named yet at this point of the run, so the goggles have to be teaching the gesture (M25, issue
+        // #15): this is the one shot that sees the hint, and the named pair later requires it gone.
+        GoggleShots.requireLine(lines, namingHintText());
         LOGGER.info(PREFIX + "comb: CHECK the controller's goggles name the job from {} to {}, under '{}' and '{}'",
                 source, target, WareworksLang.networkSize(network.rails(), network.aisleCount(),
                         summary.mastHeight()).component().getString(), aisleListLine(network));
@@ -1309,13 +1343,200 @@ public final class CombVisualScenario implements VisualScenario {
         LOGGER.info(PREFIX + "comb: CHECK the goggles at {} show the address {}", pos, address.format());
     }
 
-    /** The aisle list line the controller draws for {@code network}, built exactly as the controller builds it. */
+    /**
+     * The aisle list line the controller draws for {@code network}.
+     * <p>
+     * Built from the controller's <b>own</b> entry builder rather than from a copy of the rule: this file carried a
+     * copy until M25 and a copy of a rule is a second rule — the moment a named aisle started showing its name where
+     * an unnamed one shows its length, a copy would have gone on asserting the old line (issue #15).
+     */
     private static String aisleListLine(NetworkGoggleInfo network) {
-        List<String> entries = new ArrayList<>(network.aisleCount());
-        for (int aisle = 0; aisle < network.aisleCount(); aisle++)
-            entries.add(network.letterOf(aisle).map(String::valueOf).orElse("?") + " "
-                    + network.aisleLengths().get(aisle));
+        List<String> entries = WarehouseControllerBlockEntity.aisleEntries(network);
         return WareworksLang.networkAisles(entries, entries.size()).component().getString();
+    }
+
+    // --- the names a player gave the aisles (M25, issue #15, ADR-038) -------------------------------------------------
+
+    /**
+     * The two goggle surfaces that carry an aisle's name, <b>in both languages</b>: the controller's own lines (the
+     * warehouse's name and the aisle list, where a named aisle shows its name where an unnamed one shows its length)
+     * and the address on the goggles of a member standing in a named aisle.
+     * <p>
+     * Three of the comb's four aisles are named and the fourth deliberately is not, so every shot shows the mixed
+     * line a real warehouse shows and a name can never be read against the wrong aisle without the run failing. The
+     * names themselves are text a <b>player</b> wrote, so they are the same in both languages — which is precisely
+     * what makes the German pass worth taking: what changes around them is the translated sentence, and that sentence
+     * is the thing a goggle line can be too long for or get the argument order wrong in.
+     * <p>
+     * The teaching hint is checked in both directions: {@link #checkControllerGoggles} requires it while nothing is
+     * named, and {@link #checkNamedControllerGoggles} requires it gone once something is.
+     */
+    private void nameChapter(VisualScript script) {
+        script.server("comb: name three of the four aisles", this::nameAisles)
+                .until("comb: wait until the names reached the client", CombVisualScenario::namesSynced,
+                        SYNC_TIMEOUT_TICKS);
+        namedGoggleShots(script, "");
+        language.switchTo(script, "comb: ", GERMAN);
+        namedGoggleShots(script, "-de");
+        language.switchTo(script, "comb: ", ENGLISH);
+    }
+
+    /** The two named goggle shots of one language; {@code suffix} keeps the German pair's files apart. */
+    private void namedGoggleShots(VisualScript script, String suffix) {
+        GoggleShots.reach(script, NAME, GoggleShots.vanillaReach());
+        fly(script);
+        GoggleShots.shot(script, NAME, controllerView(), "goggles-named-controller" + suffix,
+                CombVisualScenario::controllerPos, CombVisualScenario::namesSynced,
+                CombVisualScenario::checkNamedControllerGoggles);
+        fly(script);
+        GoggleShots.shot(script, NAME, overheadView("goggles-named-rack" + suffix, GOGGLE_RACK_FAR),
+                "goggles-named-rack" + suffix, dock -> rackPos(dock, GOGGLE_RACK_FAR),
+                context -> rackNameSynced(context, GOGGLE_RACK_FAR),
+                context -> checkNamedRackGoggles(context, GOGGLE_RACK_FAR));
+        GoggleShots.reach(script, NAME, 0.0);
+    }
+
+    /**
+     * Names the aisle at the dock, the first tooth and the <b>far</b> tooth, by the letters the warehouse itself gave
+     * them — never by a letter this file assumed, which is the one way a naming test can pass while naming the wrong
+     * aisle. Aisle C is left unnamed on purpose.
+     */
+    private void nameAisles(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        WarehouseControllerBlockEntity controller = controller(level, dock);
+        WarehouseLayout warehouse = warehouse(level, dock);
+        for (Map.Entry<Integer, String> wanted : NAMED_AISLES.entrySet()) {
+            char letter = warehouse.branch(wanted.getKey()).letter()
+                    .orElseThrow(() -> new VisualTestException("aisle " + wanted.getKey() + " of the comb has no "
+                            + "letter, so there is nothing to name"));
+            String stored = controller.setAisleName(letter, wanted.getValue());
+            if (!stored.equals(wanted.getValue()))
+                throw new VisualTestException("aisle " + letter + " was stored as '" + stored + "' instead of '"
+                        + wanted.getValue() + "'");
+            LOGGER.info(PREFIX + "comb: aisle {} (branch {}) is now called '{}'", letter, wanted.getKey(), stored);
+        }
+        if (controller.namedAisles().size() != NAMED_AISLES.size())
+            throw new VisualTestException("the comb should carry " + NAMED_AISLES.size() + " names, but carries "
+                    + controller.namedAisles());
+    }
+
+    /** Both carriers have reached the client: the dock aisle's own name, and the names of the others. */
+    private static boolean namesSynced(VisualContext context) {
+        return controllerSummary(context).filter(summary -> summary.aisleName().isPresent()
+                && summary.network().filter(NetworkGoggleInfo::hasNames).isPresent()).isPresent();
+    }
+
+    /** The member's own packet has brought its aisle's name, not only its address. */
+    private static boolean rackNameSynced(VisualContext context, RackPosition rack) {
+        ClientLevel level = context.minecraft().level;
+        if (level == null)
+            return false;
+        return level.getBlockEntity(rackPos(context.origin(), rack)) instanceof WarehouseInterfaceBlockEntity storage
+                && storage.aisleAssignment().aisleName().isPresent();
+    }
+
+    /**
+     * The controller's own two named lines, read off the tooltip Create is drawing, against the warehouse's <b>synced
+     * data</b> rather than against this file's expectations.
+     */
+    private static void checkNamedControllerGoggles(VisualContext context) {
+        ControllerGoggleSummary summary = controllerSummary(context)
+                .orElseThrow(() -> new VisualTestException("the controller has no synced summary at all"));
+        NetworkGoggleInfo network = summary.network()
+                .orElseThrow(() -> new VisualTestException("the controller's summary carries no network"));
+        String dockName = summary.aisleName()
+                .orElseThrow(() -> new VisualTestException("the dock aisle's name has not reached the client"));
+        char dockLetter = network.letterOf(RackPosition.FIRST_BRANCH)
+                .orElseThrow(() -> new VisualTestException("the aisle at the dock has no letter"));
+        String letterLine = WareworksLang.warehouseLetter(dockLetter, summary.aisleName()).component().getString();
+        String listLine = aisleListLine(network);
+        List<String> lines = GoggleShots.lines(context, controllerPos(context.origin()));
+        GoggleShots.requireLine(lines, letterLine);
+        GoggleShots.requireLine(lines, listLine);
+        // The list has to carry a name AND a length, or it would prove nothing about which of the two an aisle shows.
+        // The unnamed aisle's entry is built from the synced record, so it is the real letter and the real length.
+        if (network.nameOf(TOOTH_C).isPresent())
+            throw new VisualTestException("aisle " + TOOTH_C + " of the comb is the one that stays unnamed, but the "
+                    + "client has a name for it: " + network.nameOf(TOOTH_C).orElseThrow());
+        String unnamedEntry = network.letterOf(TOOTH_C)
+                .orElseThrow(() -> new VisualTestException("the unnamed aisle has no letter"))
+                + " " + network.aisleLengths().get(TOOTH_C);
+        if (!listLine.contains(dockName) || !listLine.contains(unnamedEntry))
+            throw new VisualTestException("the aisle list should name three aisles and give the fourth its length as '"
+                    + unnamedEntry + "', but reads '" + listLine + "'");
+        GoggleShots.requireNoLine(lines, namingHintText());
+        checkAisleListWidth(context, listLine);
+        LOGGER.info(PREFIX + "comb: CHECK the controller's goggles read '{}' over '{}' in {}", letterLine, listLine,
+                context.minecraft().getLanguageManager().getSelected());
+    }
+
+    /**
+     * Whether the aisle list still fits the screen Create draws it on — and, because that is the question only a
+     * person can answer, <b>how far it is from not fitting</b>.
+     * <p>
+     * This is worth measuring rather than eyeballing because a goggle line that is too long does not wrap: Create's
+     * overlay passes {@code maxTextWidth = -1} to {@code RemovedGuiUtils.drawHoveringText}, so the wrapping branch is
+     * never taken, and an over-long line is simply drawn past the edge of the box and of the screen
+     * ({@code GoggleOverlayRenderer}: {@code posX = min(width / 2 + offset, width - tooltipTextWidth - 20)}, and
+     * {@code drawHoveringText} then clamps {@code tooltipX} to 4). So the room a line really has is the scaled screen
+     * width less {@value #TOOLTIP_SIDE_SPACE} px, and this scenario's own list has to fit it or the shot is of a
+     * line nobody could read.
+     * <p>
+     * The second number is the one for the owner: the widest list the design allows is
+     * {@link NetworkGoggleInfo#NAMES_LISTED} aisles of {@link AisleName#MAX_LENGTH} characters, and whether that is
+     * acceptable is manual check 186, not something this run can decide.
+     */
+    private static void checkAisleListWidth(VisualContext context, String listLine) {
+        Minecraft minecraft = context.minecraft();
+        String locale = minecraft.getLanguageManager().getSelected();
+        int available = minecraft.getWindow().getGuiScaledWidth() - TOOLTIP_SIDE_SPACE;
+        int real = minecraft.font.width(listLine);
+        if (real > available)
+            throw new VisualTestException(locale + ": the aisle list is " + real + " px wide and a goggle tooltip has "
+                    + "room for " + available + " px, so this shot shows a line drawn past the edge of the screen: '"
+                    + listLine + "'");
+        String widest = widestAisleList();
+        int widestWidth = minecraft.font.width(widest);
+        LOGGER.info(PREFIX + "comb: MEASURED ({}) the aisle list of this warehouse is {} px of the {} px a goggle "
+                + "tooltip has ({} %). The widest list the design allows — {} aisles of {} characters — would be {} "
+                + "px, {} % of the same room, and a goggle line is never wrapped, so it would be drawn past the edge "
+                + "(manual check 186)", locale, real, available, real * 100 / available,
+                NetworkGoggleInfo.NAMES_LISTED, AisleName.MAX_LENGTH, widestWidth, widestWidth * 100 / available);
+    }
+
+    /** The widest aisle list the bounds allow: every listed aisle named with the longest name a player can give. */
+    private static String widestAisleList() {
+        List<String> entries = new ArrayList<>(NetworkGoggleInfo.NAMES_LISTED);
+        for (int aisle = 0; aisle < NetworkGoggleInfo.NAMES_LISTED; aisle++)
+            entries.add((char) ('A' + aisle) + " " + "W".repeat(AisleName.MAX_LENGTH));
+        return WareworksLang.networkAisles(entries, NetworkGoggleInfo.NAMES_LISTED).component().getString();
+    }
+
+    /** The address of a member standing in a named aisle carries the name behind it, and not instead of it. */
+    private static void checkNamedRackGoggles(VisualContext context, RackPosition rack) {
+        BlockPos pos = rackPos(context.origin(), rack);
+        ClientLevel level = context.minecraft().level;
+        if (level == null || !(level.getBlockEntity(pos) instanceof WarehouseInterfaceBlockEntity storage))
+            throw new VisualTestException("no warehouse interface on the client at " + pos);
+        AisleAssignment assignment = storage.aisleAssignment();
+        StorageAddress address = assignment.address()
+                .orElseThrow(() -> new VisualTestException("the rack at " + pos + " shows no address"));
+        String expected = WareworksLang.address(address.format(), assignment.aisleName()).component().getString();
+        List<String> lines = GoggleShots.lines(context, pos);
+        GoggleShots.requireLine(lines, expected);
+        // Behind the address, never instead of it: the address is what the terminal and every report speak.
+        GoggleShots.requireLine(lines, address.format());
+        if (!expected.contains(FAR_AISLE_NAME))
+            throw new VisualTestException("the address line of the far aisle should carry its name '" + FAR_AISLE_NAME
+                    + "', but reads '" + expected + "'");
+        LOGGER.info(PREFIX + "comb: CHECK the goggles at {} read '{}' in {}", pos, expected,
+                context.minecraft().getLanguageManager().getSelected());
+    }
+
+    /** The teaching hint of the controller's goggles, in whichever language the client has loaded. */
+    private static String namingHintText() {
+        return WareworksLang.translateDirect(WareworksLang.GOGGLES_AISLE_NAME_HINT).getString();
     }
 
     // --- storing, the terminal and the retrieval across the comb -------------------------------------------------------
