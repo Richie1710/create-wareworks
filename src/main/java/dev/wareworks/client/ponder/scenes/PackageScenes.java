@@ -319,12 +319,16 @@ public final class PackageScenes {
         scene.world().createItemOnBeltLike(input, Direction.UP, new ItemStack(Items.COPPER_INGOT, ARRIVING_AMOUNT));
         scene.effects().indicateSuccess(input);
         scene.idle(TEXT_IDLE - SIGNAL_LEAD - PackagerBlockEntity.CYCLE);
-        scene.overlay().showText(TEXT_TICKS + TRIP_TICKS)
+        // TEXT_TICKS, not TEXT_TICKS + TRIP_TICKS: store() is shorter than TRIP_TICKS estimates, so the longer
+        // lifetime left this sentence on screen while the red beat below was already drawn at the same anchor —
+        // glyph on glyph, both unreadable. The idle after the trip keeps the two apart whatever store() costs.
+        scene.overlay().showText(TEXT_TICKS)
                 .text("Whatever address it carries: the warehouse keeps what was inside and the box is gone")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(input, PORT_FRONT));
         store(scene, crane, inInput, inTarget, target);
+        scene.idle(TEXT_IDLE);
 
         // --- 7. the one way it stops ----------------------------------------------------------------------------------
         scene.overlay().showOutline(PonderPalette.RED, "whole", util.select().position(input), TEXT_TICKS);

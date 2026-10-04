@@ -38,7 +38,9 @@ teleported: every item you put in or take out is carried by the crane, where you
 
 * **Stacker Crane** (dock block): a kinetic machine on a rail aisle. Its crane (base with bogies, braced mast, lift
   carriage, telescopic arm, grabber, drive cog) is fully animated; travel, lift and arm speed follow the RPM. Create-like
-  sounds for travel, rail joints, lift, arm, picking and dropping.
+  sounds for travel, rail joints, lift, arm, picking and dropping. Its goggles say how **busy** it has been over the last
+  minute, and where that minute went — travelling, turning (with the corners it took), and at a rack — plus the trips it
+  made and the items it moved.
 * **Warehouse Rail**: lays out the aisles. **Rails that touch connect**, so your warehouse is simply all the rails in
   front of the dock — it may bend round corners, **split** into side aisles and even close into a **ring**, and the
   block two runs share is a corner or a junction the crane turns at. Every straight run is **one** aisle with one
@@ -47,10 +49,14 @@ teleported: every item you put in or take out is carried by the crane, where you
 * **Warehouse Controller**: sits behind the dock, letters every aisle of its warehouse (the first from its own value box,
   each further one the next free letter), finds storage locations and stations, keeps a stock index and plans store and
   retrieve jobs. It never moves items itself. Its goggles say how big the warehouse is, which aisles it has and — if the
-  rails stop short of what you laid — where and why.
+  rails stop short of what you laid — where and why, plus how busy the crane has been. **Right-click it with an item you
+  named in an anvil** and the aisle at its dock carries that name from then on: `Warehouse A — Ores`, and the aisle list
+  reads `A Ores · B Metals · C 14`, where an aisle without a name still shows its length. A plain name tag clears it.
 * **Warehouse Interface**: turns any inventory with an item capability (chests, barrels, Create vaults, modded storage)
   into an addressable storage location such as `A-03-07R`. Its filter slot decides what may be stored there, and a
-  priority on the same slot decides which of the suitable locations fills first.
+  priority on the same slot decides which of the suitable locations fills first. A renamed item right-clicked on it names
+  **its** aisle, and every rack of a named aisle then reads `Address: A-03-07R (Ores)` — the address never goes away, so
+  the signs you wrote by hand still point at the same rack.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse. Put a **Create Packager** against it and it becomes an **in door** for addressed **Create packages**:
   arriving boxes are opened and their contents stored like anything else.
@@ -87,7 +93,8 @@ does not switch that. The warehouse interface, controller, crane dock and rails 
 Put a link on the controller or the terminal for a **warehouse summary** (letter, status, aisles, storage locations in
 use, item types, items) or a **stock list** of the most stocked item types; on a warehouse output or interface for the
 **stock of the item in its filter slot**; and on the crane dock for the **crane's status** — what it is doing, what it
-carries and which address it is heading for. Nixie tubes, display boards and lecterns show the text in your own
+carries and which address it is heading for — or for its **throughput**, the busy share of the last minute with
+travelling, turning and rack time under it. A warehouse summary names the aisles you have named. Nixie tubes, display boards and lecterns show the text in your own
 language. A sign accepts it too, but it keeps whatever language the server writes it in — English on a dedicated
 server, for everyone — because a sign stores plain text. Create's own display sources behave the same way.
 

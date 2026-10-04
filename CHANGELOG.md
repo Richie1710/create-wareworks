@@ -69,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2"** in gold, which is the one line that tells you to wait for the crane rather than to rebuild the door. "Room"
   rather than "a free slot": a stack also goes into a slot that already holds that very item. The refusal goes as soon
   as a package fits again, and nothing of a refused package is ever lost — it waits where it is
+- **A world from 0.7.0-alpha opens unchanged.** Nothing in this release writes anything new into your save until
+  you use it: a controller grows its list of aisle names the moment you name one and loses it again when you clear
+  the name, and everything else these two features show — the crane's busy minute, what a door says about packages —
+  is worked out while you look at it and never stored
 - **The out door for Create packages says that it is one.** Put a **Create Packager** against a **warehouse port**
   — back of the Packager to the block, which is how it faces itself when you place it — and a redstone pulse, or a
   **Smart Observer** facing the port that keeps emptying it by itself, packs whatever the warehouse put there into an

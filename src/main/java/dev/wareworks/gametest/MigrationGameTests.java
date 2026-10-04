@@ -5,6 +5,7 @@ import static dev.wareworks.gametest.WareworksGameTests.AISLE_PAIR_16X10X13;
 import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
 import static dev.wareworks.gametest.WareworksGameTests.FLOOR_Y;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +30,11 @@ import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.PackageUnpackSummary;
+import dev.wareworks.content.station.StationGoggleSummary;
 import dev.wareworks.content.station.TerminalPreferences;
+import dev.wareworks.content.station.WarehouseInputBlockEntity;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
@@ -41,12 +46,14 @@ import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
+import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.terminal.TerminalSort;
+import dev.wareworks.core.warehouse.AisleName;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.NetworkStop;
@@ -111,6 +118,20 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * before any of it existed, {@link #migrationplayerwithoutpreferencesgetsthedefaultorder} opens a player file that has
  * no such attachment, and {@link #migrationinflightterminalrequestsurvivesthesave} catches a delivery in flight — the
  * one state no saved world in {@code run/migration} holds, for the same reason M21's crane gate had to take it live.
+ * <p>
+ * <b>And since 0.8.0 the gate of M25 and M26 as well</b> (issues #15, #16, #18), the next two milestones that touch
+ * what a world holds. Between them they add exactly <b>one</b> save key — {@code Names} on the warehouse controller,
+ * written only while some aisle really has a name — and three fields that ride block-entity update tags and never
+ * reach a region file: an aisle's name on a member's address, a crane's throughput on a dock, and an input's package
+ * counters. M26 adds no save key at all. Four tests answer that:
+ * {@link #migrationrealpre08controllerkeepsitsaisleandinventsnonames} replays the real controller bytes of a world
+ * written by 0.7.0's save writers and asserts that opening and saving it produces a tag with the very same keys;
+ * {@link #migrationrealpre08bendingworldkeepsitslettersandstock} does the same for a 0.7.0 world whose rails bend, so
+ * that two aisle letters and two aisles' worth of stock are on the line rather than one;
+ * {@link #migrationpre08stationsanddocksyncwhattheysynced} asserts the packets of a migrated aisle's stations and dock,
+ * and then produces the state that fills each absent field, so the absences are measured ones; and
+ * {@link #migrationpre08cranesaveresumesandinventsnothroughput} asserts that a crane resumed out of such a save is not
+ * credited with the work its tag describes.
  */
 @GameTestHolder(Wareworks.ID)
 @PrefixGameTestTemplate(false)
@@ -263,6 +284,109 @@ public final class MigrationGameTests {
      * package-private to the station package, like {@link #CRANE_TAG} is to the crane's).
      */
     private static final String LIST_ORDER_TAG = "ListOrder";
+
+    // --- the 0.8.0 gate: a world saved by 0.7.0-alpha, before an aisle had a name (M25, M26) ----------------------
+
+    /**
+     * Keys of everything M25 and M26 can put into a tag, so a test can say "none of this is in the real bytes" and
+     * "none of it is written back" at any depth. {@code ControllerPersistence} is package-private, like
+     * {@code CranePersistence} is, so the names are mirrored here the way
+     * {@code WarehouseControllerGameTests} mirrors them.
+     * <p>
+     * Only the first is a <b>save</b> key. {@code AisleName}, {@code Throughput} and {@code Packages} ride block-entity
+     * update tags and never reach a region file, which is itself asserted below.
+     */
+    private static final String NAMES_TAG = "Names";
+    private static final String AISLE_NAME_TAG = "AisleName";
+    private static final String THROUGHPUT_TAG = "Throughput";
+    private static final String PACKAGES_TAG = "Packages";
+    /** The two fields of one {@link #NAMES_TAG} entry: the aisle letter and the name. */
+    private static final String LETTER_KEY = "C";
+    private static final String NAME_KEY = "N";
+
+    /**
+     * Every key a 0.7.0 warehouse controller writes, read offline out of the region files of the 0.7.0-era world —
+     * and the same eight the pre-M21 world's controller has, because nothing between those two releases added one.
+     * <p>
+     * The test asserts this set twice: on the real bytes, and on the tag the loaded controller saves again. That pair
+     * is the whole migration claim for {@link #NAMES_TAG} — a 0.7.0 world opened on this version writes back a save
+     * with the very same keys, so nothing of M25 is invented for a warehouse nobody has named.
+     */
+    private static final Set<String> PRE08_SAVE_KEYS = Set.of("Layout", "Locations", "Misaligned",
+            "ProductionOrders", "Requests", "ScrollValue", "StockPauses", "StockRules");
+
+    /** The nine a 0.7.0 controller of a warehouse that <b>bends</b> writes: the eight above and {@code Network}. */
+    private static final Set<String> CORNER_SAVE_KEYS = Set.of("Layout", "Locations", "Misaligned", "Network",
+            "ProductionOrders", "Requests", "ScrollValue", "StockPauses", "StockRules");
+
+    /** The UUID of the shaft order of the 0.7.0-era world, as four ints, exactly as its bytes hold it. */
+    private static final int[] PRE08_SHAFT_ID = {-84734043, 549078946, -1858308270, -1529469263};
+    private static final int[] PRE08_SHAFT_REQUEST = {1590120702, 1049839669, -1464524399, -1886695305};
+    private static final int[] PRE08_SHAFT_ALLOY = {-2104422976, -1087944475, -1654985814, 2071101331};
+    private static final int[] PRE08_CHARGE_ID = {1345988099, -838318231, -1514468976, -1122932861};
+    private static final int[] PRE08_CHARGE_REQUEST = {-1775413484, -459715204, -2095623455, 1517729155};
+    private static final int[] PRE08_CHARGE_GUNPOWDER = {-749205417, -1985461923, -1638636131, -747057889};
+    private static final int[] PRE08_CHARGE_BLAZE = {-227800649, 1075463902, -1826387476, 1890456002};
+    private static final int[] PRE08_CHARGE_COAL = {-199058289, -344044762, -1960685730, -944377243};
+
+    /** The names the tests give an aisle, both inside {@link AisleName#MAX_LENGTH}. */
+    private static final String PRE08_FIRST_NAME = "Ores";
+    private static final String PRE08_SECOND_NAME = "Metals";
+
+    /** The small aisle the station gate measures on: a terminal, a storage rack, an input and an output. */
+    private static final int PRE08_RAILS = 4;
+    private static final RackPosition PRE08_INPUT = new RackPosition(2, 0, Side.RIGHT);
+    private static final RackPosition PRE08_OUTPUT = new RackPosition(3, 0, Side.LEFT);
+
+    // --- the 0.7.0-era world whose rails bend (geometry on AISLE_PAIR_16X10X13) -----------------------------------
+
+    /** The aisle line of the bending 0.7.0-era world; the branch runs south of it, inside the template. */
+    private static final int CORNER_Z = 2;
+    private static final BlockPos CORNER_CONTROLLER = new BlockPos(0, BASE_Y, CORNER_Z);
+    private static final BlockPos CORNER_DOCK = new BlockPos(1, BASE_Y, CORNER_Z);
+    /** {@code Layout.Length} of that world: the run at the dock. */
+    private static final int CORNER_RAILS = 6;
+    /** {@code Network.Branches[0].L}: the rails of the aisle it bends into. */
+    private static final int CORNER_BRANCH_RAILS = 5;
+    private static final int CORNER_AISLES = 2;
+    private static final int CORNER_RECORDS = 13;
+    private static final int CORNER_STORAGE_RECORDS = 11;
+    private static final int CORNER_IRON = 48;
+    private static final int CORNER_GOLD = 64;
+    private static final int CORNER_LAPIS = 128;
+    private static final int CORNER_REDSTONE = 128;
+    private static final int CORNER_COPPER = 192;
+    /** Two racks of the aisle at the dock and two of the aisle it bends into, with the addresses they must keep. */
+    private static final RackPosition CORNER_IRON_RACK = new RackPosition(0, 2, 0, Side.RIGHT);
+    private static final RackPosition CORNER_GOLD_RACK = new RackPosition(0, 6, 0, Side.LEFT);
+    private static final RackPosition CORNER_LAPIS_RACK = new RackPosition(1, 0, 0, Side.LEFT);
+    private static final RackPosition CORNER_COPPER_RACK = new RackPosition(1, 3, 0, Side.LEFT);
+    private static final String CORNER_IRON_ADDRESS = "A-01-02R";
+    private static final String CORNER_GOLD_ADDRESS = "A-01-06L";
+    private static final String CORNER_LAPIS_ADDRESS = "B-01-00L";
+    private static final String CORNER_COPPER_ADDRESS = "B-01-03L";
+    private static final ItemKey LAPIS = ItemKey.of(new ItemStack(Items.LAPIS_LAZULI));
+    private static final ItemKey COPPER = ItemKey.of(new ItemStack(Items.COPPER_INGOT));
+
+    /**
+     * Records of the bending 0.7.0-era world, {@code branch, X, Y, Side, Kind, item id, count} per line — the aisle
+     * index written as the {@code B} the pre-M21 bytes have nowhere, and left out of the tag for branch 0 exactly as
+     * {@code ControllerPersistence} leaves it out.
+     */
+    private static final String[] CORNER_LOCATIONS = {
+            "0,2,0,L,INPUT,,0",
+            "0,2,0,R,STORAGE,minecraft:iron_ingot,48",
+            "0,3,0,R,STORAGE,,0",
+            "0,4,0,L,STORAGE,,0",
+            "0,5,0,L,STORAGE,,0",
+            "0,6,0,L,STORAGE,minecraft:gold_ingot,64",
+            "1,0,0,L,STORAGE,minecraft:lapis_lazuli,128",
+            "1,1,0,R,STORAGE,minecraft:redstone,128",
+            "1,3,0,L,STORAGE,minecraft:copper_ingot,192",
+            "1,3,0,R,STORAGE,,0",
+            "1,4,0,L,STORAGE,,0",
+            "1,4,0,R,STORAGE,,0",
+            "1,5,1,R,OUTPUT,,0"};
 
     private MigrationGameTests() {
     }
@@ -911,6 +1035,399 @@ public final class MigrationGameTests {
                 .thenSucceed();
     }
 
+    // --- the 0.8.0 gate: a world saved by 0.7.0-alpha, before an aisle had a name ---------------------------------
+
+    /**
+     * The migration gate of M25 (issue #15): a warehouse controller written before an aisle could have a <b>name</b>
+     * opens as the warehouse it was, with no name invented for it, and saves back a tag with the very same keys.
+     * <p>
+     * {@code Names} is the one thing either of the two unreleased milestones adds to a save — M26 adds nothing at all
+     * — and it is written only while some aisle really has a name
+     * ({@code ControllerPersistence#writeNames} returns at once for an empty table), so a 0.7.0 world that is merely
+     * opened must keep the bytes it had. This asserts both halves of that, and then the other direction: naming an
+     * aisle really does grow the key, and taking the name off really does make it go away, so the absence above is a
+     * measured absence and not a dead code path.
+     * <p>
+     * The bytes are the real ones of {@code run/migration/world-07-era} — a byte copy of the showcase world as
+     * {@code runShowcase} saved it on 2026-10-03, written by a tree whose save writers are byte-identical to
+     * {@code v0.7.0-alpha}'s ({@code run/migration/README.txt} shows the diff). Its controller at {@code (-1, -60, 0)}
+     * holds exactly {@link #PRE08_SAVE_KEYS}, 49 records with 1143 items and two COMPLETE production orders, and not
+     * one of {@code Names}, {@code AisleName}, {@code Throughput} or {@code Packages} anywhere at any depth.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void migrationrealpre08controllerkeepsitsaisleandinventsnonames(GameTestHelper helper) {
+        new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertValueEqual(controller(helper).status(), ControllerStatus.READY,
+                        "the live aisle is ready"))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity live = controller(helper);
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag real = realPre08Save();
+
+                    // 1. The bytes really are a 0.7.0 save: the eight keys that release wrote, and nothing of M25/M26.
+                    helper.assertValueEqual(new TreeSet<>(real.getAllKeys()), new TreeSet<>(PRE08_SAVE_KEYS),
+                            "the real save has exactly the keys 0.7.0 wrote");
+                    assertNothingOfThisRelease(helper, real, "the real 0.7.0 save");
+
+                    // 2. It loads as the warehouse it was.
+                    WarehouseControllerBlockEntity loaded = freshController(helper, live);
+                    loaded.loadWithComponents(real, registries);
+                    helper.assertValueEqual(loaded.status(), ControllerStatus.READY,
+                            "it loads as a working warehouse");
+                    helper.assertValueEqual(loaded.layout(), live.layout(),
+                            "the very aisle really standing there");
+                    helper.assertValueEqual(loaded.warehouse().map(WarehouseLayout::branchCount), Optional.of(1),
+                            "a warehouse of exactly one aisle");
+                    helper.assertValueEqual(loaded.aisleLetter(), 'A', "which keeps its letter");
+                    helper.assertValueEqual(loaded.locations().size(), REAL_RECORDS, "the same records");
+                    helper.assertValueEqual(loaded.storageLocations().size(), REAL_STORAGE_RECORDS,
+                            "of which the same storage locations");
+                    helper.assertValueEqual(loaded.countOf(IRON), (long) REAL_IRON, "the same iron");
+                    helper.assertValueEqual(loaded.countOf(REDSTONE), (long) REAL_REDSTONE, "the same redstone");
+                    helper.assertValueEqual(loaded.countOf(OAK_LOG), (long) REAL_OAK_LOG, "the same logs");
+                    helper.assertValueEqual(loaded.stockIndex().countAt(IRON, REAL_IRON_RACK), (long) REAL_IRON,
+                            "at the very rack it was in");
+                    helper.assertValueEqual(addressOf(helper, loaded, REAL_IRON_RACK), REAL_IRON_ADDRESS,
+                            "with the address it always had");
+                    helper.assertValueEqual(addressOf(helper, loaded, REAL_LAST_RACK), REAL_LAST_ADDRESS,
+                            "and the far end is still " + REAL_LAST_ADDRESS);
+                    helper.assertValueEqual(loaded.productionOrders().size(), REAL_ORDERS, "both orders came back");
+
+                    // 3. And with no name anywhere: none was invented for an aisle that never had one.
+                    helper.assertTrue(loaded.hasNoAisleNames(), "a warehouse nobody could name has no names");
+                    helper.assertTrue(loaded.aisleNames().isEmpty(), "its whole name table is empty");
+                    helper.assertTrue(loaded.namedAisles().isEmpty(), "and no aisle of it is named");
+                    helper.assertTrue(loaded.aisleName('A').isEmpty(), "not even the one at the dock");
+
+                    // 4. Saving it again writes the same keys back: the bytes of an untouched 0.7.0 world survive.
+                    CompoundTag again = loaded.saveWithoutMetadata(registries);
+                    helper.assertValueEqual(new TreeSet<>(again.getAllKeys()), new TreeSet<>(PRE08_SAVE_KEYS),
+                            "and saving it again writes exactly those keys");
+                    assertNothingOfThisRelease(helper, again, "the save it writes back");
+                    helper.assertValueEqual(again.getList("Locations", Tag.TAG_COMPOUND).size(), REAL_RECORDS,
+                            "with every record it was given");
+                    helper.assertValueEqual(branchKeys(again), 0, "still without an aisle index on any of them");
+
+                    // 5. Only naming an aisle grows the key — so the absence above is measured, not a dead path.
+                    helper.assertValueEqual(loaded.setAisleName('A', PRE08_FIRST_NAME), PRE08_FIRST_NAME,
+                            "the aisle takes a name");
+                    CompoundTag named = loaded.saveWithoutMetadata(registries);
+                    ListTag names = named.getList(NAMES_TAG, Tag.TAG_COMPOUND);
+                    helper.assertValueEqual(names.size(), 1, "and then the save holds one name");
+                    helper.assertValueEqual(names.getCompound(0).getString(LETTER_KEY), "A",
+                            "under the letter it belongs to");
+                    helper.assertValueEqual(names.getCompound(0).getString(NAME_KEY), PRE08_FIRST_NAME,
+                            "with the name a player gave it");
+                    helper.assertValueEqual(named.getList("Locations", Tag.TAG_COMPOUND).size(), REAL_RECORDS,
+                            "and naming an aisle costs the records nothing");
+                    helper.assertValueEqual(loaded.countOf(IRON), (long) REAL_IRON, "nor the stock");
+
+                    // 6. And taking the name off leaves the 0.7.0 shape behind, key for key.
+                    helper.assertTrue(loaded.clearAisleName('A'), "the name comes off again");
+                    CompoundTag bare = loaded.saveWithoutMetadata(registries);
+                    helper.assertValueEqual(new TreeSet<>(bare.getAllKeys()), new TreeSet<>(PRE08_SAVE_KEYS),
+                            "and the save is the one 0.7.0 wrote");
+                    assertNothingOfThisRelease(helper, bare, "the save of an unnamed warehouse again");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The same gate for a 0.7.0 world whose rails <b>bend</b>: it keeps both aisle letters and the stock at both
+     * aisles' addresses, and neither of its two aisles is given a name.
+     * <p>
+     * The straight test above cannot show this, because a warehouse of one aisle has only one letter and the aisle
+     * names are keyed by letter: a table that silently attached itself to the dock aisle would pass there and fail
+     * here. These bytes also carry {@code Network}, so they prove the other half of
+     * {@code ControllerPersistence}'s promise — the names are written <b>top level</b> and never inside
+     * {@code Network}, which is what lets an older build read a newer save and still find its rails.
+     * <p>
+     * The bytes are the real ones of {@code run/migration/world-07-corner}, a byte copy of
+     * {@code run/visual/saves/wareworks_visual_corner} as the {@code corner} visual scenario saved it on 2026-10-03 at
+     * 17:04 — <b>after</b> the 0.7.0 release commit, so its own {@code level.dat} records
+     * {@code wareworks 0.7.0-alpha}, which no other world on this machine does. Its controller holds
+     * {@link #CORNER_SAVE_KEYS}, a {@code Network} of one branch heading south, 13 records across two aisles (seven of
+     * them with a {@code B}), 560 items — and no {@code Names}.
+     */
+    @GameTest(template = AISLE_PAIR_16X10X13, timeoutTicks = TIMEOUT_TICKS)
+    public static void migrationrealpre08bendingworldkeepsitslettersandstock(GameTestHelper helper) {
+        new AisleFixture(helper, CORNER_Z, CORNER_RAILS).build(true);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertValueEqual(controllerAt(helper, CORNER_CONTROLLER).status(),
+                        ControllerStatus.READY, "the live aisle at the dock is ready"))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity live = controllerAt(helper, CORNER_CONTROLLER);
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag real = realPre08CornerSave();
+
+                    // 1. The bytes really are a 0.7.0 save of a warehouse that bends.
+                    helper.assertValueEqual(new TreeSet<>(real.getAllKeys()), new TreeSet<>(CORNER_SAVE_KEYS),
+                            "the real save has the nine keys 0.7.0 wrote for a bending warehouse");
+                    helper.assertValueEqual(real.getCompound("Network").getList("Branches", Tag.TAG_COMPOUND).size(), 1,
+                            "with the one aisle it bends into");
+                    helper.assertValueEqual(branchKeys(real), 7, "and seven records on that aisle");
+                    assertNothingOfThisRelease(helper, real, "the real bending 0.7.0 save");
+
+                    // 2. It loads as the two-aisle warehouse it was, letters and addresses intact.
+                    WarehouseControllerBlockEntity loaded = freshController(helper, live);
+                    loaded.loadWithComponents(real, registries);
+                    helper.assertValueEqual(loaded.status(), ControllerStatus.READY, "it loads as a warehouse");
+                    WarehouseLayout warehouse = loaded.warehouse().orElse(null);
+                    if (warehouse == null) {
+                        helper.fail("the loaded warehouse has no aisle at all", CORNER_CONTROLLER);
+                        return;
+                    }
+                    helper.assertValueEqual(warehouse.branchCount(), CORNER_AISLES, "of two aisles");
+                    helper.assertValueEqual(warehouse.branch(0).geometry().length(), CORNER_RAILS,
+                            "the run at the dock as long as it was");
+                    helper.assertValueEqual(warehouse.network().branch(1).length(), CORNER_BRANCH_RAILS,
+                            "and the aisle it bends into as long as it was");
+                    Set<Character> letters = new TreeSet<>();
+                    for (int branch = 0; branch < warehouse.branchCount(); branch++)
+                        warehouse.branch(branch).letter().ifPresent(letters::add);
+                    helper.assertValueEqual(letters, new TreeSet<>(Set.of('A', 'B')),
+                            "both aisles keep the letters the save gave them");
+                    helper.assertValueEqual(loaded.locations().size(), CORNER_RECORDS, "the same records");
+                    helper.assertValueEqual(loaded.storageLocations().size(), CORNER_STORAGE_RECORDS,
+                            "of which the same storage locations");
+                    helper.assertValueEqual(loaded.countOf(IRON), (long) CORNER_IRON, "the same iron");
+                    helper.assertValueEqual(loaded.countOf(GOLD), (long) CORNER_GOLD, "the same gold");
+                    helper.assertValueEqual(loaded.countOf(LAPIS), (long) CORNER_LAPIS, "the same lapis");
+                    helper.assertValueEqual(loaded.countOf(REDSTONE), (long) CORNER_REDSTONE, "the same redstone");
+                    helper.assertValueEqual(loaded.countOf(COPPER), (long) CORNER_COPPER, "the same copper");
+                    helper.assertValueEqual(loaded.stockIndex().countAt(LAPIS, CORNER_LAPIS_RACK),
+                            (long) CORNER_LAPIS, "the lapis at the very rack of the second aisle it was in");
+                    helper.assertValueEqual(addressOf(helper, loaded, CORNER_IRON_RACK), CORNER_IRON_ADDRESS,
+                            "the iron still at " + CORNER_IRON_ADDRESS);
+                    helper.assertValueEqual(addressOf(helper, loaded, CORNER_GOLD_RACK), CORNER_GOLD_ADDRESS,
+                            "the gold still at " + CORNER_GOLD_ADDRESS);
+                    helper.assertValueEqual(addressOf(helper, loaded, CORNER_LAPIS_RACK), CORNER_LAPIS_ADDRESS,
+                            "the lapis still at " + CORNER_LAPIS_ADDRESS);
+                    helper.assertValueEqual(addressOf(helper, loaded, CORNER_COPPER_RACK), CORNER_COPPER_ADDRESS,
+                            "and the copper still at " + CORNER_COPPER_ADDRESS);
+
+                    // 3. Neither aisle got a name, although there are two letters to hang one on.
+                    helper.assertTrue(loaded.hasNoAisleNames(), "neither aisle has a name");
+                    helper.assertTrue(loaded.namedAisles().isEmpty(), "and the board would show no names row");
+                    helper.assertTrue(loaded.aisleName('A').isEmpty(), "not the one at the dock");
+                    helper.assertTrue(loaded.aisleName('B').isEmpty(), "and not the one it bends into");
+                    CompoundTag again = loaded.saveWithoutMetadata(registries);
+                    helper.assertValueEqual(new TreeSet<>(again.getAllKeys()), new TreeSet<>(CORNER_SAVE_KEYS),
+                            "saving it again writes exactly those nine keys");
+                    assertNothingOfThisRelease(helper, again, "the bending save it writes back");
+                    helper.assertValueEqual(again.getCompound("Network").getList("Branches", Tag.TAG_COMPOUND).size(),
+                            1, "with its one further aisle");
+                    helper.assertValueEqual(branchKeys(again), 7, "and its seven records on that aisle");
+
+                    // 4. Name both aisles: two entries in letter order, and top level — never inside Network.
+                    loaded.setAisleName('A', PRE08_FIRST_NAME);
+                    loaded.setAisleName('B', PRE08_SECOND_NAME);
+                    CompoundTag named = loaded.saveWithoutMetadata(registries);
+                    ListTag names = named.getList(NAMES_TAG, Tag.TAG_COMPOUND);
+                    helper.assertValueEqual(names.size(), CORNER_AISLES, "both names are saved");
+                    helper.assertValueEqual(names.getCompound(0).getString(LETTER_KEY), "A", "A first");
+                    helper.assertValueEqual(names.getCompound(0).getString(NAME_KEY), PRE08_FIRST_NAME,
+                            "with its name");
+                    helper.assertValueEqual(names.getCompound(1).getString(LETTER_KEY), "B", "then B");
+                    helper.assertValueEqual(names.getCompound(1).getString(NAME_KEY), PRE08_SECOND_NAME,
+                            "with its name");
+                    helper.assertFalse(named.getCompound("Network").contains(NAMES_TAG),
+                            "the names are top level, never inside Network");
+                    helper.assertValueEqual(loaded.namedAisles().size(), CORNER_AISLES,
+                            "and the board would name both rows");
+                    helper.assertValueEqual(loaded.countOf(COPPER), (long) CORNER_COPPER,
+                            "while the stock of the named aisle is untouched");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The migration gate of M26 (issue #18) and of M25's throughput (issue #16): the stations and the dock of a 0.7.0
+     * world sync the tag they synced, because every field either milestone added to a client packet is left out while
+     * it is empty.
+     * <p>
+     * Neither milestone writes <b>anything</b> to disk here — the whole of {@code content/station/} still saves the
+     * keys it saved, and the input's package counters are not persisted at all — so the migration is about the update
+     * tag a watching player's client receives. Three fields can appear in one:
+     * {@code GoggleSummary/Packages} (M26, only for an input a package was really offered to),
+     * {@code GoggleSummary/AisleAssignment/AisleName} (M25, only on a member of a named aisle) and
+     * {@code CraneGoggles/Throughput} (M25, only on a dock somebody has really looked at). All three must be absent
+     * for a warehouse out of a 0.7.0 world, and this asserts that on the real packets of a real aisle — then makes each
+     * absence a measured one by producing the state that fills it.
+     * <p>
+     * The terminal is loaded from the <b>real bytes</b> of the 0.7.0-era world, whose
+     * {@code wareworks:warehouse_terminal} tag is byte-equal to the pre-M21 one
+     * {@link #migrationrealpre07terminalkeepsitsbufferandserves} already replays (both are
+     * {@code {Buffer: {Size: 9, Items: [6 create:shaft, 6 minecraft:fire_charge]}}} and nothing more), so a station
+     * that really came out of a 0.7.0 region file is what carries the stock through this test.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void migrationpre08stationsanddocksyncwhattheysynced(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, PRE08_RAILS).build(true);
+        aisle.storage(PRE07_STORAGE, IRON.toStack(PRE07_IRON));
+        aisle.terminal(PRE07_TERMINAL);
+        aisle.input(PRE08_INPUT);
+        aisle.output(PRE08_OUTPUT);
+        aisle.portInventory(PRE08_OUTPUT);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 1, 2))
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+
+                    // 1. The real 0.7.0 terminal bytes carry none of this release's fields, and load as what they were.
+                    CompoundTag real = realPre07Terminal();
+                    assertNothingOfThisRelease(helper, real, "the real 0.7.0 terminal save");
+                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(PRE07_TERMINAL);
+                    terminal.loadWithComponents(real, registries);
+                    helper.assertValueEqual(terminal.bufferedItems().count(SHAFT), (long) REAL_SHAFTS,
+                            "its shafts are back");
+                    helper.assertValueEqual(terminal.bufferedItems().count(FIRE_CHARGE), (long) REAL_CHARGES,
+                            "and its fire charges");
+                    helper.assertValueEqual(new TreeSet<>(terminal.saveWithoutMetadata(registries).getAllKeys()),
+                            new TreeSet<>(real.getAllKeys()),
+                            "and it saves back the keys it was given, no more");
+
+                    // 2. Every station of the aisle syncs the 0.7.0 packet: no Packages, no AisleName.
+                    WarehouseInputBlockEntity input = aisle.inputAt(PRE08_INPUT);
+                    WarehouseOutputBlockEntity output = aisle.outputAt(PRE08_OUTPUT);
+                    for (WarehouseStationBlockEntity station : List.of(input, output, terminal)) {
+                        CompoundTag summaryTag = goggleSummaryOf(helper, station);
+                        helper.assertFalse(summaryTag.contains(PACKAGES_TAG),
+                                "no package counters in the packet of " + station.getBlockPos());
+                        helper.assertValueEqual(occurrences(summaryTag, AISLE_NAME_TAG), 0,
+                                "and no aisle name in it");
+                        StationGoggleSummary shown = StationGoggleSummary.read(summaryTag);
+                        helper.assertValueEqual(shown.packages(), PackageUnpackSummary.NONE,
+                                "which reads back as no packages at all");
+                        helper.assertFalse(shown.packages().hasRefusal(), "with no refusal to report");
+                        helper.assertTrue(shown.assignment().aisleName().isEmpty(),
+                                "and as a member of an aisle with no name");
+                        helper.assertTrue(shown.assignment().address().isPresent(),
+                                "while the address it always showed is there");
+                    }
+
+                    // 3. The dock syncs no throughput, because nobody has looked at it through goggles.
+                    StackerCraneBlockEntity dock = aisle.dock();
+                    CompoundTag goggles = dock.getUpdateTag(registries)
+                            .getCompound(StackerCraneBlockEntity.GOGGLE_TAG);
+                    helper.assertFalse(goggles.contains(THROUGHPUT_TAG),
+                            "a dock nobody has watched sends no throughput");
+                    helper.assertValueEqual(occurrences(dock.saveWithoutMetadata(registries), THROUGHPUT_TAG), 0,
+                            "and none of it reaches the save file");
+
+                    // 4. And now each absence is made a measured one.
+                    input.onPackageOpened();
+                    input.onGoggleObserved();
+                    CompoundTag withPackages = goggleSummaryOf(helper, input);
+                    helper.assertTrue(withPackages.contains(PACKAGES_TAG),
+                            "an input a package was really opened at does send the counters");
+                    helper.assertValueEqual(StationGoggleSummary.read(withPackages).packages().opened(), 1L,
+                            "and they say one package");
+                    helper.assertValueEqual(occurrences(input.saveWithoutMetadata(registries), PACKAGES_TAG), 0,
+                            "while still writing nothing of them to disk");
+
+                    controller(helper).setAisleName('A', PRE08_FIRST_NAME);
+                    for (WarehouseStationBlockEntity station : List.of(input, output, terminal)) {
+                        CompoundTag summaryTag = goggleSummaryOf(helper, station);
+                        helper.assertValueEqual(StationGoggleSummary.read(summaryTag).assignment().aisleName(),
+                                Optional.of(PRE08_FIRST_NAME),
+                                "a member of a named aisle shows the name at " + station.getBlockPos());
+                        helper.assertValueEqual(occurrences(station.saveWithoutMetadata(registries), AISLE_NAME_TAG), 0,
+                                "and still writes no name of its own to disk");
+                    }
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The other half of M25's throughput (issue #16): a crane that comes out of a 0.7.0 save is <b>not</b> credited
+     * with the work the save describes.
+     * <p>
+     * The rolling minute is never saved — {@code ThroughputWindow} is an in-memory field of {@code CraneExecution} —
+     * so a machine loaded out of an old world has measured nothing, and the dock must report nothing rather than a
+     * number made up out of the job it finds in its tag. What makes that a real risk is the resume path: reconciling a
+     * saved job with the head it finds can produce delivery and completion reports, and those are exactly the two
+     * things that credit the window. {@code CraneExecution#resume} therefore marks itself and the window ignores them;
+     * this asserts it on a real save, taken live while the crane was carrying.
+     * <p>
+     * The measurement is taken on a crane that has first really done a trip, so the numbers it would have to wrongly
+     * inherit are known to be non-zero — which is what gives the assertion teeth. The round trip is done on the
+     * <b>live</b> dock, because {@code resumePending} is consumed on the first tick after a load and that is exactly
+     * what opening a world does; the aisle is left stalled afterwards (the javadoc of
+     * {@link #migrationcranejobreloadsonastraightaisle} explains why a live kinetic block entity loses its rotation
+     * that way), so this test asserts the counters and not a finished job.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void migrationpre08cranesaveresumesandinventsnothroughput(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(TARGET);
+        aisle.input(INPUT);
+
+        AtomicReference<CraneThroughput> worked = new AtomicReference<>(CraneThroughput.EMPTY);
+        AtomicReference<CompoundTag> saved = new AtomicReference<>();
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 1, 0))
+                .thenExecute(() -> {
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT)), IRON.toStack(STORED_IRON));
+                })
+                // One whole trip, so the window really holds work a wrong resume could double-count.
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.storedAt(TARGET, IRON), (long) STORED_IRON, "the trip is done");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    StackerCraneBlockEntity dock = aisle.dock();
+                    // Both measurements are handed on BEFORE anything is asserted about them, so that a failing
+                    // assertion here fails this test and nothing else: a null tag reaching the load step below would
+                    // come back as an unhandled NullPointerException inside BlockEntity#loadAdditional, and that takes
+                    // the whole GameTestServer down with it instead of reporting one test.
+                    CraneThroughput measured = dock.throughput();
+                    CompoundTag tag = dock.saveWithoutMetadata(registries);
+                    worked.set(measured);
+                    saved.set(tag);
+
+                    helper.assertValueEqual(measured.trips(), 1, "the window counted the trip");
+                    helper.assertValueEqual(measured.items(), STORED_IRON, "and the items it delivered");
+                    // The save of that machine is the 0.7.0 shape: the minute behind it is nowhere in the bytes.
+                    helper.assertValueEqual(occurrences(tag, THROUGHPUT_TAG), 0,
+                            "no throughput anywhere in the crane's save, at any depth");
+                    helper.assertValueEqual(occurrences(tag.getCompound(CRANE_TAG), "B"), 0,
+                            "and it is still the straight-aisle tag 0.7.0 wrote");
+                })
+                // Loading the tag back is what opening the world does; the resume runs on the next tick.
+                .thenExecute(() -> {
+                    CompoundTag tag = saved.get();
+                    if (tag == null) {
+                        helper.fail("the dock's save was never taken", DOCK);
+                        return;
+                    }
+                    aisle.dock().loadWithComponents(tag, helper.getLevel().registryAccess());
+                })
+                .thenIdle(5)
+                .thenExecute(() -> {
+                    StackerCraneBlockEntity dock = aisle.dock();
+                    CraneThroughput after = dock.throughput();
+                    helper.assertValueEqual(after.trips(), worked.get().trips(),
+                            "the resume credited no trip of its own");
+                    helper.assertValueEqual(after.items(), worked.get().items(),
+                            "and no delivered item of its own");
+
+                    // And a dock loaded out of an old world still sends no numbers until somebody looks at it.
+                    CompoundTag goggles = dock.getUpdateTag(helper.getLevel().registryAccess())
+                            .getCompound(StackerCraneBlockEntity.GOGGLE_TAG);
+                    helper.assertFalse(goggles.contains(THROUGHPUT_TAG),
+                            "a freshly loaded dock nobody watches sends no throughput");
+                })
+                .thenSucceed();
+    }
+
     // --- helpers --------------------------------------------------------------------------------------------------
 
     /** A survival player standing at the test-relative position, so a terminal's reach check passes. */
@@ -1029,6 +1546,120 @@ public final class MigrationGameTests {
         line.putInt("Delivered", required);
         line.putIntArray("Id", id);
         return line;
+    }
+
+    /**
+     * The controller tag of the 0.7.0-era world ({@code run/migration/world-07-era}), rebuilt from its own bytes.
+     * <p>
+     * Everything but the production orders is built by {@link #realPre06Save()}, because the two worlds' tags really
+     * are equal there: read offline, their {@code Layout}, {@code Locations} (all 49 records with the same stock),
+     * {@code Misaligned}, {@code Requests}, {@code StockRules}, {@code StockPauses} and {@code ScrollValue} compare
+     * equal tag for tag, {@code runShowcase} being deterministic. The orders differ in their UUIDs, which is what makes
+     * the tag below a different world's save rather than a copy of the one above, and
+     * {@code run/migration/README.txt} records both findings with the offline dump they came from.
+     */
+    private static CompoundTag realPre08Save() {
+        CompoundTag save = realPre06Save();
+        save.put("ProductionOrders", realPre08ProductionOrders());
+        return save;
+    }
+
+    /** The two production orders of the 0.7.0-era world, tag for tag (their own UUIDs included). */
+    private static ListTag realPre08ProductionOrders() {
+        ListTag orders = new ListTag();
+        CompoundTag shaft = order(PRE08_SHAFT_ID, PRE08_SHAFT_REQUEST, 5, 1, "R", "create:shaft");
+        ListTag shaftLines = new ListTag();
+        shaftLines.add(line("create:andesite_alloy", 1, PRE08_SHAFT_ALLOY));
+        shaft.put("Lines", shaftLines);
+        orders.add(shaft);
+
+        CompoundTag charge = order(PRE08_CHARGE_ID, PRE08_CHARGE_REQUEST, 7, 2, "L", "minecraft:fire_charge");
+        ListTag chargeLines = new ListTag();
+        chargeLines.add(line("minecraft:gunpowder", 2, PRE08_CHARGE_GUNPOWDER));
+        chargeLines.add(line("minecraft:blaze_powder", 2, PRE08_CHARGE_BLAZE));
+        chargeLines.add(line("minecraft:coal", 2, PRE08_CHARGE_COAL));
+        charge.put("Lines", chargeLines);
+        orders.add(charge);
+        return orders;
+    }
+
+    /**
+     * The controller tag of the bending 0.7.0-era world ({@code run/migration/world-07-corner}), rebuilt from its own
+     * bytes and tag types: a six-rail run east, one branch of five rails heading south from the junction six blocks
+     * down it, that branch lettered {@code B}, and the line it is pinned to.
+     */
+    private static CompoundTag realPre08CornerSave() {
+        CompoundTag save = new CompoundTag();
+        CompoundTag layout = new CompoundTag();
+        layout.putString("Facing", AISLE.getSerializedName());
+        layout.putInt("Length", CORNER_RAILS);
+        layout.putInt("Height", MAST);
+        save.put("Layout", layout);
+
+        CompoundTag branch = new CompoundTag();
+        branch.putString("C", "B");
+        branch.putIntArray("D", new int[]{CORNER_RAILS, 0});
+        branch.putString("H", Heading.SOUTH.name());
+        branch.putInt("L", CORNER_BRANCH_RAILS);
+        ListTag branches = new ListTag();
+        branches.add(branch);
+        CompoundTag pinned = new CompoundTag();
+        pinned.putInt("A", 1);
+        pinned.putString("C", "B");
+        pinned.putIntArray("D", new int[]{CORNER_RAILS, 0});
+        pinned.putInt("F", CORNER_RAILS);
+        ListTag lines = new ListTag();
+        lines.add(pinned);
+        CompoundTag network = new CompoundTag();
+        network.put("Branches", branches);
+        network.put("Lines", lines);
+        save.put("Network", network);
+
+        ListTag locations = new ListTag();
+        for (String line : CORNER_LOCATIONS)
+            locations.add(cornerRecord(line));
+        save.put("Locations", locations);
+        save.putIntArray("Misaligned", new int[0]);
+        save.putInt("ScrollValue", 0);
+        save.put("Requests", new ListTag());
+        save.put("StockRules", new ListTag());
+        save.put("StockPauses", new ListTag());
+        save.put("ProductionOrders", new ListTag());
+        return save;
+    }
+
+    /**
+     * One record of the bending world: {@code branch, X, Y, Side, Kind, Stock}, the {@code B} written only for an
+     * aisle beyond the first, exactly as {@code ControllerPersistence} writes it.
+     */
+    private static CompoundTag cornerRecord(String line) {
+        String[] parts = line.split(",", -1);
+        int branch = Integer.parseInt(parts[0]);
+        CompoundTag entry = realRecord(String.join(",", Arrays.copyOfRange(parts, 1, parts.length)));
+        if (branch != RackPosition.FIRST_BRANCH)
+            entry.putInt("B", branch);
+        return entry;
+    }
+
+    /**
+     * The goggle summary a watching player's client really receives from this station: its own
+     * {@link WarehouseStationBlockEntity#onGoggleObserved()} rebuild, read out of the update tag.
+     */
+    private static CompoundTag goggleSummaryOf(GameTestHelper helper, WarehouseStationBlockEntity station) {
+        station.onGoggleObserved();
+        return station.getUpdateTag(helper.getLevel().registryAccess())
+                .getCompound(WarehouseStationBlockEntity.SUMMARY_TAG);
+    }
+
+    /**
+     * Asserts that not one field M25 or M26 can write appears anywhere in {@code tag}, at any depth — the shape every
+     * save and every packet of a 0.7.0 world has.
+     */
+    private static void assertNothingOfThisRelease(GameTestHelper helper, CompoundTag tag, String what) {
+        helper.assertValueEqual(occurrences(tag, NAMES_TAG), 0, what + " has no aisle name table");
+        helper.assertValueEqual(occurrences(tag, AISLE_NAME_TAG), 0, what + " has no aisle name on anything");
+        helper.assertValueEqual(occurrences(tag, THROUGHPUT_TAG), 0, what + " has no crane throughput");
+        helper.assertValueEqual(occurrences(tag, PACKAGES_TAG), 0, what + " has no package counters");
     }
 
     /** An item key in the shape the real save holds it: a compound with nothing but an {@code id}. */
