@@ -36,12 +36,18 @@ import net.minecraft.world.item.Item;
  * @param collect        what a <b>collecting</b> warehouse port fetches from and has fetched (M18, issue #13):
  *                       {@link PortCollectSummary}, all of it server-only knowledge, and {@link PortCollectSummary#NONE}
  *                       — written as nothing at all — for every other station and every other port direction
+ * @param packages       what a <b>warehouse input</b> has made of the Create packages handed to it (M26, issue #18):
+ *                       {@link PackageUnpackSummary}, server-only knowledge again, and
+ *                       {@link PackageUnpackSummary#NONE} — written as nothing at all — for every station no package
+ *                       was ever offered to
  */
 public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<Item> buffer, int openRequests,
                                    long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection,
-                                   long exportedItems, boolean portArmed, PortCollectSummary collect) {
+                                   long exportedItems, boolean portArmed, PortCollectSummary collect,
+                                   PackageUnpackSummary packages) {
     public static final StationGoggleSummary NONE = new StationGoggleSummary(AisleAssignment.NONE,
-            InventorySummary.empty(), 0, 0L, 0L, Optional.empty(), 0L, false, PortCollectSummary.NONE);
+            InventorySummary.empty(), 0, 0L, 0L, Optional.empty(), 0L, false, PortCollectSummary.NONE,
+            PackageUnpackSummary.NONE);
 
     private static final String ASSIGNMENT = "Assignment";
     private static final String BUFFER = "Buffer";
@@ -52,6 +58,7 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
     private static final String EXPORTED_ITEMS = "ExportedItems";
     private static final String PORT_ARMED = "PortArmed";
     private static final String COLLECT = "Collect";
+    private static final String PACKAGES = "Packages";
 
     public StationGoggleSummary {
         if (assignment == null)
@@ -62,6 +69,8 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
             lastRejection = Optional.empty();
         if (collect == null)
             collect = PortCollectSummary.NONE;
+        if (packages == null)
+            packages = PackageUnpackSummary.NONE;
         openRequests = Math.max(0, openRequests);
         requestedItems = Math.max(0L, requestedItems);
         deliveredItems = Math.max(0L, deliveredItems);
@@ -72,19 +81,25 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
     public StationGoggleSummary withRequests(int open, long requested, long delivered,
             Optional<RequestRejection> rejection) {
         return new StationGoggleSummary(assignment, buffer, open, requested, delivered, rejection, exportedItems,
-                portArmed, collect);
+                portArmed, collect, packages);
     }
 
     /** This summary with a warehouse port's export counter and its unspent rising edge (M17). */
     public StationGoggleSummary withPort(long exported, boolean armed) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exported, armed, collect);
+                exported, armed, collect, packages);
     }
 
     /** This summary with what a collecting warehouse port fetches from and has fetched (M18, issue #13). */
     public StationGoggleSummary withCollect(PortCollectSummary collect) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exportedItems, portArmed, collect);
+                exportedItems, portArmed, collect, packages);
+    }
+
+    /** This summary with what a warehouse input has made of the packages handed to it (M26, issue #18). */
+    public StationGoggleSummary withPackages(PackageUnpackSummary packages) {
+        return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
+                exportedItems, portArmed, collect, packages);
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -111,6 +126,12 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
             collect.write(collectTag);
             tag.put(COLLECT, collectTag);
         }
+        // And only an input a package was really offered to, so an input without a Packager costs nothing (M26).
+        if (!packages.isEmpty()) {
+            CompoundTag packagesTag = new CompoundTag();
+            packages.write(packagesTag);
+            tag.put(PACKAGES, packagesTag);
+        }
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -120,6 +141,7 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
                 tag.getLong(DELIVERED_ITEMS), tag.contains(LAST_REJECTION, Tag.TAG_STRING)
                         ? RequestRejection.byName(tag.getString(LAST_REJECTION)) : Optional.empty(),
                 tag.getLong(EXPORTED_ITEMS), tag.getBoolean(PORT_ARMED),
-                PortCollectSummary.read(tag.getCompound(COLLECT)));
+                PortCollectSummary.read(tag.getCompound(COLLECT)),
+                PackageUnpackSummary.read(tag.getCompound(PACKAGES)));
     }
 }

@@ -30,6 +30,7 @@ final class VisualScenarios {
             Map.entry(RestockVisualScenario.NAME, RestockVisualScenario::new),
             Map.entry(ChainVisualScenario.NAME, ChainVisualScenario::new),
             Map.entry(DisplayVisualScenario.NAME, DisplayVisualScenario::new),
+            Map.entry(PackagesVisualScenario.NAME, PackagesVisualScenario::new),
             Map.entry(ShowcaseVisualScenario.NAME, ShowcaseVisualScenario::new),
             Map.entry(ArmVisualScenario.NAME, ArmVisualScenario::new),
             Map.entry(ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new));

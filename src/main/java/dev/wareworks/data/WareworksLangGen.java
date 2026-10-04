@@ -315,6 +315,22 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_OWN_STORAGE),
                 "This inventory is already a storage location");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_REFUSED), "Not fetched: %1$s");
+        // Packages at the out door (M26, issue #18). "Packager" and "logistics network" are Create's own names for
+        // the blocks a player holds, so these lines speak of them exactly as the game does.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGE_HANDOVER), "Hands over as a package");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGE_ADDRESS), "Addressed to: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGE_NO_ADDRESS),
+                "No address — hang a sign on the Packager");
+        // The one failure nothing else in the game diagnoses, so the longest line of the feature earns its words.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGER_LINKED),
+                "The Packager is linked to a logistics network and ignores redstone");
+        // Packages at the in door (M26, issue #18). The refusal names both numbers, because the cliff is the pair:
+        // Create consumes a package whole, so a package of three stacks needs room for all three at once. Both counts
+        // come last in their phrase, because 1 is an ordinary value for either and no plural may disagree with it.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_PACKAGE_UNPACKING), "Takes packages apart");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_PACKAGES_OPENED), "Packages opened: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_PACKAGE_REFUSED),
+                "Last package refused: stacks in it %1$s, free slots %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_STATUS), "Status: %1$s");
         for (CranePhase phase : CranePhase.values()) {
             lang.accept(WareworksLang.key(WareworksLang.cranePhaseKey(phase)), switch (phase) {

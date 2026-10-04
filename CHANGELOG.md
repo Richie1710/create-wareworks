@@ -58,6 +58,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows never move, so a four-row board never loses one, and while the crane has not yet run a whole minute the board
   says **"Measuring"** instead of showing a number about ten seconds as though it were about a minute. "Crane Status"
   is still the source a link offers first, so every display you have already built keeps showing what it showed
+- **The in door for Create packages says that it is one.** Put a **Create Packager** against a **warehouse input** —
+  back of the Packager to the block, which is how it faces itself when you place it — and addressed packages fed to it
+  are taken apart into the warehouse. That already worked; now the input says so. With goggles on it reads **"Takes
+  packages apart"** and counts them, **"Packages opened: 12"**, so you can see at a glance whether the door is doing
+  anything at all
+- **And it says why a package was turned away.** Create opens a package **whole or not at all**, so an input that has
+  room for two stacks refuses a package of three kinds of item — and until now nothing anywhere in the game said a word
+  about it: the box simply sat in the funnel. The input now reads **"Last package refused: stacks in it 3, free slots
+  2"** in gold, which is the one line that tells you to wait for the crane rather than to rebuild the door. "Room"
+  rather than "a free slot": a stack also goes into a slot that already holds that very item. The refusal goes as soon
+  as a package fits again, and nothing of a refused package is ever lost — it waits where it is
+- **The out door for Create packages says that it is one.** Put a **Create Packager** against a **warehouse port**
+  — back of the Packager to the block, which is how it faces itself when you place it — and a redstone pulse, or a
+  **Smart Observer** facing the port that keeps emptying it by itself, packs whatever the warehouse put there into an
+  addressed package. That already worked; now the port says so. With goggles on it reads **"Hands over as a
+  package"**, and an **overflow** port says it too, so what your warehouse cannot keep can leave your base in boxes
+- **The address is a sign, and the port reads it out to you.** Hang a plain **sign** on that Packager and the port's
+  goggle text says **"Addressed to: Base North"** — read by Create's own rule, off the signs that are there right
+  now, so what you are shown is what the next box the door sends will carry rather than what the last one did. Without
+  a sign the line turns gold and says **"No address — hang a sign on the Packager"**, which matters more than it
+  looks: Create only ever delivers an **unaddressed** box to a Package Port that has no name of its own, or to one
+  named `*`, so a chain conveyor carries it past every other named one
+- **And it names the one mistake nothing else in the game mentions.** A **Stock Link** on that Packager puts it on a
+  logistics network, and from that moment it ignores **every** redstone signal — no pulse, no lever, no message, no
+  particle, nothing anywhere to read, and the door simply never opens again. The port now says it in gold, **"The
+  Packager is linked to a logistics network and ignores redstone"**, so one block you put down for another reason
+  cannot quietly stop your deliveries for ever. While the link is on, that line stands **instead of** the address
+  line: a linked Packager never reads the sign, so an address there would be a promise no box keeps
+- **And Ponder shows you how to build both doors.** Hold **W** over a **warehouse port** or a **warehouse input** and a
+  new scene, **"Packages at a Warehouse Door"**, builds the whole thing in front of you: the Packager's **back** against
+  the station — which is the only thing that decides whether the door sends or receives, and the reason you cannot wire
+  one the wrong way round — the sign that is the address, a **Smart Observer** over the port that sends a box whenever
+  something is waiting there, about **one box a second** with up to nine stacks in it, and the warning that a package is
+  opened whole or not at all. In English and German, like every scene before it
 
 ## [0.7.0-alpha] - 2026-10-03
 

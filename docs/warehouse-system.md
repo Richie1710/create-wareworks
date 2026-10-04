@@ -316,6 +316,7 @@ Classes: `content.storage.WarehouseInterfaceBlock`, `WarehouseInterfaceBlockEnti
 * `DirectBeltInputBehaviour`: belts, funnels, chutes and depots can insert.
 * Create mechanical arms can put items in, and only put them in (a deposit-only arm interaction point, §3.2.2).
 * Non-empty buffer means store work is available. The crane extracts through the internal handler.
+* **A Create Packager whose back touches the block makes it an in door for addressed packages** (M26, issue #18, §3.2.5): the insert-only view is exactly what an unpack needs, and it is why a Packager there can never pack.
 
 **Warehouse Output — the warehouse port** (since M17, issue #12; the block keeps its name and its id `wareworks:warehouse_output`)
 * `ItemStackHandler` buffer with `outputBufferSlots` slots (config, default 9).
@@ -326,6 +327,7 @@ Classes: `content.storage.WarehouseInterfaceBlock`, `WarehouseInterfaceBlockEnti
   * **Accept** (rank ≠ 0): the crane brings items that arrived at a warehouse **input** and would otherwise be stored. What the player built behind the port decides what happens to them; Wareworks itself never destroys anything, and a full port lets the input back up exactly as a full warehouse does.
   * **Collect** (the sentinel rank `PortSettings.COLLECT_RANK`, M18, issue #13, §3.2.4): the crane reaches **through** the port into the inventory behind it, takes what the filter names and stores it like anything that arrived at an input — so a machine's result chest needs no belt back to the aisle. The port's own buffer stays unused in this direction, and nothing is ever inserted into a player's machine.
 * Goggles: buffer contents and the redstone behaviour; for a requesting port the pending request with its remaining amount and the last rejection reason, for an accepting one its rank, which items it accepts and how many it has handed over, for a collecting one which items it fetches, what its last read of the attached inventory found and how many items it has collected.
+* **A Create Packager whose back touches the block makes it an out door for addressed packages** (M26, issue #18, §3.2.5): the extract-only view is exactly what packing needs, and it is why a Packager there can never unpack. The address is a plain sign on the Packager, and the goods leave as boxes of up to nine stacks.
 
 #### 3.2.1 Implementation (M2, stations)
 Classes:
@@ -1117,6 +1119,434 @@ and `AisleCollections` persists nothing.
   whose vanilla hopper drains into the very chest the port reads (the three numbers go constant and stay constant), and
   a full warehouse leaving the items where they are. The `blocks` pass carries the `port_collect` exhibit and the
   `ponder` pass compiles the new scene.
+
+#### 3.2.5 Packages at the door (M26, issue #18)
+
+> Decision and reasons: **ADR-040**. Nothing was registered on the Wareworks side either: no second block, no new
+> `LocationKind`, no new port direction, no new rank, no new `JobType`, no new config key, no new NBT key and no
+> migration. The one new registration of the milestone is a single entry in **Create's** unpacking-handler registry,
+> and it adds no behaviour. A warehouse built before M26 behaves byte for byte as it did.
+
+**This worked before M26, and nobody could tell.** A Create **Packager** whose back touches a **warehouse port** packs
+whatever the warehouse hands over into an addressed package; one whose back touches a **warehouse input** takes an
+arriving package apart into the warehouse. Both directions were already complete the day the port and the input got
+their item capabilities, with **not one line of Wareworks code in the item path** — and there was no Ponder scene, no
+tooltip, no documentation and no test that said so, while both directions failed **silently**: a Stock Link stuck on
+the Packager stopped a door for ever with nothing anywhere in the game to read, and a package the input could not hold
+whole sat in a funnel with nothing anywhere in the game to read. M26 is therefore not a feature that was invented. It
+is a capability that was made **findable, diagnosable and pinned**: one Ponder scene, seven goggle lines, nineteen
+GameTests, a visual scenario that carries a box from one warehouse to another and reads every one of those seven rows
+back in both languages, and this section.
+
+The honest consequence of that shape: a Packager is **not** configured by the port or by the input. Whether a door
+sends or receives, and what its boxes are addressed to, is decided entirely by Create's own blocks, which is also why
+it cannot be set wrong (below).
+
+##### The two builds
+
+**The out door.** A **warehouse port** in the **Request** direction (or an accepting one, see below), a **Create
+Packager** one block behind it with its back against the port — which is how it faces itself when you place it — a
+plain **vanilla sign** on the Packager, and something that powers the Packager. A funnel, a chute or a Frogport takes
+the finished box out of the Packager and sends it on.
+
+The "when" this documentation and the Ponder scene teach is a **Create Smart Observer** looking at the port:
+`SmartObserverBlockEntity#tick` *sustains* its signal while the observed inventory still has something extractable
+(and its own filter is ANDed in), so the observer powers the Packager until the port is empty and the door empties
+itself. The **simpler alternative** is a bare redstone pulse: one rising edge, one box, and then a 40-tick
+`buttonCooldown` before the Packager will accept another edge. The code path is identical either way — both reach
+`PackagerBlockEntity#attemptToSend(null)` through `redstoneModeActive()` — so this is purely which build is worth
+teaching, and the self-emptying one is.
+
+**The in door.** A **warehouse input**, a **Create Packager** one block behind it with its back against the input, and
+anything that pushes packages into the Packager: a belt funnel, a chute, a hopper, a Frogport, a Postbox, a train's
+delivery. No redstone at all — an unpack happens in the insert call itself.
+
+Both doors stand wherever an ordinary port or input stands, and the crane reaches them exactly as it always did. A
+door is an ordinary `LocationKind.OUTPUT` or `INPUT` member: the planner, the reservations, the stock index, the
+filters, the priorities, the stock rules and the throughput buckets all see what they have always seen.
+
+##### The direction lock: why a door cannot be wired the wrong way round
+
+A Packager asks the block behind it for exactly one thing, `Capabilities.ItemHandler.BLOCK`, and the two stations
+answer it as **one-way views on every side**:
+
+| The Packager's back touches | What the station answers | What the Packager can do |
+|---|---|---|
+| a **warehouse port** | `ExtractOnlyItemHandler`: `insertItem` returns the stack, `isItemValid` is false | **pack only.** `DefaultUnpackingHandler`'s simulate pass finds every stack left over, `unwrapBox` returns false and `PackagerItemHandler#insertItem` hands the package straight back |
+| a **warehouse input** | `InsertOnlyItemHandler`: `extractItem` always returns empty | **unpack only.** `attemptToSend(null)` finds nothing extractable and returns before it builds a box |
+
+So the station the Packager's **back** touches *is* the direction, and the wrong direction is not a misconfiguration
+that fails later — it is structurally impossible. Create even faces the Packager correctly as a player places it:
+`PackagerBlock#getStateForPlacement` walks the nearest looking directions, takes the first neighbour whose
+`Capabilities.ItemHandler.BLOCK` answers a **null-side** query, and sets `FACING` to the opposite of that face. Both
+stations qualify, because their registration lambdas ignore `side`.
+
+Nothing pinned that before M26, which is the whole point of `packagerbehindaportcanneverunpack` and
+`packagerbehindaninputcanneverpack`: if a future refactor ever answered an insert-capable view at a port, packages
+would start vanishing into a station buffer and no other test in the suite would notice.
+
+**Wareworks never packs and never unpacks.** Create's Packager and Repackager are the only sources of a package in the
+game — no recipe yields one — and `PackageItem` lives in `content.logistics.box`, which Create's `api/packager/`
+deliberately does not export. Packing ourselves would put a sealed box inside a `StationBuffer`, i.e. tie the mod's
+**save format** to a class Create does not export, and add a fifth place to the item-conservation invariant (§8).
+ADR-040 has the full argument.
+
+A **Repackager** is not a door. It extends `PackagerBlockEntity` but only ever re-boxes fragments of a Create network
+order, never packs loose items, and has no `LINKED` state at all — so `PackageHandover#packagerFor` refuses it, and an
+input behind one stores the whole box as an ordinary item (below).
+
+##### The address is a sign, read by Create's own rule
+
+Without a logistics network there is exactly one channel Create leaves open for an address, and it is a plain vanilla
+sign next to the Packager: `attemptToSend` applies `signBasedAddress` on the no-request-queue branch, and nothing else.
+A port's goggles name that address, and they do it by **re-applying Create's rule to the signs that are there right
+now** rather than reading the Packager's own `signBasedAddress` field, which is refreshed only immediately before a
+send and is therefore stale exactly while a player stands looking at an idle door.
+
+The rule is three nested loops, and `core.port.PackagerSignAddress` is one pure function per loop, each with its
+citation and its own JUnit case:
+
+1. **One sign text** — every non-blank line, each `trim()`ed, joined with single spaces.
+2. **One sign** — the **front** text wins whenever it spells anything at all; the back is read only for a blank front.
+3. **The six neighbours**, in `Direction.values()` order (`DOWN, UP, NORTH, SOUTH, WEST, EAST`) — the **last** non-blank
+   address wins, not the first. First is the natural guess and it is wrong, which is why it is its own named function.
+
+Two subtleties that a tidier implementation would get wrong for ever. Create trims with `String#trim()`, which stops at
+`U+0020`, while "is this line blank" is `String#isBlank()`, which is Unicode-aware — so a line of **no-break spaces**
+is not blank, is not trimmed away, and really does address a box. And a **ComputerCraft computer** attached to the
+Packager can override the sign address entirely; this reads signs only, so a computer-addressed Packager is reported as
+whatever its signs say. That is the one unmodelled case, recorded here, in the class javadoc and in
+`docs/dependencies.md`, which lists the rule as **mirrored rather than called**.
+
+Because the rule is mirrored it can drift, and the mitigation is a test rather than a promise:
+`packagesignaddressmatchescreate` compares `PackageHandover.addressAt(...)` with
+`PackageItem.getAddress(box a real Packager produced)` over six sign shapes in the same tick, including the surprising
+one. A divergence from Create cannot be shipped silently.
+
+##### What a blank address means, and what a glob matches
+
+A Packager **clears** the address of every box it sends and then applies the sign's, so with no sign the box carries no
+`create:package_address` component at all and `PackageItem.getAddress` answers the empty string. That is not a
+cosmetic difference:
+
+* `PackageItem.matchAddress` is **symmetric** — either side may be the pattern — and **case-sensitive**, with no flags
+  anywhere.
+* A **blank** filter matches **only** an unaddressed box.
+* `*` on **either** side matches everything.
+* The glob supports `?`, `[a-z]`, `[!…]`, `{a,b}` and `{!…}`, anchored; a **malformed** pattern degrades to the empty
+  regex, which matches **nothing**, not everything.
+
+A chain conveyor drops a box at a Package Port whose filter matches the box's address, and a train delivers the same
+way. So an **unaddressed** box can only ever be delivered to a Package Port that has no name of its own — or one named
+`*`, the catch-all the bullet above covers — and a chain conveyor carries it past every other named one, which is why
+the port's "No address" goggle line is gold rather than grey.
+
+One citation that is easy to get backwards, and the reason the issue's own text needed correcting
+(`docs/api/_gaps-and-corrections.md` §5.30): **a Package Port's filter is its own name.** The matching is in
+`PackagePortAutomationInventoryWrapper`, not in `PackagePortBlockEntity`, and for the item-capability path it is the
+mirror image of the obvious reading — `insertItem` **refuses** a package whose address matches the port's own filter
+and accepts only one addressed elsewhere, while `extractItem` hands out **only** matching ones.
+
+A Create **Package Filter** in a storage location's filter slot matches a package by that same rule, which has worked
+since M8 (`filterpackageaddress`). That is also the one trap this feature creates: a storage location dedicated with a
+Package Filter accepts **nothing** once packages are opened at the door, because what the crane then stores is iron and
+planks, not boxes. The location looks perfectly configured. There is no automated way to tell the two intentions apart,
+so it is written down here and in the manual checklist instead of being guessed at.
+
+##### The failure nothing else in the game diagnoses: a `LINKED` Packager
+
+`PackagerBlockEntity#redstoneModeActive()` is simply `!LINKED`, and both redstone callers check it. Put a **Stock
+Link** on the Packager — for any reason, including one that has nothing to do with this door — and from that moment
+every pulse and every lever is ignored: no message, no particle, no sound, no block state a player would read as a
+cause. The door never opens again.
+
+The port's goggles therefore carry a mandatory gold line, **"The Packager is linked to a logistics network and ignores
+redstone"**. It is read off `PackagerBlock.LINKED` on the client, which can lag a player's build by up to ten ticks,
+because `recheckIfLinksPresent` runs only in `lazyTick` at Create's lazy rate of 10. The lag is accepted: a line that
+appears a moment late beats a door that never opens. `packagerlinkedtoanetworkignoresredstone` places a **real** Stock
+Link, because Create **heals** a hand-set `LINKED` flag — `activate()` itself rechecks first — so the stop cannot be
+faked with a `setblock`.
+
+One structural leak to know about while a Stock Link is there: through `PackagerBlockEntity#getAvailableItems` it
+publishes the station's **9-slot buffer** into Create's logistics network, and never the racks and never the stock
+index, because the only capability either station exposes is over its own buffer. Staying out of the network is the
+player's build, not our code.
+
+##### The all-or-nothing cliff at the in door
+
+Create consumes a package **whole or not at all**: `DefaultUnpackingHandler`'s simulate pass returns false as soon as
+one stack would be left over, and `unwrapBox` then changes nothing. That is the right invariant and Create gives it for
+free — a handler that accepted half a package would **void** the rest, because the box is consumed as a unit — so
+Wareworks keeps it and does not engineer around it.
+
+What it means at a door: `inputBufferSlots` defaults to 9 and `PackageItem.SLOTS` is 9, so an input holding one stray
+stack refuses a nine-type package until the crane has drained it. "Room" rather than "a free slot" is the exact word:
+the delegate's simulate pass also **merges** a box stack into a slot that already holds that very item with space
+left, so a package can be opened into a buffer with no free slot at all
+(`inputopensapackagethatmergesintoafullbuffer`). A free slot per stack is therefore always sufficient and not always
+necessary, and the player-facing texts say "room". At `inputBufferSlots = 1` — a legal setting, the
+range is 1..27 (§9) — **any** multi-type package is refused for ever. Nothing is lost in either case: the package waits
+in the funnel, which is the correct backpressure, and it is why a package the Packager refused whole never reaches the
+overflow path at all.
+
+Until M26 that refusal was invisible. `WarehouseInputUnpackingHandler` is registered on Create's
+`UnpackingHandler.REGISTRY` for the warehouse input **only** to make it readable: it delegates verbatim to
+`UnpackingHandler.DEFAULT`, returns the delegate's exact result, and its only side effects are two field writes on the
+input's block entity. Deleting the registration restores Create's behaviour byte for byte — which is the mitigation for
+depending on an `@Experimental` API, and the reason `packagearrivalstored` is in the required set: the registration
+**replaces** `DEFAULT` for our block, so a bug in a wrapper that is supposed to add nothing would break the whole way
+in.
+
+**The two recorded numbers are the package's own stacks against the free slots**, and they are deliberately
+commensurable: what the box brought at once against what the buffer had. With one free slot and a three-type package
+the pair is `(3, 1)`, which is what the goggle line says and what `inputrefusesapackageitcannotholdwhole` pins.
+
+The leftovers of the simulate pass would have been the wrong number to show, although they are the number the handler
+could read most cheaply. The delegate places **greedily** before it reports, so with four full filler stacks, five
+empty slots and a nine-stack box it leaves four over — and "4 stacks found no room" beside "5 slots free" reads as a
+contradiction although both halves are true. The stack count is therefore taken off the list **before** the delegate
+is let near it, because the delegate empties the entries it placed.
+
+##### The ceiling, and what one box holds
+
+* **About one package per second.** `CYCLE` is 20 ticks, `PackagerItemHandler#extractItem` returns empty during the
+  animation, a fresh redstone edge adds a 40-tick `buttonCooldown`, and `lazyTick` runs every 10.
+* **At most nine stacks per box** (`PackageItem.SLOTS` = 9), i.e. 576 items of an ordinary item. A big order leaves as
+  N boxes; consolidating them would need the network order bookkeeping ADR-040 refuses.
+* **A package does not stack** (`stacksTo(1)`), so a door hands over one box at a time and a buffer holding boxes holds
+  one per slot.
+* **A bulky item travels alone.** An item that cannot go inside a container item — a shulker box, another package —
+  is packed only into an otherwise empty box, and ends that box.
+* An M25 crane queueing behind a door is **not** idle: the throughput buckets correctly read that time as waiting at
+  the port (ADR-039). Set the expectation here, or the first report will be "the warehouse is slow".
+
+##### The cases that surprise people, and are deliberate
+
+* **A stray item rides along.** `attemptToSend(null)` packs **greedily** from every slot of the port, so a foreign item
+  a `RETRIEVE` reroute legitimately left in that port (§8) goes into the box with the rest. The buffer is therefore
+  self-cleaning, and a player will eventually get a box of iron with one stick in it. Documented, not fixed.
+* **A package already standing in the port is relabelled, not boxed again.** The Packager passes that very package
+  through and rewrites its address: `clearAddress` then the sign's. Free relabelling, surprising, harmless.
+* **A box is stored as an ordinary item when there is no Packager.** A package funnelled straight into a warehouse
+  input is stock like anything else — and `ItemKey` is item **plus** components, so it is **one stock row per address**.
+  Two boxes addressed `Base North` count 2 and a third addressed `Base South` counts 1 as a separate row. That is the
+  same class of thing as a hundred distinct enchanted books, the terminal list is already capped, and refusing the box
+  instead would back a funnel up with nothing to read. Accepted and pinned by `packagestoredasanitem`.
+* **A box addressed somewhere else is still unpacked.** Wareworks owns no address and matches none: the sign on the out
+  door is for the boxes that **leave** it. Asserted on purpose by `packageaddressedelsewhereisstillunpacked`, so nobody
+  silently "fixes" it into an address check the issue never asked for.
+* **A Frogport will not pull a box out of a Wareworks port, and will pull it out of a Packager in the same spot.**
+  `FrogportBlockEntity#tryPullingFrom` takes a package if `filterString == null || handler instanceof
+  PackagerItemHandler || !matchAddress(...)` — the middle clause is a deliberate exemption for Create's own Packager
+  that no other block can have. So a Frogport filtered `*` never pulls from us (the third clause is false for `*`), and
+  an unfiltered one does. It also only ever looks at its own inventory and the block **directly below** it. The clean
+  build is therefore Packager → funnel/chute → Frogport or Postbox, or a Frogport sitting on the Packager.
+* **A package arriving for an item no storage location accepts** takes the existing overflow path, and only once the
+  box is open: diversion port → storage → input buffers → accepting overflow port → `HOLDING` (§8). It never goes back
+  out as a package, because we cannot make one. **M26 adds no row to the §8 table**, and that is a tested claim
+  (`packagearrivaltakestheoverflow`).
+* **An empty box is consumed with nothing inserted, and is not counted.** `unwrapBox` returns true for an empty
+  package **before** it consults any handler, so our wrapper never sees one and "Packages opened" does not move.
+  Conservation-neutral under the census rule below, because an empty box counts as nothing either way.
+* **A warehouse terminal is not a door.** A terminal is also a `LocationKind.OUTPUT` whose capability is the same
+  extract-only buffer view, so a Packager behind one really does pack requested items into a box — and the terminal
+  says nothing about it. That is deliberate for M26: the terminal's screen and its goggles speak for a player standing
+  at it, the door surfaces belong to the port, and M27's work is on the terminal's own screen. Named here so that it is
+  not a silent gap; the fix, if it is ever wanted, is one call to the port's `addPackageLines` from
+  `WarehouseTerminalBlockEntity`.
+
+##### Where the item-conservation invariant ends, and the census rule that keeps it provable
+
+§8's invariant is unchanged: every item is in exactly one of source inventory, handling head, target inventory, or an
+entity in the world. **Beyond the port buffer the items are inside a Create package** — which is itself in one of those
+four places — and a package lying in the world is a `PackageEntity`, not an `ItemEntity`. The port buffer is where the
+mod's own bookkeeping already stops: what stands in a port is "station buffer, never stock", never fetched back, never
+counted and never stored again (§3.2.3).
+
+Every moment an item changes hands is conservative, and three of them are worth spelling out because they look like
+they should not be:
+
+* **Port buffer → inside the box is one tick with no window.** `attemptToSend` inserts into its own nine-slot handler
+  first, computes `transferred = extracted.getCount() − leftovers`, and only then extracts exactly that many from the
+  port. What the box holds is precisely what left the port, because the extract amount is **derived from** the insert
+  result.
+* **The box is created out of nothing and destroyed to nothing.** The Packager spends no item to make a box, and
+  `PackagerItemHandler#insertItem` returns `copyWithCount(count − 1)` — empty, because a package is `stacksTo(1)` — so
+  Create consumes it on the way in. Wareworks invents no empty-box item and no return path.
+* **Double counting is structurally impossible.** A request's `remaining` is credited at the crane's real drop and
+  nowhere else; the Packager's later extract is invisible to the controller. Conversely, the items the Packager takes
+  were already counted, so a drained port cannot re-open a closed request.
+
+That argument is only worth anything if the tests can see inside a box, and before M26 they could not: both item
+censuses counted a package as **one** `create:package` key, so a box that swallowed 64 iron read as 64 items vanishing,
+and both entity sweeps looked for `ItemEntity` only. Two rules in `gametest.ItemCensus` and `dev.SceneItemCensus` fix
+it, and they are the reason that step shipped first and alone:
+
+1. **A package counts as its contents; the box counts as nothing** — in an inventory, in a station buffer, on a
+   handling head, in an arm's claw, and in the expectation builders too, so a test states what it fed in the terms it
+   fed it. Under this rule the out-pack conserves, the in-unpack conserves, a box created or destroyed is invisible
+   (correct: it costs nothing and yields nothing), and a destroyed `PackageEntity` conserves as well, because its
+   contents drop as item entities and Create ships no entity loot table for the box.
+2. **`PackageEntity` is counted.** It is a `LivingEntity` with 5 HP, invisible to both harnesses' item-entity sweeps.
+
+The contents are read from the `create:package_contents` component and streamed, **never** through
+`PackageItem#getContents`: that fills a fixed nine-slot `ItemStackHandler` from every slot the component declares, the
+component permits 256, and `ItemStackHandler#setStackInSlot` throws out of range — so a crafted ten-slot package would
+turn a census into a crashed run instead of a report. The hazard is inside Create on the real unpack path too, so it
+cannot be shielded from the game, only from our own reads.
+
+Three sharp edges for anyone writing a test or a scenario around a dropped box. The swap from the dropped `ItemEntity` to
+the `PackageEntity` is **deferred** by one server task (`Item#hasCustomEntity` plus NeoForge's join handler), and the
+drain is not promised within any tick budget — a fixed `thenIdle(2)` failed about one run in two — so wait on the
+entity existing, or spawn it with `PackageEntity.fromItemStack`. And do not kill a package with `kill()` or any
+`bypasses_invulnerability` source: `PackageEntity#hurt` takes the removal branch **without** calling `destroy`, so the
+contents really are voided; an explosion source always destroys first. And give a dropped box **air to land in**:
+`Containers.dropItemStack` places a drop anywhere in [0.125, 0.875] of the block, a package is wider than an item,
+and `PackageEntity#hurt` ignores `inWall` only while `insertionDelay < 20` — so a box dropped beside a solid neighbour
+suffocates a second later and its contents fall out as items, for roughly half the random placements. That reads as
+an intermittently failing test and is not a race.
+
+##### What a player reads
+
+Seven lines, all built on the client and all of them nothing at all for a station nobody built a door on. Only three
+small numbers were added to any packet, and only for an input a package was really offered to.
+
+| Where | Line | Colour |
+|---|---|---|
+| port (request **or** accept, never collect) | **Hands over as a package** | grey |
+| port, on redstone | **Addressed to: Base North** | grey, the address in white |
+| port, on redstone | **No address — hang a sign on the Packager** | **gold** |
+| port, instead of those two | **The Packager is linked to a logistics network and ignores redstone** | **gold** |
+| input | **Takes packages apart** | grey |
+| input | **Packages opened: 12** | grey, the number in white |
+| input | **Last package refused: stacks in it 3, free slots 1** | **gold** |
+
+**The gold `LINKED` row stands in place of the two address rows, not beside them.** Create applies a sign on exactly
+one branch, `if (!requestQueue && !signBasedAddress.isBlank())`, and a `LINKED` Packager never reaches it: its two
+redstone callers return at `!redstoneModeActive()` before `updateSignAddress()`, and the only other caller,
+`LogisticsManager#performPackageRequests`, always passes a non-null request list, so `requestQueue` is true and the box
+carries the **network order's** address instead. Drawing "Addressed to: Base North" there would predict an address no
+box will carry, and drawing "No address — hang a sign" would ask the player for a block that provably changes nothing
+while the link is on. So the address rows describe the redstone channel only, and they come back with it;
+`packagerlinkedtoanetworkignoresredstone` asserts both halves — no address while the link is on, the address back when
+it is gone — against `WarehouseOutputBlockEntity#packageAddressShown`, which is the decision the rows are drawn from. A
+GameTest cannot build the tooltip itself: `LangBuilder#forGoggles` loads `Minecraft` for its indent, which a dedicated
+server refuses, so the decision is a method and the rows read it.
+
+Both counts of a row come **last** in their phrase (`stacks in it 3`, `free slots 1`, `Packages opened: 12`) rather
+than in front of a hard-coded plural: 1 is an ordinary value for every one of them, and `1 Plätze frei` would simply be
+wrong German. That is the shape `gui.keeper.paused_lost` already uses for the same reason.
+
+An **accepting** port says the handover lines too — its buffer is filled by the warehouse exactly as a requesting
+one's is, and "overflow leaves the base in boxes" is a real build. A **collecting** port does not: its buffer is unused
+on purpose, because the crane reaches *through* it into the inventory behind it, so the line would be a promise about
+an empty buffer.
+
+The address is the first goggle argument in the mod that is **unbounded text read from the world** — eight sign lines
+joined, on a row that is never wrapped — so it is cut to 25 characters, Create's own cap for an address
+(`PackagePortScreen`), with the cut marked by an ellipsis so a shortened address is never read as the whole one. The
+cut never lands inside a surrogate pair and never leaves trailing whitespace.
+`LangConsistencyTest#thePackageDoorRowsFitAGoggleTooltip` holds all **seven** rows of both doors, each filled to its
+own worst case, inside 81 characters; the widest is the German `LINKED` row at 73. That budget is **stricter than what
+the mod already ships** — the widest existing goggle row is about 107 characters, a German
+`no_job_reason.port_full` drawn inside `gui.goggles.last_plan` — so it was applied to the new rows only rather than
+retro-fitted.
+
+What the budget does **not** cover is a window narrower than about 460 scaled pixels, which is where a 73-character row
+at roughly 6 px a character stops fitting beside the 24 px Create's placement keeps. 1920x1080 at GUI scale 4 gives
+480 − 24 = 456 px, so the German `LINKED` row only just clips there; the visual run's own 1600x900 window at scale 4
+would give 376 px and clip plainly. Both are a person's judgement rather than a number, and both are manual check 195.
+
+The rows are also **rendered** in German, not only measured as strings: the `packages` visual scenario switches the
+client's language and re-shoots all seven (`goggles-*-de`). Nothing else in the build draws them in a language other
+than English, and `de_de.json` is hand-written.
+
+**Ponder.** One new scene, `warehouse/packages_at_the_door` ("Packages at a Warehouse Door"), registered for the
+**warehouse output** *and* the **warehouse input**, because the build is the same block on either side of the warehouse
+and which station its back touches is the whole lesson. Twelve beats: the Packager's back against the station, that it
+cannot be set wrong, the sign as the address, a Smart Observer over the port, the crane filling it and the box leaving,
+one box a second and nine stacks, a funnel taking it away, the same Packager at an input as an in door, a foreign
+address opened anyway, the all-or-nothing cliff, and the goggles. A new scene rather than a beat appended to an
+existing one: the build fits neither existing schematic, and a new scene only adds new `text_n` keys, so ADR-016's rule
+that no shipped scene's keys move is kept. The scene teaches the **Smart Observer**; the bare pulse is named above, in
+this document, and deliberately not in the scene.
+
+##### Persistence, sync and configuration
+
+**Nothing, anywhere.** No NBT key on any block, no new config key, no `WareworksNetwork.VERSION` bump, no migration
+and no `MigrationGameTests` entry. A world from 0.7.0 is bit-for-bit unaffected.
+
+The only new synced data is `PackageUnpackSummary` (three small numbers) on the existing `StationGoggleSummary`,
+written as nothing at all for every station no package was ever offered to — the `exportedItems` / `portArmed`
+discipline — so no other station's packet grows by a byte. Everything the port says is read off neighbouring block
+states, block entities and sign block entities, which a client already has, so it costs **no sync at all**, and every
+lookup is guarded by `isLoaded` so a call can never pull in a chunk.
+
+`PackageUnpackSummary` is deliberately **not saved**: it is a diagnosis, not state the warehouse plans with, so
+"Packages opened" counts since the block entity was **loaded** rather than since the door was built (the `AislePorts`
+cold-cache convention). That is also why the counter differs from the port's persisted `Handed over` number.
+
+The registration itself is the one lifecycle detail worth knowing: `UnpackingHandler.REGISTRY` is keyed by the `Block`
+**object**, so it needs `WareworksBlocks.WAREHOUSE_INPUT.get()` and cannot run in a mod constructor, where a Registrate
+entry is not yet bound. `WareworksUnpackingHandlers.register(modEventBus)` adds one `FMLCommonSetupEvent` listener that
+defers it with `enqueueWork` — exactly where and why Create registers its own three handlers — which also gives the
+"exactly once" that `SimpleRegistry#register` requires.
+
+##### What M26 deliberately leaves to M27
+
+A terminal request that **names the door it leaves by**: you pick the door at the terminal, and the sign on that door
+is the address, so the request reads "64 iron to Base North". The address is **not** typed, and that is forced rather
+than chosen — a per-request address only exists on Create's request-queue branch, which stamps
+`create:package_order_data` unconditionally, and that component is literally what makes a package a fragment of a
+network order downstream. A Wareworks box carrying a fabricated order id would be collected and re-boxed by a player's
+Repackager against a promise nobody made. ADR-040 carries the argument; the roadmap carries the sequencing.
+
+Also sequenced rather than dropped: routing a **clipboard list** order to a door, which would mean generalising the
+tick-mark credit that today requires the delivery target to be the terminal's own block entity, and deciding what a
+half-delivered build-site list means.
+
+##### Classes and tests
+
+* `core.port`: `PackagerSignAddress` (the sign rule as three pure functions, plus the 25-character display cut) — the
+  only addition to `core.*` in this milestone.
+* `content.station`: `PackageHandover` (`packagerFor`, `addressAt`, `ignoresRedstone` — the reading half, which moves
+  nothing), `WarehouseInputUnpackingHandler` (verbatim delegation plus two field writes), `PackageUnpackSummary`,
+  `WarehouseInputBlockEntity#onPackageOpened` / `#onPackageRefused` / its three goggle lines,
+  `WarehouseOutputBlockEntity#addPackageLines`, `StationGoggleSummary#withPackages`.
+* `registry`: `WareworksUnpackingHandlers`.
+* `util.WareworksLang`: the seven keys, `packageAddress` and `packageRefused`.
+* `client.ponder`: `scenes.PackageScenes#packagesAtTheDoor`, registered in `WareworksPonderScenes` for both stations.
+* **Nothing else.** No change under `content.crane.**`, `core.crane.**`, `content.controller.**`, `core.job.**`,
+  `network.**` or `config.**`.
+* **JUnit** (9 new, 1208 → **1217**): `PackagerSignAddressTest` (8: the join with blank and whitespace-only lines, the
+  `trim()`-not-`strip()` no-break-space case, the front face winning, the **last** sign winning, every "nothing at
+  all" input giving the same answer, the display cut, and that a cut never ends in whitespace or half a surrogate
+  pair) and `LangConsistencyTest#thePackageDoorRowsFitAGoggleTooltip`.
+* **GameTests** (19 new, 413 → **432**):
+  * `gametest.ItemCensusGameTests` (2): `censuscountsapackageasitscontents` (including a crafted 12-slot component
+    counted in full rather than crashing) and `censuscountsapackageentity`.
+  * `gametest.PackageUnpackingGameTests` (3): `inputunpacksacreatepackage` (the handler really is ours, the package is
+    consumed, the contents reach the buffer, the counter reads 1, and an input nothing was offered to writes no tag at
+    all), `inputrefusesapackageitcannotholdwhole` (the exact `(3, 1)` pair, nothing entered, then the crane drains
+    the buffer and the same package is accepted) and `inputopensapackagethatmergesintoafullbuffer` (a buffer with
+    **no** free slot taking a package whose stack merges into a slot that already holds that item — the boundary of
+    the word "room" in every text of this feature).
+  * `gametest.PackageHandoverGameTests` (14, each with an `ItemCensus`, six of them per tick):
+    `packagehandoverfromaport`, `packagerbehindaportcanneverunpack`, `packagerbehindaninputcanneverpack`,
+    `packagerplacedagainstaninputfacesaway` (a real `BlockItem#place` through a mock player, so Create's own
+    `getStateForPlacement` runs), `packagerfoundonlybehindthestation` (five sides, both facings, a Repackager and a
+    Packager one block too far — the orientation rule nothing else pins), `packagesignaddressmatchescreate`,
+    `packagerlinkedtoanetworkignoresredstone` (a real Stock Link), `packagearrivalstored`,
+    `packagearrivalrefusedwhenfull` (a funnel offering the box for 60 ticks under a per-tick census),
+    `packagearrivaltakestheoverflow`, `packageaddressedelsewhereisstillunpacked`, `packagestoredasanitem`,
+    `packagepersistencemidhandover` (a box in `heldBox` and items in the port buffer, both block entities rebuilt as a
+    chunk load does), `packageentitydroppedcountsasitscontents` (Create's real drop path).
+* **Visual** (ADR-014): the scenario **`packages`** carries 16 iron out of one warehouse through a Packager a Smart
+  Observer drives, onto a belt, through a brass belt funnel into a second Packager, into the second warehouse's input
+  and into its racks — 21 shots, a `SceneItemCensus` spanning **both** warehouses and the belt around every move, and
+  five goggle shots read back off the client block entity line by line: the address, the missing address, the gold
+  `LINKED` dead end (with a real Stock Link), the in door's counter, and the refusal. The **`ponder`** pass compiles
+  the new scene against a real `PonderLevel`, which is the only automated check that it exists at all.
 
 ### 3.3 Warehouse Controller (`content.controller`)
 Owns the logical warehouse state of one aisle:
@@ -4053,6 +4483,12 @@ Checked without a change: clamping and refusal of requests (§7.2), the `WAREHOU
 
 **Invariant:** every item is in exactly one of: source inventory, crane grabber (persisted), target inventory, or an `ItemEntity` in the world.
 
+**M26 (§3.2.5) adds no fifth place and no row to this table.** An item inside a Create package is in whichever of
+those four places the box itself is, a box lying in the world is a `PackageEntity` rather than an `ItemEntity`, and
+both item censuses now count a package as its contents and the box as nothing — which is what makes a hand-over at a
+package door provable rather than merely plausible. That the overflow path is unchanged is a tested claim
+(`packagearrivaltakestheoverflow`).
+
 | Situation | Behaviour |
 |---|---|
 | Source empty / less than planned at pick time | Pick what is there (real extract). If 0, abort the job after retracting. |
@@ -4122,6 +4558,11 @@ The table above is covered by automated tests. What only a running game can reac
   * Two aisles that share a rack plane both count the shared inventory in their own "Items stored". That is not a duplication of items, only of bookkeeping; every transfer uses the real handler result.
   * An inventory that falls outside a shrunken aisle keeps its items but disappears from the controller's index and from every address, until the aisle reaches it again.
   * A crane whose aisle is gone holds its items indefinitely ("Holding items, no target found") instead of dropping them. They come back with the aisle, or drop at the dock when the dock is broken.
+  * **A Create package that does not fit a warehouse input whole is refused whole**, and waits in the funnel that
+    offered it until the crane has freed enough slots (§3.2.5). At `inputBufferSlots = 1` every multi-type package is
+    refused for ever. Nothing is lost in either case, and since M26 the input's goggles say which it is.
+  * **A box that reaches a warehouse input with no Packager behind it is stored as an ordinary item**, one stock row
+    per address, instead of being opened or refused (§3.2.5).
 
 ## 9. Configuration (server config)
 
@@ -4141,7 +4582,7 @@ The table above is covered by automated tests. What only a running game can reac
 | `returnHomeIdleTicks` | 200 | ticks a crane waits for work before it drives back to its **home** — the warehouse home point if there is one, otherwise position 0 of the aisle at the dock (M21, §3.7, `stacker-crane.md` §4.7). Only a warehouse of **more than one aisle** sends its crane anywhere: on a single straight aisle it stands where its last job left it, exactly as before M21. The trip is no job — it is interrupted by the next real one in the tick that job arrives, even mid-turn, and it holds no chunk. **0 switches returning home off everywhere** |
 | `transferTicks` | 10 | duration of pick/drop animation |
 | `grabberStacks` / `grabberMaxItems` | 1 / 64 | carry limit |
-| `inputBufferSlots` / `outputBufferSlots` | 9 / 9 | station buffers |
+| `inputBufferSlots` / `outputBufferSlots` | 9 / 9 | station buffers. The input's default equals `PackageItem.SLOTS`: a Create package is opened whole or not at all, so a smaller buffer refuses packages a default one takes, and `1` refuses every multi-type package for ever (§3.2.5) |
 | `terminalBufferSlots` | 9 | buffer of a warehouse terminal (M6) |
 | `maxTerminalRequestAmount` | 1024 | largest amount one terminal request may wait for, before the controller clamps it to the available stock (M6). Since M7 it bounds the **merged** amount of repeated clicks for one item, not a single click (§7.2) |
 | `maxTerminalStockEntries` | 512 | item types a terminal reports in one stock snapshot, so a huge warehouse cannot produce an unbounded list for the screen (M6). It bounds the **payload**, not the pass over the index (§3.4.1); the types with the most items are reported and the screen shows how many were left out |

@@ -52,13 +52,16 @@ teleported: every item you put in or take out is carried by the crane, where you
   into an addressable storage location such as `A-03-07R`. Its filter slot decides what may be stored there, and a
   priority on the same slot decides which of the suitable locations fills first.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
-  warehouse.
+  warehouse. Put a **Create Packager** against it and it becomes an **in door** for addressed **Create packages**:
+  arriving boxes are opened and their contents stored like anything else.
 * **Warehouse Output**: the warehouse's **port**, in three directions. It either **requests** the item in its filter slot
   — on a redstone pulse, or continuously while a signal is held, which keeps a machine supplied without a clock — or it
   **accepts** what the warehouse cannot keep, as an overflow behind every rack or as a diversion in front of them, or it
   **collects**: the crane reaches through the port into the inventory behind it and fetches a machine's result into
   storage, so no belt has to lead back to the aisle. Funnels, chutes, hoppers and Mechanical Arms take the items out of a
-  requesting or accepting port either way. Details in the **The warehouse port** section below.
+  requesting or accepting port either way. A **Create Packager** against it makes it an **out door**: what the
+  warehouse hands over leaves as a package, addressed by a plain sign. Details in the **The warehouse port** and
+  **Packages at the door** sections below.
 * **Warehouse Terminal**: a searchable screen showing the whole warehouse's stock; click an item and the crane
   delivers it into the terminal. Its grid is ordered by what there is most of, by what **you** request most often, or
   by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard — a Schematicannon's material
@@ -262,6 +265,58 @@ turns that off again when you want the warehouse to fill up.
 
 Items in a port are **not stock**: they are never counted, never fetched back and never stored again. An output placed
 before this feature existed is a port that requests on a pulse, which is exactly what it did.
+
+## Packages at the door
+
+A warehouse can hand its goods over as addressed **Create packages**, and take packages in — with a **Create Packager**
+and a plain **sign**, and nothing else. Hold **W** over a Warehouse Output or a Warehouse Input for the Ponder scene
+*"Packages at a Warehouse Door"*, which builds both doors in front of you.
+
+**The out door.** Put a Packager one block behind a **Warehouse Output** so its **back** touches the block — which is
+how it faces itself when you place it against the port. Hang a sign on the Packager, write `Base North` on it, and
+power the Packager. Everything the warehouse puts in that port leaves as a box addressed `Base North`, and a funnel, a
+chute or a Frogport takes it from there. (The sign is the address of a door driven by **redstone**. Put the Packager on
+a Create logistics network with a Stock Link and the network addresses its boxes instead — and the door stops answering
+redstone altogether, which is the gold line below.)
+
+For the "when", a **Smart Observer** looking at the port is the build worth learning: it keeps its signal up while
+anything is still in the port, so the door empties itself. A plain redstone pulse works too — one box per rising edge,
+then a two-second cooldown.
+
+An **overflow** port works the same way, so what your warehouse cannot keep can leave your base in boxes instead of
+jamming your input belt.
+
+**The in door.** Put a Packager behind a **Warehouse Input** the same way. Boxes pushed into it by a belt funnel, a
+chute, a Frogport, a Postbox or a train are opened and their contents stored in the racks. No redstone at all.
+
+**Which station the Packager's back touches is the whole of it.** A port only ever hands items *out*, so a Packager
+there can only pack; an input only ever takes items *in*, so a Packager there can only unpack. There is nothing to
+configure and no way to wire a door the wrong way round.
+
+**Put the goggles on and the door tells you what it is doing.** A port says *"Hands over as a package"* and
+*"Addressed to: Base North"*; an input says *"Takes packages apart"* and *"Packages opened: 12"*. Two lines are gold,
+because they are the two ways a door goes quiet:
+
+* *"No address — hang a sign on the Packager"*. A box with no address is only ever delivered to a Package Port with no
+  name of its own — or to one named `*`, which Create treats as a catch-all — so a chain conveyor will carry it past
+  every other named one.
+* *"The Packager is linked to a logistics network and ignores redstone"*. A **Stock Link** on the Packager puts it on a
+  network, and from that moment it ignores every pulse and every lever — Create says nothing about it anywhere, and the
+  door simply never opens again. Take the link off and it works. While the link is on, this line stands **instead of**
+  the address line: a linked Packager never reads the sign, so promising you an address there would be a lie.
+
+**What to expect of it.** One box holds up to nine stacks and a door sends about one box a second, so a big order
+leaves as several boxes. A stray item standing in the port rides along in the box. An input opens a package **whole or
+not at all**, so a box of four different items needs **room** for all four stacks at once — a free slot each, or a slot
+already holding that very item with space left. Until it has that, the box waits in the funnel and the input says
+*"Last package refused: stacks in it 4, free slots 1"* — which means wait for the crane, not rebuild the door. A box
+addressed somewhere else is opened anyway: the sign on a door is for the boxes that **leave** it. And a box that
+reaches an input with no Packager behind it is simply stored as an item, one stock row per address.
+
+Two notes if you build with the rest of Create's logistics. A **Frogport** will not pull a box out of the port itself,
+but it will out of the Packager — so sit it on the Packager, or use a funnel or chute. And a storage location you
+dedicated with a **Package Filter** will accept nothing once your door is opening packages, because what the crane
+stores then is iron and planks rather than boxes.
 
 ## Storage filters and priorities
 

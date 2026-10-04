@@ -1988,3 +1988,111 @@ you get tired of waiting, and put it back before judging check 160.
     actually built, not just on the six-wide one the test assumes. Finally, break the warehouse's crane rotation and
     confirm that a freshly placed board says **"Messung läuft"** rather than a number, and keeps saying it until the
     machine has really run a minute.
+
+## AG. Packages at the door (M26, issue #18)
+
+> Almost everything about the mechanism is automated, and unusually so for a feature this new — because almost nothing
+> about the mechanism is new. Both directions worked before M26 with no Wareworks code in the item path, so what the
+> tests hold is that they keep working: the direction lock on both halves (`packagerbehindaportcanneverunpack`,
+> `packagerbehindaninputcanneverpack`), the addressing compared character for character against Create's own rule over
+> six sign shapes and then against a real box (`packagesignaddressmatchescreate`, plus 8 JUnit cases), the Packager
+> found only behind the station (`packagerfoundonlybehindthestation`), a **real** Stock Link stopping a door and the
+> door opening again when it is removed (`packagerlinkedtoanetworkignoresredstone`), both refusals with their exact
+> numbers (`packagearrivalrefusedwhenfull`, `inputrefusesapackageitcannotholdwhole`), the overflow path unchanged
+> (`packagearrivaltakestheoverflow`), a box stored as an ordinary item (`packagestoredasanitem`), persistence
+> (`packagepersistencemidhandover`) and Create's real drop path (`packageentitydroppedcountsasitscontents`) — 19
+> GameTests in all, with an item census that now counts a package as its contents. On screen,
+> `./gradlew runVisualTest -Pwareworks.visualTest=packages` carries 16 iron out of one warehouse as an addressed box,
+> along a belt, into a second warehouse's racks, and reads all seven new goggle rows back off the client block entity
+> line by line, in the five tooltips that hold them — the address, the missing address, the gold `LINKED` dead end, the
+> in door's counter and the refusal — and then switches the client to **German** and re-shoots every one of those
+> seven rows, which is the only place in the
+> build that renders the hand-written `de_de.json`; `-Pwareworks.visualTest=ponder` compiles the new scene against a
+> real `PonderLevel`. What follows is
+> only what a person can judge, and most of it is about **discovery**: the whole milestone exists because a capability
+> was invisible, and whether it is visible now is not a thing a test can answer.
+>
+> One automated gap to know about while you check: **nothing automated reaches the far end of either door.** A
+> Frogport, a Postbox, a chain conveyor, a train and a Create Package Port are all outside the GameTest harness, so
+> checks 193 and 196 are the only evidence that a Wareworks box really travels Create's own logistics the way any
+> other box does.
+
+192. **Would you ever have found the out door — and does the port tell you enough once you have?** Build an ordinary
+    warehouse, put a **warehouse port** on a rack wall with iron in its filter, and then build the out door: a **Create
+    Packager** one block behind the port (place it against the port and it faces itself correctly — check that it
+    does), a plain **sign** on the Packager reading `Base North`, and a **Create Smart Observer** looking at the port
+    with one block of redstone dust onto the Packager. Pulse or lever it if you prefer; the observer is what the Ponder
+    scene teaches, because it keeps the signal up while anything is still in the port and so empties the door by
+    itself. Now put the goggles on and read the port: under its own three settings it should say **"Hands over as a
+    package"** and **"Addressed to: Base North"**. The questions only you can answer: without reading this document,
+    would the **Ponder scene** on the port (hold **W**) have got you to this build — in particular, would you have
+    known that it is the Packager's **back** that has to touch the port, and that this is the only thing deciding
+    whether the door sends or receives? Does the port's own tooltip, with the package lines at the end of six or seven
+    other lines, read as *this block is a package door*, or did they get lost in the list? And does "Hands over as a
+    package" on an **overflow** port (a negative rank, no filter, unwired) read as useful rather than odd — that build
+    is "whatever my warehouse cannot keep leaves my base in boxes", and the lines are shown there on purpose.
+193. **Does a Wareworks box really behave like any other box, out there in Create's logistics?** Nothing automated
+    leaves the Packager, so this is the one check that the feature is actually usable. Take the door from 192 and send
+    its boxes somewhere: a **chute** or a **funnel** into a **Frogport**, a **Postbox**, a **chain conveyor** to a
+    **Package Port** named `Base North` at the other end of your base, and — if you have the rails — a **train** with
+    a delivery schedule. Then do the same in reverse into a second warehouse's **in door** (a Packager against a
+    **warehouse input**). Three things to watch for specifically. **A Frogport will not pull a box out of the port
+    itself** but will out of the Packager — Create exempts its own Packager from the address filter it applies to
+    every other inventory, and a Frogport only ever looks at its own inventory and the block **directly below** it, so
+    sitting it on the Packager is the build that works. Does that read as reasonable when you hit it, or as a bug?
+    **Rename the sign** while boxes are in flight and check that the next box carries the new address and the ones
+    already travelling keep the old one. And **take the sign off entirely**: the port's line turns gold, and the box
+    that then goes out is unaddressed — which, in Create's own matching, can only ever be delivered to a Package Port
+    that has **no name of its own**, or to one named `*`, which matches everything; a chain conveyor carries it past
+    every other named one. If you have a `*` catch-all port anywhere, that is where the box will land. Build exactly
+    that and
+    confirm you can see where the box ends up, because an unaddressed box going round for ever is the most confusing
+    thing this feature can do to you.
+194. **Is the gold `LINKED` line the rescue it is meant to be?** This is the failure the milestone exists for. With the
+    door from 192 working, put a **Stock Link** on the Packager — for any reason, which is the point: a player does it
+    to put the Packager on a logistics network, not to break the door. Everything stops: no pulse, no lever and no
+    observer will send another box, and Create itself says nothing anywhere. Now look at the port through goggles:
+    **"The Packager is linked to a logistics network and ignores redstone"**, in gold. The questions: standing there
+    confused, would you have looked at the **port** rather than at the Packager, the observer or the wiring? (The line
+    is on the port because that is the Wareworks block, and nothing can be added to Create's Packager tooltip from
+    here.) Is one gold line enough, or did you want it louder? And note the timing: the line can appear up to **half a
+    second** after you place the link, because Create only rechecks the link in its lazy tick — which also means it
+    can lag the same amount after you take it off again. Is that noticeable enough to annoy you? Then break the link
+    and confirm the same door opens on the next signal with nothing else touched.
+195. **Do the seven lines fit and read, at the GUI scale and window you actually play at?** All seven rows of both
+    doors are measured against a budget of 81 characters, which is the room a goggle tooltip has at the visual run's
+    1600x900 window at GUI scale 3 (534 scaled px less the 24 px Create's placement keeps, the 510 px the `comb` run
+    prints for itself); a goggle line is **never
+    wrapped**, so an over-long one is drawn past the edge of its own box. The German `LINKED` row is the long one, 73
+    characters or roughly 438 px, so it needs about 460 scaled px. **1920x1080 at GUI scale 4 gives 480 − 24 = 456 px,
+    so it only just fits there** — while a smaller window at the same scale (1600 wide gives 376 px) clips it plainly.
+    Please look at both, because a number this close is a person's judgement: set the GUI scale to 4, read the rows
+    full screen, then again in a window about two thirds as wide. The German text itself is now shot by the `packages`
+    visual scenario, so this check is about the **fit**, not about the words. Switch the game to **German**, set the
+    GUI scale to 4, and read the port (`Übergibt als Paket`, `Adressiert an: Base North`, `Keine
+    Adresse — hänge ein Schild an den Verpacker`, `Der Verpacker ist mit einem Logistiknetz verbunden und ignoriert
+    Redstone`) and the input (`Nimmt Pakete auseinander`, `Geöffnete Pakete: 12`, `Letztes Paket abgelehnt: Stapel
+    darin 3, freie Plätze 1`). Note that the port shows `Adressiert an: …` **or** the `LINKED` row, never both: take
+    the Stock Link off to see the address again. Is the long German `LINKED` row cut off, and if it is, is it still readable enough to
+    do its job? Then write a sign with a **very long** address — more than 25 characters — and check that the port
+    shows it cut with an **ellipsis** rather than silently shortened: a shortened address you cannot tell from a whole
+    one is a thing you would compare against a Package Port filter and get wrong. And read the **Ponder scene** in
+    German from beginning to end: twelve beats, and the only check on them is that they compile.
+196. **Does the in door's pair of numbers tell you what to do?** Build an in door (a Packager against a **warehouse
+    input**), feed it boxes with a belt funnel, and read the input through goggles while it works: **"Takes packages
+    apart"** and **"Packages opened: 12"**. Then make it fail the way it really fails: fill the input's buffer by
+    hand, or stop the crane, so that only one or two slots are free, and send in a box holding three or four different
+    items. Create opens a package **whole or not at all**, so the box is refused and simply waits in the funnel, and
+    the input now says **"Last package refused: stacks in it 3, free slots 1"** in gold. The questions: does that
+    sentence tell you to **wait for the crane** rather than to rebuild the door? Do the two numbers read the way they
+    are meant to — the first is what the **box** brought (three kinds of item, so three stacks) and the second what the
+    buffer had free, so the line says "it needs three at once and there is one". Both counts come after their words on
+    purpose, because `1 Plätze frei` would be wrong German; does `stacks in it 3` read as stilted to you? And note the
+    one case the pair does not explain on its own: a stack also merges into a slot that already holds that very item,
+    so a package can be accepted when the free-slot count alone looks too small — put iron in the buffer by hand, leave
+    one slot free, and send in a box of iron and gold. Then notice two deliberate things and say whether either bothers you. **"Packages
+    opened" counts since the chunk was loaded**, not since you built the door, so it resets when you come back to your
+    base — it is a diagnosis, not a statistic, and making it permanent would mean writing to the save. And if your
+    server has `inputBufferSlots` set **below** 9, say 1 or 2, every multi-type package is refused **for ever** and
+    that gold line will never go away; nothing is lost, the boxes queue up outside, but is "correct and permanently
+    stuck" something the line should say differently?

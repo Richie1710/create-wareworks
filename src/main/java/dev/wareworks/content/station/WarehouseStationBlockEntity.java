@@ -147,7 +147,7 @@ public abstract class WarehouseStationBlockEntity extends SmartBlockEntity
     protected StationGoggleSummary createSummary() {
         return new StationGoggleSummary(WarehouseRegistry.assignmentOf(level, worldPosition, this),
                 ItemTypeSummaries.of(buffer.snapshot(), GOGGLE_TOP_ENTRIES), 0, 0L, 0L, Optional.empty(), 0L, false,
-                PortCollectSummary.NONE);
+                PortCollectSummary.NONE, PackageUnpackSummary.NONE);
     }
 
     /** Relative lang key of the goggle header, e.g. "Warehouse Input:". */

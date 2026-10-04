@@ -14,12 +14,14 @@ import dev.wareworks.core.inventory.InventorySummary;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.port.PackagerSignAddress;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.NetworkStop;
 import net.createmod.catnip.lang.LangBuilder;
 import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.item.Item;
@@ -481,6 +483,60 @@ public final class WareworksLang {
      * planning reason, on the block a player is pointing at (M18 review). The argument is a {@code NoJobReason} text.
      */
     public static final String GOGGLES_PORT_COLLECT_REFUSED = "gui.goggles.port_collect_refused";
+    /**
+     * {@code "Hands over as a package"}: a Create Packager's back touches this port, so what the warehouse puts in the
+     * buffer leaves as an addressed package (M26, issue #18).
+     * <p>
+     * Nothing about it is configured on the port — the direction is the geometry of the build ({@code PackageHandover},
+     * ADR-040) — so this line exists to make an accidental-looking capability readable.
+     */
+    public static final String GOGGLES_PORT_PACKAGE_HANDOVER = "gui.goggles.port_package_handover";
+    /**
+     * {@code "Addressed to: %1$s"}: what the signs on that Packager spell, i.e. the address the <b>next box the door
+     * sends</b> will carry (M26). Cut to {@link PackagerSignAddress#DISPLAY_LENGTH} characters with an ellipsis if it
+     * is longer, since a goggle line is never wrapped.
+     * <p>
+     * Drawn only while the Packager still answers redstone: Create applies a sign on one branch
+     * ({@code PackagerBlockEntity:516-517}) that a {@code LINKED} Packager never reaches, so there the
+     * {@link #GOGGLES_PORT_PACKAGER_LINKED} row stands in this one's place rather than beside it
+     * ({@code WarehouseOutputBlockEntity#addPackageLines}).
+     */
+    public static final String GOGGLES_PORT_PACKAGE_ADDRESS = "gui.goggles.port_package_address";
+    /**
+     * {@code "No address — hang a sign on the Packager"}: the Packager has no sign, so its boxes go out unaddressed,
+     * and an unaddressed box is only ever delivered to a Package Port that has no name of its own — or one named
+     * {@code *} (M26). Gold, because it is a build that looks finished. Like the address row it is left out while the
+     * Packager is {@code LINKED}, where hanging a sign would provably change nothing.
+     */
+    public static final String GOGGLES_PORT_PACKAGE_NO_ADDRESS = "gui.goggles.port_package_no_address";
+    /**
+     * {@code "The Packager is linked to a logistics network and ignores redstone"} — the one failure of a package door
+     * that <b>nothing else in the game diagnoses</b> (M26, issue #18).
+     * <p>
+     * A Stock Link on the Packager flips its {@code LINKED} state, {@code redstoneModeActive()} is {@code !LINKED}, and
+     * from then on every pulse and every lever is silently ignored with no feedback on any block
+     * ({@code PackageHandover#ignoresRedstone}). Gold, and not optional: without it a door simply stops for ever. It
+     * <b>replaces</b> the two address rows, which only describe the redstone channel.
+     */
+    public static final String GOGGLES_PORT_PACKAGER_LINKED = "gui.goggles.port_packager_linked";
+    /**
+     * {@code "Takes packages apart"}: a warehouse input a Create Packager's back touches, i.e. an in door for
+     * addressed packages (M26, issue #18). The whole handover works without a line of Wareworks code in the item path,
+     * so this line is the only thing in the game that says the build is a feature and not a coincidence.
+     */
+    public static final String GOGGLES_INPUT_PACKAGE_UNPACKING = "gui.goggles.input_package_unpacking";
+    /** {@code "Packages opened: %1$s"}: packages taken apart at this input since it was loaded (M26). */
+    public static final String GOGGLES_INPUT_PACKAGES_OPENED = "gui.goggles.input_packages_opened";
+    /**
+     * {@code "Last package refused: stacks in it %1$s, free slots %2$s"}: the one failure nothing else in the game
+     * diagnoses (M26, issue #18). Create consumes a package <b>whole</b> or not at all, so a package with more stacks
+     * than the input buffer has room for sits in the funnel for ever and no block says a word.
+     * <p>
+     * Both numbers come <b>last</b> in their phrase, the shape {@code gui.keeper.paused_lost} already uses: 1 is an
+     * ordinary value for either of them, and a count in front of a hard-coded plural would be wrong in German at that
+     * value and read badly in English.
+     */
+    public static final String GOGGLES_INPUT_PACKAGE_REFUSED = "gui.goggles.input_package_refused";
     /** {@code "Status: %1$s"}: the phase of a stacker crane. */
     public static final String GOGGLES_CRANE_STATUS = "gui.goggles.crane_status";
     /** Prefix of the crane phase texts, {@code gui.goggles.crane_phase.<phase>} ({@link #cranePhaseKey}). */
@@ -1365,6 +1421,38 @@ public final class WareworksLang {
     public static LangBuilder pendingRequests(long items, int requests) {
         return translate(GOGGLES_PENDING_REQUESTS, number(items).style(ChatFormatting.GOLD),
                 number(requests).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Addressed to: Base North" — the address the next box a port hands over will carry (M26, issue #18), with the
+     * address itself picked out in white.
+     * <p>
+     * The address is <b>text from the world</b>, so it is the one argument of a goggle line that no bound of ours has
+     * ever passed through: a sign carries four lines on each of two faces, and all of them joined would be drawn past
+     * the edge of the screen, because a goggle line is never wrapped
+     * ({@code CombVisualScenario#checkAisleListWidth} measures the room one really has). It is therefore cut to
+     * {@link PackagerSignAddress#DISPLAY_LENGTH} characters and the cut is <b>marked</b>, so a player never reads a
+     * shortened address as the whole one.
+     */
+    public static LangBuilder packageAddress(String address) {
+        LangBuilder shown = builder().text(PackagerSignAddress.shorten(address));
+        if (PackagerSignAddress.wouldShorten(address))
+            shown.add(CommonComponents.ELLIPSIS);
+        return translate(GOGGLES_PORT_PACKAGE_ADDRESS, shown.style(ChatFormatting.WHITE))
+                .style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Last package refused: stacks in it 3, free slots 1" — the all-or-nothing cliff of a Create package at a
+     * warehouse input (M26, issue #18). Gold like every other refusal, with both numbers picked out in white.
+     * <p>
+     * The first number is what the <b>package</b> brought, not what Create's greedy simulate pass had left over, so
+     * that the two can be read side by side: 3 stacks needed at once against 1 slot free is an explanation, while "2
+     * found no room" beside "1 slot free" is a riddle ({@code PackageUnpackSummary}).
+     */
+    public static LangBuilder packageRefused(long packageStacks, long freeSlots) {
+        return translate(GOGGLES_INPUT_PACKAGE_REFUSED, number(packageStacks).style(ChatFormatting.WHITE),
+                number(freeSlots).style(ChatFormatting.WHITE)).style(ChatFormatting.GOLD);
     }
 
     /** "Last request refused: reason" for a reason key relative to the {@code wareworks} namespace. */

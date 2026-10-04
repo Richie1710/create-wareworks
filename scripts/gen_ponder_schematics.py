@@ -67,6 +67,7 @@ TEMPLATES = {
     "warehouse/port_requesting": (9, 7, 9),
     "warehouse/port_accepting": (9, 7, 9),
     "warehouse/port_collecting": (9, 7, 9),
+    "warehouse/packages_at_the_door": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

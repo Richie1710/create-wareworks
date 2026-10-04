@@ -258,6 +258,73 @@ class LangConsistencyTest {
     }
 
     /**
+     * The goggle rows of a package door — <b>both</b> doors, all seven — fit a goggle tooltip <b>in both
+     * languages</b>, with the longest address a row can draw already in them (M26, issue #18).
+     * <p>
+     * A goggle line is <b>never wrapped</b>: Create's overlay passes {@code maxTextWidth = -1}, so an over-long row is
+     * drawn past the edge of the box — and because the box is placed at
+     * {@code min(width / 2 + offset, width - tooltipTextWidth - 20)} and then clamped to 4, one long row drags the
+     * whole tooltip to the screen edge and is cut there. {@code CombVisualScenario#checkAisleListWidth} measures the
+     * room one really has: the scaled screen width less 24 px, i.e. {@value #GOGGLE_ROW_PIXELS} px in the 1600x900
+     * window every visual run uses (GUI scale auto is 3 there), less the {@value #GOGGLE_INDENT_PIXELS} px of indent a
+     * detail row spends ({@code LangBuilder#forGoggles} writes {@code 4 + indents} spaces of 4 px).
+     * <p>
+     * Characters are a crude stand-in for pixels — this suite runs without Minecraft, so it has no font — but a
+     * conservative {@value #GOGGLE_PIXELS_PER_CHARACTER} px per character is the advance of a plain lowercase glyph in
+     * the default font, which is what these rows are made of. German is where a row runs out of room first, and the
+     * row this bound is really about is the {@code LINKED} warning: at 73 characters it is the widest of the seven,
+     * and the one row a player must be able to read whole, because nothing else in the game diagnoses that failure.
+     * <p>
+     * <b>The budget is stricter than what the mod already ships</b>, deliberately: the widest existing goggle row is
+     * about 107 characters — a German {@code no_job_reason.port_full} drawn inside {@code gui.goggles.last_plan} — so
+     * it was applied to these new rows only rather than retro-fitted ({@code docs/warehouse-system.md} §3.2.5).
+     */
+    @Test
+    void thePackageDoorRowsFitAGoggleTooltip() throws IOException {
+        int budget = (GOGGLE_ROW_PIXELS - GOGGLE_INDENT_PIXELS) / GOGGLE_PIXELS_PER_CHARACTER;
+        for (Map.Entry<String, Path> lang : Map.of("en_us", GENERATED_EN_US, "de_de", HAND_WRITTEN_DE_DE).entrySet()) {
+            Map<String, String> texts = readFlatJson(lang.getValue());
+            for (String relativeKey : WareworksLangKeys.PACKAGE_DOOR_GOGGLE_KEYS) {
+                String key = "wareworks." + relativeKey;
+                String text = texts.get(key);
+                assertTrue(text != null, lang.getKey() + " has no text for " + key);
+                // The widest each row can get: the address row draws the longest address a surface shows plus the
+                // mark of the cut, and every other argument of these rows is a count.
+                String first = relativeKey.equals(WareworksLangKeys.PACKAGE_ADDRESS_KEY)
+                        ? "W".repeat(PACKAGE_ADDRESS_CHARS) + "..." : GOGGLE_COUNT_ARGUMENT;
+                String filled = text.replace("%1$s", first).replace("%2$s", GOGGLE_COUNT_ARGUMENT);
+                assertTrue(filled.length() <= budget, lang.getKey() + ": " + key + " needs " + filled.length()
+                        + " of the " + budget + " characters a goggle row holds: '" + filled + "'");
+            }
+        }
+    }
+
+    /**
+     * Room a goggle tooltip has in the window every visual run uses, in scaled pixels: 1600x900 at GUI scale auto is a
+     * scaled width of <b>534</b>, and Create's placement leaves 24 px of it unusable
+     * ({@code CombVisualScenario#TOOLTIP_SIDE_SPACE}).
+     * <p>
+     * The number is the one the game itself reports rather than one computed here: {@code checkAisleListWidth} asks
+     * {@code Window#getGuiScaledWidth()} and prints "the 510 px a goggle tooltip has" in every {@code comb} run, so
+     * this constant and that scenario's measurement are the same number and cannot drift apart unnoticed.
+     */
+    private static final int GOGGLE_ROW_PIXELS = 510;
+    /** Indent of a detail row: {@code forGoggles(tooltip, 2)} writes six spaces of 4 px each. */
+    private static final int GOGGLE_INDENT_PIXELS = 24;
+    /** Advance of a plain lowercase glyph in the default font, the conservative stand-in for measuring one. */
+    private static final int GOGGLE_PIXELS_PER_CHARACTER = 6;
+    /**
+     * Characters of a sign address a row draws, {@code PackagerSignAddress.DISPLAY_LENGTH}. Spelled out rather than
+     * imported for the reason the nested class below gives.
+     */
+    private static final int PACKAGE_ADDRESS_CHARS = 25;
+    /**
+     * Stand-in for a counted argument of a package-door row: six digits is far past what any of them can reach (the
+     * stacks of a package, the free slots of a buffer, the packages one input opened since it was loaded).
+     */
+    private static final String GOGGLE_COUNT_ARGUMENT = "999999";
+
+    /**
      * The keys of the tests above, spelled out here rather than read from {@code WareworksLang}: this test suite runs
      * without Minecraft, and that class pulls in {@code Component}.
      */
@@ -272,6 +339,17 @@ class LangConsistencyTest {
                 "display_source.throughput.line_items", "display_source.throughput.line_busy",
                 "display_source.throughput.line_turning", "display_source.throughput.measuring",
                 "display_source.throughput.no_crane");
+        /** The address row, the only one of the seven below whose argument is text from the world rather than a count. */
+        private static final String PACKAGE_ADDRESS_KEY = "gui.goggles.port_package_address";
+        /**
+         * Every goggle row a package handover adds, at <b>either</b> door (M26, issue #18): four at the out door on a
+         * warehouse port, three at the in door on a warehouse input. The in door's refusal row is the only one with
+         * two arguments, and it is the longest of its three.
+         */
+        private static final List<String> PACKAGE_DOOR_GOGGLE_KEYS = List.of("gui.goggles.port_package_handover",
+                PACKAGE_ADDRESS_KEY, "gui.goggles.port_package_no_address", "gui.goggles.port_packager_linked",
+                "gui.goggles.input_package_unpacking", "gui.goggles.input_packages_opened",
+                "gui.goggles.input_package_refused");
 
         private WareworksLangKeys() {
         }

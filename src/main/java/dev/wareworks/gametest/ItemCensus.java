@@ -4,7 +4,11 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
 
+import com.simibubi.create.AllDataComponents;
+import com.simibubi.create.AllEntityTypes;
 import com.simibubi.create.content.kinetics.mechanicalArm.ArmBlockEntity;
+import com.simibubi.create.content.logistics.box.PackageEntity;
+import com.simibubi.create.content.logistics.box.PackageItem;
 
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
@@ -18,6 +22,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -35,6 +40,14 @@ import net.neoforged.neoforge.items.IItemHandler;
  * ({@link MechanicalArmFixture#heldItem}), everything else through {@code Capabilities.ItemHandler.BLOCK} — where the
  * second half of a <b>double</b> chest is skipped, because both halves answer the same handler — but only while the half
  * that is counted lies inside the bounds itself ({@link #isSecondChestHalf}).
+ * <p>
+ * <b>A Create package counts as its contents and the box itself counts as nothing</b> (M26), wherever it turns up — in
+ * an inventory, in a station buffer, on a handling head, in an arm's claw, or lying in the world as a
+ * {@link PackageEntity}, which is a {@code LivingEntity} and therefore invisible to the item-entity sweep. That is the
+ * only rule under which packing and unpacking conserve items: a Packager builds the box out of nothing and destroys it
+ * again on the way in, so counting the box would report 64 iron vanishing into one {@code create:package}. The
+ * expectation builders ({@link #of}, {@link #change}) apply the same rule, so a test states what it fed in the terms it
+ * fed it and the census agrees. See {@link #add(Map, ItemStack, long)}.
  * <p>
  * A census reads every block position of the test bounds once, which is fine for tests (a few thousand lookups).
  */
@@ -79,6 +92,11 @@ final class ItemCensus {
         }
         for (ItemEntity entity : helper.getEntities(EntityType.ITEM))
             add(counts, entity.getItem());
+        // A package lying in the world is never an ItemEntity: NeoForge swaps it for a PackageEntity, a LivingEntity
+        // the sweep above cannot see (Item#hasCustomEntity, NeoForgeEventHandler#onEntityJoinWorld). That swap is
+        // deferred by one server task, so a test that drops a package must let a tick pass before it counts again.
+        for (PackageEntity entity : helper.getEntities(AllEntityTypes.PACKAGE.get()))
+            add(counts, entity.getBox());
         return counts;
     }
 
@@ -104,7 +122,10 @@ final class ItemCensus {
                     + describe(actual));
     }
 
-    /** A mutable expectation map from key/count pairs ({@code ItemKey, Number, ItemKey, Number, ...}). */
+    /**
+     * A mutable expectation map from key/count pairs ({@code ItemKey, Number, ItemKey, Number, ...}). A package key
+     * contributes its contents, exactly as the census counts it.
+     */
     static Map<ItemKey, Long> of(Object... keyCounts) {
         Map<ItemKey, Long> expected = new HashMap<>();
         for (int i = 0; i + 1 < keyCounts.length; i += 2)
@@ -112,17 +133,54 @@ final class ItemCensus {
         return expected;
     }
 
-    /** Adds {@code delta} (may be negative) to {@code key} in an expectation map, dropping zero counts. */
+    /**
+     * Adds {@code delta} (may be negative) to {@code key} in an expectation map, dropping zero counts. A package key
+     * again contributes its contents, so feeding one box of 64 iron changes the expectation by 64 iron.
+     */
     static void change(Map<ItemKey, Long> expected, ItemKey key, long delta) {
         add(expected, key, delta);
     }
 
     private static void add(Map<ItemKey, Long> counts, ItemStack stack) {
-        if (!stack.isEmpty())
-            add(counts, ItemKey.of(stack), stack.getCount());
+        add(counts, stack, stack.getCount());
     }
 
+    /**
+     * Counts {@code copies} items of {@code stack}'s identity — or, when it is a Create package, the contents of
+     * {@code copies} such boxes, because the box counts as nothing. {@code copies} may be negative (an expectation
+     * being reduced).
+     * <p>
+     * The contents are read from the {@code create:package_contents} component, <b>never</b> through
+     * {@link PackageItem#getContents}: that fills a fixed nine-slot {@code ItemStackHandler} from every slot the
+     * component declares ({@code ItemHelper.fillItemStackHandler}), the component permits 256
+     * ({@code ItemContainerContents.MAX_SIZE}), and {@code ItemStackHandler.setStackInSlot} throws out of range. A
+     * crafted package with ten slots would make the census crash the run instead of reporting on it.
+     * <p>
+     * A package inside a package is counted the same way. The recursion always terminates: a data component is an
+     * immutable value and cannot contain itself, and its depth is bounded by what NBT would accept.
+     */
+    private static void add(Map<ItemKey, Long> counts, ItemStack stack, long copies) {
+        if (stack.isEmpty() || copies == 0)
+            return;
+        if (!PackageItem.isPackage(stack)) {
+            put(counts, ItemKey.of(stack), copies);
+            return;
+        }
+        stack.getOrDefault(AllDataComponents.PACKAGE_CONTENTS, ItemContainerContents.EMPTY)
+                .nonEmptyStream()
+                .forEach(held -> add(counts, held, copies * held.getCount()));
+    }
+
+    /** Counts {@code amount} items of {@code key}, a package again as its contents. */
     private static void add(Map<ItemKey, Long> counts, ItemKey key, long amount) {
+        if (key.getItem() instanceof PackageItem) {
+            add(counts, key.toStack(), amount);
+            return;
+        }
+        put(counts, key, amount);
+    }
+
+    private static void put(Map<ItemKey, Long> counts, ItemKey key, long amount) {
         long value = counts.getOrDefault(key, 0L) + amount;
         if (value == 0)
             counts.remove(key);

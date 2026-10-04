@@ -567,6 +567,10 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
      * entity's client packet) and the signal by the block state, so none of those needs a goggle summary field. The
      * <b>pulse token</b> does: it is a server field that no client packet carries, so it is read from {@code shown}
      * ({@link StationGoggleSummary#portArmed()}) and never from {@link #armed}, which on a client is always false.
+     * <p>
+     * Last of all, and only when a player built one, what a Create Packager behind the port makes of it
+     * ({@link #addPackageLines}, M26) — the one group of lines that is read out of the world rather than out of the
+     * port's own state.
      */
     @Override
     protected void addStationGoggleLines(List<Component> tooltip, StationGoggleSummary shown) {
@@ -586,6 +590,78 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
             WareworksLang.translate(settings.gateOpen(isPowered(), shown.portArmed())
                             ? WareworksLang.GOGGLES_PORT_ACTIVE : WareworksLang.GOGGLES_PORT_WAITING)
                     .style(ChatFormatting.DARK_GRAY).forGoggles(tooltip, 2);
+        addPackageLines(tooltip, settings);
+    }
+
+    /**
+     * Client: what a Create <b>Packager</b> behind this port makes of it ({@code docs/warehouse-system.md} §3.2.5, M26,
+     * issue #18) — that the goods leave as an addressed package, which address the next box the door sends will carry,
+     * and the one failure of such a door that nothing else in the game diagnoses.
+     * <p>
+     * <b>Why the port says it at all.</b> Not one line of Wareworks code is in that item path: a Packager whose back
+     * touches a port can only pack, because the port's capability is extract-only on every side, and the address is the
+     * vanilla sign Create itself reads (ADR-040). The capability is therefore real and completely invisible — no
+     * tooltip, no block, nothing — until these lines. They cost <b>no sync</b>: a goggle tooltip is built on the
+     * client, and the client already has the Packager's state and the signs ({@link PackageHandover}).
+     * <p>
+     * <b>Why not for a collecting port.</b> A collecting port's buffer stays unused on purpose — the crane reaches
+     * <b>through</b> it into the inventory behind it ({@link #attachedPos()}) — so a Packager there would pack nothing
+     * but the odd leftover of an earlier direction, and "hands over as a package" would be a promise about an empty
+     * buffer. A requesting port (the out door of the design) and an accepting one (an overflow that leaves as packages)
+     * both really do hand their buffer over, so both say so.
+     * <p>
+     * <b>Why a linked Packager is told about instead of addressed.</b> The sign is read on exactly one branch of
+     * Create's code, {@code if (!requestQueue && !signBasedAddress.isBlank())}
+     * ({@code PackagerBlockEntity#attemptToSend:516-517}), and a {@code LINKED} Packager can never reach it: its two
+     * redstone callers return at {@code !redstoneModeActive()} before {@code updateSignAddress()} and
+     * {@code attemptToSend(null)} ({@code lazyTick:290-293}, {@code activate:352-356}), and the only other caller,
+     * {@code LogisticsManager#performPackageRequests:212}, always passes a non-null request list, so
+     * {@code requestQueue} is true and the box carries the <b>network order's</b> address instead. So while the link is
+     * on, the sign row would predict an address no box will carry and the "hang a sign" row would ask for a block that
+     * provably changes nothing — the gold line stands in their place, and the address returns with the next signal the
+     * door answers.
+     */
+    private void addPackageLines(List<Component> tooltip, PortSettings settings) {
+        if (level == null || settings.direction() == PortDirection.COLLECT)
+            return;
+        if (PackageHandover.packagerFor(level, worldPosition).isEmpty())
+            return;
+        WareworksLang.translate(WareworksLang.GOGGLES_PORT_PACKAGE_HANDOVER).forGoggles(tooltip, 1);
+        Optional<String> address = packageAddressShown();
+        // The line this whole step exists for: a Stock Link on the Packager turns every pulse and every lever into
+        // nothing at all, for ever, and no block in the game says a word about it. It replaces the address rows rather
+        // than following them, because a linked Packager never applies a sign (see above).
+        if (address.isEmpty())
+            WareworksLang.translate(WareworksLang.GOGGLES_PORT_PACKAGER_LINKED).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
+        else if (address.get().isEmpty())
+            // Gold: the build looks finished, and an unaddressed box is only ever delivered to a Package Port that has
+            // no name of its own, or one named "*".
+            WareworksLang.translate(WareworksLang.GOGGLES_PORT_PACKAGE_NO_ADDRESS).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
+        else
+            WareworksLang.packageAddress(address.get()).forGoggles(tooltip, 2);
+    }
+
+    /**
+     * Whether this port's goggles name an address at all, and which — the decision {@link #addPackageLines} draws, as
+     * a value a test can read.
+     * <p>
+     * It is a method of its own because a goggle tooltip cannot be built outside a client: {@code LangBuilder#forGoggles}
+     * loads {@code Minecraft} for the indent, which a dedicated server refuses. So a GameTest asserts this instead,
+     * which is the same decision and not a second copy of it.
+     *
+     * @return empty when no address row is drawn — no Packager stands there, this is a collecting port, or the
+     *         Packager is {@code LINKED} and will never apply a sign, so the gold warning stands in their place;
+     *         otherwise the address, which is the empty string for the gold "No address" row
+     */
+    public Optional<String> packageAddressShown() {
+        if (level == null || portDirection() == PortDirection.COLLECT)
+            return Optional.empty();
+        Optional<BlockPos> packager = PackageHandover.packagerFor(level, worldPosition);
+        if (packager.isEmpty() || PackageHandover.ignoresRedstone(level, packager.get()))
+            return Optional.empty();
+        return Optional.of(PackageHandover.addressAt(level, packager.get()));
     }
 
     /**

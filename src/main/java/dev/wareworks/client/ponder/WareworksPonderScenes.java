@@ -6,6 +6,7 @@ import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.client.ponder.scenes.CraneScenes;
 import dev.wareworks.client.ponder.scenes.NetworkScenes;
+import dev.wareworks.client.ponder.scenes.PackageScenes;
 import dev.wareworks.client.ponder.scenes.PortScenes;
 import dev.wareworks.client.ponder.scenes.ProductionScenes;
 import dev.wareworks.client.ponder.scenes.StockRuleScenes;
@@ -39,9 +40,9 @@ import net.minecraft.resources.ResourceLocation;
  *       warehouse/junction</td></tr>
  *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
- *   <tr><td>warehouse_input</td><td>warehouse/storing</td></tr>
+ *   <tr><td>warehouse_input</td><td>warehouse/storing, warehouse/packages_at_the_door</td></tr>
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting,
- *       warehouse/port_collecting</td></tr>
+ *       warehouse/port_collecting, warehouse/packages_at_the_door</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting,
  *       warehouse/production_chain</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
@@ -140,5 +141,13 @@ public final class WareworksPonderScenes {
         scenes.forComponents(WareworksBlocks.WAREHOUSE_RAIL, WareworksBlocks.STACKER_CRANE)
                 .addStoryBoard("warehouse/junction", NetworkScenes::junction,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
+
+        // Packages at a door (M26, issue #18, ADR-040), and last for the same reason as every scene above: a player
+        // meets "a port hands items out" and "an input takes items in" first, and "and a Create Packager can box them
+        // on the way" after. It belongs to <b>both</b> doors — the build is the same block on either side of the
+        // warehouse, and which station its back touches is the whole lesson — so a player who met one finds the other.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT, WareworksBlocks.WAREHOUSE_INPUT)
+                .addStoryBoard("warehouse/packages_at_the_door", PackageScenes::packagesAtTheDoor,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

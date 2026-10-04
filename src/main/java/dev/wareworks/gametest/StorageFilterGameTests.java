@@ -670,9 +670,18 @@ public final class StorageFilterGameTests {
         return filter;
     }
 
-    /** A Create package addressed to {@code address} (the default box style, so the test is deterministic). */
+    /**
+     * A Create package addressed to {@code address} (the default box style, so the test is deterministic), holding one
+     * iron ingot.
+     * <p>
+     * The contents are irrelevant to the filter, which matches on the address alone, but they are what the conservation
+     * census tracks: since M26 a package counts as its contents and the box as nothing, so an empty box would ride
+     * through the warehouse untracked. The iron inside is counted at every moment, in the input buffer, on the handling
+     * head and in the chest.
+     */
     private static ItemStack addressedPackage(String address) {
         ItemStack box = PackageStyles.getDefaultBox();
+        box.set(AllDataComponents.PACKAGE_CONTENTS, ItemContainerContents.fromItems(List.of(IRON.toStack())));
         PackageItem.addAddress(box, address);
         return box;
     }

@@ -23,6 +23,7 @@ import dev.wareworks.registry.WareworksCapabilities;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import dev.wareworks.registry.WareworksDisplaySources;
 import dev.wareworks.registry.WareworksMenuTypes;
+import dev.wareworks.registry.WareworksUnpackingHandlers;
 import dev.wareworks.util.GoggleObservers;
 import net.createmod.catnip.lang.FontHelper;
 import net.minecraft.resources.ResourceLocation;
@@ -77,6 +78,10 @@ public final class Wareworks {
         // Per-player state that belongs to the player and not to a block: the terminal's chosen order and request
         // counts (M24, issue #17, ADR-037). It references no block, so its place in this order does not matter.
         WareworksAttachments.register(modEventBus);
+        // M26: what happens when a Create Packager takes a package apart into a warehouse input. Keyed by the block
+        // object, so it can only be registered once the registry event has bound our blocks: this adds the common
+        // setup listener that does it, exactly as Create registers its own three handlers.
+        WareworksUnpackingHandlers.register(modEventBus);
 
         modEventBus.addListener(WareworksCapabilities::register);
         modEventBus.addListener(WareworksNetwork::register);

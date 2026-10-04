@@ -78,10 +78,12 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("rail", WareworksBlocks.WAREHOUSE_RAIL, 3),
             new Subject("controller", WareworksBlocks.WAREHOUSE_CONTROLLER, 2),
             new Subject("interface", WareworksBlocks.WAREHOUSE_INTERFACE, 3),
-            new Subject("input", WareworksBlocks.WAREHOUSE_INPUT, 1),
+            // M26 (issue #18) adds the package door, which both stations show: it is the same Packager on either side
+            // of the warehouse, and which station its back touches is what decides the direction.
+            new Subject("input", WareworksBlocks.WAREHOUSE_INPUT, 2),
             // M17: retrieving, plus the two port scenes (the second of which the keeper shows as well). M18 adds the
-            // third direction, which the production station shows as well.
-            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 4),
+            // third direction, which the production station shows as well, and M26 the package door.
+            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 5),
             // M20 (issue #4) adds the chain, which both of these blocks show: the plan is made by a click at a
             // terminal and run at the stations.
             new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 3),

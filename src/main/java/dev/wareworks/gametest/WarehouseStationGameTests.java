@@ -1029,7 +1029,7 @@ public final class WarehouseStationGameTests {
                 .withAisleName(Optional.of(LONGEST_AISLE_NAME));
         return new StationGoggleSummary(widest, summary.buffer(), summary.openRequests(), summary.requestedItems(),
                 summary.deliveredItems(), summary.lastRejection(), summary.exportedItems(), summary.portArmed(),
-                summary.collect());
+                summary.collect(), summary.packages());
     }
 
     /** Dock, rails, controller, a chest with diamonds behind an interface, aligned and misaligned stations. */
