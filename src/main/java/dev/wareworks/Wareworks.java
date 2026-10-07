@@ -13,6 +13,7 @@ import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.crane.CraneServerHooks;
 import dev.wareworks.content.station.ProductionStationHooks;
+import dev.wareworks.content.storage.RackBayGestures;
 import dev.wareworks.data.WareworksDatagen;
 import dev.wareworks.network.WareworksNetwork;
 import dev.wareworks.registry.WareworksArmInteractionPoints;
@@ -22,6 +23,7 @@ import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCapabilities;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import dev.wareworks.registry.WareworksDisplaySources;
+import dev.wareworks.registry.WareworksEntityTypes;
 import dev.wareworks.registry.WareworksMenuTypes;
 import dev.wareworks.registry.WareworksUnpackingHandlers;
 import dev.wareworks.util.GoggleObservers;
@@ -73,6 +75,8 @@ public final class Wareworks {
         WareworksDisplaySources.register();
         WareworksBlocks.register();
         WareworksBlockEntityTypes.register();
+        // M28: the pallet, the mod's one entity. It references no block, so its place in this order does not matter.
+        WareworksEntityTypes.register();
         WareworksMenuTypes.register();
         WareworksArmInteractionPoints.register(modEventBus);
         // Per-player state that belongs to the player and not to a block: the terminal's chosen order and request
@@ -95,6 +99,9 @@ public final class Wareworks {
         // M20: the production station's sneak-click resume, which vanilla would otherwise swallow whenever the player
         // carries anything in the offhand (ProductionStationHooks).
         ProductionStationHooks.register(NeoForge.EVENT_BUS);
+        // M28: the rack bay's Shift gesture, which vanilla would otherwise never hand to the block at all — a
+        // sneaking interaction is dropped before the block whenever a hand holds something (RackBayGestures).
+        RackBayGestures.register(NeoForge.EVENT_BUS);
         // 5. Optional chunk loading for aisles that have work (M19, issue #10, ADR-031). The ticket controller must be
         //    registered on the MOD bus and unconditionally: an unregistered controller has its saved tickets stripped
         //    from the level. Its lifecycle hooks and the operator command live on the game bus.

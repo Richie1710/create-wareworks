@@ -8,6 +8,7 @@ import dev.wareworks.core.crane.HomeReturn;
 import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.stock.RestockLimits;
+import dev.wareworks.core.storage.BayTier;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
@@ -15,7 +16,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * world by {@code <world>/serverconfig/wareworks-server.toml} (NeoForge {@code ServerLifecycleHooks.handleServerAboutToStart}).
  * <p>
  * Keys and defaults follow {@code docs/warehouse-system.md} §9; the TOML file groups them into the sections
- * {@code aisle}, {@code crane}, {@code stations} and {@code controller}.
+ * {@code aisle}, {@code crane}, {@code stations}, {@code storage}, {@code controller} and {@code chunkLoading}.
  * <p>
  * SERVER config values exist only while a server runs (and on connected clients). Always read them through the typed
  * getters below: they fall back to the default when the config is not loaded (registry events, datagen, main menu,
@@ -226,6 +227,45 @@ public final class WareworksConfig {
         return get(SERVER.stockKeeperRows);
     }
 
+    // --- storage -------------------------------------------------------------------------------------------------
+
+    /** Item stacks one wooden rack bay holds (M28, issue #20, {@code docs/warehouse-system.md} §3.8). */
+    public static int woodBayStacks() {
+        return get(SERVER.woodBayStacks);
+    }
+
+    /** Item stacks one andesite rack bay holds (M28, issue #20). */
+    public static int andesiteBayStacks() {
+        return get(SERVER.andesiteBayStacks);
+    }
+
+    /** Item stacks one brass rack bay holds (M28, issue #20). */
+    public static int brassBayStacks() {
+        return get(SERVER.brassBayStacks);
+    }
+
+    /**
+     * How many item stacks one rack bay of {@code tier} holds, as the configuration sets it and brought into
+     * {@link BayTier}'s range (M28, issue #20) — so a hand-edited file or a per-world override can make a bay small or
+     * large, but never nonsensical.
+     */
+    public static int bayStacks(BayTier tier) {
+        return BayTier.clampStacks(switch (tier) {
+            case WOOD -> woodBayStacks();
+            case ANDESITE -> andesiteBayStacks();
+            case BRASS -> brassBayStacks();
+        });
+    }
+
+    /**
+     * How many <b>items</b> one rack bay of {@code tier} holds of an item that stacks to {@code maxStackSize} (M28,
+     * issue #20): the configured stack count times the item's own stack size, which is why one number stands on the
+     * block whatever is in it.
+     */
+    public static long bayCapacity(BayTier tier, int maxStackSize) {
+        return tier.capacity(bayStacks(tier), maxStackSize);
+    }
+
     // --- controller ----------------------------------------------------------------------------------------------
 
     public static int snapshotIntervalTicks() {
@@ -431,6 +471,10 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxProductionPatterns;
         public final ModConfigSpec.IntValue stockKeeperRows;
 
+        public final ModConfigSpec.IntValue woodBayStacks;
+        public final ModConfigSpec.IntValue andesiteBayStacks;
+        public final ModConfigSpec.IntValue brassBayStacks;
+
         public final ModConfigSpec.IntValue snapshotIntervalTicks;
         public final ModConfigSpec.IntValue snapshotCycleTicks;
         public final ModConfigSpec.IntValue dispatchIntervalTicks;
@@ -632,6 +676,37 @@ public final class WareworksConfig {
                             "The screen shows six rows without scrolling, so the default costs no scrollbar.")
                     .worldRestart()
                     .defineInRange("stockKeeperRows", 6, 1, 16);
+            builder.pop();
+
+            builder.comment("Rack bays: bulk storage locations that hold one item type each").push("storage");
+            woodBayStacks = builder
+                    .comment("Item stacks one WOODEN rack bay holds.",
+                            "Counted in STACKS, not items, the way Create counts a vault: a bay holds this many "
+                                    + "stacks and the item says what a stack is, so at the default a wooden bay takes "
+                                    + "4096 cobblestone and 1024 ender pearls. That keeps one number on the block "
+                                    + "whatever is in it, and it makes a bay worth less for an item that stacks to 16 "
+                                    + "- which is the right way round, since bulk is what bays are for.",
+                            "Lowering this below what a bay already holds never destroys anything: the bay keeps its "
+                                    + "items and accepts nothing more until it has been drained below the new "
+                                    + "capacity.")
+                    .defineInRange("woodBayStacks", BayTier.WOOD.defaultStacks(), BayTier.MIN_STACKS,
+                            BayTier.MAX_STACKS);
+            andesiteBayStacks = builder
+                    .comment("Item stacks one ANDESITE rack bay holds.",
+                            "Four times the wooden bay at the defaults: enough that reorganising a wall upward is "
+                                    + "worth the trouble, little enough that a wooden warehouse does not become "
+                                    + "worthless the day andesite arrives.")
+                    .defineInRange("andesiteBayStacks", BayTier.ANDESITE.defaultStacks(), BayTier.MIN_STACKS,
+                            BayTier.MAX_STACKS);
+            brassBayStacks = builder
+                    .comment("Item stacks one BRASS rack bay holds.",
+                            "The top of the ladder: 65536 cobblestone at the default, which is level with a fully "
+                                    + "upgraded drawer and 38 times a chest filled with one item type.",
+                            "Raising it is free in storage terms, but one terminal request is still bounded by "
+                                    + "maxTerminalRequestAmount, so a very large bay takes several requests to empty "
+                                    + "from a terminal.")
+                    .defineInRange("brassBayStacks", BayTier.BRASS.defaultStacks(), BayTier.MIN_STACKS,
+                            BayTier.MAX_STACKS);
             builder.pop();
 
             builder.comment("Warehouse controller").push("controller");

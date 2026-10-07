@@ -19,6 +19,9 @@ import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
+import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.RackBayBlock;
+import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.registry.WareworksBlocks;
@@ -40,6 +43,7 @@ import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -56,6 +60,12 @@ import net.minecraft.world.level.levelgen.Heightmap;
  * <b>stopped</b> lamp burning. The warehouse terminal is the one
  * exhibit whose front is <b>not</b> its aisle side: since ADR-022 a player stands at its screen and the crane loads it
  * through the opposite face, so the front camera sees the screen and the back camera sees the arm port.
+ * <p>
+ * Since M28 the three <b>rack bays</b> are exhibits too, one per material and each at a different fill level, because
+ * the two things only a human can judge about them are whether the material reads from across the room and whether the
+ * load behind the window reads as a fill level at all. A fourth exhibit is a three by three <b>wall</b> of wooden bays
+ * at every step from empty to full, with its own camera far enough back to hold all nine: a single bay says nothing
+ * about the question the block exists for, which is whether a wall of them reads as racking.
  * <p>
  * Shots per pass: the row from above and from far away (distant z-fighting shows there), a front and a back
  * close-up of every exhibit, two <b>player-eye</b> views of the terminal (M10 look pass: the screen side and the aisle side
@@ -123,6 +133,18 @@ public final class BlocksVisualScenario implements VisualScenario {
     /** Rank of the accepting port exhibit: an overflow of strength 0, i.e. the weakest one a board can name (M17). */
     private static final int ACCEPT_EXHIBIT_RANK = -1;
 
+    /**
+     * The rack wall exhibit (M28): three bays wide and three high, so the uprights and shelves of neighbouring bays
+     * meet and a player can see whether that reads as racking rather than as a row of boxes.
+     */
+    private static final String WALL_LABEL = "bay_wall";
+    private static final int WALL_WIDTH = 3;
+    private static final int WALL_HEIGHT = 3;
+    /** Camera for the wall: far enough back and high enough to hold all nine bays, which the close-ups cannot. */
+    private static final double WALL_DISTANCE = 6.0;
+    private static final double WALL_HEIGHT_EYE = 2.0;
+    private static final double WALL_LOOK_HEIGHT = 1.2;
+
     /** One exhibit: its label and how it is placed at its position (server thread). */
     private record Exhibit(String label, BiConsumer<ServerLevel, BlockPos> placer) {
     }
@@ -148,6 +170,15 @@ public final class BlocksVisualScenario implements VisualScenario {
                     .getDefaultState().setValue(WarehouseControllerBlock.FACING, Direction.NORTH))),
             new Exhibit("interface", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_INTERFACE
                     .getDefaultState().setValue(WarehouseInterfaceBlock.FACING, Direction.NORTH))),
+            // The three rack bays (M28, issue #20). FACING points into the rack depth exactly as an interface's does,
+            // so NORTH turns the open front - the window onto the load, with the arm port above it - towards the
+            // front camera. Each one is shown at a different fill level, so one row of shots answers both questions
+            // at once: whether the three materials are told apart, and whether a load can be read as a level.
+            new Exhibit("bay_wood", (level, pos) -> bay(level, pos, WareworksBlocks.RACK_BAY_WOOD.getDefaultState(), 0)),
+            new Exhibit("bay_andesite",
+                    (level, pos) -> bay(level, pos, WareworksBlocks.RACK_BAY_ANDESITE.getDefaultState(), 2)),
+            new Exhibit("bay_brass", (level, pos) -> bay(level, pos,
+                    WareworksBlocks.RACK_BAY_BRASS.getDefaultState(), RackBayBlock.FILL_LEVELS)),
             new Exhibit("input", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_INPUT
                     .getDefaultState().setValue(WarehouseInputBlock.FACING, Direction.SOUTH))),
             new Exhibit("output", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_OUTPUT
@@ -204,13 +235,47 @@ public final class BlocksVisualScenario implements VisualScenario {
             new Exhibit("home_point_refused", (level, pos) -> level.setBlockAndUpdate(pos,
                     WareworksBlocks.WAREHOUSE_HOME_POINT.getDefaultState()
                             .setValue(WarehouseHomePointBlock.FACING, Direction.SOUTH)
-                            .setValue(WarehouseHomePointBlock.REFUSED, true))));
+                            .setValue(WarehouseHomePointBlock.REFUSED, true))),
+            // Last, because it is the only exhibit wider than its own block: a wall of wooden bays running through
+            // every fill step from empty to full, left to right and bottom to top. It is built from the middle
+            // column outwards and upwards so that every bay is placed beside one that is already standing, which is
+            // how a player builds one (RackBayBlock#placementFacing).
+            new Exhibit(WALL_LABEL, BlocksVisualScenario::wall));
 
     /** A rail at {@code pos} with one rail on each named side, so the middle one draws the shape those sides make. */
     private static void rails(ServerLevel level, BlockPos pos, Direction... sides) {
         level.setBlockAndUpdate(pos, rail());
         for (Direction side : sides)
             level.setBlockAndUpdate(pos.relative(side), rail());
+    }
+
+    /** One rack bay exhibit: facing the front camera, filled to {@code fillStep} of its own capacity. */
+    private static void bay(ServerLevel level, BlockPos pos, BlockState bay, int fillStep) {
+        level.setBlockAndUpdate(pos, bay.setValue(RackBayBlock.FACING, Direction.NORTH));
+        if (fillStep <= 0)
+            return;
+        if (!(level.getBlockEntity(pos) instanceof RackBayBlockEntity entity))
+            throw new VisualTestException("no rack bay block entity at " + pos);
+        long capacity = entity.capacityFor(ItemKey.of(Items.COBBLESTONE));
+        int amount = (int) Math.max(1, capacity * fillStep / RackBayBlock.FILL_LEVELS);
+        ItemStack rest = entity.insert(new ItemStack(Items.COBBLESTONE, amount), false);
+        if (!rest.isEmpty())
+            throw new VisualTestException("the bay at " + pos + " refused " + rest.getCount() + " of its own capacity");
+        int shown = level.getBlockState(pos).getValue(RackBayBlock.FILL);
+        if (shown != fillStep)
+            throw new VisualTestException("the bay at " + pos + " shows fill " + shown + " instead of " + fillStep);
+    }
+
+    /** The rack wall exhibit: {@value #WALL_WIDTH} by {@value #WALL_HEIGHT} wooden bays, every fill step once. */
+    private static void wall(ServerLevel level, BlockPos pos) {
+        int steps = RackBayBlock.FILL_LEVELS + 1;
+        for (int row = 0; row < WALL_HEIGHT; row++) {
+            for (int column = 0; column < WALL_WIDTH; column++) {
+                int index = row * WALL_WIDTH + column;
+                bay(level, pos.offset(column - WALL_WIDTH / 2, row, 0),
+                        WareworksBlocks.RACK_BAY_WOOD.getDefaultState(), index % steps);
+            }
+        }
     }
 
     private static BlockState rail() {
@@ -249,6 +314,9 @@ public final class BlocksVisualScenario implements VisualScenario {
                     BLOCK_CENTER), label);
             if (label.equals(TERMINAL_LABEL))
                 terminalEyeShots(script, x);
+            if (label.equals(WALL_LABEL))
+                script.shotFrom(CameraView.of("wall", x, WALL_HEIGHT_EYE, BLOCK_CENTER + WALL_DISTANCE, x,
+                        WALL_LOOK_HEIGHT, BLOCK_CENTER), WALL_LABEL);
         }
         script.client("blocks: check the creative tab on the client", this::checkCreativeTab)
                 .server("blocks: open a chest screen with every Wareworks item", this::openItemScreen)
@@ -340,6 +408,8 @@ public final class BlocksVisualScenario implements VisualScenario {
                 shown.stream().map(BuiltInRegistries.ITEM::getKey).toList());
         List<Item> expected = List.of(WareworksBlocks.STACKER_CRANE.asItem(), WareworksBlocks.WAREHOUSE_RAIL.asItem(),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), WareworksBlocks.WAREHOUSE_INTERFACE.asItem(),
+                WareworksBlocks.RACK_BAY_WOOD.asItem(), WareworksBlocks.RACK_BAY_ANDESITE.asItem(),
+                WareworksBlocks.RACK_BAY_BRASS.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem());

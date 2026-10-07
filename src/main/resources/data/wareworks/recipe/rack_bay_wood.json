@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "A": { "item": "create:andesite_alloy" },
+    "P": { "tag": "minecraft:planks" }
+  },
+  "pattern": [
+    "PPP",
+    "A A",
+    "PPP"
+  ],
+  "result": { "count": 1, "id": "wareworks:rack_bay_wood" }
+}

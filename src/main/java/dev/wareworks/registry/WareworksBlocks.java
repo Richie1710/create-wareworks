@@ -6,6 +6,7 @@ import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.simibubi.create.foundation.data.ModelGen;
 import com.simibubi.create.foundation.data.SharedProperties;
 import com.simibubi.create.foundation.data.TagGen;
+import com.tterrag.registrate.builders.BlockBuilder;
 import com.tterrag.registrate.util.entry.BlockEntry;
 
 import dev.wareworks.Wareworks;
@@ -18,7 +19,9 @@ import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
+import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
+import dev.wareworks.core.storage.BayTier;
 import dev.wareworks.data.WareworksBlockStateGen;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.material.MapColor;
@@ -28,8 +31,10 @@ import net.minecraft.world.level.material.MapColor;
  * <p>
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
- * controller, interface, input, output, terminal, production station, stock keeper, home point
- * (GameTest {@code creativetaborderandicon}). Recipes are hand-written JSON in
+ * controller, interface, the three rack bays (wood, andesite, brass), input, output, terminal, production station,
+ * stock keeper, home point (GameTest {@code creativetaborderandicon}). The bays stand directly after the interface
+ * because they are the other half of the same answer: an interface turns somebody else's inventory into a storage
+ * location, a bay <b>is</b> one. Recipes are hand-written JSON in
  * {@code data/wareworks/recipe/} (GameTest {@code recipesloaded}). This class must only be initialised through
  * {@link #register()}, which {@code Wareworks} calls after {@code registerEventListeners}; otherwise Registrate silently
  * drops client-side listeners.
@@ -113,6 +118,37 @@ public final class WareworksBlocks {
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
+                    .register();
+
+    /**
+     * Wooden rack bay ({@code docs/warehouse-system.md} §3.8, M28, issue #20): the cheap early bay, a better barrel,
+     * buildable long before there is a warehouse. {@link #rackBay} explains what the three entries share and what is
+     * still missing from them.
+     */
+    public static final BlockEntry<RackBayBlock> RACK_BAY_WOOD =
+            rackBay("rack_bay_wood", BayTier.WOOD)
+                    .initialProperties(SharedProperties::wooden)
+                    .properties(p -> p.mapColor(MapColor.WOOD).sound(SoundType.WOOD))
+                    .lang("Wooden Rack Bay")
+                    .transform(TagGen.axeOnly())
+                    .register();
+
+    /** Andesite rack bay ({@link #rackBay}): four times a wooden one, and it may not stand on top of wood. */
+    public static final BlockEntry<RackBayBlock> RACK_BAY_ANDESITE =
+            rackBay("rack_bay_andesite", BayTier.ANDESITE)
+                    .initialProperties(SharedProperties::stone)
+                    .properties(p -> p.mapColor(MapColor.STONE).sound(SoundType.NETHERITE_BLOCK))
+                    .lang("Andesite Rack Bay")
+                    .transform(TagGen.pickaxeOnly())
+                    .register();
+
+    /** Brass rack bay ({@link #rackBay}): level with a fully upgraded drawer, and it carries nothing above it but brass. */
+    public static final BlockEntry<RackBayBlock> RACK_BAY_BRASS =
+            rackBay("rack_bay_brass", BayTier.BRASS)
+                    .initialProperties(SharedProperties::softMetal)
+                    .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK))
+                    .lang("Brass Rack Bay")
+                    .transform(TagGen.pickaxeOnly())
                     .register();
 
     /**
@@ -246,6 +282,37 @@ public final class WareworksBlocks {
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();
+
+    /**
+     * The three rack bays share everything but their material: one {@link RackBayBlock} class carrying its
+     * {@link BayTier}, protected from contraptions like every other block that holds warehouse state, and all three
+     * served by the one {@code RACK_BAY} block entity type.
+     * <p>
+     * <b>Its look</b> (M28 step 9) is a <b>multipart</b> blockstate over the tier's hand-made
+     * {@code models/block/rack_bay_<tier>/block.json} — a rack box with a pallet in it, open towards the aisle, and
+     * carrying the same 8 x 4 px arm port the warehouse interface has — plus the shared load models in
+     * {@code models/block/rack_bay/}, which draw four fill steps through that window
+     * ({@link WareworksBlockStateGen#rackBayBlockProvider()}). The item model is the empty shell, which is what a
+     * crafted bay is.
+     * <p>
+     * <b>Its loot table is the plain block, and that is a rule rather than a default.</b> Registrate's self-drop is
+     * exactly right and has to stay exactly that: no {@code copy_nbt}, no {@code setBlockEntityData}, nothing that
+     * copies the block entity into the item. Breaking a bay <b>resets</b> it — an empty bay item and the whole load as
+     * one {@code PalletEntity} on the floor (ADR-046) — so a loot table that carried the contents as well would hand
+     * out both, which is the duplication the pallet exists to avoid, and would turn a brass bay into a pocketable
+     * crate worth thirty-eight shulker boxes, which the owner rejected outright. The GameTest
+     * {@code bayBreakResets} asserts that the dropped bay item is a plain, componentless one for that reason.
+     */
+    private static BlockBuilder<RackBayBlock, CreateRegistrate> rackBay(String name, BayTier tier) {
+        return REGISTRATE.block(name, properties -> new RackBayBlock(properties, tier))
+                .transform(WareworksTags.relocationProtected())
+                // The aisle face is a window onto the load and the arm port is a recess, so the block is not a full
+                // cube: without this it would cull its neighbours' faces and light its own interior as if it were one.
+                .properties(p -> p.noOcclusion())
+                .blockstate(WareworksBlockStateGen.rackBayBlockProvider())
+                .item()
+                .transform(ModelGen.customItemModel("_", "block"));
+    }
 
     private WareworksBlocks() {
     }

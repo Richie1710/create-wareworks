@@ -10,15 +10,17 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly **ten** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
-   interface, warehouse input, warehouse output, warehouse terminal, warehouse production station, warehouse stock
-   keeper, warehouse home point. (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from there
-   if the two ever disagree.)
+   lists exactly **thirteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   interface, **wooden rack bay, andesite rack bay, brass rack bay**, warehouse input, warehouse output, warehouse
+   terminal, warehouse production station, warehouse stock keeper, warehouse home point — the three bays stand
+   directly after the interface, weakest first. (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read
+   it from there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **ten** items shows a Create-style description; the stacker crane additionally shows its
-   stress impact.
-4. JEI/EMI shows **ten** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
+3. Holding Shift on each of the **thirteen** items shows a Create-style description; the stacker crane additionally
+   shows its stress impact. A rack bay's summary says it **shows how full it is on the front** — not what is in it,
+   which only the goggles say until M29 draws the real item.
+4. JEI/EMI shows **thirteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
    terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass
    nuggets** the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an
@@ -899,7 +901,7 @@ went where it went.
     back at 0, like any freshly placed block (the number is a setting, not an item property).
 
     Two interfaces on **one double chest**: only one of them counts the chest, so only its priority applies. The other
-    one's goggles must say "Without effect: another interface counts this inventory" in gold **even when it carries only
+    one's goggles must say "Without effect: another storage location counts this inventory" in gold **even when it carries only
     a priority and no filter**, and the controller's "Prioritised locations" must not count it.
 
 115. **German (`de_de`).** Switch the language and walk the same surfaces: the board's title ("Lagerpriorität") and its
@@ -2122,3 +2124,225 @@ you get tired of waiting, and put it back before judging check 160.
     cannot be unloaded. If your drawer mod uses a slot limit **at or below 99** the drawer stays conservative by design
     and will still stop at one stack; that is the one case the fix knowingly leaves alone (at most 35 items of a
     99-limit slot go unused), so note which mod and which limit if you hit it.
+
+## AI. A rack bay you fill by hand (M28, issue #20)
+
+> Take a bay out of the creative tab — the three stand directly after the warehouse interface — and place it with
+> its **open front** towards you; `facing` points **into the rack**, away from where you stand. Everything
+> below is state and wording, which is exactly the half no gate can judge: the gestures are asserted by
+> `RackBayGameTests#bayhandgestures`, the client packet by `baysyncisbounded`, the address by
+> `baygogglestatefollowsthewarehouse`, and the goggle rows' **widths** in both languages by
+> `LangConsistencyTest#theRackBayRowsFitAGoggleTooltip`, whose list of rows is itself kept complete by
+> `everyRackBayGoggleRowIsMeasured` — but the goggle **lines** cannot be built on a server at all
+> (`LangBuilder#forGoggles` measures the client font), so how they read has never been seen by anything but a person.
+
+198. **Can you find the gesture at all, and does the filter box still get its clicks?** Stand in front of a bay with a
+    stack of cobblestone. Right-click the **face**, a little away from the little box in the middle: **one** item goes
+    in. Hold **Shift** and right-click: a **whole stack** goes in. Empty your hand: a plain right-click gives **one**
+    back, Shift gives a **stack**. Now aim deliberately at the box in the middle and click with a filter item: it must
+    go into the **filter slot**, not into the bay, and holding that click must still open the **priority** board. The
+    sphere is 4 px across and nothing automated can feel where its edge is — so: **is the box findable, and is it easy
+    to miss when you mean to store something?** The honest failure mode here is a player who tried to store an item
+    and set a filter instead, or the other way round.
+199. **The two things the gesture takes away, and whether they are acceptable.** While a bay would accept what you are
+    holding, **Shift-clicking it puts the item in instead of placing a block against it** — try to Shift-place
+    cobblestone against a bay that holds cobblestone and the cobblestone goes into the bay. Aiming at a neighbouring
+    block still places it, and a bay that **refuses** the item (a filter, a different type inside, no room) places it
+    as before. Second: right-click a bay with an **item you named in an anvil** and the action bar says
+    *"Name an aisle at a warehouse controller or interface"* — the item stays in your hand, it is not stored, and
+    **Shift**-clicking with it still places it. Ask both questions: does the Shift-insert ever get in your way while
+    building a wall, and does the naming answer send you to the right block?
+200. **Does the goggle text read like a rack bay?** With Engineer's Goggles on, look at a bay in each of these states
+    and read the whole tooltip aloud. **Empty, no filter:** it names itself (*"Brass Rack Bay"*), says
+    *"Takes the first item that arrives"*, *"Empty"* and *"Capacity: 1,024 stacks"*. **Holding something, no filter:**
+    *"Holds Cobblestone until it is empty"* and *"Cobblestone 4,096 / 65,536"*. **With a filter:** *"Filter:
+    Cobblestone"* instead, and the line stays after you empty the bay — that difference is the whole point, so: **can
+    you tell the item the bay decided on from the one you set?** Then put an **ender pearl** in a bay and check that
+    the capacity line still says the same stack count while the item total is sixteen times smaller, which is the
+    deliberate price of counting in stacks.
+201. **Does a bay no warehouse serves read as fine rather than broken?** Put a single bay down in the middle of
+    nowhere, fill it by hand, and look at it through goggles: *"Not part of an aisle"* and, under it,
+    *"A rack bay works by hand with no warehouse"*. This is the one line written for the player who meets this block
+    before they meet the rest of the mod, so the question is blunt: **would you go looking for a fault after reading
+    it?** Then build an aisle around it — dock, rails, controller — and watch the same block show an **address**
+    instead. Break the controller again and it must go back to the two quiet lines with its load untouched.
+202. **The gold line of an overloaded bay, and whether it blames the right block.** Put a wooden bay down, then
+    `/setblock` a **brass** one directly on top of it. The **wooden** bay now reads, in gold,
+    *"The rack above this bay is overloaded"*. Read it standing at the wooden bay: **does it send you to the block
+    above?** It is worded for the rule and not for the neighbour on purpose — in a column only a command can build
+    (brass under wood under andesite) the brass bay carries the same line although nothing stronger stands directly
+    above it. Check that the bay still **hands out** what is inside it by hand and through the crane while it says
+    this, and that taking the brass bay away makes the line go.
+203. **The same five checks on a German client.** Restart with `de_de` and read 198 to 202 again:
+    *"Nimmt den ersten Gegenstand, der ankommt"*, *"Enthält Kopfsteinpflaster, bis es leer ist"*,
+    *"Kapazität: 1.024 Stapel"*, *"Ein Regalfach arbeitet von Hand auch ohne Lager"*,
+    *"Das Regal über diesem Fach ist überladen"*, and in the action bar
+    *"Benenne einen Gang an einer Lagersteuerung oder Lagerschnittstelle"*. The widths are measured in both languages,
+    so what is left is the wording: **does the German say the same thing, and does "Regalfach" read as a rack bay
+    rather than as a shelf?**
+204. **The front stays right while you watch it.** Stand at a bay with **no goggles on**, have a hopper or a funnel
+    feed it, and keep watching — this is the one thing a server test cannot see at all, because the contents are
+    pushed to the client on **every** change and nothing else in this mod does that. Then walk twenty blocks away and
+    come back, and leave and rejoin the world. **Is what the block says about itself ever stale?** (Until the model
+    lands, "what the block says" means its goggle tooltip; from the step that draws the fill level on it, it means the
+    block itself.)
+
+## AJ. Breaking a full rack bay: the pallet (M28, issue #20)
+
+> Place a brass bay from the creative tab, its open front towards you, and fill it by hand or with a hopper.
+> Everything about the pallet's **state** is asserted — `RackBayGameTests#baybreakresets`, `baybreakincreative`,
+> `palletspawnrefusedfallsbacktoitementities`, `bayrefilledfromapalletbyhand` and the whole of `PalletGameTests`, plus
+> the dev harness breaking a full bay while the crane carries items. What no gate can judge is whether the thing you
+> are left standing in front of **reads** as the load of the bay you just broke, and whether refilling by hand feels
+> like work or like a chore.
+
+205. **Break a full bay and look at what is left.** Fill a brass bay with a few stacks of cobblestone, then break it.
+    You should get the (eventual) bay block back and **one pallet** on the floor in front of you, with the item and
+    the count written above it. **Is it obvious at a glance that nothing was lost?** Count the number against what
+    you put in. Then break a bay standing **high up in a wall** and check that the pallet comes down to the aisle
+    floor rather than hanging in the air where the bay was.
+206. **Refill a bay from a pallet, and judge the tedium honestly.** Place a fresh bay, then take stacks off the pallet
+    with **Shift** + right-click (empty hand) and Shift-click them into the bay. This is the path that replaced
+    "put the filled bay back", and the owner settled it deliberately — so the question is the one only playing can
+    answer: **at two stacks it is fine; at sixty-four, is it still?** Note how it felt, because the answer decides
+    whether the "retire this location" mechanic needs to come sooner.
+207. **Shove it around.** Walk into the pallet: you should pass through it and push it along the floor. **Does that
+    read as moving a pallet, or as a bug?** Try to pick it up: middle-click it, right-click it with something in your
+    hand, try to put it in a minecart or a boat. None of that may work, and that is the point — a pallet in your
+    pocket would be a thousand stacks in one slot.
+208. **Set fire to it.** Push a pallet into **lava**, blow it up with **TNT**, set it alight, and drop it in water.
+    It must come out of all four with its load intact and no flame overlay stuck on it. Then save and quit, reload,
+    walk far enough away that its chunk unloads and come back. **Is the count still the same every time?** The one
+    thing that *does* destroy it is the void — and when it happens the server log says what fell and where, so check
+    that line exists.
+209. **A hopper drains it and a funnel does not.** Put a vanilla **hopper** under a pallet: it empties it item by
+    item and the pallet vanishes when it is done. Now aim a Create **funnel**, **chute** or **belt** at one: nothing
+    happens, for ever. That is a real limitation of how Create recognises items on the ground, and it is in the
+    Ponder scene and the docs for that reason — so the check is whether a player who tries the funnel first would
+    work out what is going on, or file a bug.
+210. **The German name.** On a `de_de` client the pallet is **"Palette"**. Read it in the one place a player sees it
+    (the entity name, e.g. after a `/kill @e[type=wareworks:pallet]` message or in F3 + B's hitbox label): **does it
+    read as a warehouse pallet rather than as a colour palette?**
+
+## AK. What a rack wall looks like (M28 step 9, issue #20)
+
+> The one half of this block no automated gate can judge. The geometry is pinned
+> (`CraneModelLayoutTest#aRackBaysLoadStaysUnderTheArmAndInsideItsWindow` and
+> `#theThreeRackBaysAreTheSameRackInThreeMaterials`), the fill step is pinned
+> (`RackBayGameTests#bayfilllevelfollowsitscontents`) and the creative tab order is asserted twice — but whether a
+> wall of them **reads** as racking, and whether the load **reads** as a level, is a person's call. Build in survival
+> if you can: the recipes are the other half of this step.
+
+211. **The first bay, before anything else exists.** In a fresh survival world, with no machine built and no brass in
+    sight, craft a **Wooden Rack Bay**: six planks and two andesite alloy. **Was anything in that chain a surprise —
+    did you need a machine, a casing you did not have, or a trip anywhere?** It should be craftable the same evening
+    you make your first andesite alloy. Then fill it by hand and use it as a barrel for a while. **Is it worth the
+    two andesite alloy over a barrel, for one item type and 64 stacks?**
+212. **Read a wall by walking past it.** Build a wall of at least nine bays, two or three high, and put different
+    amounts into them — a handful in one, a few stacks in another, one filled to the brim. Now walk past it at
+    normal walking speed, five or six blocks out, without goggles. **Can you tell the full ones from the nearly empty
+    ones?** Then walk away until the wall is at the far edge of your render distance and look back: the fill level is
+    block geometry, so it must still be there at any distance — unlike an interface's filter item, which disappears
+    at ten blocks.
+213. **Does it read as racking?** Stand in the aisle in front of that wall. **Does it look like a high-bay rack —
+    uprights, shelves, pallets with goods — or like a grid of decorated cubes?** This is the question the whole
+    block exists for, and M29 is the milestone that answers it properly; what is wanted here is a note of what is
+    already right and what still reads as boxes.
+214. **The three materials, side by side.** Put a wooden, an andesite and a brass bay next to each other, all empty,
+    and step back ten blocks. **Can you tell which is which without looking at a tooltip?** Then fill all three with
+    the same number of cobblestone — say a wooden bay's worth. The wooden one must look **full** and the brass one
+    nearly **empty**, because the level is a fraction of the bay's own capacity. **Does that read as "a brass bay
+    holds far more", or as a bug?**
+215. **The icons in the creative tab.** Open the Wareworks tab. The three bays stand directly after the warehouse
+    interface, weakest first. **Does each icon read as a rack bay rather than as a coloured cube — can you see the
+    pallet and the arm slot?** They are turned to their front for that reason, unlike every other block of this mod,
+    so also check the opposite: **does that look out of place in the row?**
+216. **The item descriptions.** Hover each bay and read its Create-style description, then do it again on a `de_de`
+    client. Three things have to be right in both languages: the **capacity** (64 / 256 / 1024 stacks), the sentence
+    about what each tier may carry **above** it, and that breaking one gives you an **empty bay and a pallet**.
+    **Would a player who read only this know not to break a full bay expecting to carry it away?**
+217. **The arm goes in through the slot.** Build a bay into a real aisle and watch the crane store something in it.
+    **Does the arm go in through the dark slot above the load, or does it appear to pass through the woodwork?** And
+    when it reaches all the way in, **does anything of the grabber stick out of the back of the bay?**
+218. **The filter slot is still where your click lands.** The little value box sits in the middle of the bay's front,
+    in the window, with no plate behind it any more. Right-click it with an item: it must set the **filter** and not
+    store the item. Then right-click two pixels away from it: that must **store** the item. **Is the boundary where
+    you expect it, or does the open window make you miss?**
+219. **The pallet got a pallet.** Break a full bay and look at what lands on the floor: it should be a wooden pallet
+    — boards on three runners — with the goods standing on it and the count above. **Does it read as a pallet now,
+    rather than as a slab of planks?**
+
+## AL. What the game teaches about a rack bay (M28 step 11, issue #20)
+
+> The three Ponder scenes — **"Storing Bulk Goods in a Rack Bay"**, **"Building a Rack Wall"** and **"Rack Bays in a
+> Warehouse Aisle"**, in that order on all three bay items — are compiled, run against a real `PonderLevel` and
+> screenshotted at three moments each by `runVisualTest -Pwareworks.visualTest=ponder`, which is what catches a
+> missing schematic, a crashing instruction or a raw lang key. What it cannot judge is the only thing that matters
+> here: **whether a player who has never seen this mod understands the block afterwards.** This is the block most
+> players will meet first — a wooden bay needs no machine to craft — so these checks are worth more than most.
+>
+> The last two are not about Ponder at all. They are the two questions the milestone itself rests on, and no
+> automated run can answer either.
+
+220. **Watch all three scenes through, once, at speed, as a stranger would.** Hold **W** over a Wooden Rack Bay in the
+    creative tab and watch scene one without pausing, then press the forward arrow for two and three. **Afterwards,
+    could you build and fill a bay without reading anything else?** Specifically: do you know that it holds one item
+    type, that a plain click moves one item and Shift a stack, that the goods you can see through the front are the
+    fill level, and that breaking it gives you the block back plus a pallet?
+221. **The order has to feel right.** Scene one shows the block **alone**, with no crane, no controller and no rails —
+    deliberately the opposite order to every other block of this mod. **Does meeting it that way make the bay feel
+    like something you could build tonight, or does it feel like a piece of a machine whose other half is missing?**
+    If the second, the registration order in `WareworksPonderScenes` is what to change.
+222. **The pallet's Create limitation has to land.** The last caption of scene one says that a plain Hopper drains a
+    pallet and a Deployer can, while Create's Belts, Chutes and Funnels cannot see one at all. **Having watched only
+    the scene, would you try a funnel on a pallet?** Then try one: put an andesite funnel against a pallet and
+    confirm it does nothing, and a vanilla hopper under one and confirm it drains it. This is the sentence that stops
+    the first bug report, and it is the one caption whose German is not a translation — Minecraft's Hopper and
+    Create's Funnel are both *Trichter* — so read it on a `de_de` client too and check it still tells them apart.
+223. **No two captions at once.** Watch each scene once more with your eye on the text box alone. **Is there ever a
+    moment where two captions are drawn on top of each other?** This is the defect M22 found and M26 shipped again in
+    one beat; the rule (a caption never outlives the idle after it) is now written into `RackBayScenes`, but only a
+    person watching can confirm it holds at every beat and at every window size.
+224. **The German pass over all three scenes.** Switch the client to Deutsch and watch all three again. Ponder wraps
+    its captions, so the risk is not clipping but a line that wraps to four rows and outruns its beat. **Does every
+    caption finish being readable before it fades?** And does the wall scene's German still name the three materials
+    the way the blocks themselves are named — *Holz-*, *Andesit-* and *Messing-Regalfach*?
+225. **Does 64 stacks feel right?** Play an evening with a few wooden bays as your only bulk storage — cobblestone,
+    deepslate, dirt from a tunnel. A wooden bay is 64 stacks for six planks and two andesite alloy, against a vanilla
+    barrel's 27 stacks of anything for six planks and two slabs. **Is that a trade you would make, and does the bay
+    fill up fast enough that andesite feels like something to want, without wood feeling pointless?** If a wooden bay
+    never fills, the ladder starts too high; if it fills in an hour, it starts too low. The three numbers are server
+    config (`storage.woodBayStacks` and its two siblings), so this check is a recommendation and not a bug report.
+226. **Does the wall read as racking?** This repeats check 213 on purpose, because it is the question the whole
+    feature exists for and the one the milestone has to be judged on. Build a wall at least five bays wide and three
+    high, in one material, fill it unevenly, and stand in the aisle in front of it. **Does it look like a high-bay
+    rack — uprights, shelves, pallets with goods — or like a grid of decorated cubes?** Write down which parts
+    already read as racking and which still read as boxes: that list is M29's step 12.
+
+## AM. What the M28 review's fixes leave to a person
+
+227. **A bay against a bay really places.** This is the half of the gesture no test can reach: a GameTest calls
+    `useItemOn` directly, while a real click goes through `ServerPlayerGameMode`. Place one wooden bay, then click the
+    **side** of it holding another wooden bay — plain, and again with **Shift**. **Does a second bay appear beside the
+    first, facing the same way, both times?** It must never go *into* the bay, which is what happened before the fix
+    and which made a free-standing wall's second row impossible to start. Then click the **top** of a wooden bay with
+    an **andesite** one: refused, with *"A rack bay may carry nothing stronger above it"* in the action bar and the
+    item still in your hand. Everything else the bay would accept still goes **in** rather than being placed against
+    it, by design — try a cobblestone block on an empty unfiltered bay and aim at a neighbouring block instead.
+228. **An observer beside a rack wall stays quiet.** Put an **observer** facing a bay, and a **comparator** and a
+    **piston** beside two more, then fill the bay through all four fill steps from a hopper or by hand. **Does any of
+    the three fire?** None may: a fill level is written with `UPDATE_CLIENTS | UPDATE_KNOWN_SHAPE`, so neither a
+    neighbour update nor a shape update goes out. The observer is the one this check exists for — it hooks
+    `updateShape`, not `neighborChanged`, so dropping the neighbour update alone never silenced it. Then break the
+    bay: an observer in front of a block that disappears **does** fire, which is ordinary and right.
+229. **A schematic print over a full bay keeps its goods.** Build a small rack wall, fill one bay, and capture it with
+    a **Schematic and Quill**. Print that schematic back over the standing wall — in creative with the instant print,
+    and again with a **Schematicannon** whose *Replace Block Entities* is on. **Is the full bay still full afterwards,
+    with the right fill level on its front?** The filter and the priority *are* overwritten, which is what a schematic
+    of a rack wall is for; the goods are not. A vanilla chest beside it keeps its contents through the same print,
+    which is the comparison this check is measured against.
+230. **A floor of pallets costs nothing.** Break eight or ten full bays so their pallets lie about, then compare
+    **F3**'s tick time with the pallets loaded and with them gone. **Is there a difference you can see?** A resting
+    pallet runs its collision step only every fourth tick, which is vanilla's own rule for a dropped item. Then mine
+    the floor out from under one: **does it fall at once**, within a tick or two, rather than hanging in the air? And
+    shove one across the floor: **does it still slide and stop as it did?**

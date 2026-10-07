@@ -7,7 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A rack bay is the storage location itself, with no interface in front of it.** Every storage location this mod had
+  was an inventory plus a **warehouse interface** carrying its address, its filter and its priority, so a rack wall
+  was a wall of chests with interfaces in their faces — fifty locations, a hundred blocks. A bay is one block that
+  **is** the location: it carries its own **address**, its own **store filter** and its own **storage priority**, and
+  the crane reaches into it through the same slot it uses on an interface. The interface is unchanged and still the
+  right answer for the long tail you own three of — swords, enchanted books, anything a whole bay per type would
+  waste — and both kinds of location live side by side in one aisle. One thing is different from a chest, and it is
+  the point of the block: a bay holds **one item type at a time**. Give it a filter and that is what belongs there;
+  leave it unfiltered and it takes the first type that arrives and keeps it until the bay is empty again. A second
+  type is simply refused — your hand keeps the item, a funnel backs up instead of hammering the block, and the
+  warehouse plans that delivery somewhere else
+- **Material decides how much a bay holds, and a server can move the whole curve.** A wooden bay holds **64 stacks**
+  of its one item type, an andesite one **256** and a brass one **1,024** — 4,096, 16,384 and 65,536 cobblestone.
+  They are counted in stacks rather than items, the way Create counts an Item Vault, so one number stands on the block
+  whatever is in it. All three live in a new **`storage`** section of `wareworks-server.toml` — `woodBayStacks`,
+  `andesiteBayStacks` and `brassBayStacks` — beside the `aisle`, `crane`, `stations`, `controller` and `chunkLoading`
+  sections a modpack already tunes. Lowering one below what a bay already holds never destroys anything: that bay
+  keeps every item and accepts nothing more until it has drained
+- **Fill and empty a rack bay with your own hands.** Right-click it with an item and **one** goes in; hold **Shift**
+  and a whole **stack** goes in. Right-click with an **empty hand** and one comes back out; Shift and you get a stack.
+  The same two amounts in both directions, exactly what a plain click and a Shift click already mean at a warehouse
+  terminal. There is deliberately no "take everything": a bay holds up to a thousand stacks and your pockets do not,
+  so emptying one in a single move is what breaking it is for. Nothing is ever lost on the way — you only ever get
+  what fits, and what the bay really took is what leaves your hand. The little filter box in the middle of the face
+  still keeps every click that hits it, a **wrench** still turns the bay, a **clipboard** still copies its filter and
+  priority onto the next bay, the **Mechanical Arm** item still places an arm, and **another rack bay** is always
+  placed against the one you clicked rather than stored in it, which is how a wall grows. Two things to know: while a
+  bay would accept what you are holding, clicking it — plain or with **Shift** — puts the item in instead of placing
+  a block against it, so aim at a neighbouring block for that; and a bay you have renamed an item for will tell you
+  that aisles are named at a **controller** or an **interface**, rather than swallowing the item
+- **The goggles read a rack bay out loud.** Look at one through Engineer's Goggles and it names itself —
+  **"Brass Rack Bay"** — then tells you where it stands, what may go in, and last what is in it:
+  **"Cobblestone 4,096 / 65,536"** and **"Capacity: 1,024 stacks"**. A bay nobody has filtered says
+  **"Takes the first item that arrives"** while it is empty and **"Holds Cobblestone until it is empty"** once
+  something has landed in it, so you can always tell the item the bay decided on from the one you set with a filter. A
+  bay carrying a stronger one above it says in gold that the rack above it is overloaded, which is why the warehouse
+  stores nothing there — and it still hands out everything that is already inside
+- **Break a full rack bay and nothing is lost: the load lands on a pallet.** A bay holding a thousand stacks cannot
+  simply spray them across the floor — that would be thousands of item entities for one block, and a whole wall of
+  them would bring a server to its knees. So breaking a bay **resets** it: you get an empty bay back and the whole
+  load lying in front of you as a single **pallet** — wooden boards over three runners with the goods standing on them
+  — with the item and the count written above it so you can see at a glance that everything is still there. You refill by hand, stack by stack, with the very gesture the bay uses:
+  right-click the pallet with an **empty hand** for one item, **Shift** for a whole stack. A pallet cannot be picked
+  up, pocketed or put back as a filled bay — carrying a thousand stacks in one slot is exactly what this is not — but
+  you can **shove it across the floor** to wherever you want it
+- **A pallet does not evaporate, burn or drown.** It never despawns, however long you leave it; it shrugs off fire,
+  lava, an explosion and anything else that could damage it; it floats in water; and it survives saving, reloading and
+  the chunk around it being unloaded with its load intact. The one way to lose one is to push it into the void, which
+  writes a line into the server log saying exactly what fell and where. A **vanilla hopper** underneath will drain a
+  pallet for you, item by item, and so will a **Deployer** — but Create's belts, chutes, funnels, depots and ejectors
+  cannot see a pallet at all, which also means none of them can ever make one disappear
+- **A funnel, a chute, a belt or a hopper fills a storage location directly — and that is new.** Until now the only
+  automated way into a warehouse was a **warehouse input** and the crane, because an interface deliberately offers a
+  machine nothing at all. A bay offers its contents on every face, so a Create **funnel**, a **chute**, a **belt** or
+  a plain vanilla **hopper** fills it and empties it where it stands, with no input station and no warehouse anywhere
+  near it. Nothing about the rules bends for that: a machine moves items one real handler call at a time into the
+  block in front of it, nothing teleports, and the warehouse is merely **told** that the bay changed — in the same
+  tick, which is a better answer than a chest behind an interface has ever had. A **Mechanical Arm** is the one
+  machine that cannot reach a bay: clicking one with the arm item places an arm, as it does on a rail, so put a funnel
+  between the two
+- **A bay refuses to be placed where it would carry something stronger.** The rule is that a bay may carry nothing
+  stronger **anywhere** above it, and you meet it while building rather than in a tooltip: try to put a wooden bay
+  under an andesite one and the block is not placed, the item stays in your hand, and the action bar says
+  **"A rack bay may carry nothing stronger above it"**. That is what makes upgrading a wall a rebuild from the bottom
+  up. A column that a command or a world edit put in the wrong order is not broken either — the bay underneath keeps
+  every item in it, still hands them back out, says in gold through goggles that the rack above it is overloaded, and
+  only stops being offered new goods
+- **Rack bays you can craft, hold and look at.** All three stand in the Wareworks creative tab, directly after the
+  warehouse interface, and the **wooden** one is the cheapest thing this mod makes after a rail: six planks and two
+  andesite alloy, with no machine anywhere in its chain, so you can put a wall of them up the same evening you make
+  your first andesite alloy — a better barrel, long before there is a warehouse. The ladder is the same frame one
+  material up: six **andesite alloy** and two andesite casings for the andesite bay, six **brass sheets** and two
+  brass casings for the brass one, for four and sixteen times the capacity
+- **You can see how full a rack bay is from across the room.** A bay is drawn as a rack box with a **pallet** inside
+  and an open window towards the aisle, and the goods on that pallet grow in four steps as the bay fills: a single
+  carton when there is anything at all in it, cartons across the whole pallet when it is nearly full, one more stacked
+  on top when it is full. It is part of the block itself rather than something drawn on top of it, so it is still
+  there at any distance — walk past a rack wall and you can read which bays are still worth filling without goggles
+  and without opening anything. The level is a fraction of that bay's own capacity, so a wooden bay's worth of
+  cobblestone fills a wooden bay and barely covers the pallet of a brass one. The three materials are the same rack in
+  three colours — wood, andesite, brass — so a wall says what it is made of at a glance, and the crane reaches in
+  through the same slot it uses on a warehouse interface
+- **A rack bay that no warehouse serves says so, and says it is fine.** Standing on its own it reads
+  **"Not part of an aisle"** and, under it, **"A rack bay works by hand with no warehouse"** — because that is the
+  whole point of the block: it is worth building long before there is a crane, and nothing about it is broken until
+  one arrives. Build the wall first and the aisle later; the moment a crane can reach it, the same block shows its
+  address instead
+- **Three Ponder scenes teach the rack bay, and they teach the block before the warehouse.** Hold **W** over any of
+  the three bays and the first scene shows one bay standing on its own with no crane, no controller and no rails
+  anywhere: how a click puts one item in and Shift a whole stack, how an empty hand takes them back out, how the load
+  behind the window grows as it fills, how a bay keeps the first item type that lands in it until it is empty, and
+  what breaking a full one really does — the empty block back and the whole load on one pallet, with the count written
+  above it. The second builds a rack wall out of all three materials and shows the rule that decides how you upgrade
+  one: a bay carries nothing stronger above it, so a wall is rebuilt from the bottom up, and a column that a command
+  put in the wrong order keeps every item in it and only stops being offered new ones. Only the third brings a
+  warehouse: rails laid in front of bays that were already full, what each one is called afterwards, the crane
+  reaching in through the slot above the window, and why a chest behind an interface is still the right answer for the
+  things you own three of. The order is deliberate — a wooden bay costs six planks and two andesite alloy and needs no
+  machine at all, so most players will meet this block long before they own a crane. The scene also says the one thing
+  you would otherwise find out the hard way: a **vanilla hopper** underneath a pallet drains it and a **Deployer**
+  can, while Create's belts, chutes and funnels cannot see a pallet at all
+
+### Changed
+
+- **The goggle line for a dead store filter now names a storage location instead of an interface.** A filter or a
+  priority does nothing when another location already counts the same inventory, and the gold line saying so read
+  "Without effect: another interface counts this inventory". The location doing the counting can now be a **rack
+  bay**, which is not an interface, so the line reads **"Without effect: another storage location counts this
+  inventory"**
+- **"No matching filter" no longer blames a filter for a refusal no filter caused.** An aisle that could place an
+  input's items nowhere used to report "no storage location has a filter that accepts these items". A **rack bay**
+  also refuses items because it already holds another type, or because the column rule has taken it out of service,
+  and neither of those is a filter — so the line now reads **"no storage location takes these items, whatever room it
+  has"**, which still tells the case apart from a warehouse that is merely full
+
 ### Fixed
+
+- **Two captions no longer overlap in the Ponder scene "Packages at a Warehouse Door".** While the crane delivered
+  into the out door, the sentence about that trip stayed on screen for about a second and a half after the next one
+  had appeared — two lines of text drawn through each other on two neighbouring blocks, both unreadable
 
 - **A drawer behind a warehouse interface is filled past one stack again.** Any inventory that holds more than a stack
   per slot — a drawer, a barrel from a storage mod, a crate — was handed exactly one stack and then written off as

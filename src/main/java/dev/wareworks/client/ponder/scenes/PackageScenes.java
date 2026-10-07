@@ -87,8 +87,6 @@ public final class PackageScenes {
     private static final int TRANSFER_TICKS = 40;
     /** Ticks between the redstone edge and the box appearing, so cause and effect are two readable moments. */
     private static final int SIGNAL_LEAD = 10;
-    /** Extra ticks a text stays up while the crane makes a whole trip under it. */
-    private static final int TRIP_TICKS = 150;
 
     /** The face of a port on the {@link Side#RIGHT} plane the camera draws, with its predecessor left empty. */
     private static final Direction PORT_FRONT = Direction.WEST;
@@ -269,7 +267,12 @@ public final class PackageScenes {
 
         // --- the crane fills the door, and the box is made ------------------------------------------------------------
         CraneScript crane = CraneScript.parkedAt(scene, dock);
-        scene.overlay().showText(TEXT_TICKS + TRIP_TICKS)
+        // Shown for TEXT_TICKS and not for the whole trip, the same correction the arrival beat below carries: this
+        // caption used to be shown for 150 ticks longer than it is, while the beats that follow it idle only
+        // SIGNAL_LEAD + CYCLE + SIGNAL_LEAD = 40, so it and the caption about what a box is worth were drawn at once
+        // on two adjacent blocks for about 1.5 s. A caption must never outlive the idle that follows it
+        // (RackBayScenes' class comment).
+        scene.overlay().showText(TEXT_TICKS)
                 .text("The crane brings what the port asked for, and the Packager boxes it up")
                 .attachKeyFrame()
                 .placeNearTarget()
@@ -319,9 +322,9 @@ public final class PackageScenes {
         scene.world().createItemOnBeltLike(input, Direction.UP, new ItemStack(Items.COPPER_INGOT, ARRIVING_AMOUNT));
         scene.effects().indicateSuccess(input);
         scene.idle(TEXT_IDLE - SIGNAL_LEAD - PackagerBlockEntity.CYCLE);
-        // TEXT_TICKS, not TEXT_TICKS + TRIP_TICKS: store() is shorter than TRIP_TICKS estimates, so the longer
-        // lifetime left this sentence on screen while the red beat below was already drawn at the same anchor —
-        // glyph on glyph, both unreadable. The idle after the trip keeps the two apart whatever store() costs.
+        // TEXT_TICKS, and not a guess at the length of the trip under it: a longer lifetime left this sentence on
+        // screen while the red beat below was already drawn at the same anchor - glyph on glyph, both unreadable. The
+        // idle after the trip keeps the two apart whatever store() costs.
         scene.overlay().showText(TEXT_TICKS)
                 .text("Whatever address it carries: the warehouse keeps what was inside and the box is gone")
                 .attachKeyFrame()

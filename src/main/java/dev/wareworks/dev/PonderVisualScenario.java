@@ -88,7 +88,13 @@ public final class PonderVisualScenario implements VisualScenario {
             // terminal and run at the stations.
             new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 3),
             new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 3),
-            new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3));
+            new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3),
+            // M28 (issue #20): all three tiers carry the same three scenes, and all three are toured rather than only
+            // the wooden one. The tier is the block, so three registrations can be lost independently — and the tour
+            // is also the only check that each tier's own Ponder entry opens at all.
+            new Subject("bay-wood", WareworksBlocks.RACK_BAY_WOOD, 3),
+            new Subject("bay-andesite", WareworksBlocks.RACK_BAY_ANDESITE, 3),
+            new Subject("bay-brass", WareworksBlocks.RACK_BAY_BRASS, 3));
 
     @Override
     public String name() {

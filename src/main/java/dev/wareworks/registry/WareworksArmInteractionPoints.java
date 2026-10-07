@@ -31,6 +31,12 @@ import net.neoforged.neoforge.registries.DeferredRegister;
  * deliberately no arm point for the warehouse interface (it has no inventory of its own, and its chest is storage: the
  * Create way to reach a chest is a funnel on it), the controller, the stacker crane dock or the rail.
  * <p>
+ * Nor for the <b>rack bay</b> (M28), although a bay <i>is</i> a storage location with an item capability of its own:
+ * the reason the interface has none applies to it unchanged — a bay is storage, and the Create way to reach storage
+ * is a funnel on it. Without a type here the Mechanical Arm <b>item</b> clicked on a bay places an arm instead of
+ * aiming one, which is what {@code RackBayGestures} lets through on purpose; anything that claims an arm can fill a
+ * bay directly is wrong until a {@code rack_bay} type stands in this class.
+ * <p>
  * Initialised through {@link #register} after {@link WareworksMenuTypes#register()}.
  */
 public final class WareworksArmInteractionPoints {

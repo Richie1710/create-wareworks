@@ -26,6 +26,9 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
+import dev.wareworks.content.storage.PalletEntity;
+import dev.wareworks.content.storage.RackBayBlock;
+import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
@@ -59,6 +62,9 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <p>
  * It builds one aisle far away from the world spawn (so its chunks really can unload), starts store jobs and then:
  * <ol>
+ *   <li><b>a full rack bay broken while the crane carries items</b> (M28) — the load leaves as one pallet entity and
+ *       the crane finishes the job without the location it was storing into. It runs <b>first</b>, so the pallet is on
+ *       the floor for every phase below and a real chunk unload and a real world reload carry it;</li>
  *   <li><b>chunk round trip</b> — the camera flies far away until the aisle chunks unload while a job is running, waits,
  *       and comes back;</li>
  *   <li><b>save, quit and rejoin</b> — the world is saved in the middle of a job, the game returns to the title screen
@@ -67,9 +73,12 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *       dock itself, which drops the handling head at the dock.</li>
  * </ol>
  * After every step it counts <b>every item of the scene</b> ({@link SceneItemCensus}: inventories, station buffers,
- * handling head, dropped item entities) and logs one {@code robustness PASS} or {@code robustness FAIL} line. A FAIL
- * throws, so the harness writes a crash report and the Gradle task {@code runRobustnessTest} exits non-zero. Screenshots
- * are incidental here; the logs are the evidence.
+ * handling head, dropped item entities, Create packages and pallets) and logs one {@code robustness PASS} or
+ * {@code robustness FAIL} line. A FAIL throws, so the harness writes a crash report and the Gradle task
+ * {@code runRobustnessTest} exits non-zero. Screenshots are incidental here; the logs are the evidence.
+ * <p>
+ * One of the ten storage locations is a <b>rack bay</b> rather than a chest behind an interface, filled before the
+ * warehouse is ready, so every phase above carries a bay through it as well as a foreign inventory.
  */
 public final class RobustnessVisualScenario implements VisualScenario {
     public static final String NAME = "robustness";
@@ -126,6 +135,17 @@ public final class RobustnessVisualScenario implements VisualScenario {
 
     private static final int STACK = 64;
 
+    /**
+     * The one storage location that is a <b>rack bay</b> rather than a chest behind an interface (M28, issue #20): the
+     * far end of the left side, so the crane really has to drive there. A bay <i>is</i> the location, so the storage
+     * count is unchanged — no chest and no interface stand at this position.
+     */
+    private static final RackPosition BAY = RackPosition.of(RAILS, 0, Side.LEFT);
+    /** What the bay holds, and what the broken-bay phase feeds in so the crane consolidates into the bay. */
+    private static final Item BAY_ITEM = Items.DIAMOND;
+    /** The bay's load before the warehouse exists: more than one {@code ItemStack} could ever carry. */
+    private static final int BAY_LOAD = 2 * STACK;
+
     /** The order and the two items whose request counts have to survive the save, quit and rejoin (M24, issue #17). */
     private static final TerminalSort PREFERRED_SORT = TerminalSort.USED;
     private static final Item PREFERRED_ITEM = Items.AMETHYST_SHARD;
@@ -143,6 +163,16 @@ public final class RobustnessVisualScenario implements VisualScenario {
     /** The fill of the chunk-hold phase (M19): its own item type, like every other phase's. */
     private static List<ItemStack> chunkHoldFill() {
         return List.of(new ItemStack(Items.EMERALD, STACK));
+    }
+
+    /** The fill of the broken-bay phase: the bay's own item, so the crane consolidates into the bay it is about to lose. */
+    private static List<ItemStack> bayFill() {
+        return List.of(new ItemStack(BAY_ITEM, STACK));
+    }
+
+    /** The job the broken-bay phase hands on to the chunk round trip, which needs one that is already running. */
+    private static List<ItemStack> bayTailFill() {
+        return List.of(new ItemStack(Items.BRICK, STACK));
     }
 
     private static List<ItemStack> thirdFill() {
@@ -165,6 +195,12 @@ public final class RobustnessVisualScenario implements VisualScenario {
      * flip while the block entity is still the same object.
      */
     private volatile StackerCraneBlockEntity dockBeforeUnload;
+    /**
+     * 1 once the rack bay has been broken, so that {@link #sceneReady} expects one storage location fewer afterwards.
+     * A bay <b>is</b> the location, so breaking it really does take one away — unlike breaking the chest behind an
+     * interface, which leaves the interface standing.
+     */
+    private volatile int bayBroken;
 
     @Override
     public String name() {
@@ -187,6 +223,11 @@ public final class RobustnessVisualScenario implements VisualScenario {
                 .server("robustness: power the crane", this::powerOn)
                 .serverUntil("robustness: wait until the crane carries items", this::craneCarries, JOB_TIMEOUT_TICKS);
 
+        // The bay goes first on purpose: the pallet it leaves then rides the chunk round trip, the save, quit and
+        // rejoin and the chunk hold, and is counted by every census after it. "Persists across save, reload and chunk
+        // unload" is thereby proved by a real unload and a real world reload rather than only by a save-data round
+        // trip in a GameTest.
+        brokenBay(script);
         chunkRoundTrip(script);
         saveAndReload(script);
         chunkHold(script);
@@ -299,6 +340,45 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> census(server, "the aisle held and released its own chunks"));
     }
 
+    /**
+     * A <b>full rack bay is broken while the crane carries items</b> (M28, issue #20): the one item-conservation event
+     * this mod can cause that moves a whole storage location's contents at once, and the one no GameTest can watch
+     * across a real job.
+     * <p>
+     * The bay stands at the far end of the aisle holding two stacks, so breaking it has to produce a pallet carrying
+     * more than one {@code ItemStack} could. The census is taken twice: right after the break, while the crane is
+     * still carrying and its target may have just vanished under it, and again once the job has finished and the
+     * leftovers have been rerouted somewhere else.
+     * <p>
+     * <b>This step is only meaningful because {@link SceneItemCensus} was taught about pallets in the same commit as
+     * the entity.</b> Before that it swept inventories, station buffers, handling heads, item entities and Create
+     * packages — and a pallet is none of those, so this very step would have reported PASS while 128 diamonds
+     * disappeared.
+     * <p>
+     * It runs <b>first</b>, so the pallet it leaves is on the floor for the chunk round trip, the save-quit-rejoin and
+     * the chunk hold that follow, and is counted by every census after it. That is what proves "a pallet persists
+     * across a save, a reload and a chunk unload" with a real unload and a real world reload. The phase therefore ends
+     * by starting another job: the one the setup handed it has been used up here, and
+     * {@link #chunkRoundTrip(VisualScript)} is about a job that is <b>running</b> when its chunks go.
+     */
+    private void brokenBay(VisualScript script) {
+        script.server("robustness: refill the input with the bay's own item",
+                        (server, context) -> refill(server, context, bayFill()))
+                .serverUntil("robustness: wait until the crane carries items", this::craneCarries, JOB_TIMEOUT_TICKS)
+                .server("robustness: break the full rack bay while the crane carries items", this::breakBay)
+                .waitTicks(DROP_SETTLE_TICKS)
+                .server("robustness: census after the full bay was broken mid job",
+                        (server, context) -> census(server, "a full rack bay broken while the crane carried items"))
+                .serverUntil("robustness: wait until the crane finished without that bay", this::craneIdleAndEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census after the job finished without the broken bay",
+                        (server, context) -> census(server, "the job that lost its bay finished"))
+                .server("robustness: start another job for the chunk round trip",
+                        (server, context) -> refill(server, context, bayTailFill()))
+                .serverUntil("robustness: wait until the crane carries items again", this::craneCarries,
+                        JOB_TIMEOUT_TICKS);
+    }
+
     /** The controller and then the dock are broken while the crane carries items. */
     private void brokenBlocks(VisualScript script) {
         script.server("robustness: refill the input", (server, context) -> refill(server, context, thirdFill()))
@@ -352,13 +432,33 @@ public final class RobustnessVisualScenario implements VisualScenario {
         for (Side side : Side.values()) {
             Direction outward = layout.sideDirection(side);
             for (int x = STORAGE_FIRST_POSITION; x <= RAILS; x++) {
-                BlockPos rack = layout.rackPos(RackPosition.of(x, 0, side));
-                level.setBlockAndUpdate(rack.relative(outward),
+                RackPosition rack = RackPosition.of(x, 0, side);
+                BlockPos pos = layout.rackPos(rack);
+                if (rack.equals(BAY)) {
+                    // A rack bay IS the storage location: no chest behind it and no interface in front of it, which is
+                    // why the storage count below is unchanged. It is filled before the warehouse is ready, exactly as
+                    // a player builds a wall of bays first, so the baseline census already holds its load.
+                    level.setBlockAndUpdate(pos, WareworksBlocks.RACK_BAY_BRASS.getDefaultState()
+                            .setValue(RackBayBlock.FACING, outward));
+                    fillBay(level, pos);
+                    continue;
+                }
+                level.setBlockAndUpdate(pos.relative(outward),
                         Blocks.CHEST.defaultBlockState().setValue(ChestBlock.FACING, outward.getOpposite()));
-                level.setBlockAndUpdate(rack, WareworksBlocks.WAREHOUSE_INTERFACE.getDefaultState()
+                level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_INTERFACE.getDefaultState()
                         .setValue(WarehouseInterfaceBlock.FACING, outward));
             }
         }
+    }
+
+    /** Fills the rack bay through its own item capability, the way a funnel or a player's hand would. */
+    private void fillBay(ServerLevel level, BlockPos pos) {
+        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
+        if (handler == null)
+            throw new VisualTestException("the rack bay at " + pos + " has no item handler");
+        ItemStack rest = ItemHandlerHelper.insertItem(handler, new ItemStack(BAY_ITEM, BAY_LOAD), false);
+        if (!rest.isEmpty())
+            throw new VisualTestException("the rack bay refused " + rest);
     }
 
     private void placeController(MinecraftServer server, VisualContext context) {
@@ -372,7 +472,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         WarehouseControllerBlockEntity controller = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER.getNullable(level,
                 dock.relative(AISLE.getOpposite()));
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
-        int storage = (RAILS - STORAGE_FIRST_POSITION + 1) * Side.values().length;
+        int storage = (RAILS - STORAGE_FIRST_POSITION + 1) * Side.values().length - bayBroken;
         return controller != null && crane != null && controller.status() == ControllerStatus.READY
                 && !controller.isMembershipDirty() && controller.pendingSnapshotCount() == 0
                 && controller.storageLocations().size() == storage && controller.inputStations().size() == 1
@@ -543,6 +643,34 @@ public final class RobustnessVisualScenario implements VisualScenario {
     private void breakDock(MinecraftServer server, VisualContext context) {
         requireCarrying(server, context, "the dock");
         server.overworld().destroyBlock(context.origin(), false);
+    }
+
+    /**
+     * Breaks the full rack bay while the crane carries items. {@code dropBlock = false}, so the bay <b>block</b> never
+     * becomes an item entity in the census; its <b>contents</b> leave all the same, as one pallet, because that is
+     * {@code RackBayBlockEntity#destroy}'s job and not the loot table's.
+     */
+    private void breakBay(MinecraftServer server, VisualContext context) {
+        requireCarrying(server, context, "a full rack bay");
+        ServerLevel level = server.overworld();
+        BlockPos bay = layout(context.origin()).rackPos(BAY);
+        RackBayBlockEntity be = WareworksBlockEntityTypes.RACK_BAY.getNullable(level, bay);
+        if (be == null || be.storedCount() <= 0)
+            throw new VisualTestException("the rack bay at " + bay + " must hold goods when it is broken");
+        // Read before the break, not the number it was filled with: the crane has been storing into this bay since
+        // the phase started, which is exactly the situation the step is about.
+        int load = be.storedCount();
+        LOGGER.info(PREFIX + "robustness: breaking a rack bay holding {} x {}", load,
+                be.storedKey().map(Object::toString).orElse("nothing"));
+        level.destroyBlock(bay, false);
+        bayBroken = 1;
+        List<PalletEntity> pallets = level.getEntitiesOfClass(PalletEntity.class, censusBox);
+        long carried = pallets.stream().mapToLong(PalletEntity::carriedCount).sum();
+        LOGGER.info(PREFIX + "robustness: the broken bay left {} pallet(s) carrying {} items in total", pallets.size(),
+                carried);
+        if (pallets.size() != 1 || carried != load)
+            throw new VisualTestException("a broken rack bay must leave exactly one pallet with its whole load, found "
+                    + pallets.size() + " pallet(s) carrying " + carried + " instead of " + load);
     }
 
     private void requireCarrying(MinecraftServer server, VisualContext context, String what) {

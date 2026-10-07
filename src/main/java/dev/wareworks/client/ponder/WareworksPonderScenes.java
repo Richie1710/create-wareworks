@@ -9,6 +9,7 @@ import dev.wareworks.client.ponder.scenes.NetworkScenes;
 import dev.wareworks.client.ponder.scenes.PackageScenes;
 import dev.wareworks.client.ponder.scenes.PortScenes;
 import dev.wareworks.client.ponder.scenes.ProductionScenes;
+import dev.wareworks.client.ponder.scenes.RackBayScenes;
 import dev.wareworks.client.ponder.scenes.StockRuleScenes;
 import dev.wareworks.client.ponder.scenes.TerminalScenes;
 import dev.wareworks.client.ponder.scenes.WarehouseScenes;
@@ -49,6 +50,8 @@ import net.minecraft.resources.ResourceLocation;
  *       warehouse/production_chain</td></tr>
  *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
  *       warehouse/port_accepting</td></tr>
+ *   <tr><td>rack_bay_wood, rack_bay_andesite, rack_bay_brass</td><td>warehouse/rack_bay, warehouse/rack_wall,
+ *       warehouse/bays_in_an_aisle</td></tr>
  * </table>
  */
 public final class WareworksPonderScenes {
@@ -148,6 +151,26 @@ public final class WareworksPonderScenes {
         // warehouse, and which station its back touches is the whole lesson — so a player who met one finds the other.
         scenes.forComponents(WareworksBlocks.WAREHOUSE_OUTPUT, WareworksBlocks.WAREHOUSE_INPUT)
                 .addStoryBoard("warehouse/packages_at_the_door", PackageScenes::packagesAtTheDoor,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // The rack bay (M28, issue #20, ADR-048), and the one block of this mod whose scenes are deliberately NOT in
+        // "warehouse first" order: a wooden bay needs no machine to craft and many players meet it as a better barrel
+        // long before they own a crane, so the standalone block comes first, the wall it grows into second, and the
+        // warehouse that adopts it last. All three tiers carry all three scenes, because the tier is the block and a
+        // player holding a brass bay has to find the same three lessons as one holding a wooden one.
+        scenes.forComponents(WareworksBlocks.RACK_BAY_WOOD, WareworksBlocks.RACK_BAY_ANDESITE,
+                        WareworksBlocks.RACK_BAY_BRASS)
+                .addStoryBoard("warehouse/rack_bay", RackBayScenes::rackBay,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        scenes.forComponents(WareworksBlocks.RACK_BAY_WOOD, WareworksBlocks.RACK_BAY_ANDESITE,
+                        WareworksBlocks.RACK_BAY_BRASS)
+                .addStoryBoard("warehouse/rack_wall", RackBayScenes::rackWall,
+                        WareworksPonderTags.WAREHOUSE);
+
+        scenes.forComponents(WareworksBlocks.RACK_BAY_WOOD, WareworksBlocks.RACK_BAY_ANDESITE,
+                        WareworksBlocks.RACK_BAY_BRASS)
+                .addStoryBoard("warehouse/bays_in_an_aisle", RackBayScenes::baysInAnAisle,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

@@ -47,7 +47,12 @@ public final class WareworksPonderTags {
                 .add(WareworksBlocks.WAREHOUSE_OUTPUT)
                 .add(WareworksBlocks.WAREHOUSE_TERMINAL)
                 .add(WareworksBlocks.WAREHOUSE_PRODUCTION)
-                .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER);
+                .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
+                // A rack bay is a storage location that is the block itself (M28, issue #20), so all three tiers
+                // belong in the index beside the interface.
+                .add(WareworksBlocks.RACK_BAY_WOOD)
+                .add(WareworksBlocks.RACK_BAY_ANDESITE)
+                .add(WareworksBlocks.RACK_BAY_BRASS);
 
         // The dock is a kinetic appliance: it consumes rotational force and its speed depends on the RPM.
         entries.addToTag(AllCreatePonderTags.KINETIC_APPLIANCES)
@@ -60,6 +65,11 @@ public final class WareworksPonderTags {
                 .add(WareworksBlocks.WAREHOUSE_TERMINAL)
                 .add(WareworksBlocks.WAREHOUSE_PRODUCTION)
                 // The keeper moves nothing itself, but its three numbers gate what everything else here may move.
-                .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER);
+                .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
+                // A bay is the one storage location of this mod that Create's own machines can fill and drain
+                // directly (§3.8, "Machines may fill it"), so it belongs beside them.
+                .add(WareworksBlocks.RACK_BAY_WOOD)
+                .add(WareworksBlocks.RACK_BAY_ANDESITE)
+                .add(WareworksBlocks.RACK_BAY_BRASS);
     }
 }

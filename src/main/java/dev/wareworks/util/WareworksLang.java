@@ -237,6 +237,83 @@ public final class WareworksLang {
     public static final String AISLE_NAMED_CUT = "message.aisle_named_cut";
     /** Action bar text for a naming click on a block that belongs to no warehouse aisle yet (M25). */
     public static final String AISLE_NAME_NO_AISLE = "message.aisle_name_no_aisle";
+    /**
+     * Action bar text for a rack bay placement the column rule refuses (M28, issue #20, ADR-044): the bay would carry
+     * something stronger above it, or stand on top of something weaker.
+     * <p>
+     * It is one sentence for both directions on purpose. The rule is "strength never rises upwards" and it is refused
+     * in both directions so that the illegal column cannot be built from either end; a player who reads two different
+     * sentences for one rule has to work out that they are the same rule.
+     */
+    public static final String BAY_COLUMN_REFUSED = "message.bay_column_refused";
+    /**
+     * Action bar text for a naming click on a rack bay (M28, issue #20): a bay does <b>not</b> name an aisle, and a
+     * player who learned the gesture on a warehouse interface will try it here.
+     * <p>
+     * It is a deliberate answer and not a pass-through, because the gesture collides head-on with the bay's own one:
+     * a right-click with an item puts that item in, so a silent bay would swallow the renamed item a player was
+     * holding out at it. The sentence says where the gesture does work instead of only saying no.
+     */
+    public static final String BAY_NO_NAMING = "message.bay_no_naming";
+    /**
+     * {@code "%1$s:"}: goggle header of a rack bay (M28, issue #20), whose one argument is the <b>block's own
+     * name</b> — "Brass Rack Bay:".
+     * <p>
+     * The only goggle header of this mod that is not a constant sentence, and for a reason: the material is what
+     * decides a bay's capacity and what it may carry above it, so the tooltip has to name it, and the block's name
+     * already says it in both languages. Three more lang keys for "Wood", "Andesite" and "Brass" would say the same
+     * thing a second time and could drift from the block names.
+     */
+    public static final String GOGGLES_RACK_BAY = "gui.goggles.rack_bay";
+    /**
+     * {@code "%1$s %2$s / %3$s"}: what a rack bay holds and how full it is — "Cobblestone 4,096 / 65,536".
+     * <p>
+     * Deliberately not {@link #GOGGLES_SLOTS_USED}: a bay has exactly one slot, so "Slots: 1 / 1" would be true and
+     * useless. The item, the count and the capacity are the three numbers the issue's "you cannot see the stock" asks
+     * for, and the capacity is this bay's capacity <b>for what it holds</b> (stacks times that item's stack size).
+     */
+    public static final String GOGGLES_BAY_CONTENTS = "gui.goggles.bay_contents";
+    /** {@code "Capacity: %1$s stacks"}: a rack bay's capacity in stacks, which is what its material decides (M28). */
+    public static final String GOGGLES_BAY_CAPACITY = "gui.goggles.bay_capacity";
+    /**
+     * {@code "Holds %1$s until it is empty"}: an <b>unfiltered</b> rack bay that has learned a type from what landed
+     * in it (M28, issue #20). It replaces {@link #GOGGLES_STORAGE_FILTER_NONE} while such a bay holds something,
+     * because "Accepts everything" would then be false: a bay takes one type at a time, and this one is committed
+     * until it drains.
+     * <p>
+     * This is also how a player tells "the bay decided" from "I decided": a filter a player set reads
+     * {@link #GOGGLES_STORAGE_FILTER} and stays after the bay empties, while this line goes away with the last item.
+     */
+    public static final String GOGGLES_BAY_LEARNED = "gui.goggles.bay_learned";
+    /**
+     * {@code "Takes the first item that arrives"}: an <b>empty, unfiltered</b> rack bay (M28, issue #20). Also
+     * instead of {@link #GOGGLES_STORAGE_FILTER_NONE}, which is literally true of such a bay and still misses the
+     * whole rule — it accepts everything exactly once.
+     */
+    public static final String GOGGLES_BAY_ACCEPTS_FIRST = "gui.goggles.bay_accepts_first";
+    /**
+     * The gold warning of a rack bay the column rule has taken out of service (M28, issue #20, ADR-044):
+     * {@code "The rack above this bay is overloaded"}.
+     * <p>
+     * It is worded for the <b>closure</b> and not for the neighbour. {@code RackBayBlock.OVERLOADED} is the transitive
+     * closure of "the block directly above is a stronger bay", so in a column only a command can build — brass under
+     * wood under andesite — it is true for a bay that has nothing stronger directly above it at all. "A stronger bay
+     * stands above this one" would be false for that bay; "the rack above this bay is overloaded" is true for both,
+     * and it is also the physical reading the rule comes from.
+     */
+    public static final String GOGGLES_BAY_OVERLOADED = "gui.goggles.bay_overloaded";
+    /** Hint under {@link #GOGGLES_MISALIGNED} for rack bays: the open front belongs to the aisle (M28). */
+    public static final String GOGGLES_BAY_MISALIGNED_HINT = "gui.goggles.bay_misaligned_hint";
+    /**
+     * The dark-grey line under {@link #GOGGLES_NO_AISLE} on a rack bay (M28, issue #20): a bay no warehouse serves is
+     * <b>working as intended</b>, not broken.
+     * <p>
+     * Every other member of a warehouse is useless without one, so "Not part of an aisle" is a defect for them and a
+     * simple fact for a bay — which is cheap enough to be an early-game barrel and has to work with no controller, no
+     * crane and no rail anywhere. Many players meet this block before they meet the rest of the mod, so the quiet line
+     * that is right for an interface is not enough here.
+     */
+    public static final String GOGGLES_BAY_NO_WAREHOUSE = "gui.goggles.bay_no_warehouse";
     /** {@code "Open requests: %1$s"}: open retrieval requests of a controller. */
     public static final String GOGGLES_OPEN_REQUESTS = "gui.goggles.open_requests";
     /** {@code "Warehouse Input:"}: goggle header of a warehouse input. */
@@ -1494,5 +1571,34 @@ public final class WareworksLang {
     public static LangBuilder attachedInventory(Component blockName) {
         return translate(GOGGLES_ATTACHED_INVENTORY, builder().add(blockName.copy()).style(ChatFormatting.WHITE))
                 .style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Brass Rack Bay:" — the goggle header of a rack bay, which names the material because the material is what
+     * decides the capacity and the column rule ({@link #GOGGLES_RACK_BAY}).
+     *
+     * @param blockName the bay block's own name, so the three tiers need no lang keys of their own
+     */
+    public static LangBuilder rackBay(Component blockName) {
+        return translate(GOGGLES_RACK_BAY, builder().add(blockName.copy())).style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Cobblestone 4,096 / 65,536" — what a rack bay holds, how much of it, and how much it would hold of that item
+     * ({@link #GOGGLES_BAY_CONTENTS}).
+     * <p>
+     * The item's <b>generic</b> name, never a custom one: a bay syncs its contents as a registry id, so the client has
+     * no component data to draw from and must not pretend otherwise. The amount is gold like every other number a
+     * player came to read, the capacity plain beside it.
+     */
+    public static LangBuilder bayContents(Item item, long count, long capacity) {
+        return translate(GOGGLES_BAY_CONTENTS, builder().add(item.getDescription().copy()).style(ChatFormatting.WHITE),
+                number(count).style(ChatFormatting.GOLD), number(capacity)).style(ChatFormatting.GRAY);
+    }
+
+    /** "Holds Cobblestone until it is empty" — an unfiltered bay committed to what landed in it (dark grey). */
+    public static LangBuilder bayLearned(Item item) {
+        return translate(GOGGLES_BAY_LEARNED, builder().add(item.getDescription().copy()))
+                .style(ChatFormatting.DARK_GRAY);
     }
 }

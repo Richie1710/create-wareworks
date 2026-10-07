@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "B": { "tag": "c:plates/brass" },
+    "C": { "item": "create:brass_casing" }
+  },
+  "pattern": [
+    "BBB",
+    "C C",
+    "BBB"
+  ],
+  "result": { "count": 1, "id": "wareworks:rack_bay_brass" }
+}

@@ -8,8 +8,14 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Position of the warehouse interface's store filter slot ({@code docs/warehouse-system.md} §3.1.1, ADR-021): centred on
- * the <b>aisle side</b> ({@code FACING.getOpposite()}) in the lower half of the framed plate, below the crane's arm port.
+ * Position of the store settings slot of a storage location ({@code docs/warehouse-system.md} §3.1.1, ADR-021): centred
+ * on the <b>aisle side</b> ({@code FACING.getOpposite()}) in the lower half of the framed plate, below the crane's arm
+ * port.
+ * <p>
+ * It serves the warehouse interface and, since M28, the <b>rack bay</b> (§3.8) without a line of change:
+ * {@link WarehouseInterfaceBlock#FACING} <i>is</i> {@code HorizontalDirectionalBlock.FACING}, the one property both
+ * blocks carry, and both point it into the rack depth — so {@link #isSideActive} already answers for a bay. Everything
+ * below holds for either block.
  * <p>
  * The aisle side is the only face of an interface a player can use, and putting the slot anywhere else would break a
  * different interaction, because Create's {@code ValueSettingsInputHandler} cancels a right-click that hits a value box

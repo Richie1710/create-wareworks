@@ -300,6 +300,79 @@ class LangConsistencyTest {
     }
 
     /**
+     * Every goggle row of a <b>rack bay</b> fits a goggle tooltip in both languages (M28, issue #20), with the widest
+     * arguments each of them can draw already in it.
+     * <p>
+     * It is the same bound and the same argument as the package door's rows above: a goggle line is never wrapped, so
+     * one over-long row drags the whole tooltip to the screen edge and is cut there. A bay has <b>no screen</b>, so
+     * none of its texts can reach a hard-clipped row and {@code TerminalVisualScenario#checkRowVocabularyFits} — which
+     * measures exactly those rows, the terminal's status row and the production station's — has nothing new to
+     * measure. This is the gate that does apply to it.
+     * <p>
+     * Two arguments need a stand-in rather than a bound of ours. The header draws the <b>block's own name</b>, which
+     * is read out of the same file so the two can never drift apart. The contents and the learned-type rows draw an
+     * <b>item</b> name, which no bound of this mod governs at all — any mod's item can land in a bay — so they are
+     * measured with {@value #GOGGLE_ITEM_NAME_CHARS} characters, which is a touch more than the longest vanilla item
+     * name ("Waxed Weathered Cut Copper Stairs"). A row that only fits because its item is called "Dirt" is not a row
+     * that fits.
+     */
+    @Test
+    void theRackBayRowsFitAGoggleTooltip() throws IOException {
+        int budget = (GOGGLE_ROW_PIXELS - GOGGLE_INDENT_PIXELS) / GOGGLE_PIXELS_PER_CHARACTER;
+        for (Map.Entry<String, Path> lang : Map.of("en_us", GENERATED_EN_US, "de_de", HAND_WRITTEN_DE_DE).entrySet()) {
+            Map<String, String> texts = readFlatJson(lang.getValue());
+            String blockName = "";
+            for (String blockKey : WareworksLangKeys.RACK_BAY_BLOCK_KEYS) {
+                String name = texts.get("block." + blockKey);
+                assertTrue(name != null, lang.getKey() + " has no name for block." + blockKey);
+                if (name.length() > blockName.length())
+                    blockName = name;
+            }
+            for (String relativeKey : WareworksLangKeys.RACK_BAY_GOGGLE_KEYS) {
+                String key = "wareworks." + relativeKey;
+                String text = texts.get(key);
+                assertTrue(text != null, lang.getKey() + " has no text for " + key);
+                // The header's one argument is the longest of the three block names; every other first argument of
+                // these rows is either an item name or a count, and an item name is the wider of the two.
+                String first = relativeKey.equals(WareworksLangKeys.RACK_BAY_HEADER_KEY) ? blockName
+                        : relativeKey.equals(WareworksLangKeys.BAY_CAPACITY_KEY) ? GOGGLE_COUNT_ARGUMENT
+                                : "W".repeat(GOGGLE_ITEM_NAME_CHARS);
+                String filled = text.replace("%1$s", first).replace("%2$s", GOGGLE_COUNT_ARGUMENT)
+                        .replace("%3$s", GOGGLE_COUNT_ARGUMENT);
+                assertTrue(filled.length() <= budget, lang.getKey() + ": " + key + " needs " + filled.length()
+                        + " of the " + budget + " characters a goggle row holds: '" + filled + "'");
+            }
+        }
+    }
+
+    /**
+     * The list the test above measures is <b>complete</b>: every goggle row a rack bay owns is in it (M28, issue #20).
+     * <p>
+     * Without this, the width gate silently stops covering a bay the moment a row is added to it — the one failure
+     * mode of a hand-written list of keys, and an expensive one here, because a row that is too long is only visible
+     * on a screenshot of a goggle tooltip and only in the language it is too long in. The rule is mechanical: a bay's
+     * own rows are exactly the keys named after it, so a new one cannot be written without a new
+     * {@code gui.goggles.bay_*} key, and a new key fails here until it is measured.
+     * <p>
+     * It is a double inclusion on purpose, so a <b>renamed</b> or deleted key fails too instead of leaving a dead
+     * entry in the list that would measure nothing and pass.
+     */
+    @Test
+    void everyRackBayGoggleRowIsMeasured() throws IOException {
+        Set<String> measured = new TreeSet<>(WareworksLangKeys.RACK_BAY_GOGGLE_KEYS);
+        assertEquals(WareworksLangKeys.RACK_BAY_GOGGLE_KEYS.size(), measured.size(),
+                "the measured rack bay rows must be listed once each");
+        Set<String> own = new TreeSet<>();
+        for (String key : readFlatJson(GENERATED_EN_US).keySet()) {
+            String relative = key.startsWith("wareworks.") ? key.substring("wareworks.".length()) : key;
+            if (relative.equals(WareworksLangKeys.RACK_BAY_HEADER_KEY) || relative.startsWith("gui.goggles.bay_"))
+                own.add(relative);
+        }
+        assertEquals(own, measured, "every goggle row of a rack bay must be measured by the test above, and every "
+                + "measured row must still exist (run ./gradlew runData, then update RACK_BAY_GOGGLE_KEYS)");
+    }
+
+    /**
      * Room a goggle tooltip has in the window every visual run uses, in scaled pixels: 1600x900 at GUI scale auto is a
      * scaled width of <b>534</b>, and Create's placement leaves 24 px of it unusable
      * ({@code CombVisualScenario#TOOLTIP_SIDE_SPACE}).
@@ -323,6 +396,11 @@ class LangConsistencyTest {
      * stacks of a package, the free slots of a buffer, the packages one input opened since it was loaded).
      */
     private static final String GOGGLE_COUNT_ARGUMENT = "999999";
+    /**
+     * Stand-in for an <b>item</b> name in a rack bay's rows: a little more than the longest vanilla item name ("Waxed
+     * Weathered Cut Copper Stairs", 33), because no bound of this mod governs what a bay can hold.
+     */
+    private static final int GOGGLE_ITEM_NAME_CHARS = 36;
 
     /**
      * The keys of the tests above, spelled out here rather than read from {@code WareworksLang}: this test suite runs
@@ -350,6 +428,17 @@ class LangConsistencyTest {
                 PACKAGE_ADDRESS_KEY, "gui.goggles.port_package_no_address", "gui.goggles.port_packager_linked",
                 "gui.goggles.input_package_unpacking", "gui.goggles.input_packages_opened",
                 "gui.goggles.input_package_refused");
+        /** The header row of a rack bay, whose one argument is the block's own name (M28, issue #20). */
+        private static final String RACK_BAY_HEADER_KEY = "gui.goggles.rack_bay";
+        /** The one rack bay row whose argument is a count rather than an item name. */
+        private static final String BAY_CAPACITY_KEY = "gui.goggles.bay_capacity";
+        /** Every goggle row a rack bay can draw (M28, issue #20). */
+        private static final List<String> RACK_BAY_GOGGLE_KEYS = List.of(RACK_BAY_HEADER_KEY, BAY_CAPACITY_KEY,
+                "gui.goggles.bay_contents", "gui.goggles.bay_learned", "gui.goggles.bay_accepts_first",
+                "gui.goggles.bay_overloaded", "gui.goggles.bay_misaligned_hint", "gui.goggles.bay_no_warehouse");
+        /** The three bay blocks, whose names the header row draws. */
+        private static final List<String> RACK_BAY_BLOCK_KEYS = List.of("wareworks.rack_bay_wood",
+                "wareworks.rack_bay_andesite", "wareworks.rack_bay_brass");
 
         private WareworksLangKeys() {
         }

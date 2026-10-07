@@ -15,6 +15,7 @@ import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 
 /**
@@ -37,6 +38,23 @@ public final class WareworksBlockEntityTypes {
             .blockEntity("warehouse_interface", WarehouseInterfaceBlockEntity::new)
             .validBlocks(WareworksBlocks.WAREHOUSE_INTERFACE)
             .renderer(() -> WarehouseInterfaceRenderer::new)
+            .register();
+
+    /**
+     * Rack bay ({@code docs/warehouse-system.md} §3.8, M28, issue #20): <b>one</b> type for all three materials, because
+     * {@code .validBlocks(...)} is varargs and the tier is read off the block ({@code RackBayBlock#tier}) — one
+     * registration, one capability registrar, one renderer slot. <b>No renderer, deliberately</b> (ADR-047): everything a
+     * bay shows is block state geometry drawn into the chunk mesh, and registering one would put every bay of a rack
+     * wall into its chunk section's per-frame list at the vanilla 64-block default — the cost that cut the warehouse
+     * interface's own view distance to ten blocks. The visible consequence is that a bay's store filter is not drawn
+     * on the block the way an interface's is; it is read through the goggles and in the value box the crosshair rests
+     * on. Its item capability is the bay's own one-slot, one-type handler on every side, which is the whole of its
+     * contents.
+     */
+    public static final BlockEntityEntry<RackBayBlockEntity> RACK_BAY = REGISTRATE
+            .blockEntity("rack_bay", RackBayBlockEntity::new)
+            .validBlocks(WareworksBlocks.RACK_BAY_WOOD, WareworksBlocks.RACK_BAY_ANDESITE,
+                    WareworksBlocks.RACK_BAY_BRASS)
             .register();
 
     /**

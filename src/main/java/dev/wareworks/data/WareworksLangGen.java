@@ -92,6 +92,33 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.AISLE_NAMED_CUT), "Aisle %1$s is now \"%2$s\" (shortened)");
         lang.accept(WareworksLang.key(WareworksLang.AISLE_NAME_NO_AISLE),
                 "This is not part of a warehouse aisle yet");
+        // M28 (issue #20, ADR-044): one sentence for a rule that is refused in both directions, because it is one
+        // rule — the strength of a column never rises going upwards.
+        lang.accept(WareworksLang.key(WareworksLang.BAY_COLUMN_REFUSED),
+                "A rack bay may carry nothing stronger above it");
+        // M28 step 6: the gesture a bay does NOT carry. A right-click with an item puts that item in, so the aisle
+        // naming a player learned on an interface would silently swallow the renamed item they held out at the bay.
+        lang.accept(WareworksLang.key(WareworksLang.BAY_NO_NAMING),
+                "Name an aisle at a warehouse controller or interface");
+        // M28 step 6: the rack bay's goggle lines. The header's argument is the block's own name, so "Brass" is said
+        // once, by the block, instead of in three more lang keys that could drift from it.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RACK_BAY), "%1$s:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_CONTENTS), "%1$s %2$s / %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_CAPACITY), "Capacity: %1$s stacks");
+        // The two lines that stand instead of "Accepts everything" on an unfiltered bay, because a bay accepts
+        // everything exactly once: before the first item, and then only that one until it has drained.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_LEARNED), "Holds %1$s until it is empty");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_ACCEPTS_FIRST), "Takes the first item that arrives");
+        // Worded for the closure and not for the neighbour (ADR-044): the flag can be true for a bay with nothing
+        // stronger directly above it, in a column only a command could have built.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_OVERLOADED),
+                "The rack above this bay is overloaded");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_MISALIGNED_HINT),
+                "Turn the open front towards the aisle");
+        // "Not part of an aisle" is a defect for every other member of a warehouse and a plain fact for a bay, which
+        // is an early-game barrel long before there is a crane. One line says so, so nobody goes looking for a fault.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_NO_WAREHOUSE),
+                "A rack bay works by hand with no warehouse");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ADDRESS), "Address: %1$s");
         // The name is in brackets behind the address, never instead of it: the address is what the terminal, the
         // crane's own lines and every report speak, and the name is the label a player put beside it.
@@ -105,7 +132,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_FILTER_EMPTY),
                 "Empty filter: this location accepts nothing");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_FILTER_SHADOWED),
-                "Without effect: another interface counts this inventory");
+                "Without effect: another storage location counts this inventory");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_STORAGE_PRIORITY), "Priority: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_CONTROLLER), "Warehouse Controller:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_LETTER), "Warehouse %1$s");
@@ -384,7 +411,7 @@ public final class WareworksLangGen {
                 // No origin is named in these four (M18 review): a collecting port reports the same three of them as a
                 // warehouse input, and a collect-only aisle need not contain an input at all.
                 case WAREHOUSE_FULL -> "no storage location accepts these items";
-                case NO_MATCHING_FILTER -> "no storage location has a filter that accepts these items";
+                case NO_MATCHING_FILTER -> "no storage location takes these items, whatever room it has";
                 case PORT_FULL -> "an accepting port was the only place left for these items and it is full";
                 case AT_MAXIMUM -> "a stock rule for these items is at its maximum";
                 case OUTPUT_FULL -> "an output is full";
@@ -768,6 +795,16 @@ public final class WareworksLangGen {
                 "Shows its _address_, its _filter_, its _priority_, the _attached inventory_, its _used slots_, the "
                         + "most stored _items_ and the items _reserved_ for a running crane job.");
 
+        // The three rack bays (M28, issue #20). They differ in exactly two sentences — how much one holds and what it
+        // may carry above it — so the description is written once and the two numbers are passed in; a player reading
+        // two tiers in JEI has to be able to see at a glance that only those two things changed.
+        rackBayTooltip(lang, "rack_bay_wood", "64 stacks",
+                "a _wooden_ bay carries only wooden bays");
+        rackBayTooltip(lang, "rack_bay_andesite", "256 stacks",
+                "an _andesite_ bay carries wooden and andesite bays, never _brass_");
+        rackBayTooltip(lang, "rack_bay_brass", "1024 stacks",
+                "a _brass_ bay carries every bay there is");
+
         tooltip(lang, "block.wareworks.warehouse_input",
                 "A _station_ of a warehouse _aisle_ where items _enter_ the warehouse. It _buffers_ arriving items until "
                         + "a _stacker crane_ stores them.",
@@ -969,6 +1006,43 @@ public final class WareworksLangGen {
                 "When using a Wrench",
                 "_Closes_ the rail and opens it again. A _closed_ rail belongs to no warehouse, which keeps two "
                         + "warehouses whose rails touch apart and sends a _stray_ rail away again.");
+    }
+
+    /**
+     * Create item description of one rack bay ({@code docs/warehouse-system.md} §3.8). The three tiers share every
+     * word but {@code stacks} and {@code carries}, which is the point: the material decides how much a bay holds and
+     * what it may carry above it, and nothing else about the block changes with it.
+     *
+     * @param stacks   how much one bay of this tier holds, as it is written in the summary
+     * @param carries  the column rule for this tier, as a clause inside the placement sentence
+     */
+    private static void rackBayTooltip(BiConsumer<String, String> lang, String block, String stacks, String carries) {
+        tooltip(lang, "block.wareworks." + block,
+                "A _storage location_ that is the block itself: it holds _one item type_ and " + stacks + " of it, "
+                        + "shows _how full_ it is on the front, and needs _no warehouse interface_. It works _by hand_ "
+                        + "with no warehouse at all, and becomes an _addressable_ storage location as soon as a "
+                        + "crane's aisle reaches it.",
+                "When placed",
+                "Set bays _beside_ and _above_ each other to build a rack wall; clicking the _side_ of another bay "
+                        + "copies its direction, so a row grows however you stand. Keep the _open front_ towards the "
+                        + "_aisle_. A bay may carry _nothing stronger_ above it — " + carries + " — so a wall is "
+                        + "rebuilt from the _bottom_ up when you upgrade it.",
+                "When filling it by hand",
+                "_Right-Click_ with an item puts _one_ in, _Shift_ puts in a whole _stack_; with an _empty hand_ you "
+                        + "take _one_ out, _Shift_ a _stack_. There is deliberately no _take everything_ — emptying a "
+                        + "bay in one go is what _breaking_ it is for. _Funnels_, _chutes_, _belts_ and _hoppers_ "
+                        + "fill a bay directly as well.",
+                "When setting the filter",
+                "Click the _filter slot_ below the arm port to say what belongs here; _hold_ the click to set a "
+                        + "_priority_ from _0_ to _9_. A bay with _no_ filter takes the _first_ item that arrives and "
+                        + "holds that type until it is _empty_ again, so you can put up a wall and let it fill.",
+                "When broken",
+                "A bay _resets_: you get the _empty bay_ back and its whole load as _one pallet_ on the floor, "
+                        + "however much was inside. Nothing is lost and nothing is duplicated — you refill by hand, a "
+                        + "stack at a time, or let a _hopper_ drain the pallet.",
+                "When looked at with Goggles",
+                "Shows its _material_, its _address_, its _filter_, its _priority_, what is _in_ it, how _full_ it is "
+                        + "and the items _reserved_ for a running crane job.");
     }
 
     /** Create item description: summary plus condition/behaviour pairs ({@code .tooltip.conditionN/behaviourN}). */

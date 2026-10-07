@@ -1,0 +1,71 @@
+{
+  "multipart": [
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_andesite/block"
+      },
+      "when": {
+        "facing": "north"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_andesite/block",
+        "y": 90
+      },
+      "when": {
+        "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_andesite/block",
+        "y": 180
+      },
+      "when": {
+        "facing": "south"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_andesite/block",
+        "y": 270
+      },
+      "when": {
+        "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay/load_1"
+      },
+      "when": {
+        "fill": "1"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay/load_2"
+      },
+      "when": {
+        "fill": "2"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay/load_base"
+      },
+      "when": {
+        "fill": "3|4"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay/load_cap"
+      },
+      "when": {
+        "fill": "4"
+      }
+    }
+  ]
+}

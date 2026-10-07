@@ -50,6 +50,11 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 #   (dev.wareworks.client.ponder.scenes.PonderNetwork).
 # The junction scene (M22) uses that plate as a comb: the main run east at z = 2 over x = 1..8, with two side aisles
 #   south at x = 3 and x = 6 over z = 2..6, racks on the far side of each and the collecting port at x = 1, z = 3.
+# The two aisle-free rack bay scenes (M28) have no aisle at all, because a bay works standalone: rack_bay is one bay in
+#   the middle of a square 3 plate, and rack_wall is a 3 x 3 wall on the far row (z = 4) of a square 7 plate, so
+#   nothing stands between the camera and the bays' fronts (dev.wareworks.client.ponder.scenes.RackBayScenes).
+#   rack_bay's plate is deliberately the smallest of all of them, because that scene draws one block at twice the
+#   usual scale (RackBayScenes.SINGLE_SCALE) and the plate is what has to fit around it.
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
@@ -68,6 +73,9 @@ TEMPLATES = {
     "warehouse/port_accepting": (9, 7, 9),
     "warehouse/port_collecting": (9, 7, 9),
     "warehouse/packages_at_the_door": (9, 7, 9),
+    "warehouse/rack_bay": (3, 6, 3),
+    "warehouse/rack_wall": (7, 7, 7),
+    "warehouse/bays_in_an_aisle": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

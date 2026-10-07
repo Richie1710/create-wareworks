@@ -14,6 +14,7 @@ import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
+import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -53,6 +54,11 @@ import net.neoforged.neoforge.items.IItemHandler;
  * only rule under which packing and unpacking conserve items: a Packager builds the box out of nothing and destroys it
  * again on the way in, so counting the box would report 64 iron vanishing into one {@code create:package}.
  * {@code gametest.ItemCensus} applies the same two rules, for the same reason. See {@link #add(Map, ItemStack, long)}.
+ * <p>
+ * <b>A pallet counts as its contents and the pallet itself as nothing</b> (M28): the load of a broken rack bay lies in
+ * the world as one {@link PalletEntity}, which is neither an {@code ItemEntity} nor a block with an item capability, so
+ * without this branch the whole robustness run would report PASS while a broken brass bay deleted 65 536 items. A
+ * pallet is a new <b>carrier</b>, exactly as a package is, and not a fifth place an item can be (§8).
  * <p>
  * A census reads every block position of the box once, so scenarios keep the box to their own aisle. The box is
  * inflated around that aisle and therefore normally spans several chunks: {@link #take} <b>refuses</b> to count while
@@ -122,6 +128,11 @@ final class SceneItemCensus {
         // deferred by one server task, so a scenario that drops a package must let a tick pass before it counts again.
         for (PackageEntity entity : level.getEntitiesOfClass(PackageEntity.class, box))
             add(counts, entity.getBox());
+        // The load of a broken rack bay: one entity carrying one item type and a count, which no sweep above can see
+        // (M28). Read through the entity's own API rather than its item capability, so that a census never depends on
+        // a capability registration being present.
+        for (PalletEntity pallet : level.getEntitiesOfClass(PalletEntity.class, box))
+            pallet.carriedKey().ifPresent(key -> add(counts, key, pallet.carriedCount()));
         return counts;
     }
 

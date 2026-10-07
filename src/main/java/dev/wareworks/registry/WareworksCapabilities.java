@@ -7,6 +7,8 @@ import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.content.storage.PalletEntity;
+import dev.wareworks.content.storage.RackBayBlockEntity;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
 
 /**
@@ -20,17 +22,38 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
  * <p>
  * Registered ({@code docs/warehouse-system.md} §3.2, §3.4, §3.5): the warehouse input exposes an insert-only view of
  * its buffer, the warehouse output, the warehouse terminal and the warehouse production station an extract-only view,
- * all for every side. The views are final fields, so NeoForge's automatic
+ * all for every side, and a rack bay its own one-slot, one-type handler — the whole of its contents, because a bay
+ * <b>is</b> the storage location (§3.8, M28). The views are final fields, so NeoForge's automatic
  * invalidation (placement, removal, chunk load/unload) is enough; a station only invalidates itself when a load changed
- * its slot count. The warehouse interface, controller and crane expose no item capability. Create mechanical arms reach
+ * its slot count. The warehouse interface, controller and crane expose no item capability — an interface deliberately
+ * exposes nothing, because the inventory it reads answers for itself. Create mechanical arms reach
  * the stations through these same views, via the interaction point types in {@link WareworksArmInteractionPoints}.
+ * <p>
+ * <b>The rack bay is the one entry here that is a storage location</b> (M28, §3.8). Everything else registered above is
+ * a station or a buffer in front of the warehouse; a bay <i>is</i> a rack position, so its registrar is what makes a
+ * storage location fillable by a funnel, a chute, a hopper or a belt without the input station and
+ * without the crane. Nothing teleports — a machine makes one real {@code IItemHandler} call at the block in front of it
+ * — and the controller is only told, in the same tick, that the contents changed. Callers that do not use the
+ * capability at all (belts, belt tunnels, weighted ejectors) go through the bay's {@code DirectBeltInputBehaviour}
+ * instead, as they do at the warehouse input. A Create <b>mechanical arm</b> is the one caller this capability does
+ * <i>not</i> buy: an arm reaches only blocks a registered {@link WareworksArmInteractionPoints arm interaction point}
+ * accepts, and the bay has none.
+ * <p>
+ * <b>The pallet is the one entry that is not a block at all</b> (M28, §3.8): the load of a broken rack bay, carried by
+ * {@code PalletEntity}. It registers the <i>entity</i> item capabilities — {@code ItemHandler.ENTITY} and
+ * {@code ENTITY_AUTOMATION} — over one slot that is <b>extract-only</b>, because the only way goods may get <i>into</i>
+ * a warehouse's storage is a bay, and a pallet a machine could fill would be the portable container the owner refused.
+ * A vanilla hopper under a pallet drains it and a Create Deployer can take from it; Create's own belts, chutes and
+ * funnels cannot see it, which also means no Create logistics block can delete or teleport one.
  */
 public final class WareworksCapabilities {
     private static final List<Consumer<RegisterCapabilitiesEvent>> REGISTRARS = List.of(
             WarehouseInputBlockEntity::registerCapabilities,
             WarehouseOutputBlockEntity::registerCapabilities,
             WarehouseTerminalBlockEntity::registerCapabilities,
-            WarehouseProductionBlockEntity::registerCapabilities);
+            WarehouseProductionBlockEntity::registerCapabilities,
+            RackBayBlockEntity::registerCapabilities,
+            PalletEntity::registerCapabilities);
 
     private WareworksCapabilities() {
     }

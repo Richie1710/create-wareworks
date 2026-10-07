@@ -58,4 +58,36 @@ public interface StorageMember extends WarehouseMember {
     default int storePriority() {
         return 0;
     }
+
+    /**
+     * Whether this location holds at most <b>one item type at a time</b>: everything already inside it, and everything
+     * a planned job is about to bring, has to be the same item as the next delivery. A rack bay says yes; an inventory
+     * behind a warehouse interface says no, because a chest may hold whatever a player put into it.
+     * <p>
+     * It is <b>stricter than the planner's item-type grouping</b> and a different kind of rule. {@code JobPlanner}
+     * prefers a location that holds nothing of another type ({@code holdsOnlyTypeOf}, a ranking key over the item), but
+     * it will still store into a mixed one when nothing better is free. This is a gate: a location that answers true is
+     * never offered a second type at all, not even as the last candidate, because ADR-021 never re-shuffles and a
+     * location that was mixed once stays mixed.
+     * <p>
+     * The default is false, so a storage member that takes anything needs no change and a warehouse of interfaces is
+     * planned exactly as it was before.
+     */
+    default boolean holdsOneTypeOnly() {
+        return false;
+    }
+
+    /**
+     * Whether this location may be <b>stored into</b> at all. Retrieval is never restricted by it: items that are
+     * already inside can always be fetched, exactly as with the store filter.
+     * <p>
+     * It answers for the location itself rather than for an item, which is what distinguishes it from
+     * {@link #storeFilter()}: a rack bay that may not be filled because the column it stands in forbids it refuses
+     * every item for the same reason, and no filter could express that.
+     * <p>
+     * The default is true, so a storage member that is always fillable needs no change.
+     */
+    default boolean acceptsStoring() {
+        return true;
+    }
 }

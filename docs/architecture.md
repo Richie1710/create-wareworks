@@ -42,7 +42,9 @@ dev.wareworks
 │                              player's own playerdata, copied on death and never synced, M24, issue #17, ADR-037);
 │                              WareworksUnpackingHandlers (what happens when a Create Packager takes a package apart
 │                              into a Wareworks block: exactly one entry, registered from FMLCommonSetupEvent because
-│                              Create's registry is keyed by the Block object, M26, issue #18, ADR-040)
+│                              Create's registry is keyed by the Block object, M26, issue #18, ADR-040);
+│                              WareworksEntityTypes (the mod's only entity: PALLET, the load of a broken rack bay -
+│                              no spawn egg, no item form, M28, issue #20, ADR-046)
 │                              (WareworksItems only if plain items are ever added)
 ├── command                    WareworksCommands (`/wareworks chunks`, permission 2: what the mod holds force-loaded per
 │                              dimension, and the release valve — a hard requirement of M19, because nothing outside
@@ -161,6 +163,15 @@ dev.wareworks
 │   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views),
 │   │                          ClipboardList (M23, ADR-036: the only place Create's clipboard is read or ticked off)
 │   ├── storage                WarehouseInterfaceBlock / BlockEntity, AttachedInventorySummary (storage location);
+│   │                          RackBayBlock / BlockEntity and RackBayHandler (M28, ADR-043: the storage location
+│   │                          that IS the block - one item type as a count, 64/256/1024 stacks by tier, its own
+│   │                          address, filter and priority, no interface in front of it and no ticker);
+│   │                          RackBayGestures (M28, ADR-045: a plain click moves one item and Shift one stack, in
+│   │                          both directions, plus the interaction listener that is the only way a sneaking click
+│   │                          reaches a block at all);
+│   │                          PalletEntity (M28, ADR-046: the load of a broken bay as ONE plain Entity - one item
+│   │                          key and a count, extract-only, no item form so it can never be pocketed, and no
+│   │                          override needed for "survives fire, lava, damage and a reload");
 │   │                          StorageFilterBehaviour (the store filter slot, empty filters not synced; since M16 the
 │   │                          same box also carries the storage priority as a hold-to-edit board row, written only
 │   │                          while it is not 0, ADR-028),
@@ -313,7 +324,10 @@ dev.wareworks
 │   │                          digit on the plate, skipped at 0, ADR-028);
 │   │                          WarehouseOutputRenderer (the port's filter item plus, for an accepting port, its signed
 │   │                          rank on the plate on the back, M17, ADR-029; nothing for a collecting one, which has no
-│   │                          rank magnitude, M18)
+│   │                          rank magnitude, M18);
+│   │                          PalletRenderer (the mod's only EntityRenderer: a broken bay's load - a low deck, the
+│   │                          item on it and the count above it, because Create's goggles are block-entity-only and
+│   │                          an entity carries no tooltip at all, M28, ADR-046)
 │   └── ponder                 WareworksPonderPlugin (the one PonderPlugin), WareworksPonderScenes (which scene belongs
 │       │                      to which item), WareworksPonderTags (own tag wareworks:warehouse + Create tags),
 │       │                      WareworksPonderLang (ponder lang inside the Registrate LANG generator) (M5)
@@ -510,7 +524,7 @@ Naming notes (M1):
 * Goggle data of block entities is derived state that the server keeps small, compares by value and syncs only through `write(..., clientPacket = true)` when it changed (throttled); it is not saved to disk (warehouse interface, `warehouse-system.md` §3.1.1).
   * Its size must be bounded independently of inventory contents, because the update tag is part of every chunk packet and clients read block entity tags there with a 2 MB NBT quota. Never sync item data components for display; sync item ids (item types) instead.
   * It is refreshed and synced only while a player observes the block through goggles (`util.GoggleObservers`, per player, one ray pick per interval). Block entities implement `GoggleObservers.Observable` and need no ticker for this.
-* Initialisation order in the `Wareworks` constructor: `registerEventListeners` → `defaultCreativeTab(WareworksCreativeTabs.BASE_KEY)` → config → creative tab register → `WareworksDisplaySources` (M14; the block builders reference its entries, so it comes first) → `WareworksBlocks` → `WareworksBlockEntityTypes` → `WareworksMenuTypes` → `WareworksArmInteractionPoints` (M12; its `DeferredRegister` goes on the mod bus, and its types reference blocks) → capability, network and datagen listeners. No static field of `Wareworks` references a registry class.
+* Initialisation order in the `Wareworks` constructor: `registerEventListeners` → `defaultCreativeTab(WareworksCreativeTabs.BASE_KEY)` → config → creative tab register → `WareworksDisplaySources` (M14; the block builders reference its entries, so it comes first) → `WareworksBlocks` → `WareworksBlockEntityTypes` → `WareworksEntityTypes` (M28; it references no block, so its place in this order does not matter) → `WareworksMenuTypes` → `WareworksArmInteractionPoints` (M12; its `DeferredRegister` goes on the mod bus, and its types reference blocks) → capability, network and datagen listeners. No static field of `Wareworks` references a registry class.
   * M19 adds `AisleChunkTickets.register(modEventBus)` (the `TicketController`, registered **unconditionally** — an unregistered controller has its saved tickets stripped from the level), `AisleChunkTickets.registerHooks(NeoForge.EVENT_BUS)` and `WareworksCommands.register(NeoForge.EVENT_BUS)` to the event-listener step (ADR-031).
 
 ## Key design decisions (ADR log)
@@ -689,9 +703,11 @@ iron sheets already require a press and its brass casing already requires brass.
   * *Extended in M21 to fifteen scenes* (`warehouse/corner`, "Rails Around a Corner"), rails that bend; registered for the **warehouse rail and the stacker crane**, and last in both cases, so each block still opens on the scene it always did (ADR-033). Its stage is `client.ponder.scenes.PonderNetwork`, which asks the real `WarehouseLayout` for every position and address rather than computing them itself.
   * *Extended in M22 to sixteen scenes* (`warehouse/junction`, "Rails That Split"), rails that split; registered for the **same two components** and last again, so the rail and the crane now show overview → corner → junction. It is a storyboard of its own rather than beats added to `warehouse/corner` for the reason M20 gave: inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files, and a comb needs a third aisle, a second junction and three crane trips — more than the corner's stage and pacing hold. Its stage is `PonderNetwork#COMB` on the same square nine as the corner's, and `PonderNetwork#requireTwinOf` asserts the ownership claim its closing beats make against the layout itself, so the storyboard fails to compile rather than captioning a picture that stopped being true. Its captions each idle **longer** than they are shown (`NetworkScenes#SAY_IDLE`): `showText` does not block, and a scene whose captions all point at the same junction otherwise draws the next one on top of the one still fading out (found by looking at the shots of the first cut).
   * *Extended in M26 to seventeen scenes* (`warehouse/packages_at_the_door`, “Packages at a Warehouse Door”), Create packages at a warehouse door; registered for the **warehouse output and the warehouse input**, and last in both cases, so each block still opens on the scene it always did (ADR-040). Both stations show it because the build is the same Packager on either side of the warehouse and which station its back touches is the whole lesson, so a player who meets one door finds the other. It is a storyboard of its own for the reason M20 and M22 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because its build (two Packagers, a sign, a Smart Observer, a funnel) fits neither port schematic. Its stage is a new 9x7x9 plate in `scripts/gen_ponder_schematics.py`. Two things the plate itself taught, worth knowing before the next scene: a **standing sign** shows a scene its blank back unless `ROTATION` is set (6 points the writing at the plate's fixed camera), and a block's place on the plate is worth computing rather than guessing (screen-right ≈ −0.819·X + 0.574·Z, screen-up ≈ 0.329·X + 0.470·Z + 0.819·Y, from `PonderScene.SceneTransform`'s yRotation 145 / xRotation −35) — which is what shows, before any run, that a Packager on the **far** rack plane hides behind its own station. A ticking Create Packager in a scene is safe, which was doubted while this was being planned: `PackagerBlockEntity#lazyTick` returns at `if (level.isClientSide()) return;` before `recheckIfLinksPresent`, so the `setBlockAndUpdate` that worried it is unreachable from a `PonderLevel` — with or without a Stock Link beside it.
+  * *Extended in M28 to twenty scenes* (`warehouse/rack_bay`, `warehouse/rack_wall`, `warehouse/bays_in_an_aisle`), the rack bay's three, in `client.ponder.scenes.RackBayScenes` and registered for **all three tiers** (ADR-048). They are the one block of this mod whose scenes are deliberately **not** in warehouse-first order: a wooden bay needs no machine to craft, so its first audience owns no crane, and the standalone block comes first, the wall second and the aisle last. Three things they had to learn, each of which the next aisle-free scene will need as well. A `PonderLevel` is **client-side**, so it derives neither of a bay's flags (`FILL`, `OVERLOADED`) and cannot spawn a pallet at all — the scenes write both flags into the block state and build the pallet through `createEntity` plus the new display hook `PalletEntity#showClientLoad`, the counterpart of `showClientPose`. Ponder renders at **`30 * scaleFactor` units per block whatever the base plate is** (`PonderScene.SceneTransform#refreshMatrix`), so the plate only centres a scene and a single-block scene is made legible by `scaleSceneView` — `RackBayScenes.SINGLE_SCALE` is 2.0 on a square **3** plate, the largest scale and smallest plate in the mod. And the M22 caption rule is now written down rather than remembered (`RackBayScenes`' class comment): applying it found `warehouse/packages_at_the_door` still shipping the defect in one of its two trip beats, a caption shown 150 ticks longer than the scene then idled, drawn on top of the next one.
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
+  * *M28:* the three rack bays joined both tags together with their scenes, so the tag holds all **twelve** blocks. They are in `LOGISTICS` because a bay is the one storage location of this mod that Create's own machines fill and drain directly.
 * **Schematics are empty stages.** `scripts/gen_ponder_schematics.py` writes nothing but a checkerboard base plate plus an explicit `minecraft:air` entry for every position above it. A `PonderLevel`'s bounds are the bounding box of the blocks the template actually places (not the `size` tag), and instructions silently skip positions outside them, so the air entries are what lets the scenes build themselves with `setBlock`. Consequence: no Wareworks block state or block entity data lives in a `.nbt` file, so block changes never require regenerating them.
 * **The crane is animated through the client pose API, not frame by frame.** `client.ponder.scenes.CraneScript` calls `StackerCraneBlockEntity#showClientPose(pose, target, phase, held)` and then idles for exactly as many ticks as the pure `CraneMotion` needs to reach that target, simulated ahead of time at the same kinetic speed the scene sets. The block entity's own client tick does the moving, so the arm retracts before travel and extends at the target exactly as in a real job, and rendering interpolates between ticks. Only blocking instructions add to a scene's total time, so these `idle` calls keep the progress bar honest.
 * **Lang:** English from `provideLang` inside the LANG generator (`wareworks.ponder.*`), German hand-written; `LangConsistencyTest` enforces that they match. The `text_n` numbering follows the order of the `.text(...)` calls within a scene, so inserting a line renumbers every later key and both files must be regenerated together.
@@ -937,8 +953,9 @@ filter items cannot diverge from how they behave everywhere else in Create.
 * **A retrieve reroute may return items to a rejecting location.** Filters gate storing, and leftovers of a retrieval
   already left the warehouse; dropping those candidates could park the crane in `HOLDING` for ever in exactly the
   fully partitioned aisle this ADR encourages.
-* **`NO_MATCHING_FILTER`** tells "no filter accepts these items" from "no room" in the goggles; it keeps the
-  `fullBackoffTicks` back-off on purpose (reasoned in §7.4).
+* **`NO_MATCHING_FILTER`** tells "a location will not take these items" from "no room" in the goggles; it keeps the
+  `fullBackoffTicks` back-off on purpose (reasoned in §7.4). Since ADR-042 it covers two refusals no filter caused, so
+  its text names none (M28 review).
 * **Only real players may set a filter**: Create's value-box handler bypasses the hit test for a `FakePlayer`, so a
   deployer aimed anywhere at the aisle face could re-dedicate a chest and discard the filter item that was in it. The
   "hit-tested within half its scale" rationale above holds for players only.
@@ -1783,7 +1800,9 @@ same crane.
   used; and a **background poll** every `collectPollIntervalTicks` (default 20) covers the machines that change their
   inventory without telling anybody — a furnace's result slot, several Create blocks. Both queues share the one
   `maxSnapshotsPerTick` budget, so the per-tick cost bound of the stock index is unchanged, and a gated-shut port is not
-  read at all. A per-tick scan was never an option: the hard rules forbid it.
+  read at all. Storage is drained first, but the **last** unit of that budget is the collect queue's whenever the budget
+  is larger than one: a wall of rack bays, which hint on every accepted transfer, would otherwise keep the urgent
+  snapshot set non-empty and stop collecting ports being read at all (M28 review). A per-tick scan was never an option: the hard rules forbid it.
 * **Extraction goes through the item capability only**, slot by slot with real results, spilling at the **port's**
   position and never inside the machine. The crane never inserts there, so a Create machine feeding the same inventory
   is never fought over.
@@ -3161,6 +3180,565 @@ put one live query per location to the world each minute, which is the per-candi
 knows the inventory, and `ItemHandlerSnapshots.capture` reads a foreign `IItemHandler` and would pass `false`, so it
 cannot fix the released bug at all; it belongs to the rack bay, which does know.
 
+### ADR-042 — A storage location may answer for itself whether it takes one item type and whether it takes anything, and both are gated at the store filter (M28, issue #20)
+
+*Context:* M28's rack bay is a storage location that holds **one item type at a time** and that may be forbidden to
+accept anything at all (a bay with a stronger bay above it in its column). Neither rule is expressible as a Create
+filter: the first depends on what the location already holds and on what is already on its way there, and the second
+refuses every item for a reason that is about the location and about no item. The planner (`core.job.JobPlanner`) is
+pure, is shared by every location kind, and must not learn what a bay is.
+
+*Decision:*
+
+* **Two defaults on `content.controller.StorageMember`**, beside `storeFilter()` and `storePriority()`:
+  `holdsOneTypeOnly()` → `false` and `acceptsStoring()` → `true`. The warehouse interface, the only implementor before
+  M28, needs no change, and a warehouse of interfaces is planned exactly as before **by construction** rather than by
+  assertion.
+* **They are cached in `AisleFilters` beside the filter and the priority**, so they ride the refresh paths that already
+  exist (`refreshLocation`, `readStoreSettingsAt`, `onStorageFilterChanged`, `markUnread`) and the one-shot resolve of
+  an unread rack reads all four in the same block entity lookup. The planner's per-candidate cost stays one map lookup.
+* **The gate is `WarehouseControllerBlockEntity#storeFilterMatch`**, which `CraneDispatch` already wires as
+  `PlannerInput#storeFilter` — the planner's only store gate. A location that accepts no storing, and a one-type
+  location not committed to the key, answer `FilterMatch.REJECTED`. **`JobPlanner` gains no line**, and both rules
+  inherit everything a store filter already has: they decide before the capacity estimate, before any live simulation
+  and before a refusal could be remembered; retrieval never consults them; and a `RETRIEVE` reroute still ranks such a
+  location last instead of dropping it, so items can always be put back where they came from.
+* **The two rules decide before the Create filter is evaluated** (`AisleFilters#match`), because both are cheaper than
+  walking a filter's rules and both are stricter. For a location that answers neither — every interface — it is two
+  field reads on an entry that was looked up anyway.
+* **The commitment test reads the reservation ledger as well as the stock index.** The index says what is *inside* a
+  location; the ledger says what a crane is already carrying towards it. An empty one-type location with a cobblestone
+  job in flight would otherwise accept a dirt job planned in the same window, and two item types would be on their way
+  into a location whose whole premise is one. Both reads (`ReservationView#reservedCapacity(L)` and `(L, K)`) already
+  exist, so there is no new ledger method and no new `PlannerInput` field.
+* **The rule is a gate, not a ranking key.** `JobPlanner#holdsOnlyTypeOf` already *prefers* a location without other
+  item types, but it stores into a mixed one when nothing better is free, and it compares the **item** rather than the
+  whole key. A one-type location is never offered a second key at all, not even as the last candidate, because
+  ADR-021 never re-shuffles: a location that was mixed once would stay mixed for the world's life.
+
+*Consequences:*
+
+* An entry is dropped from `AisleFilters` only when a location carries no filter, no priority, takes any item type and
+  accepts storing, which is what keeps a wall of plain interfaces free. A rack bay is never neutral, so a warehouse of
+  1 056 bays keeps 1 056 small entries where a warehouse of 1 056 interfaces keeps none — tens of kilobytes beside a
+  stock index that already holds a snapshot per location, bounded by the number of rack positions, and written into the
+  class doc rather than left to be discovered.
+* A warehouse whose locations all refuse the incoming item reports `NO_MATCHING_FILTER`, not `WAREHOUSE_FULL`, because
+  that is what a store-filter rejection has always meant. For a wall of bays each holding a different item that is the
+  reason ladder's honest answer, and it is the wording the bay's goggle lines have to agree with (M28 Step 6). Both
+  gates answer before the filter is evaluated, though, so the reason now also covers a bay committed to another type
+  and a bay the column rule disabled — the **text** therefore stopped naming a filter in the M28 review.
+* The cold-cache rule of ADR-021 covers the new rules for free: an unread location answers `REJECTED` until it is
+  resolved, which is exactly right for a one-type location, since guessing "takes anything" would mix a bay for ever.
+* **Verified by teeth rather than by reading:** with `acceptsStoring()` defaulted to `false`, 122 of the 437 GameTests
+  fail; with `holdsOneTypeOnly()` defaulted to `true`, 11 fail and they fail with the predicted message — a second
+  key is refused and the reason ladder reports `NO_MATCHING_FILTER` where it used to report `WAREHOUSE_FULL`. Both
+  defaults restored, the suite green at 437.
+
+*Alternatives rejected:* **A new `LocationKind.BAY`** — would force a new arm into two exhaustive switches, a new
+saved name through `LocationKind.byName` and a branch at every `records(STORAGE)` call site, for a location that is
+discovered, addressed and reached exactly like any other. **Enforcing one type at the live simulate** — would burn a
+live-simulation budget entry per refusal and let the refusal memory remember a location that is about to become free.
+**Writing the learned type into the location's own filter slot** — would make the goggles report a filter nobody set,
+count the location as player-partitioned, and propagate a learned type as a set one through a clipboard copy.
+
+
+### ADR-043 — A rack bay is one item key and a count, in a hand-written handler, and the block is the storage location (M28, issue #20)
+
+*Context:* M28's rack bay holds **one item type** and a very great deal of it — 64, 256 or 1 024 stacks by tier, so
+65 536 cobblestone in one block. Every storage location before it was a *foreign* inventory read through a warehouse
+interface, and every item store this mod owns (the station buffer, the handling head) holds at most a stack per slot.
+A bay is the first block of this mod that owns a large amount of items itself, and the first storage location that is
+not a pointer at something else.
+
+*Decision:*
+
+* **The contents are one `ItemKey` and one `int`** (`core.storage.BayContents`, pure and JUnit-tested), with the
+  invariant `stored != null` exactly when `count > 0`. A bay therefore **forgets its item type the moment it empties**,
+  which is the issue's rule for an unfiltered bay, and the learned type *is* the stored type — there is no fourth field
+  and nothing is ever written into the filter slot, which would make a type the bay decided look like one a player set.
+* **The item handler is hand-written** (`content.storage.RackBayHandler`), and this is forced twice over.
+  `ItemStackHandler.serializeNBT` saves each slot with `ItemStack.save`, whose `ItemStack.CODEC` bounds a count at
+  `Item.ABSOLUTE_MAX_STACK_SIZE` = 99, so **a bay on an `ItemStackHandler` would lose its whole load on the first save,
+  silently** — nothing throws, and the network codec is unbounded, so the bay would look right until the world was
+  loaded again. And `ItemStackHandler.insertItem` caps an insert at `min(getSlotLimit, stack.getMaxStackSize())`, so a
+  raised slot limit alone would accept one stack and then refuse everything. ADR-013 already forbids saving contents as
+  `ItemStack`s; the save is `{Stored: <ItemKey>, Count: int}`, the shape the station buffer and the handling head use.
+* **`getStackInSlot` returns the true, oversized count.** The `IItemHandler` contract allows it, every drawer mod does
+  it, and it is what the item censuses of this mod's tests read (`gametest.ItemCensus`, `dev.SceneItemCensus`): a
+  clamped answer would make every conservation test report a gain of 64 the moment the crane took a stack out of a bay,
+  and would hide real losses in that noise. `extractItem` caps one call at one stack, as the contract requires and as
+  the crane's grabber and a vanilla hopper both expect.
+* **The block is the storage location.** `attachedPos()` is the bay's own position and `attachedHandler()` its own
+  handler, so `LocationKind.STORAGE` is reused with `FACING` pointing into the rack depth. Discovery, membership,
+  addressing, the snapshot round robin, `TransferContexts.resolve` and the crane's reach then accept a bay **with no
+  change at all** — the whole of the integration is that two `StorageMember` methods answer differently.
+* **No ticker on either side** (`RackBayBlock.getTicker` returns `null`), the warehouse interface's rule. A basement of
+  a thousand bays must cost nothing per tick. It is affordable because nothing polls: a bay's contents change only
+  through its own handler or a player's hands, and each change tells the controllers of that rack position at once
+  (`WarehouseRegistry.contentChanged`), which is a **one-key** index diff — the cheapest stock update in the mod, and
+  strictly better than the neighbour hint plus round-robin re-read a chest behind an interface needs.
+* **It exposes `Capabilities.ItemHandler.BLOCK` on every side**, which the hard rule of ADR-005 requires of a block
+  holding items and which is the only way an item census can see a bay's contents at all. Every face, because in a real
+  rack wall the lateral and rear faces are covered by neighbours and the aisle face is often the only reachable one. The
+  handler is a `final` field, so NeoForge's automatic invalidation is enough.
+* **A load is bounded and never throws, and a lowered capacity keeps every item.** No count, a count at or below 0 and
+  an undecodable item type all read as an empty bay (vanilla's own answer for an unreadable container entry); a crafted
+  count above `BayTier.MAX_CAPACITY_ITEMS`, which no configuration can reach, is clamped and logged as the loss it is;
+  a count above *this* bay's configured capacity, which lowering the config legitimately produces, is **kept in full**
+  and the bay accepts nothing until it has drained, so a world load never destroys anything. There is no slot list to
+  size, so a crafted count allocates nothing.
+
+*Consequences:*
+
+* A bay's insert estimate is **exact above one stack and an under-estimate below it**. `CapacityMath` reads a snapshot's
+  three numbers: a bay holding more than a stack hits the drawer branch and its remaining room is exact, a bay holding
+  exactly one stack lands in ADR-041's "unknown" window and is settled by the live simulate, and a bay holding less than
+  one stack is estimated at one stack minus its count. All three are above zero, which is all the planner's capacity
+  gate asks of them, and the live simulate decides the amount in every case.
+* **`writeSafe` is left at Create's default**, which does not call the bay's `write`, so a schematic of a rack wall
+  carries the filters and the priorities and not one item — a schematicannon printing a full brass bay would be the
+  removal crate the owner rejected, multiplied.
+* `Clearable.clearContent()` empties a bay without dropping anything, so `/setblock`, `/fill`, `/clone` and structure
+  placement void it exactly as they void a vanilla chest. Conceded by the issue, and asserted rather than discovered,
+  because a chest loses 27 stacks and a brass bay 1 024.
+* **Verified by teeth rather than by reading:** truncating the saved count at 99 — what `ItemStack.CODEC` would do -
+  fails `baypersistenceroundtrip` after the reload and nowhere else; clamping `getStackInSlot` to one stack fails
+  `baystandsalone`, `baypersistenceroundtrip` **and the item census of `baybreakspillsitsload`**, which is the argument
+  for the oversized count stated as a test result.
+
+*Alternatives rejected:* **An `ItemStackHandler` with a raised slot limit** — silent total loss on the first save, see
+above. **Clamping `getStackInSlot` to one stack** — turns every conservation test into a phantom gain. **A `MATERIAL`
+block state property instead of three blocks** — the item model, the recipe and the upgrade path are per item, and the
+column rule reads against three block ids; the three blocks share **one** block entity type, so there is still one
+registration, one capability registrar and one renderer. **A ticker that reconciles the bay's own contents** — there is
+nothing to reconcile: the bay is the inventory, so it knows every change exactly and at once.
+
+### ADR-044 — The column rule is one derived block state flag, refused at placement and only reported afterwards (M28, issue #20)
+
+*Context:* a rack bay may have **nothing stronger anywhere above it** in its column — no andesite on top of wood,
+because the rack below would give way. That rule is what makes upgrading a wall a rebuild from the bottom up and the
+tiers a progression rather than a label (issue #20). It has to hold for a wall of hundreds of bays, it is asked by the
+**job planner** (through `StorageMember#acceptsStoring`, ADR-042), and `/setblock`, `/clone`, WorldEdit and structure
+placement can all produce a column that breaks it without ever asking.
+
+*Decision:*
+
+* **A column is an unbroken stack of bays.** The first block that is not a rack bay ends it, so a gap is two racks and
+  a brass bay on a roof says nothing about a wooden bay in the basement. It is the only version maintainable in O(1),
+  and the alternative is a rule a player cannot see the edges of.
+* **Placement is refused, in both directions**, by `RackBayBlock.getStateForPlacement` answering `null`:
+  `BlockItem.getPlacementState` passes that through and `BlockItem.place` answers `FAIL` before it places the block and
+  before `itemstack.consume`, so nothing is placed and no item is used up, and the player is told in the action bar
+  (`message.bay_column_refused`, one sentence for one rule). It walks the column up **and** down, because the rule is
+  "strength never rises upwards": refusing only "stronger above" would let the illegal column be built from the top,
+  and a player would meet the refusal three rows later instead of on the first block. Each walk reads the whole column,
+  not just the neighbour, because a column a command already broke can hold a weak bay deep under a strong one.
+* **`canSurvive` is deliberately never implemented, and neither is `updateShape`.** A block that answers
+  `canSurvive() == false` while it stands advertises to every other mod that it may be popped, and a popped bay would
+  turn a `/setblock` into item loss. A standing illegal bay therefore **keeps standing, with its items.**
+* **A standing bay carries `OVERLOADED`, which is reported and never fixed.** It keeps its contents and its address, is
+  not offered as a **store** target, **stays retrievable** (a store rule never restricts retrieval, ADR-021 — a player
+  must be able to get their cobblestone out), says so on its goggles in gold, and works again the moment the bay above
+  it is gone. The flag never changes the model: a warning, not a look, the call the warehouse port already made for
+  `powered`.
+* **The flag is maintained in O(1), as the transitive closure of "the block directly above is a stronger bay":**
+  `overloaded(pos) = above is a bay && (above is stronger || above.overloaded)`. One block-state read answers it.
+  Writing it is itself a neighbour update for the bay below, so a change walks **down** the column one block at a time
+  with no world search and no recursion — and `neighborChanged` from `pos.above()` is the **only** trigger, so a wall
+  of a thousand bays does no work at all when a player builds beside it.
+* **A bay a command placed repairs its own flag on a scheduled tick**, not from `onPlace`. `onPlace` runs inside
+  `LevelChunk#setBlockState` *before* the block entity is created, and that method writes the state it was called with
+  into the block entity afterwards — a block state written from `onPlace` would therefore be overwritten in the block
+  entity while the chunk kept the new one, and `getBlockState()` would lie to the job planner about the very flag it
+  reads. Nothing is scheduled when the flag already agrees, which is every player placement and every legal command.
+* **A flipped flag notifies `WarehouseRegistry.filterChanged`**, from the block entity's `setBlockState`: the location
+  is the same one, only its answer to "may I store here" changed, which is exactly what a store filter change is. A
+  facing change still goes to `memberChanged` (aligned and misaligned swap), and a fill level (M28 step 9) matches
+  neither and notifies nothing.
+
+*Consequences:*
+
+* **The closure answers for the whole column below a weak link, which can over-report by design.** In a column a
+  command broke non-monotonically — brass under wood under andesite — the brass bay is flagged although nothing above
+  it is stronger than brass. That is the physical reading (the wood gives way and the wall comes down on the brass), so
+  the flag means *"something above me is giving way"* rather than *"the block above me is stronger"*, and the goggle
+  wording has to say that. Placement, which walks, refuses by the exact rule instead; the two only differ inside a
+  column a command already broke.
+* **The leaky case is a block being broken *below* a bay, not above it.** In a `wood / wood / brass` column the flag
+  sits on the two wooden bays; breaking the upper wooden one — the brass bay's neighbour below — must clear the wooden
+  bay underneath. An implementation that recomputed only on placement, or that walked upwards from the change, would
+  leave that bay refusing every store job for ever with its goggles naming a stronger bay in empty space. Nothing at
+  all happens to the brass bay above the break: it is not popped, it does not fall, it keeps its load, and its own flag
+  never depended on what stood below it.
+* **Verified by teeth:** disabling the `neighborChanged` recompute fails 4 GameTests (including
+  `baycolumnrulefollowscommandsandbreaks` on exactly that case); disabling the scheduled repair fails only
+  `baycommandedunderastrongeroneflagsitself`; dropping the `filterChanged` notification fails
+  `anoverloadedbaystoresnothingbutstaysretrievable` on its **last** step, where the controller's cached verdict stays
+  stale after the stronger bay is removed.
+* A bay whose column the planner refuses reports `NO_MATCHING_FILTER` through the reason ladder, like every other store
+  refusal (ADR-042). Named as a known wart there; a reason of its own is a follow-up. The M28 review took the half of
+  it that a player can see: the goggle text no longer claims a filter caused it.
+
+*Alternatives rejected:* **`canSurvive`** — see above, it invites other mods to pop a bay holding 65 536 items.
+**Recomputing the whole column whenever the question is asked** — up to a few hundred block-state reads, and the job
+planner asks it per storage candidate per planning run. **A four-valued "strongest tier above" property**, which would
+make the flag exact rather than a closure — it would cost a wider block state and would still only differ inside a
+column a command had already broken, where the mod's answer is "report, do not fix". **Clearing or moving an
+overloaded bay's items** — that is item loss on a command, and the issue settled that a bay keeps its goods.
+**Letting an overloaded bay refuse retrieval too** — a player could not get their own cobblestone out of a wall they
+can see.
+
+### ADR-045 — A rack bay's gestures are one item and one stack in both directions, and its contents are synced unconditionally (M28, issue #20)
+
+*Context:* a rack bay has to be filled and emptied **by hand** — it is a better barrel long before there is a crane —
+and what is in it has to be readable from the outside, which is half the reason the issue exists. Both halves land in
+places this mod has not been before: a block whose contents a player moves one click at a time, and a block whose
+**contents** are part of every chunk packet.
+
+*Decision:*
+
+* **A plain right-click moves one item, Shift moves one stack, and that holds in both directions.** An item in hand
+  puts in, an empty hand takes out. One symmetric sentence, the same amounts a plain and a Shift click mean at the
+  warehouse terminal, and **no "take everything"**: emptying a bay in one go is what breaking it is for, and a brass
+  bay holds 65 536 items against a player inventory's 2 304, so "everything" could only ever have meant "fill my
+  inventory and stop". The terminal's third modifier could not have been delivered anyway — a block click carries no
+  modifier bit over the wire at all, so the server knows nothing of the player's keyboard beyond the crouch state it
+  already tracks. The two plain amounts are one constant each (`RackBayGestures.PLAIN_INSERT_ITEMS`,
+  `PLAIN_TAKE_ITEMS`), because "a plain insert puts the whole held stack in" is a taste the issue itself raised.
+* **Not a punch, although a drawer's gesture is one.** `blockstate.attack(...)` and starting to break a block are one
+  input — `ServerPlayerGameMode#handleBlockBreakAction` calls `attack` and then begins destroy progress on the
+  following lines — so "punch to take a stack" breaks the bay in about two ticks for a player holding an efficiency
+  pickaxe, on the block this mod places by the hundred. An empty-hand right-click keeps the drawer feel and cannot
+  destroy anything.
+* **The Shift half needs an interaction listener, and there is no way around it.** Vanilla never hands a *sneaking*
+  interaction to a block while a hand holds something: `ServerPlayerGameMode#useItemOn` builds its guard from "is
+  sneaking" and "either hand is non-empty" (less the items that answer `doesSneakBypassUse`, whose default is
+  `false`) and skips `useItemOn` **and** `useWithoutItem`. `RackBayGestures` therefore answers
+  `PlayerInteractEvent.RightClickBlock` with `setUseBlock(TRUE)` for a sneaking main-hand click on a bay — the same
+  mechanism and the same shape as `ProductionStationHooks` (M20), which needed it for an empty hand and an occupied
+  offhand. It answers identically on both sides, so the client's prediction matches.
+* **Five items keep their own meaning**, in the gesture and in the listener: a **wrench** (which turns the bay and so
+  decides which face is the aisle face), Create's **clipboard** (which dedicates a whole rack wall in one gesture —
+  Create's own handler cancels a plain click for it and returns on a sneaking one, so without this a sneaking
+  clipboard click would be *stored*), the **Mechanical Arm** item (which *places* an arm, because a bay is no arm
+  target — ADR-025 registers none for it), **another rack bay** (which places, and is the whole way a wall is built:
+  without this entry an empty, unfiltered bay — the state every freshly placed bay is in — *stored* the next bay in
+  both postures, and a free-standing wall's second row could not be started at all; M28 review), and a
+  **renamed** item on a sneaking click. A plain click with a renamed item is **answered** instead
+  (`message.bay_no_naming`): a bay names no aisle (D9), and a player who learned that gesture on an interface would
+  otherwise watch their renamed item disappear into the bay.
+* **A `FakePlayer` is refused in both directions.** A Deployer has the item capability for exactly this purpose, the
+  aisle face is the one face in-aisle automation can reach, and `StorageFilterBehaviour#mayInteract` already refuses
+  fake players at the value box for the same reason — which is why such a click reaches the block at all.
+* **The goggles name the bay's own block**, because the material decides the capacity and the column rule and the
+  block already says it in every language; three more lang keys for "Wood", "Andesite" and "Brass" would say the same
+  thing twice and could drift from the block names. It is the only goggle header of this mod that is not a constant
+  sentence.
+* **A bay no warehouse serves reads as working as intended.** `gui.goggles.no_aisle` is a defect for every other
+  member of a warehouse and a plain fact for a bay, so one dark-grey line is added under it:
+  *"A rack bay works by hand with no warehouse"*. Many players meet this block before they meet the rest of the mod.
+* **An unfiltered bay never reads "Accepts everything"**, which is the one place the interface's vocabulary is wrong
+  here: a bay accepts everything exactly once. Empty it *takes the first item that arrives*; holding something it
+  *holds that until it is empty*. Those two lines are also how a player tells the type the bay **learned** from the
+  one they **set**, which stays after the bay drains.
+* **The contents line is item, count and capacity**, not `usedSlots / totalSlots`: a bay has one slot, so Create's
+  slot line would read "Slots: 1 / 1" — true and useless. A bay therefore uses neither `AttachedInventorySummary` nor
+  `ItemTypeSummaries` and writes its own two values.
+* **The client packet carries the item's registry id and an int, never an `ItemKey`** — the M1 lesson, written up in
+  `warehouse-system.md` §3.1.1: a block entity's update tag is part of every chunk packet, read with a 2 MB NBT quota,
+  and the interface's first version synced full item keys, so one shulker box of written books could disconnect
+  everyone loading the chunk. Bounded on both sides: an unknown item and an impossible count read as empty or as the
+  bound.
+* **And it is sent on every content change, unthrottled** — the first time this mod syncs per-block **contents** at
+  all. The interface throttles its goggle summary and flushes it on the next goggle observation; a bay must not,
+  because its front has to be right for a player walking past with no goggles on, and a throttle on a block with no
+  ticker and no observer could never be flushed. So it gets a budget of its own,
+  `MAX_RACK_BAY_SYNC_BYTES` = 1024 beside the interface's 2048, asserted in the state almost every bay of a wall is in
+  (556 bytes measured) and again in the worst case a warehouse can produce (3 276 of 4 096).
+* **The whole observer apparatus of the interface is deleted rather than copied.** The dirty flag, the two-rate
+  refresh, the sync throttle, the `LogThrottle` around an inventory that throws and the `BlockCapabilityCache`
+  listener all exist for one stated reason — goggles run on the client, which cannot see a **foreign** inventory's
+  contents. A bay's contents are its own data and are already there. `onGoggleObserved` resolves the address and the
+  reservations and nothing else.
+
+*Consequences:*
+
+* **You cannot sneak-place a block against a bay's face while the bay would accept that block as an item.** That is
+  the price of forcing the sneaking click, and it is named rather than discovered. A bay that refuses the item — a
+  filter, a different type inside, no room — passes the click on and the block is placed as before, and so do the four
+  items above.
+* **A renamed item cannot be put into a bay by hand at all**: a plain click is answered, a sneaking one places the
+  block. A funnel, a hopper and the crane still store one — and it would read as its plain self on the block either
+  way, because that is all the client is sent.
+* **A take can never fail for lack of room**, because the hand's own slot is free and a take is capped at one stack.
+  The simulate against the player's inventory and the "only what fits" rule stay all the same: they are what make the
+  property true by construction rather than by that argument, and the two plain amounts are constants that may change.
+* **The goggle lines themselves have no automated test.** `LangBuilder#forGoggles` measures the client font, so
+  `addToGoggleTooltip` cannot run in `runGameTestServer` at all; what a server test pins is every piece of state the
+  lines read and that it crosses the wire (`baygogglestatefollowsthewarehouse`, `baysyncisbounded`). The widths are
+  `LangConsistencyTest#theRackBayRowsFitAGoggleTooltip`; the lines as a player sees them are a manual check and, from
+  M29, a visual one.
+* **Verified by teeth:** writing the item's *name* instead of its id onto the wire fails `baysyncisbounded` and
+  `baygogglestatefollowsthewarehouse`; dropping the four-item pass-through makes a bay swallow a wrench and fails
+  `bayhandgestures`; dropping the naming answer makes it swallow a renamed item silently and fails the same test on
+  its action bar.
+
+*Alternatives rejected:* **a punch to take out** — see above, it is the block-breaking input. **`Control` for
+"everything"** — the wire carries no such bit, and the issue had already settled against it. **A plain insert of the
+whole held stack** — left as a constant, because it is the owner's taste and not a mechanism. **Writing the learned
+type into the filter slot** — ADR-043 rejected that for the whole feature, and the goggles are where it would have
+shown as "Filter: Cobblestone" for a filter nobody set. **Throttling the content sync** — a throttle with no ticker
+and no observer can never be flushed, and the front would be stale exactly for the player who is not wearing goggles.
+**Copying the interface's observer machinery** — dead code wearing the clothes of caution.
+
+### ADR-046 — Breaking a rack bay resets it: the load leaves as one plain `Entity` that cannot be pocketed, and both item censuses count a pallet as its contents (M28, issue #20)
+
+*Context:* a bay holds up to 65 536 items and a single `ItemStack` caps at `Item.ABSOLUTE_MAX_STACK_SIZE` = 99, so
+breaking a full bay is the largest item-conservation event this mod can cause. Three answers were on the table and two
+were refused by the owner. **Indestructibility** — "a rack is not made of obsidian, and a block that shrugs off a
+creeper because it happens to be full is a game rule pretending to be physics". **Dropping the bay as a filled item,
+shulker-box style** — a brass bay is 1 024 stacks, thirty-eight times a shulker box, obtainable without ever visiting
+the End; players would stop building warehouses and start using bays as removal crates, and the crane this mod is built
+around would become decoration. What is left is dropping the contents, which cannot be done the obvious way: `spillAt`
+splits to the item's max stack size and `Containers.dropItemStack` splits again by `random.nextInt(21) + 10`, so a full
+brass bay is roughly **3 300** item entities, and a rack wall of them is a server's bad afternoon.
+
+*Decision:*
+
+* **Breaking a bay resets it.** An empty bay item from the loot table and the whole load as **one** entity on the
+  floor, refilled by hand a stack at a time with the bay's own gesture (ADR-045). Never both the items and a filled
+  block, and never a filled block in a pocket. The loot table is the plain block, with no `copy_nbt` and no
+  `setBlockEntityData`, which is what keeps those two from both happening.
+* **The pallet is a plain `net.minecraft.world.entity.Entity`** in `MobCategory.MISC`, carrying one `ItemKey` and one
+  count — not a `LivingEntity`, not a vehicle, not a copy of Create's `PackageEntity`. That choice **is** the answer to
+  every "must survive" requirement, and each one costs no override:
+  * `Entity#hurt` is "mark hurt and answer false" — a plain entity has no health, so **no damage source can reduce
+    it**. `setInvulnerable(true)` is set anyway, so `isInvulnerableTo` answers honestly and `/damage` reports its
+    failure instead of lying;
+  * `Entity#lavaHurt` has its whole body inside `if (!fireImmune())` and every burning path routes through `hurt`, so
+    `.fireImmune()` on the entity type is the whole of "survives fire and lava";
+  * despawning is `Mob` behaviour and the 6 000-tick death is `ItemEntity` behaviour — a plain entity has neither;
+  * `shouldBeSaved()` is already true for a non-passenger and the unload path saves to the chunk, so `noSave()` must
+    **never** be called and no persistence flag is needed.
+  `PackageEntity` is the nearest shape in the ecosystem and the opposite behaviour on all four counts the issue names:
+  it is pocketable, it dies in lava, it dies in water, and it drops its contents as item entities.
+* **It cannot be pocketed and cannot be put back as a filled bay**, which is the same sentence twice: there is **no
+  item form and no spawn egg at all**, so both pick hooks can be left at their defaults (`Entity#getPickResult`
+  answers `null`, `IEntityExtension#getPickedResult` delegates to it) and the rule needs nothing maintained to stay
+  true. It also rides nothing (`canRide` false, not `Leashable`) and changes no dimension, so it cannot be carried out
+  of the warehouse by any route.
+* **It is pushable and it falls.** `isPushable()` true and `canBeCollidedWith()` left at its `false` default: a player
+  walks through a pallet and shoves it along, which is the picture the feature is built on. A minimal physics tick
+  (gravity, move, drag — the shape `PrimedTnt` uses) is therefore real behaviour and not decoration: without it a bay
+  broken high up in a rack wall would leave its load floating out of reach. `PrimedTnt` lives at most 80 ticks and a
+  pallet is **permanent**, though, so the move also carries `ItemEntity`'s resting guard — skip the collision step
+  while the pallet is on the ground and still, except on every fourth tick, staggered by `getId()` (M28 review). Taking
+  `ItemEntity`'s despawn comparison without its resting guard was the gap: a resting pallet never reaches
+  `Entity.collide`'s zero-vector short circuit, because gravity re-arms the delta every tick. `isPickable()` must be true or it cannot
+  be clicked at all; `isAttackable()` is false, because there is nothing a punch could do.
+* **Out only, never in.** `Capabilities.ItemHandler.ENTITY` and `ENTITY_AUTOMATION` expose one slot, **extract-only**:
+  insertion would make the pallet a machine-fillable portable container, which is the thing that was refused. A player
+  takes with the bay's own gesture — empty hand, plain one item, Shift one stack, simulated against their own
+  inventory first. An **emptied pallet discards itself**, so draining one never leaves an invisible husk.
+* **The bay's side is `destroy()` and nothing else** (ADR-013: drops happen only there, reached via `IBE.onRemove`),
+  and it does two things in a fixed order. It **clears the contents before anything is spawned**, so a second pass
+  finds nothing — the discipline `StationBuffer.dropAll` already uses. And it **checks what `addFreshEntity`
+  answered**: `EntityJoinLevelEvent` is cancellable and the UUID set can reject, so one unrelated mod's handler would
+  otherwise turn breaking a bay into total loss. The fallback is the old `spillAt` plus a `WARN` — deliberately ugly,
+  thousands of item entities, because a loud mess is the right failure mode for an item-conservation event and a
+  silent loss is not.
+* **`{Item: <ItemKey>, Count: int}`, never `ItemStack.save`.** `ItemStack.CODEC` bounds its count at 1..99 while the
+  network codec does not, so a pallet built on a stack would look perfect for a whole session and empty itself on the
+  next world load — the same trap that forced `RackBayHandler` to be hand-written. A load is bounded and never throws:
+  an undecodable key or a count at or below 0 **discards** the pallet (vanilla's own answer for an item entity whose
+  stack it cannot read; an unremovable husk would be worse), and a count above `MAX_LOAD` is clamped **and logged as
+  the item loss it is**.
+* **`MAX_LOAD` is `BayTier.MAX_CAPACITY_ITEMS`** (405 504), not a number of its own. A pallet carries one bay's load
+  and nothing else, so its ceiling is the bay's ceiling, its warning is the bay's warning and its count is an `int`
+  for the same reason a bay's is. A second, unrelated bound would be a second thing to keep in step.
+* **The client gets the item as a tracked `ItemStack` of count 1 plus the count as a separate `int`**, so no oversized
+  stack ever exists where `save` could truncate it. This is entity **tracker** traffic rather than a chunk packet, so
+  it carries the real components and a renamed item reads correctly on a pallet — the one place this mod can afford
+  that, and the opposite of the bay's own update tag (§3.1.1).
+* **Both item censuses count a pallet as its contents and the pallet itself as nothing, in the same commit as the
+  entity.** `gametest.ItemCensus` and `dev.SceneItemCensus` sweep `ItemHandler.BLOCK`, station buffers, handling
+  heads, arm claws, `ItemEntity` and `PackageEntity` — and a pallet is none of those. Until they learned it, **every
+  conservation GameTest and the whole robustness run would have reported PASS while a broken brass bay deleted 65 536
+  items.** A pallet is a new **carrier**, exactly as M26 made a package one, and not a fifth place an item can be
+  (`warehouse-system.md` §8).
+
+*Consequences:*
+
+* **A Create funnel, chute, belt, depot or ejector will not drain a pallet**, because they all gate on
+  `ItemHelper.fromItemEntity`, whose whole body answers only for a `PackageEntity` and an `ItemEntity`. A **vanilla
+  hopper** does (NeoForge's hopper code falls back to the entity automation capability) and so does a **Create
+  Deployer**, which throttles itself on its own overflow. This must be in the Ponder scene and the docs or it is the
+  first bug report — and the second half of it is the better half: **no Create logistics block can delete or teleport a
+  pallet either.**
+* **The honest limits stay the void, `/kill` and a world edit.** The void is conceded by the issue and is the one
+  allowed loss, so `onBelowWorld` logs the item, the count and the position **before** it discards: the loss leaves a
+  record.
+* **`/setblock`, `/fill`, `/clone` and structure placement still void a bay's contents**, because they call
+  `Clearable.tryClear` first and never reach `destroy()`. Vanilla parity for containers — but a chest loses 27 stacks
+  and a brass bay loses 1 024, so it is said out loud in §8 and in the manual checklist rather than discovered.
+* **A fill-level block state change spawns nothing**, because `IBE.onRemove` returns early when the block is the same
+  and the new state still has a block entity. M29's visible fill level rests on exactly that.
+* **Pistons and contraptions never reach it either**, because the bay carries `WareworksTags.relocationProtected()` —
+  a different mechanism from breakability, and one that stays whatever is decided about breaking.
+* **Verified by teeth:** spawning no pallet at all fails `baybreakresets` on the census, and *only* because both
+  censuses learned about pallets — which is how that change was checked. Saving the load as an `ItemStack` passes
+  everything until `palletpersistenceroundtrip` reloads 65 536 items. Ignoring `addFreshEntity`'s answer passes
+  everything except `palletspawnrefusedfallsbacktoitementities`. Giving the pallet an item form fails
+  `palletisnotpocketableandcannotride` before it can become a removal crate.
+
+*Alternatives rejected:* **indestructibility** and **a filled bay item** — both refused by the owner, for the reasons
+in the context. **One item entity per item type** — still 662 entities for a full brass bay by the issue's own count,
+and about 3 300 by `spillAt`'s real behaviour. **A `LivingEntity`** — it would need health, an attribute supplier and
+a damage override to achieve what `Entity#hurt`'s empty body gives for free, and it would be hurt by anything that
+bypasses invulnerability. **`noSave()` plus a persistence flag** — the thing that would actively break the main
+requirement. **Letting the pallet be placed back as a filled bay** — the last route by which goods could move without
+being touched, and carrying a full bay is exactly what the feature refuses. **A `long` count with a ceiling of its
+own** — see `MAX_LOAD`.
+
+
+### ADR-047 — A rack bay's fill level is block state geometry, and the three tiers are one model in three materials (M28, issue #20)
+
+*Context:* "you cannot see the stock" is half the reason rack bays exist, and the owner's picture of the block is a
+pallet with the goods stacked on it whose load grows as the bay fills — read by walking past, not by opening
+anything. A warehouse places bays by the hundred, so how that is drawn decides whether the feature works at the
+distance it is read from.
+
+*Decision:*
+
+* **The fill level is a block state property**, `RackBayBlock.FILL`, 0..4, and never renderer state. Registering a
+  block entity renderer puts every block of that type into its chunk section's per-frame render list at the vanilla
+  64-block default — which is the regression that forced `WarehouseInterfaceRenderer` to cut `getViewDistance()` to
+  Create's `filterItemRenderDistance` (default **10 blocks**). A rack wall is hundreds of blocks, so a renderer would
+  either cost that every frame or make the fill level invisible from across the room. Block state geometry is baked
+  into the chunk mesh and is free at any distance.
+* **Four steps plus empty.** Four reads as a rack; eight would read as a gauge, and a bay is a rack. The step rounds
+  **up**, so a single item already shows something and only an empty bay shows nothing: "is there anything in this bay
+  at all" is the question asked from across the room, and rounding down would leave a wooden bay holding a thousand
+  cobblestone looking exactly as empty as one holding none. It is a fraction of the bay's **configured** capacity, so
+  the same count reads lower in a brass bay than in a wooden one, and a modpack that moves the curve moves the look
+  with it.
+* **`FILL` notifies nothing and is written with `UPDATE_CLIENTS | UPDATE_KNOWN_SHAPE`.** A fill level is neither a
+  membership change nor a store-settings change, so no controller cares (`RackBayBlockEntity#setBlockState` already
+  says so). `UPDATE_ALL` is kept for `OVERLOADED`, whose write *is* the neighbour update the bay below reads
+  (ADR-044); using it for `FILL` as well would make every comparator and piston beside a rack wall fire on goods
+  moving. Dropping `UPDATE_NEIGHBORS` alone is **not** enough, which the M28 review caught: an observer hooks
+  `updateShape`, not `neighborChanged`, and `Level.markAndNotifyBlock` runs the whole shape pass for any write whose
+  flags lack `UPDATE_KNOWN_SHAPE` — so an observer aimed at a bay pulsed on every fill step, and the write paid six
+  neighbour `updateShape` calls plus two indirect passes it was meant to avoid. Suppressing the pass is safe here
+  because `RackBayBlock` overrides no `getShape` and `FILL` changes only the model.
+* **Three tiers, one model, one texture entry apart.** What the material decides is how much a bay holds and what it
+  may carry above it, never how it is built, so the three hand-made models differ in the `frame`/`particle` texture
+  and in nothing else — not a pixel of geometry, not a UV, not a face. The four load models live once and are shared,
+  because goods are goods, and a **multipart** blockstate puts a tier's shell and up to two load parts together. That
+  is eight parts instead of the twenty a per-facing load would need, and `OVERLOADED` is deliberately not a condition
+  anywhere: a bay that carries something stronger above it looks exactly like one that does not.
+* **The aisle face is the warehouse interface's**, byte for byte above the window: the same 8 x 4 px arm port recessed
+  3 px at x 4..12, y 9..13, so the crane enters a bay exactly as it enters an interface and the existing port sweep
+  covers it unchanged. Below it a 1 px beam, and below that the window the load is read through. The port's back wall
+  is `create:block/dark_metal_block` rather than the interface's `create:block/chute_hole`: on an interface a black
+  slot in a solid face is the whole cue, while on a wall of bays fifty black letterboxes won the contrast fight
+  against the load, which is the one thing the block exists to show.
+* **The item icon is turned to its front.** Every other block of this mod shows its back in the creative tab; for a
+  bay that is a featureless cube three times over, so the block model overrides the `gui` display rotation. The icon
+  is the empty shell, which is what a crafted bay is.
+
+*Consequences:*
+
+* The load may never enter the crane's path, and the port sweep cannot see that, because it only sweeps the 3 px of
+  the port recess while the load sits behind it. The arm reaches one **full block**, so a fully extended arm stands in
+  every pixel of depth of the bay. `CraneModelLayoutTest#aRackBaysLoadStaysUnderTheArmAndInsideItsWindow` is therefore
+  the test that goes red when a fill step grows: it reads the arm's floor off `CraneModelLayout` and insists every
+  load box and every pallet stays under it. Verified by growing one step into the arm's path — that test went red and
+  the port sweep stayed green, which is exactly why both exist.
+* The bay's own back panel **is** in the arm's path, for the last 2.5 px of its reach. That is the warehouse
+  interface's accepted case (`stacker-crane.md` §7.1: beyond the 3 px recess the arm is hidden behind the port's back
+  wall) and is named here rather than discovered later.
+* A bay still has **no block entity renderer**, so the store filter it carries is not drawn on the block the way an
+  interface's is — it is visible through the goggles and in the value box the crosshair rests on. Deliberate for now:
+  adding one would buy back exactly the per-frame cost this ADR is about. Worth revisiting with M29's look pass.
+* Three blocks after the warehouse interface change the creative tab's explicit order, which `creativetaborderandicon`
+  asserts in a GameTest and the `blocks` visual scenario asserts again on the client.
+
+*Alternatives rejected:* **a block entity renderer for the load** — the regression above, and M29's job if it is ever
+worth it. **A fill level in the block entity only** — invisible beyond the goggle range, which is the opposite of the
+requirement. **One model per tier per step** (fifteen files) — three times the authoring for geometry that does not
+differ, and nothing to keep the three tiers in step. **A tall single opening with no beam** — tried and shot: from a
+camera above the block the clearance above the load reads as a second shelf. **Keeping the interface's
+`chute_hole`** — tried and shot: a wall of bays became a grid of black letterboxes with the goods as the quiet
+element.
+
+
+### ADR-048 — The rack bay's Ponder scenes teach the block before the warehouse, and the pallet is taught inside them (M28, issue #20)
+
+*Context:* every Ponder scene this mod has written so far starts from the warehouse: a component is shown, then what
+the crane does with it. That order is right for eight blocks and wrong for the ninth. A wooden rack bay costs six
+planks and two andesite alloy, nothing in that chain needs a machine, and the owner settled that a bay **is** an early
+storage solution — a better barrel — built long before an aisle exists (issue #20, "A bay comes before the crane").
+So the block has a first audience that owns no crane, no controller and no rail, and for whom a scene opening on a
+warehouse aisle answers a question they have not asked yet.
+
+The second half of the context is a constraint rather than a choice. Ponder's unit of registration is an **item**: a
+storyboard is registered `forComponents(...)` and `/ponder <id>` and "Hold [W] to Ponder" both key off an item id. A
+`PalletEntity` has **no item form and no spawn egg at all** (ADR-046, and that absence is what makes "a pallet cannot
+be pocketed" true with nothing to maintain), so the pallet can never be a Ponder subject. Whatever a player has to
+learn about it has to be taught by the block it comes out of.
+
+*Decision:*
+
+* **Three scenes, in standalone-first order:** `warehouse/rack_bay` (the block alone — the hand gesture both ways,
+  one item type, the fill level readable from outside, and the break that resets it), `warehouse/rack_wall` (the wall,
+  the three materials and the column rule) and `warehouse/bays_in_an_aisle` (the warehouse arriving at bays that were
+  already there). Scene order per component is **registration order**, so the order in `WareworksPonderScenes` is the
+  decision, and it is deliberately the reverse of every other block's.
+* **All three tiers carry all three scenes.** The tier is the block (ADR-043), so a player holding a brass bay has to
+  reach the same three lessons as one holding a wooden bay. The scenes themselves show a wooden bay in the first and
+  all three materials in the second, because a storyboard cannot know which component opened it.
+* **The pallet's lesson lives at the end of `warehouse/rack_bay`**, including the one thing that would otherwise be
+  the first bug report: a vanilla **Hopper** drains a pallet and a **Deployer** can, while Create's belts, chutes,
+  funnels, depots and ejectors cannot see one at all (`ItemHelper.fromItemEntity` answers only for `ItemEntity` and
+  `PackageEntity`). A scene that showed the pallet and left that out would be worse than no scene.
+* **A caption may never outlive the idle that follows it.** Ponder draws a caption until its own duration runs out, so
+  a caption shown for longer than the scene then idles is still on screen when the next one appears and two captions
+  are drawn at the same anchor at once. It is invisible on a scene whose captions point at different blocks and
+  unmissable on one whose captions all point at the same block — which is every caption of `warehouse/rack_bay`. The
+  rule is written into `RackBayScenes`' class comment, and applying it found the M26 scene still shipping the defect
+  in one of its two beats (`PackageScenes#packagesAtTheDoor`, fixed in the same change).
+
+*Consequences:*
+
+* The three scenes need two stages that no earlier scene needed, because neither has an aisle in it: a square **3**
+  base plate for the single bay and a square 7 for the wall, both generated by `scripts/gen_ponder_schematics.py`.
+  The small one carries the other half of the lesson this step learnt: Ponder renders at `30 * scaleFactor` units per
+  block **whatever the base plate is**, and the plate only centres the scene — so a single-block scene is made legible
+  by `scaleSceneView`, not by the plate, and `RackBayScenes.SINGLE_SCALE` is 2.0, the largest in the mod.
+* **A Ponder level derives neither of a bay's two flags.** `FILL` and `OVERLOADED` are both written by server-only
+  code and a `PonderLevel` is client-side, so the scenes write both into the block state themselves — the same lesson
+  `PonderAisle#placePort` recorded for the warehouse port's two halves.
+* **A pallet cannot be spawned in a scene either**, because `PalletEntity#spawn` refuses a client level outright. The
+  break beat builds the entity through `createEntity` and gives it its load through a new documented display hook,
+  `PalletEntity#showClientLoad`, which is the pallet's counterpart of `StackerCraneBlockEntity#showClientPose` and is
+  a no-op on a server level.
+* Three new rows in the hard-coded, **count-asserting** `SUBJECTS` list of `dev.wareworks.dev.PonderVisualScenario` —
+  one per tier, all three toured rather than only the wooden one, because three registrations can be lost
+  independently and the tour is also the only check that each tier's own Ponder entry opens at all. The `ponder`
+  visual run goes from 84 to 111 shots.
+* 32 new lang keys in both languages, and **one caption whose German is not a translation**: Minecraft's Hopper and
+  Create's Funnel are both *Trichter* in German, and that caption turns on telling them apart, so both languages name
+  the mod rather than relying on the block names.
+
+*Alternatives rejected:* **One scene covering all of it** — the three lessons are a block, a wall and a warehouse, and
+a single scene would have carried about thirty captions. **Warehouse-first order, like every other block** — it would
+open the mod's most-met block on machinery its first audience does not own. **A scene on the pallet itself** — not
+possible: no item, no component, no entry. **Registering the scenes on the wooden bay only** — a player who crafted
+brass first would find the bay has nothing to teach them. **Touring only one tier in the visual scenario** — it is the
+count assertion that catches a lost registration, and there are three of them.
+
 
 ## Persistence & sync
 
@@ -3192,6 +3770,24 @@ cannot fix the released bug at all; it belongs to the rack bay, which does know.
   data can fail a player's load. The client is sent the numbers for the one screen it has open and owns none of
   them.
 * **Packages at a door** (M26, ADR-040) persist **nothing at all**, in either direction. The handover itself is Create's: the box lives in the Packager's own saved `HeldBox`, and the items are in a station buffer that was already saved. What Wareworks added is three numbers of diagnosis on the existing `StationGoggleSummary` (`PackageUnpackSummary`), written as nothing at all for every station no package was ever offered to and never written to disk — so “Packages opened” counts since the block entity was loaded, the way `AislePorts`' caches start cold, and a world from 0.7.0 saves byte for byte what it did. Everything the port's own lines say is read on the **client** off block states, block entities and sign block entities it already has, so that half costs no sync whatsoever.
+* A **rack bay** (M28, ADR-043 and ADR-045) saves one count-less `ItemKey` under `Stored` and one `int` under
+  `Count`, written only while something is stored, plus Create's filter and the storage priority — `ItemStack.save` is
+  never called, because its codec bounds a count at 99 and a brass bay holds 65 536. Its **client packet** is a
+  different shape on purpose: the item's registry **id** as a string under `StoredItem`, the count, and the derived
+  goggle state (the aisle assignment always, the reservations and the shared-inventory flag only while they say
+  something). One name is never used for two NBT types, so a reader of either tag cannot be looking at the other. It
+  is the first block of this mod whose **contents** are synced on every change and **without a throttle**, for the
+  reason in ADR-045, which is what the `MAX_RACK_BAY_SYNC_BYTES` budget is there to keep honest.
+* A **pallet** (M28, ADR-046) is the one piece of authoritative state this mod keeps in an **entity**:
+  `{Item: <ItemKey>, Count: int}` in `addAdditionalSaveData`, and again never `ItemStack.save`. There is no
+  persistence flag of any kind — `shouldBeSaved()` is already true for a non-passenger and the unload path saves to
+  the chunk, so the requirement "survives a save, a chunk unload and a reload with its load intact" is met by not
+  calling `noSave()`. A load is bounded and never throws: an undecodable key or a count at or below 0 **discards** the
+  entity (vanilla's own answer for an unreadable item entity) and a count above the bay's own ceiling is clamped and
+  logged as the item loss it is. Its sync is `SynchedEntityData` — the item as a stack of **count 1** plus the count
+  as a separate `int`, so no oversized stack ever exists where a codec could truncate it — and because this is entity
+  **tracker** traffic rather than a chunk packet it is the one place this mod can afford to carry an item's real
+  components, so a renamed item reads correctly on a pallet.
 * After a restart, jobs resume from the persisted state (`CraneStateMachine.resume` makes a loaded state consistent). There is no `FAULT` phase: if a referenced block is missing, a job aborts with a reason before the pick, and after it the held items are rerouted (`REROUTE`), held and retried (`HOLDING`) or waited with at the requesting output (`WAITING_FOR_TARGET`). Items are dropped only when the dock itself breaks (`stacker-crane.md` §4.1, `warehouse-system.md` §8).
 
 ## Performance rules
@@ -3200,4 +3796,5 @@ cannot fix the released bug at all; it belongs to the rack bay, which does know.
 * Index updates are incremental: the result of every transfer updates the index directly; snapshots only reconcile drift.
 * Controller and crane tick only while they have work or are moving.
 * Warehouse interfaces have no ticker at all (`warehouse-system.md` §3.1.1): presence comes from capability invalidation, content hints from `onNeighborChange`, goggle data from player observation.
+* **Rack bays have no ticker either** (`warehouse-system.md` §3.8, ADR-043), which matters more, because a warehouse places them by the hundred and a basement of a thousand is an ordinary build. A bay owns its items, so it needs neither the capability cache nor the content hint: every change goes through its own handler and notifies its controllers in the same tick as a one-key index diff.
 * Optional chunk loading (M19, ADR-031) is event-driven for the same reason: every place that changes what an aisle has to do sets one boolean, and only the controller's tick may call NeoForge's chunk API. An aisle that holds nothing schedules no re-check at all, so a server with the feature off — the default — pays one boolean and one long compare per controller tick, and the evaluation those ~18 hooks trigger returns after two map lookups while the feature is off (M19 review). Taking is capped at two chunks per tick, because forcing a chunk loads it synchronously.

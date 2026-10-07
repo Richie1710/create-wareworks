@@ -71,6 +71,9 @@ public final class WareworksItemGameTests {
 
     private static final TagKey<Item> IRON_PLATES = itemTag("c", "plates/iron");
     private static final TagKey<Item> BRASS_NUGGETS = itemTag("c", "nuggets/brass");
+    /** The rack bays' two material tags (M28): any plank for the wooden one, any brass sheet for the brass one. */
+    private static final TagKey<Item> BRASS_PLATES = itemTag("c", "plates/brass");
+    private static final TagKey<Item> PLANKS = itemTag("minecraft", "planks");
 
     private static final String ANDESITE_ALLOY = "andesite_alloy";
     private static final String ANDESITE_CASING = "andesite_casing";
@@ -79,6 +82,7 @@ public final class WareworksItemGameTests {
     private static final String BRASS_FUNNEL = "brass_funnel";
     private static final String BRASS_HAND = "brass_hand";
     private static final String BRASS_NUGGET = "brass_nugget";
+    private static final String BRASS_SHEET = "brass_sheet";
     private static final String COMPARATOR = "comparator";
     private static final String ELECTRON_TUBE = "electron_tube";
     private static final String INDUSTRIAL_IRON_BLOCK = "industrial_iron_block";
@@ -88,6 +92,8 @@ public final class WareworksItemGameTests {
     private static final String PRECISION_MECHANISM = "precision_mechanism";
     private static final String ROSE_QUARTZ_LAMP = "rose_quartz_lamp";
     private static final String SHAFT = "shaft";
+    /** A plank for the wooden rack bay's grid; any one of {@link #PLANKS} would do. */
+    private static final String OAK_PLANKS = "oak_planks";
 
     /** A recipe the mod must ship: recipe id = item id, recipe type, result count and the exact ingredients. */
     private record ExpectedRecipe(BlockEntry<?> block, RecipeType<?> type, int count, List<IngredientSpec> ingredients) {
@@ -227,6 +233,17 @@ public final class WareworksItemGameTests {
         // The home point is the cheapest member of all, because it holds nothing: andesite plus the lamp a player sees
         // on it (M21, ADR-034).
         CraftingInput homePoint = grid(3, 2, none, stack(ROSE_QUARTZ_LAMP), none, alloy, casing, alloy);
+        // The three rack bays: the same open frame three times, so each one's grid has to craft its own tier and
+        // nothing else (M28). The wooden one is the only Wareworks recipe built from a vanilla material, which is
+        // what makes it buildable before any machine exists.
+        ItemStack plank = vanilla(OAK_PLANKS);
+        ItemStack sheet = stack(BRASS_SHEET);
+        CraftingInput woodBay = grid(3, 3, plank, plank, plank, alloy, none, alloy, plank, plank, plank);
+        CraftingInput andesiteBay = grid(3, 3, alloy, alloy, alloy, casing, none, casing, alloy, alloy, alloy);
+        CraftingInput brassBay = grid(3, 3, sheet, sheet, sheet, brass, none, brass, sheet, sheet, sheet);
+        assertCrafts(helper, recipes, level, woodBay, WareworksBlocks.RACK_BAY_WOOD.asItem(), ONE);
+        assertCrafts(helper, recipes, level, andesiteBay, WareworksBlocks.RACK_BAY_ANDESITE.asItem(), ONE);
+        assertCrafts(helper, recipes, level, brassBay, WareworksBlocks.RACK_BAY_BRASS.asItem(), ONE);
         assertCrafts(helper, recipes, level, production, WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(), ONE);
         assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
         assertCrafts(helper, recipes, level, homePoint, WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(), ONE);
@@ -289,6 +306,10 @@ public final class WareworksItemGameTests {
         List<Item> shown = tab.getDisplayItems().stream().map(ItemStack::getItem).toList();
         helper.assertValueEqual(shown, List.of(WareworksBlocks.STACKER_CRANE.asItem(), WareworksBlocks.WAREHOUSE_RAIL.asItem(),
                 WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), WareworksBlocks.WAREHOUSE_INTERFACE.asItem(),
+                // The three rack bays stand directly after the interface, weakest first (M28, issue #20): an
+                // interface turns somebody else's inventory into a storage location, a bay is one.
+                WareworksBlocks.RACK_BAY_WOOD.asItem(), WareworksBlocks.RACK_BAY_ANDESITE.asItem(),
+                WareworksBlocks.RACK_BAY_BRASS.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem()),
@@ -321,6 +342,25 @@ public final class WareworksItemGameTests {
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_INTERFACE, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(ANDESITE_CASING), IngredientSpec.of(ANDESITE_FUNNEL),
                                 IngredientSpec.ofTag(BRASS_NUGGETS))),
+                // The three rack bays (M28, issue #20): one rack in three materials, and the ladder is "the same
+                // frame, one material up". The wooden one is deliberately the cheapest block this mod has after the
+                // rail - planks and two andesite alloy, no machine anywhere in its chain - because the owner settled
+                // that a bay comes before the crane: a better barrel, built long before a warehouse exists.
+                new ExpectedRecipe(WareworksBlocks.RACK_BAY_WOOD, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofTag(PLANKS), IngredientSpec.ofTag(PLANKS),
+                                IngredientSpec.ofTag(PLANKS), IngredientSpec.of(ANDESITE_ALLOY),
+                                IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.ofTag(PLANKS),
+                                IngredientSpec.ofTag(PLANKS), IngredientSpec.ofTag(PLANKS))),
+                new ExpectedRecipe(WareworksBlocks.RACK_BAY_ANDESITE, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.of(ANDESITE_ALLOY),
+                                IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.of(ANDESITE_CASING),
+                                IngredientSpec.of(ANDESITE_CASING), IngredientSpec.of(ANDESITE_ALLOY),
+                                IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.of(ANDESITE_ALLOY))),
+                new ExpectedRecipe(WareworksBlocks.RACK_BAY_BRASS, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.of(BRASS_CASING),
+                                IngredientSpec.of(BRASS_CASING), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_INPUT, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(ANDESITE_FUNNEL), IngredientSpec.of(ANDESITE_CASING))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_OUTPUT, RecipeType.CRAFTING, ONE,

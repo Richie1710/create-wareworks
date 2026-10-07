@@ -78,6 +78,24 @@ public final class WareworksGameTests {
      * character for every string, far more than is sent ({@code docs/warehouse-system.md} §3.1.1).
      */
     public static final int MAX_RESERVED_INTERFACE_SYNC_BYTES = 4096;
+    /**
+     * Bound of a <b>rack bay</b>'s update tag in NBT size accounting ({@code Tag#sizeInBytes}) in the state almost
+     * every bay of a rack wall is in: one item id, one count and the aisle assignment, with no filter and no
+     * reservations (M28, {@code warehouse-system.md} §3.8, ADR-045).
+     * <p>
+     * It gets a bound of its own, and a tighter one than the interface's, for one reason: a bay is the first block of
+     * this mod that syncs its <b>contents</b> on every change and without any throttle, because its front has to be
+     * right for a player walking past with no goggles on. That is affordable exactly as long as the tag stays an item
+     * id and an int — syncing an {@code ItemKey} here would put a shulker box of written books into every chunk
+     * packet of a rack wall, which is the regression the warehouse interface already shipped once.
+     */
+    public static final int MAX_RACK_BAY_SYNC_BYTES = 1024;
+    /**
+     * Bound of a rack bay's update tag in the worst case a warehouse can produce: a store filter, a storage priority,
+     * the widest address with the longest aisle name, and the largest reservation summary of a location with a job
+     * running at it. Only the bays of running jobs ever reach it.
+     */
+    public static final int MAX_RESERVED_RACK_BAY_SYNC_BYTES = 4096;
 
     private static final int CHEST_SLOTS = 27;
     private static final int INSERTED_IRON = 100;

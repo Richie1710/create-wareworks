@@ -17,6 +17,7 @@ import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
+import dev.wareworks.content.storage.RackBayBlock;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -220,6 +221,49 @@ public final class WareworksBlockStateGen {
             case COLLECT -> collect;
             case REQUEST -> request;
         };
+    }
+
+    /**
+     * A rack bay's <b>multipart</b> blockstate ({@code docs/warehouse-system.md} §3.8, M28 step 9, issue #20): the
+     * tier's hand-made {@code block} shell turned onto {@link net.minecraft.world.level.block.HorizontalDirectionalBlock#FACING},
+     * plus up to two shared load parts chosen by {@code RackBayBlock.FILL}.
+     * <p>
+     * <b>The load is shared by all three tiers and not turned.</b> Goods are goods: what the material decides is how
+     * much a bay holds and what it may carry above it, not what a pallet of cardboard boxes looks like — so the four
+     * steps live once in {@code models/block/rack_bay/} rather than three times over. They are authored centred on the
+     * block and are symmetric about its vertical axis, so a rotation would move nothing; leaving it off keeps the
+     * blockstate at <b>eight</b> parts instead of twenty.
+     * <p>
+     * The steps stack instead of repeating themselves: {@code load_1} and {@code load_2} are the two small loads,
+     * {@code load_base} is the full footprint shown for the <b>last two</b> steps, and {@code load_cap} is the crate
+     * that goes on top of it at the last one. A bay at step 3 and one at step 4 therefore differ by exactly the crate
+     * a player can see arrive, and no geometry is written twice.
+     * <p>
+     * <b>{@code OVERLOADED} is deliberately not a condition anywhere</b>, so a bay that carries something stronger
+     * above it looks exactly like one that does not (ADR-044): it is a warning for the goggles and the job planner,
+     * not a look. A variant blockstate would have had to spell out every combination of it instead.
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            rackBayBlockProvider() {
+        return (context, provider) -> {
+            ModelFile shell = provider.models().getExistingFile(provider.modLoc("block/" + context.getName() + "/block"));
+            MultiPartBlockStateBuilder builder = provider.getMultipartBuilder(context.getEntry());
+            for (Direction facing : Direction.Plane.HORIZONTAL) {
+                builder.part().modelFile(shell).rotationY(rotationOnto(facing)).addModel()
+                        .condition(RackBayBlock.FACING, facing).end();
+            }
+            loadPart(builder, provider, "load_1", 1);
+            loadPart(builder, provider, "load_2", 2);
+            loadPart(builder, provider, "load_base", 3, 4);
+            loadPart(builder, provider, "load_cap", 4);
+        };
+    }
+
+    /** One shared load part of a rack bay, shown at the named fill steps ({@link #rackBayBlockProvider()}). */
+    private static void loadPart(MultiPartBlockStateBuilder builder, RegistrateBlockstateProvider provider,
+                                 String model, Integer... fillSteps) {
+        ModelFile file = provider.models().getExistingFile(provider.modLoc("block/rack_bay/" + model));
+        builder.part().modelFile(file).addModel().condition(RackBayBlock.FILL, fillSteps).end();
     }
 
     /**

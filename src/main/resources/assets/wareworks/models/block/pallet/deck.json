@@ -1,0 +1,59 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"deck": "create:block/bracket_plate_wooden",
+		"particle": "create:block/bracket_plate_wooden"
+	},
+	"elements": [
+		{
+			"name": "boards",
+			"from": [0, 2, 0],
+			"to": [16, 3, 16],
+			"faces": {
+				"north": {"uv": [0, 13, 16, 14], "texture": "#deck"},
+				"south": {"uv": [0, 13, 16, 14], "texture": "#deck"},
+				"west": {"uv": [0, 13, 16, 14], "texture": "#deck"},
+				"east": {"uv": [0, 13, 16, 14], "texture": "#deck"},
+				"up": {"uv": [0, 0, 16, 16], "texture": "#deck"},
+				"down": {"uv": [0, 0, 16, 16], "texture": "#deck"}
+			}
+		},
+		{
+			"name": "runner_west",
+			"from": [0, 0, 0],
+			"to": [3, 2, 16],
+			"faces": {
+				"north": {"uv": [13, 14, 16, 16], "texture": "#deck"},
+				"south": {"uv": [0, 14, 3, 16], "texture": "#deck"},
+				"west": {"uv": [0, 14, 16, 16], "texture": "#deck"},
+				"east": {"uv": [0, 14, 16, 16], "texture": "#deck"},
+				"down": {"uv": [0, 0, 3, 16], "texture": "#deck"}
+			}
+		},
+		{
+			"name": "runner_middle",
+			"from": [6, 0, 0],
+			"to": [10, 2, 16],
+			"faces": {
+				"north": {"uv": [6, 14, 10, 16], "texture": "#deck"},
+				"south": {"uv": [6, 14, 10, 16], "texture": "#deck"},
+				"west": {"uv": [0, 14, 16, 16], "texture": "#deck"},
+				"east": {"uv": [0, 14, 16, 16], "texture": "#deck"},
+				"down": {"uv": [6, 0, 10, 16], "texture": "#deck"}
+			}
+		},
+		{
+			"name": "runner_east",
+			"from": [13, 0, 0],
+			"to": [16, 2, 16],
+			"faces": {
+				"north": {"uv": [0, 14, 3, 16], "texture": "#deck"},
+				"south": {"uv": [13, 14, 16, 16], "texture": "#deck"},
+				"west": {"uv": [0, 14, 16, 16], "texture": "#deck"},
+				"east": {"uv": [0, 14, 16, 16], "texture": "#deck"},
+				"down": {"uv": [13, 0, 16, 16], "texture": "#deck"}
+			}
+		}
+	]
+}

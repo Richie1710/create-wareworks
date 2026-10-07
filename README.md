@@ -57,6 +57,18 @@ teleported: every item you put in or take out is carried by the crane, where you
   priority on the same slot decides which of the suitable locations fills first. A renamed item right-clicked on it names
   **its** aisle, and every rack of a named aisle then reads `Address: A-03-07R (Ores)` — the address never goes away, so
   the signs you wrote by hand still point at the same rack.
+* **Rack Bay** (wooden, andesite, brass): a storage location that **is** the block — one item type, a great deal of
+  it, and **no warehouse interface in front of it**, so a fifty-bay rack wall is fifty blocks instead of a hundred.
+  A wooden bay holds **64 stacks**, an andesite one **256** and a brass one **1,024** (all three server config), and
+  the goods behind its window grow in four steps as it fills, so you read how full a wall is by walking past it — no
+  goggles, nothing to open, and still visible at any distance. It needs **no warehouse at all**: a wooden bay is six
+  planks and two andesite alloy, with no machine anywhere in its chain, so you can put up a wall the evening you make
+  your first andesite alloy and fill it by hand — a plain right-click moves **one item**, Shift a whole **stack**, in
+  both directions. A funnel, a chute, a belt or a hopper fills one directly as well. Only when a crane's aisle reaches
+  it does the same block **also** become an addressable storage location, with its own filter and priority, and what
+  it already held is counted on the spot. A bay may carry **nothing stronger above it**, so a wall is upgraded from
+  the bottom up — and breaking a full one **loses nothing**: you get the empty bay back and its whole load as a single
+  **pallet** on the floor.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse. Put a **Create Packager** against it and it becomes an **in door** for addressed **Create packages**:
   arriving boxes are opened and their contents stored like anything else.
@@ -141,9 +153,14 @@ The build *is* the configuration; there is no setup screen.
    many junctions it passes through. Close a rail you want left out with a **wrench**.
 4. **Put the Warehouse Controller directly behind the dock**, facing it. Its **Aisle** value box sets the letter (A–Z)
    the aisle at the dock starts with; any further aisle gets the next free letter by itself.
-5. **Build the racks.** Put chests, barrels or vaults beside the aisle and a **Warehouse Interface** in front of each,
-   brass port towards the inventory, plate towards the aisle. Clicking the side of an interface you already placed
-   copies its facing, so a rack row goes up quickly.
+5. **Build the racks.** Two kinds of storage stand side by side in one aisle, and both are addressed the same way.
+   For **bulk goods** — cobblestone, deepslate, ore, anything you have thousands of — set **Rack Bays** straight into
+   the rack positions: one block per location, one item type each, and nothing in front of or behind them. For the
+   **long tail** — the items you own three of — put chests, barrels or vaults beside the aisle and a **Warehouse
+   Interface** in front of each, brass port towards the inventory, plate towards the aisle. Clicking the side of a bay
+   or of an interface you already placed copies its facing, so a rack row goes up quickly. A wooden bay costs six
+   planks and two andesite alloy, so you can put a wall of them up before any of this exists and fill it by hand:
+   right-click with an item for one, Shift for a stack, an empty hand to take them back out.
 6. **Place a Warehouse Input** at a rack position with its opening towards the aisle and feed it with a belt, funnel,
    chute, hopper or Mechanical Arm. The crane stores whatever arrives.
 7. **Place a Warehouse Output** the same way. Put the item you want into its filter slot, hold right-click to set the
@@ -157,8 +174,8 @@ The build *is* the configuration; there is no setup screen.
 9. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
-Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Nine of the ten blocks have one — the
-home point is the exception, it has no scene yet: the crane and the rail share the overview, the controller shows storing
+Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Twelve of the thirteen blocks have
+one — the home point is the exception, it has no scene yet: the crane and the rail share the overview, the controller shows storing
 and retrieving, the interface adds addressing and storage filters, the terminal and the production station have their own
 scenes (placing and requesting, and feeding a machine from the warehouse), the output has three more for its port
 directions — requesting, accepting and collecting, the last of which the production station shows as well, because it is
@@ -171,7 +188,13 @@ a quarter turn on it, and the two racks that one corner block serves. The sixtee
 third: side aisles leaving one run in the middle of it, the junction block that belongs to both aisles, the one letter
 a straight run keeps through every junction, the machine driving straight over one junction and round the bend at
 another, goods from all three aisles arriving at the one output beside the dock, and the two racks beside a junction
-that only their facing tells apart.
+that only their facing tells apart. The seventeenth, **Packages at a Warehouse Door**, builds both package doors in
+front of you and teaches the one rule that decides their direction. And the last three belong to the **rack bays**,
+all three tiers, in the order a player meets the block rather than the order the warehouse would: **Storing Bulk Goods
+in a Rack Bay** shows one bay standing alone with no warehouse anywhere — both hand gestures, the one item type it
+learns and forgets, the load growing behind its window, and the break that resets it onto a pallet; **Building a Rack
+Wall** shows the wall, the three materials and the rule that a bay carries nothing stronger above it; and **Rack Bays
+in a Warehouse Aisle** brings the rails to bays that were already full.
 
 ## Requesting items
 

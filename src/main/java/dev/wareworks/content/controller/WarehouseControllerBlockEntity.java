@@ -16,6 +16,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.ToLongFunction;
 
@@ -234,6 +235,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private final Function<RackPosition, Optional<AisleFilters.StoreSettings>> storeSettingsResolver =
             this::readStoreSettingsAt;
+    /**
+     * The commitment test {@link AisleFilters#match} applies to a location that holds one item type only (M28), held
+     * once beside the resolver for the same reason: {@link #storeFilterMatch} runs per storage candidate per planning
+     * run, and a warehouse without such a location never calls it at all.
+     */
+    private final BiPredicate<RackPosition, ItemKey> storeCommitment = this::committedTo;
     /** Port policies of the aisle's warehouse ports, cached for the continuous pass and for planning (M17); not saved. */
     private final AislePorts ports = new AislePorts();
     /**
@@ -692,12 +699,41 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * the same {@code storeFilter} about both, and the cache that knows the answer is asked. A port's filter is one
      * concrete item, so {@link AislePorts#filterMatch} is an equality test and answers {@code null} for everything that is
      * no cached port — one lookup in a map that is empty for a warehouse without them.
+     * <p>
+     * <b>It is also the only gate for the two store rules a location reports itself</b> (M28): a location that accepts
+     * no storing, and a location that holds one item type only and is not committed to this one, answer
+     * {@link FilterMatch#REJECTED} here. That puts them exactly where a store filter already decides — before the
+     * capacity estimate, before any live simulation and before a refusal could be remembered — so the planner needs no
+     * change and a {@code RETRIEVE} reroute still ranks such a location last instead of dropping it (§8).
      */
     FilterMatch storeFilterMatch(RackPosition rack, ItemKey key) {
         if (level == null)
             return FilterMatch.UNFILTERED;
         FilterMatch port = ports.filterMatch(rack, key);
-        return port != null ? port : filters.match(level, rack, key, storeSettingsResolver);
+        return port != null ? port : filters.match(level, rack, key, storeSettingsResolver, storeCommitment);
+    }
+
+    /**
+     * Whether the storage location at {@code rack} holds, and awaits, nothing but {@code key} — the test behind
+     * {@link StorageMember#holdsOneTypeOnly()}, asked by {@link AisleFilters#match} for such a location only.
+     * <p>
+     * <b>The reservations are half of the answer, and the half that is easy to forget.</b> The stock index alone says
+     * what is <i>inside</i> the location; it says nothing about the items a crane is already carrying towards it. An
+     * empty one-type location with a cobblestone job in flight would otherwise accept a dirt job planned in the same
+     * window, and two item types would be on their way into a location whose whole premise is one. Nothing is lost when
+     * that happens — the second delivery is rerouted (§8) — but it is a wasted trip and an inexplicable one, so the
+     * ledger is consulted beside the index: the location may reserve capacity for {@code key} and for nothing else.
+     * <p>
+     * Both reads are the ones the planner already does per candidate ({@code ReservationView#reservedCapacity}), and a
+     * one-type location holds at most one item type by construction, so this is O(1) for the only locations that ask it.
+     */
+    private boolean committedTo(RackPosition rack, ItemKey key) {
+        for (ItemKey stored : stock.countsAt(rack).keySet()) {
+            if (!stored.equals(key))
+                return false;
+        }
+        ReservationView<ItemKey, RackPosition> reserved = dispatch.reservations();
+        return reserved.reservedCapacity(rack) == reserved.reservedCapacity(rack, key);
     }
 
     /**
@@ -714,10 +750,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * Reads the store filter and the storage priority of {@code rack} straight from its interface, for the one lookup
-     * {@link AisleFilters} does per location that was never read into the cache. Both in one lookup on purpose: the
-     * planner may ask for either first, and a priority the controller has not read must never be guessed. Empty while
-     * the position is not loaded or holds no storage member.
+     * Reads the store settings of {@code rack} straight from its member — filter, priority and the two store rules of
+     * M28 — for the one lookup {@link AisleFilters} does per location that was never read into the cache. All of them in
+     * one lookup on purpose: the planner may ask for either first, and a priority the controller has not read must
+     * never be guessed. Empty while the position is not loaded or holds no storage member.
      */
     private Optional<AisleFilters.StoreSettings> readStoreSettingsAt(RackPosition rack) {
         if (level == null || level.isClientSide || layout == null)
@@ -728,7 +764,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (!(blockEntity instanceof StorageMember member) || blockEntity.isRemoved())
             return Optional.empty();
-        return Optional.of(new AisleFilters.StoreSettings(member.storeFilter(), member.storePriority()));
+        return Optional.of(new AisleFilters.StoreSettings(member.storeFilter(), member.storePriority(),
+                member.holdsOneTypeOnly(), member.acceptsStoring()));
     }
 
     /**
@@ -946,7 +983,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (blockEntity instanceof StorageMember member && !blockEntity.isRemoved())
-            filters.set(rack, member.storeFilter(), member.storePriority());
+            filters.set(rack, member.storeFilter(), member.storePriority(), member.holdsOneTypeOnly(),
+                    member.acceptsStoring());
     }
 
     /**
@@ -1341,8 +1379,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
         // The store settings are refreshed here as well: this is every path on which the controller already resolves the
         // member (join, content hint, round robin, after a transfer, load verification), and they have to be known even
-        // when the attached inventory is not loaded (ADR-021, ADR-028).
-        filters.set(rack, member.storeFilter(), member.storePriority());
+        // when the attached inventory is not loaded (ADR-021, ADR-028, M28).
+        filters.set(rack, member.storeFilter(), member.storePriority(), member.holdsOneTypeOnly(),
+                member.acceptsStoring());
         BlockPos attached = member.attachedPos();
         if (!level.isLoaded(attached))
             return false;
@@ -3952,31 +3991,61 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * Reads at most {@code maxSnapshotsPerTick} queued storage locations, urgent ones first.
+     * Reads at most {@code maxSnapshotsPerTick} queued inventories, urgent ones first.
      * <p>
      * A location whose rack position is not loaded is put back (M8 review fix): {@link SnapshotQueue#poll} has already
      * removed it, so dropping it here left its restored counts to the round robin, which needs up to
      * 2 · (L+1) · H · {@code snapshotIntervalTicks} to come round — minutes at the default caps (§5).
+     *
+     * <h2>The collect queue has the last unit of the budget to itself</h2>
+     * The two queues share one budget, so an aisle with collecting ports never reads more inventories per tick than
+     * one without (M18, issue #13), and storage comes first: a stale stock index is what a player's request and every
+     * plan depend on. But "storage first" alone was <b>starvation</b>, not an order, from M28 on. A rack bay tells its
+     * controller the moment its contents change, so every accepted transfer through a bay's handler is one
+     * {@code addUrgent} — one item from a hopper is one hint. As soon as {@code maxSnapshotsPerTick} <i>distinct</i>
+     * bays of an aisle change per tick (several hints for one bay already collapse, because {@link SnapshotQueue} is a
+     * set), the urgent set never empties, and {@link #refreshCollection} is reached from nowhere else: a collecting
+     * port would then never be read again for as long as the feeding lasts, which {@code AisleCollections} says out
+     * loud is silent — an unread port collects nothing, and a port read once goes stale and makes the planner plan
+     * collects whose pick returns 0. The same saturation also makes the stock index itself fall behind.
+     * <p>
+     * So the <b>last</b> unit of the budget belongs to {@link #pendingCollections}, and neither queue can waste it:
+     * whichever queue is reserved is asked first and the other one gets the unit when it is empty. At
+     * {@code maxSnapshotsPerTick = 1} there is nothing to reserve and the stock index keeps the whole budget, which is
+     * the honest reading of a budget of one.
      */
     private void drainPendingSnapshots() {
-        for (int budget = Math.max(1, WareworksConfig.maxSnapshotsPerTick()); budget > 0; budget--) {
-            Optional<RackPosition> next = pendingSnapshots.poll();
-            if (next.isPresent()) {
-                RackPosition rack = next.get();
-                if (!refreshLocation(rack) && isRackUnloaded(rack))
-                    pendingSnapshots.addBackground(rack); // keep it queued until its chunk is loaded again
-                continue;
-            }
-            // The collect queue shares the same budget, so an aisle with collecting ports never reads more inventories
-            // per tick than one without (M18, issue #13). Storage first: a stale stock index is what a player's request
-            // and every plan depend on, while a collect that waits one tick costs nothing.
-            Optional<RackPosition> collect = pendingCollections.poll();
-            if (collect.isEmpty())
-                return;
-            RackPosition rack = collect.get();
-            if (!refreshCollection(rack) && isCollectUnloaded(rack))
-                pendingCollections.addBackground(rack); // keep it queued until its chunks are loaded again
+        int budget = Math.max(1, WareworksConfig.maxSnapshotsPerTick());
+        int reservedForCollections = budget > 1 ? 1 : 0;
+        for (; budget > 0; budget--) {
+            boolean collectFirst = budget <= reservedForCollections;
+            boolean read = collectFirst ? drainOneCollection() || drainOneSnapshot()
+                    : drainOneSnapshot() || drainOneCollection();
+            if (!read)
+                return; // both queues are empty
         }
+    }
+
+    /** Reads one queued storage location; {@code false} when the queue held nothing. */
+    private boolean drainOneSnapshot() {
+        Optional<RackPosition> next = pendingSnapshots.poll();
+        if (next.isEmpty())
+            return false;
+        RackPosition rack = next.get();
+        if (!refreshLocation(rack) && isRackUnloaded(rack))
+            pendingSnapshots.addBackground(rack); // keep it queued until its chunk is loaded again
+        return true;
+    }
+
+    /** Reads one queued collecting port; {@code false} when the queue held nothing. */
+    private boolean drainOneCollection() {
+        Optional<RackPosition> collect = pendingCollections.poll();
+        if (collect.isEmpty())
+            return false;
+        RackPosition rack = collect.get();
+        if (!refreshCollection(rack) && isCollectUnloaded(rack))
+            pendingCollections.addBackground(rack); // keep it queued until its chunks are loaded again
+        return true;
     }
 
     /**

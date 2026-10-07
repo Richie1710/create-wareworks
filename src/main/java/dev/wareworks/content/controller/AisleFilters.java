@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -25,9 +26,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
 /**
- * The <b>store settings</b> of one aisle's storage locations — the store filter (M8, ADR-021) and the storage priority
- * (M16, ADR-028) — cached by rack position ({@code docs/warehouse-system.md} §3.1). Owned by one
- * {@link WarehouseControllerBlockEntity}; server thread only.
+ * The <b>store settings</b> of one aisle's storage locations — the store filter (M8, ADR-021), the storage priority
+ * (M16, ADR-028) and the two store rules a location itself reports (M28) — cached by rack position
+ * ({@code docs/warehouse-system.md} §3.1). Owned by one {@link WarehouseControllerBlockEntity}; server thread only.
  * <p>
  * <b>Why a cache.</b> {@link dev.wareworks.core.job.JobPlanner} asks about every storage candidate of a planning run —
  * up to 2 · (L+1) · H of them, every {@code dispatchIntervalTicks} — and resolving a block entity per candidate would be
@@ -59,6 +60,20 @@ import net.minecraft.world.level.Level;
  * review fix; before, one deny-list chest outranked consolidation and item-type grouping for every item in the
  * warehouse).
  * <p>
+ * <b>Two questions that are not filters.</b> Besides the filter and the priority a player sets, a storage location is
+ * asked whether it holds {@linkplain StorageMember#holdsOneTypeOnly() one item type only} and whether it
+ * {@linkplain StorageMember#acceptsStoring() accepts storing} at all (M28). They are cached here because they ride the
+ * same refresh paths and have to be known in the same one lookup, and they are answered in {@link #match} <b>before</b>
+ * the Create filter is evaluated: both are cheaper than walking a filter's rules and both are stricter, so a location
+ * neither of them allows costs no filter evaluation, no capacity estimate and no live simulation.
+ * <p>
+ * <b>A location that answers either of them is never neutral, and that is the one cost worth naming.</b> An entry is
+ * dropped only for a location that carries no filter, no priority, takes any item type and accepts storing, which is
+ * what makes a wall of plain warehouse interfaces cost nothing here beyond the map itself. A rack bay holds one item type by construction, so it always keeps an entry: a
+ * warehouse of 1 056 bays holds 1 056 small entries where a warehouse of 1 056 interfaces holds none. That is tens of
+ * kilobytes beside a stock index that already keeps a snapshot per location, and it is bounded by the number of rack
+ * positions, so it is paid for knowingly rather than discovered later.
+ * <p>
  * <b>Shared inventories.</b> Entries are keyed by rack position, and the planner only ever asks about the location that
  * counts an inventory ({@code sharedInventoryOf}), so for a double chest or an item vault read by several interfaces the
  * settings of that counting location are the ones that apply (§3.1.1, known limitation). The goggle accessors therefore
@@ -84,13 +99,18 @@ final class AisleFilters {
     private ItemStack probeStack = ItemStack.EMPTY;
 
     /**
-     * The store settings of one storage location as its interface reports them, for the one-shot resolve of an unread
-     * rack: both in one block entity lookup, so the planner can never plan with a priority this cache has not read.
+     * The store settings of one storage location as its member reports them, for the one-shot resolve of an unread
+     * rack: all of them in one block entity lookup, so the planner can never plan with a setting this cache has not
+     * read.
      *
-     * @param filter   the filter stack (a copy the cache may trim), empty for "accepts everything"
-     * @param priority the storage priority, {@value #NO_PRIORITY} for "no preference"
+     * @param filter           the filter stack (a copy the cache may trim), empty for "accepts everything"
+     * @param priority         the storage priority, {@value #NO_PRIORITY} for "no preference"
+     * @param holdsOneTypeOnly whether the location takes at most one item type at a time
+     *                         ({@link StorageMember#holdsOneTypeOnly()})
+     * @param acceptsStoring   whether the location may be stored into at all
+     *                         ({@link StorageMember#acceptsStoring()})
      */
-    record StoreSettings(ItemStack filter, int priority) {
+    record StoreSettings(ItemStack filter, int priority, boolean holdsOneTypeOnly, boolean acceptsStoring) {
         StoreSettings {
             Objects.requireNonNull(filter, "filter");
         }
@@ -108,44 +128,53 @@ final class AisleFilters {
      * @param selecting whether the filter <b>selects</b> the items it accepts (an allow list) rather than excluding
      *                  others
      * @param priority  the storage priority, {@value #NO_PRIORITY} for "no preference"
+     * @param holdsOneTypeOnly whether the location takes at most one item type at a time (M28); an entry exists for a
+     *                         location that carries nothing but this
+     * @param acceptsStoring whether the location may be stored into at all (M28)
      */
-    private record Entry(ItemStack source, @Nullable FilterItemStack filter, boolean selecting, int priority) {
-        Entry withPriority(int priority) {
-            return new Entry(source, filter, selecting, priority);
+    private record Entry(ItemStack source, @Nullable FilterItemStack filter, boolean selecting, int priority,
+            boolean holdsOneTypeOnly, boolean acceptsStoring) {
+        /** The same resolved filter with new store rules: a changed priority or flag never rebuilds the filter. */
+        Entry withStoreRules(int priority, boolean holdsOneTypeOnly, boolean acceptsStoring) {
+            return new Entry(source, filter, selecting, priority, holdsOneTypeOnly, acceptsStoring);
         }
     }
 
     /**
-     * Stores the store settings of the storage location at {@code rack}, and marks that location read. An empty filter
-     * together with {@value #NO_PRIORITY} removes the entry, so the location accepts everything with no preference again.
+     * Stores the store settings of the storage location at {@code rack}, and marks that location read. A location that
+     * says <b>nothing</b> — no filter, {@value #NO_PRIORITY}, takes any item type and accepts storing — keeps no entry,
+     * so it accepts everything with no preference again and costs nothing during planning. Any one of the four keeps
+     * one, which is why a rack bay always has an entry (see the class comment).
      * <p>
      * {@code filter} must be a copy the caller does not keep: {@link FilterItemStack#of} trims components of a Create
-     * filter item in place ({@code StorageMember#storeFilter()} therefore returns copies). An unchanged filter is not
+     * filter item in place ({@link StorageMember#storeFilter()} therefore returns copies). An unchanged filter is not
      * rebuilt: resolving a Create list filter allocates a slot handler and a nested wrapper per entry, and this runs on
-     * every refresh path while a filter only ever changes when a player clicks it — a changed <b>priority</b> alone
-     * therefore keeps the resolved filter and only replaces the number.
+     * every refresh path while a filter only ever changes when a player clicks it — a changed <b>priority</b> or a
+     * changed store rule therefore keeps the resolved filter and only replaces the numbers beside it.
      */
-    void set(RackPosition rack, ItemStack filter, int priority) {
+    void set(RackPosition rack, ItemStack filter, int priority, boolean holdsOneTypeOnly, boolean acceptsStoring) {
         Objects.requireNonNull(rack, "rack");
         Objects.requireNonNull(filter, "filter");
         unread.remove(rack);
-        if (filter.isEmpty() && priority == NO_PRIORITY) {
+        if (filter.isEmpty() && priority == NO_PRIORITY && !holdsOneTypeOnly && acceptsStoring) {
             settings.remove(rack);
             return;
         }
         Entry cached = settings.get(rack);
         if (cached != null && ItemStack.isSameItemSameComponents(cached.source(), filter)) {
-            if (cached.priority() != priority)
-                settings.put(rack, cached.withPriority(priority));
+            if (cached.priority() != priority || cached.holdsOneTypeOnly() != holdsOneTypeOnly
+                    || cached.acceptsStoring() != acceptsStoring)
+                settings.put(rack, cached.withStoreRules(priority, holdsOneTypeOnly, acceptsStoring));
             return;
         }
         if (filter.isEmpty()) {
-            settings.put(rack, new Entry(ItemStack.EMPTY, null, false, priority));
+            settings.put(rack, new Entry(ItemStack.EMPTY, null, false, priority, holdsOneTypeOnly, acceptsStoring));
             return;
         }
         ItemStack source = filter.copy(); // taken before of() trims the stack in place
         FilterItemStack resolved = FilterItemStack.of(filter);
-        settings.put(rack, new Entry(source, resolved, selects(resolved), priority));
+        settings.put(rack,
+                new Entry(source, resolved, selects(resolved), priority, holdsOneTypeOnly, acceptsStoring));
     }
 
     /**
@@ -223,21 +252,36 @@ final class AisleFilters {
      * A filter that throws while being evaluated (a modded item attribute) counts as {@link FilterMatch#REJECTED}
      * rather than as "accepts everything": a broken filter must not silently deliver items into a location the player
      * set aside for something else. The failure is logged at most once per {@link LogThrottle} interval.
+     * <p>
+     * The two store rules of M28 decide <b>first</b>, before the filter is evaluated: a location that
+     * {@linkplain StorageMember#acceptsStoring() accepts no storing} refuses every key, and one that
+     * {@linkplain StorageMember#holdsOneTypeOnly() holds one item type only} refuses every key it is not already
+     * committed to. Both are cheaper than walking a filter's rules and both are stricter, so the order costs nothing and
+     * saves the filter evaluation. For every location that answers neither — every warehouse interface — this is two
+     * field reads on an entry that was looked up anyway.
      *
-     * @param resolver reads the store settings of a rack position straight from its interface; empty while they cannot
-     *                 be read
+     * @param resolver    reads the store settings of a rack position straight from its interface; empty while they
+     *                    cannot be read
+     * @param committedTo whether a one-type location holds, and awaits, nothing but {@code key}; consulted only for a
+     *                    location that holds one item type only, so a warehouse without one never calls it
      */
     FilterMatch match(Level level, RackPosition rack, ItemKey key,
-            Function<RackPosition, Optional<StoreSettings>> resolver) {
+            Function<RackPosition, Optional<StoreSettings>> resolver,
+            BiPredicate<RackPosition, ItemKey> committedTo) {
         Objects.requireNonNull(rack, "rack");
         Objects.requireNonNull(resolver, "resolver");
+        Objects.requireNonNull(committedTo, "committedTo");
         Entry entry = entryFor(rack, resolver);
         if (entry == null)
             // Resolved and it really carries nothing, or still unread because it could not be resolved at all.
             return unread.contains(rack) ? FilterMatch.REJECTED : FilterMatch.UNFILTERED;
+        if (!entry.acceptsStoring())
+            return FilterMatch.REJECTED;
+        if (entry.holdsOneTypeOnly() && !committedTo.test(rack, key))
+            return FilterMatch.REJECTED;
         FilterItemStack filter = entry.filter();
         if (filter == null)
-            return FilterMatch.UNFILTERED; // an entry that exists only for its priority
+            return FilterMatch.UNFILTERED; // an entry that exists only for its priority or a store rule
         try {
             if (!filter.test(level, probe(key)))
                 return FilterMatch.REJECTED;
@@ -278,7 +322,8 @@ final class AisleFilters {
         if (resolved.isEmpty())
             return null;
         // Also clears the unread mark, so this costs one block entity lookup per location ever.
-        set(rack, resolved.get().filter(), resolved.get().priority());
+        StoreSettings read = resolved.get();
+        set(rack, read.filter(), read.priority(), read.holdsOneTypeOnly(), read.acceptsStoring());
         return settings.get(rack);
     }
 

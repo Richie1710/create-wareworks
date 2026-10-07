@@ -14,7 +14,9 @@ import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
+import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.registry.WareworksEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
@@ -48,6 +50,12 @@ import net.neoforged.neoforge.items.IItemHandler;
  * again on the way in, so counting the box would report 64 iron vanishing into one {@code create:package}. The
  * expectation builders ({@link #of}, {@link #change}) apply the same rule, so a test states what it fed in the terms it
  * fed it and the census agrees. See {@link #add(Map, ItemStack, long)}.
+ * <p>
+ * <b>A pallet counts as its contents and the pallet itself as nothing</b> (M28): the load of a broken rack bay lies in
+ * the world as one {@link PalletEntity}, which is neither an {@code ItemEntity} nor a block with an item capability,
+ * so without this branch a broken brass bay could delete 65 536 items while every conservation test reported PASS. A
+ * pallet is a new <b>carrier</b>, exactly as a package is, and not a fifth place an item can be
+ * ({@code docs/warehouse-system.md} §8).
  * <p>
  * A census reads every block position of the test bounds once, which is fine for tests (a few thousand lookups).
  */
@@ -97,6 +105,11 @@ final class ItemCensus {
         // deferred by one server task, so a test that drops a package must let a tick pass before it counts again.
         for (PackageEntity entity : helper.getEntities(AllEntityTypes.PACKAGE.get()))
             add(counts, entity.getBox());
+        // The load of a broken rack bay: one entity carrying one item type and a count, which no sweep above can see
+        // (M28). It is read through the entity's own API rather than its item capability, so that a census never
+        // depends on a capability registration being present.
+        for (PalletEntity pallet : helper.getEntities(WareworksEntityTypes.PALLET.get()))
+            pallet.carriedKey().ifPresent(key -> add(counts, key, pallet.carriedCount()));
         return counts;
     }
 

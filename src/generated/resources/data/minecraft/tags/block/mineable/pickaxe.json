@@ -4,6 +4,8 @@
     "wareworks:warehouse_rail",
     "wareworks:warehouse_controller",
     "wareworks:warehouse_interface",
+    "wareworks:rack_bay_andesite",
+    "wareworks:rack_bay_brass",
     "wareworks:warehouse_input",
     "wareworks:warehouse_output",
     "wareworks:warehouse_terminal",

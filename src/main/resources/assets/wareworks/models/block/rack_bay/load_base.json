@@ -1,0 +1,23 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"load": "create:block/bound_cardboard_block_side",
+		"load_top": "create:block/bound_cardboard_block_top",
+		"particle": "create:block/bound_cardboard_block_side"
+	},
+	"elements": [
+		{
+			"name": "load_base",
+			"from": [3, 4, 3],
+			"to": [13, 7, 13],
+			"faces": {
+				"north": {"uv": [3, 9, 13, 12], "texture": "#load"},
+				"south": {"uv": [3, 9, 13, 12], "texture": "#load"},
+				"west": {"uv": [3, 9, 13, 12], "texture": "#load"},
+				"east": {"uv": [3, 9, 13, 12], "texture": "#load"},
+				"up": {"uv": [3, 3, 13, 13], "texture": "#load_top"}
+			}
+		}
+	]
+}

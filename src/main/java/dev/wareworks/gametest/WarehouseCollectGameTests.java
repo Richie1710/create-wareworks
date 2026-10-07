@@ -4,6 +4,7 @@ import static dev.wareworks.gametest.WareworksGameTests.AISLE_16X10X7;
 import static dev.wareworks.gametest.WareworksGameTests.AISLE_PAIR_16X10X13;
 import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -17,6 +18,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollVa
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.PortCollectSummary;
 import dev.wareworks.content.station.PortRankBehaviour;
@@ -29,6 +31,7 @@ import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStationBlock;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
+import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
@@ -495,6 +498,68 @@ public final class WarehouseCollectGameTests {
                             "which reaches the port's goggles");
                     aisle.assertIdleAndEmpty();
                 })
+                .thenSucceed();
+    }
+
+    /**
+     * <b>A wall of rack bays must not starve the collect queue</b> (M28 review).
+     * <p>
+     * The two snapshot queues share one {@code maxSnapshotsPerTick} budget and storage is drained first, which was an
+     * order rather than starvation only while every content hint came from a neighbour update. A rack bay tells its
+     * controller on <b>every</b> accepted transfer, so one item from a hopper is one
+     * {@code WarehouseRegistry.contentChanged}, and as soon as more <i>distinct</i> bays than the whole budget change
+     * per tick the urgent set never empties again. {@code refreshCollection} is reached from the drain and from
+     * nowhere else, so a collecting port would then never be re-read for as long as the feeding lasts — silently,
+     * because an unread port collects nothing and a port read once goes stale and makes the planner plan collects
+     * whose pick returns 0.
+     * <p>
+     * The storm here is the hint itself rather than a belt, for two reasons: it is exactly what a bay's handler emits,
+     * and it moves no items, so the census can assert on every tick that this test changes nothing in the world. The
+     * crane is deliberately left unpowered for the same reason — what is measured is the controller's own drain.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void collectsurvivesarackbayhintstorm(GameTestHelper helper) {
+        AisleFixture aisle = aisle(helper);
+        aisle.storage(STORAGE_RACK);
+        BlockPos machine = aisle.portInventory(COLLECT_RACK, IRON.toStack(IN_MACHINE));
+
+        // Strictly more distinct bays than one whole budget, so their hints alone keep the urgent set non-empty for
+        // ever: the queue de-duplicates per rack position, so the count of BAYS is what matters, not the hint rate.
+        List<BlockPos> bays = new ArrayList<>();
+        for (int position = 0; position < RAILS && bays.size() < WareworksConfig.maxSnapshotsPerTick() + 2; position++) {
+            for (Side side : Side.values()) {
+                RackPosition rack = new RackPosition(position, 0, side);
+                if (rack.equals(COLLECT_RACK) || rack.equals(STORAGE_RACK))
+                    continue;
+                helper.setBlock(aisle.rackPos(rack), WareworksBlocks.RACK_BAY_WOOD.getDefaultState()
+                        .setValue(RackBayBlock.FACING, aisle.sideDirection(rack)));
+                bays.add(aisle.absoluteRackPos(rack));
+            }
+        }
+        helper.assertTrue(bays.size() > WareworksConfig.maxSnapshotsPerTick(),
+                "the storm needs more bays than one drain budget, or it proves nothing");
+
+        Map<ItemKey, Long> conserved = ItemCensus.of(IRON, IN_MACHINE);
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1 + bays.size(), 0, 1))
+                .thenExecute(() -> {
+                    collect(helper, aisle, COLLECT_RACK, PortRedstone.UNLESS_POWERED);
+                    // From here on: one hint per bay per tick, which is a wall of bays being fed by machines.
+                    helper.onEachTick(() -> {
+                        ItemCensus.assertEquals(helper, conserved, "while a rack wall hints on every tick");
+                        for (BlockPos bay : bays)
+                            WarehouseRegistry.contentChanged(helper.getLevel(), bay);
+                    });
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(collectSummary(helper, aisle, COLLECT_RACK).ready(),
+                        (long) IN_MACHINE, "the port is read at all while the rack wall hints"))
+                .thenExecute(() -> aisle.insertAll(aisle.handlerAt(machine), IRON.toStack(ADDED_TO_MACHINE)))
+                .thenExecute(() -> ItemCensus.change(conserved, IRON, ADDED_TO_MACHINE))
+                .thenWaitUntil(() -> helper.assertValueEqual(collectSummary(helper, aisle, COLLECT_RACK).ready(),
+                        (long) (IN_MACHINE + ADDED_TO_MACHINE),
+                        "and it is read AGAIN: the last unit of the budget is the collect queue's"))
+                .thenExecute(() -> helper.assertValueEqual(aisle.inventoryCount(machine, IRON),
+                        (long) (IN_MACHINE + ADDED_TO_MACHINE), "and nothing was fetched: the crane never ran"))
                 .thenSucceed();
     }
 
