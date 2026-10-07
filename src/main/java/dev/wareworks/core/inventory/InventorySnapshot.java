@@ -3,6 +3,7 @@ package dev.wareworks.core.inventory;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +30,11 @@ public final class InventorySnapshot<K> {
     private final Map<K, Long> totals;
     /** Free space per key in the slots that hold it ({@link CapacityMath#insertable(SlotView, Object, int)}). */
     private final Map<K, Long> roomByKey;
+    /**
+     * Keys with at least one slot this snapshot cannot judge ({@link CapacityMath#capacityUnknown}). Empty for every
+     * vanilla container and every plain {@code ItemStackHandler}, so the usual snapshot allocates nothing for it.
+     */
+    private final Set<K> unknownKeys;
     /** The common limit of all empty slots, {@link #NO_EMPTY_SLOT} or {@link #MIXED_SLOT_LIMITS}. */
     private final int emptySlotLimit;
     private final int usedSlots;
@@ -38,6 +44,7 @@ public final class InventorySnapshot<K> {
         this.slots = List.copyOf(slots);
         Map<K, Long> sums = new LinkedHashMap<>();
         Map<K, Long> room = new HashMap<>();
+        Set<K> unknown = Set.of();
         int emptyLimit = NO_EMPTY_SLOT;
         int used = 0;
         long items = 0;
@@ -53,9 +60,15 @@ public final class InventorySnapshot<K> {
             items += slot.count();
             sums.merge(slot.key(), (long) slot.count(), Long::sum);
             room.merge(slot.key(), CapacityMath.insertable(slot, slot.key(), slot.maxStackSize()), Long::sum);
+            if (CapacityMath.capacityUnknown(slot, slot.key())) {
+                if (unknown.isEmpty())
+                    unknown = new HashSet<>();
+                unknown.add(slot.key());
+            }
         }
         this.totals = Collections.unmodifiableMap(sums);
         this.roomByKey = room;
+        this.unknownKeys = unknown;
         this.emptySlotLimit = emptyLimit;
         this.usedSlots = used;
         this.totalItems = items;
@@ -134,19 +147,22 @@ public final class InventorySnapshot<K> {
 
     /**
      * Estimated insertable amount of {@code key}, equal to {@link CapacityMath#insertable(Iterable, Object, int)} over
-     * the slots. O(1) when all empty slots share one limit (the usual case; the planner calls this for every candidate
-     * location), otherwise one pass over the slots.
+     * the slots — including its {@link CapacityMath#UNKNOWN_CAPACITY} answer when no slot has known room while at
+     * least one slot cannot be judged. O(1) when all empty slots share one limit (the usual case; the planner calls
+     * this for every candidate location), otherwise one pass over the slots.
      */
     public long insertable(K key, int keyMaxStackSize) {
         Objects.requireNonNull(key, "key");
         long total = roomByKey.getOrDefault(key, 0L);
-        if (emptySlotLimit != MIXED_SLOT_LIMITS)
-            return total + freeSlots() * CapacityMath.slotCapacity(Math.max(0, emptySlotLimit), keyMaxStackSize, 0);
-        for (SlotView<K> slot : slots) {
-            if (slot.isEmpty())
-                total += CapacityMath.slotCapacity(slot.slotLimit(), keyMaxStackSize, 0);
+        if (emptySlotLimit != MIXED_SLOT_LIMITS) {
+            total += freeSlots() * CapacityMath.slotCapacity(Math.max(0, emptySlotLimit), keyMaxStackSize, 0);
+        } else {
+            for (SlotView<K> slot : slots) {
+                if (slot.isEmpty())
+                    total += CapacityMath.slotCapacity(slot.slotLimit(), keyMaxStackSize, 0);
+            }
         }
-        return total;
+        return total == 0 && unknownKeys.contains(key) ? CapacityMath.UNKNOWN_CAPACITY : total;
     }
 
     /** Stored amount of {@code key}, see {@link CapacityMath#extractable(Iterable, Object)}. */

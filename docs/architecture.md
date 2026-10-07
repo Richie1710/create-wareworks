@@ -3098,6 +3098,70 @@ physically placed on the Packager. Staying out is the player's build, not our co
 publishes the station's **9-slot buffer**, never the racks and never the stock index, because that buffer is the only
 capability either station exposes.
 
+
+### ADR-041 — An insert estimate may answer "unknown", and the planner's capacity gate is a pre-filter rather than a verdict (bug fix before M28)
+
+*Context:* `CapacityMath.slotCapacity(slotLimit, maxStackSize, currentCount)` answers `min(slotLimit, maxStackSize)`
+unless the slot already holds **more** than one stack, which it reads as proof that the inventory ignores stack sizes
+(a drawer). `JobPlanner#collectStorage` then treats the estimate as a **hard gate** with a `continue` before any live
+call, because a live query per candidate location is exactly what this mod refuses to do. Together those two correct
+decisions deadlock: proving drawer behaviour needs a count above one stack, which needs a delivery, which the gate
+forbids. A row of drawers behind a warehouse interface therefore filled to exactly one stack — the default carry
+limit is one stack — and was never used again. This is released behaviour, not a rack-bay problem, so it ships on
+its own.
+
+The ambiguity is **real**: at exactly one full stack an ordinary slot is full and a drawer is not, and the three
+numbers cannot tell them apart. The obvious patch, `currentCount >= maxStackSize`, breaks the case the code gets
+right: an ordinary container slot reports a limit of 99 whatever it holds, so a slot holding a full stack of 16 ender
+pearls would be credited with room for 64 and the warehouse would plan jobs for items that cannot fit. That is why
+`CapacityMathTest#countAtStackSizeStaysConservative` pins today's answer deliberately.
+
+*Decision:*
+
+* **The estimate says it does not know, instead of guessing.** `CapacityMath.capacityUnknown(slot, key)` marks a slot
+  holding exactly one full stack of `key` under a slot limit above `CapacityMath.STACK_SIZE_CEILING`, and the estimate
+  over a whole inventory (`CapacityMath.insertable(Iterable, ...)`, `InventorySnapshot#insertable`) answers
+  `CapacityMath.UNKNOWN_CAPACITY` when such a slot is present **and** no slot has known room. `slotCapacity` is
+  unchanged, so no number anywhere is overestimated.
+* **The gate stays one comparison and gains no branch.** `JobPlanner.UNKNOWN_CAPACITY` is
+  `CapacityMath.UNKNOWN_CAPACITY` — one value, not two — and the gate `estimate − reserved <= 0` already passed
+  it, because a location whose counts were restored from a save without a snapshot has answered it since M1. So the
+  fix adds **no planner logic**: an unknown location is ranked and the live `simulateInsert` in `tryInsert` decides,
+  which is the only place that can tell a drawer from a chest. The estimate is thereby what its own class doc always
+  claimed — an upper-bound pre-filter — and never a verdict about a location it cannot judge.
+* **The discriminator is the stack ceiling, not a guess about mods.** `ItemStackHandler.getSlotLimit` returns exactly
+  `Item.ABSOLUTE_MAX_STACK_SIZE` (99) and `InvWrapper.getSlotLimit` returns `Container.getMaxStackSize()`, which
+  vanilla defaults to 99; both then clamp an insert by the item's own stack size. A slot limit **above** 99 therefore
+  cannot be a stack-size rule at all, which is the only evidence of bulk behaviour available before a live call. The
+  core layer is pure Java and cannot see the vanilla constant, so `CapacityMath.STACK_SIZE_CEILING` mirrors it and
+  GameTest `stacksizeceiling` pins the mirror against the real one in a running server.
+
+*Consequences:*
+
+* A drawer at exactly one stack is offered to the crane again and fills to its real capacity, and it needs no lucky
+  first delivery: the unknown answer gets it past one stack deterministically, after which the existing escape hatch
+  reads its real room.
+* **No vanilla container, no plain `ItemStackHandler` and no Create inventory can answer unknown**, so a warehouse of
+  chests and barrels plans exactly as before and pays **zero** extra live calls — including the case this fix is
+  most easily accused of making expensive, a warehouse that is genuinely full.
+* A genuine bulk inventory sitting at exactly one stack costs **one** `simulateInsert` for that (location, key). A
+  refusing one is recorded in `CraneDispatch`'s refusal memory and skipped before the estimate for the next 1200
+  ticks; an accepting one gets the delivery. Both stay inside the per-run `liveSimulationBudget` (64), and nothing is
+  read per tick.
+* **Accepted limitation:** a bulk slot whose limit is at or below 99 stays conservative and loses at most
+  `slotLimit − maxStackSize` (at most 98) items of headroom in that slot. Bounded and small, unlike the
+  65 536-item drawer.
+* M28's rack bay inherits the contract rather than a special case: it builds its own `SlotView` and will answer an
+  exact estimate, and the planner needs no bay-shaped branch at the gate.
+
+*Alternatives rejected:* **`>=` in `slotCapacity`** — overestimates every ordinary slot full of a small-stacking
+item and plans impossible jobs. **A soft gate for every zero estimate** — a completely full warehouse would then
+put one live query per location to the world each minute, which is the per-candidate live query the design refuses.
+**A `limitInStacks` flag on `SlotView`** (the earlier M28 Step 0 sketch) — a flag can only be set by code that
+knows the inventory, and `ItemHandlerSnapshots.capture` reads a foreign `IItemHandler` and would pass `false`, so it
+cannot fix the released bug at all; it belongs to the rack bay, which does know.
+
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).

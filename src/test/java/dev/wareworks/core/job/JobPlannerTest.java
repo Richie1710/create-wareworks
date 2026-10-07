@@ -35,6 +35,12 @@ class JobPlannerTest {
     private static final String ITEM_TYPE_SEPARATOR = "#";
     private static final String WORN_SWORD = "sword#worn";
     private static final String NEW_SWORD = "sword#new";
+    private static final String PEARL = "pearl";
+    private static final int SMALL_STACK = 16;
+    /** What every vanilla container and every plain {@code ItemStackHandler} reports per slot. */
+    private static final int CONTAINER_LIMIT = 99;
+    /** A slot limit no stack-size rule can explain: a drawer. */
+    private static final int BULK_LIMIT = 1 << 16;
     private static final int STACK = 64;
     private static final int CARRY = 64;
     private static final int TRANSFER_TICKS = 10;
@@ -105,6 +111,11 @@ class JobPlannerTest {
         for (int i = 0; i < emptySlots; i++)
             builder.addEmpty(STACK);
         return builder.build();
+    }
+
+    /** A snapshot of one drawer-like slot: a limit far above any stack size, so stack sizes may not apply. */
+    private static InventorySnapshot<String> bulkSlot(String key, int count) {
+        return InventorySnapshot.<String>builder(1).add(key, count, BULK_LIMIT, STACK).build();
     }
 
     private static PlannerInput.OpenRequest<String, RackPosition> request(UUID id, String key, int remaining,
@@ -600,6 +611,63 @@ class JobPlannerTest {
         assertEquals(68, estimate.estimateInsertable(chest, IRON));
         assertEquals(64, estimate.estimateInsertable(chest, DIAMOND));
         assertEquals(JobPlanner.UNKNOWN_CAPACITY, estimate.estimateInsertable(restored, IRON));
+    }
+
+    /**
+     * The store gate is a pre-filter, not a verdict: a location whose snapshot cannot be judged reaches the live
+     * simulate. One drawer-like slot (a limit far above any stack size) holding <b>exactly</b> one full stack is the
+     * case the three numbers cannot decide — full for an ordinary slot, half empty for a drawer — so the estimate
+     * answers {@link JobPlanner#UNKNOWN_CAPACITY} and the drawer keeps being filled instead of dying at one stack.
+     */
+    @Test
+    void aDrawerHoldingExactlyOneStackIsStillOffered() {
+        RackPosition drawer = rack(2, 0, Side.LEFT);
+        stock.update(drawer, bulkSlot(IRON, STACK));
+        live.insertable.put(drawer, STACK);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(drawer))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+
+        PlanResult<String, RackPosition> result = planner.plan(base.inputBuffers(l -> slots(0, IRON, 8)).build());
+        assertTrue(result.hasJob(), "a drawer holding exactly one stack must not be gated out as full");
+        assertEquals(drawer, result.job().orElseThrow().job().target(), "the drawer is still a store candidate");
+        assertEquals(List.of(drawer), live.insertCalls, "and exactly one live simulate decided it");
+        assertEquals(JobPlanner.UNKNOWN_CAPACITY, JobPlanner.InsertEstimate
+                .fromSnapshots(stock.readOnlyView(), key -> STACK).estimateInsertable(drawer, IRON),
+                "the snapshot cannot decide this slot, so it must not claim it is full");
+    }
+
+    /**
+     * The other half of the same question, and the reason the estimate may not simply trust the slot limit: an
+     * <b>ordinary</b> container slot reports a limit of {@value #CONTAINER_LIMIT} whatever it holds, so a slot holding
+     * a full stack of a 16-stacking item (an ender pearl) is genuinely full. It must stay skipped, and it must cost no
+     * live call at all — that is the cost bound of the fix above.
+     */
+    @Test
+    void anOrdinaryFullSlotOfASmallStackingItemCostsNoLiveCall() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, InventorySnapshot.<String>builder(1)
+                .add(PEARL, SMALL_STACK, CONTAINER_LIMIT, SMALL_STACK).build());
+        live.insertable.put(chest, STACK);
+        PlanResult<String, RackPosition> result = planner.plan(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> SMALL_STACK))
+                .inputBuffers(location -> slots(0, PEARL, 8))
+                .build());
+        assertFalse(result.hasJob(), "a full ordinary slot is full");
+        assertEquals(List.of(), live.insertCalls, "and is skipped before any live call");
+    }
+
+    /**
+     * A drawer that already holds more than one stack proves its own behaviour, so the estimate answers a number
+     * again — the unknown answer above is needed for exactly one count, not forever.
+     */
+    @Test
+    void aDrawerPastOneStackEstimatesItsRealRoom() {
+        RackPosition drawer = rack(2, 0, Side.LEFT);
+        stock.update(drawer, bulkSlot(IRON, STACK + 1));
+        assertEquals(BULK_LIMIT - (STACK + 1), JobPlanner.InsertEstimate
+                .fromSnapshots(stock.readOnlyView(), key -> STACK).estimateInsertable(drawer, IRON));
     }
 
     // --- store filters (M8, ADR-021) -----------------------------------------------------------------------------

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A drawer behind a warehouse interface is filled past one stack again.** Any inventory that holds more than a stack
+  per slot — a drawer, a barrel from a storage mod, a crate — was handed exactly one stack and then written off as
+  full for the rest of the world's life: the warehouse judged the slot by the stack size of the item in it and never
+  asked the drawer itself, and because it needed to see more than a stack before it would believe the drawer, nothing
+  could ever get it there. Such a place is now offered to the crane and the drawer answers for itself, so it keeps
+  filling to its real capacity. Ordinary chests, barrels and machines are untouched: a chest slot holding a full stack
+  is still full, and still costs the warehouse nothing to pass over
+
 ## [0.8.0-alpha] - 2026-10-04
 
 ### Added

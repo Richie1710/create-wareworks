@@ -1,7 +1,9 @@
 package dev.wareworks.core.inventory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,7 +15,13 @@ class CapacityMathTest {
     private static final int STACK = 64;
     private static final int SMALL_STACK = 16;
     private static final int UNSTACKABLE = 1;
+    /**
+     * What every vanilla container and every plain {@code ItemStackHandler} reports per slot, which is also
+     * {@link CapacityMath#STACK_SIZE_CEILING}: at or below it a slot limit is always a stack-size rule.
+     */
     private static final int CONTAINER_LIMIT = 99;
+    /** A slot limit no stack-size rule can explain: a drawer. */
+    private static final int BULK_LIMIT = 2048;
 
     @Nested
     class SlotCapacity {
@@ -39,9 +47,19 @@ class CapacityMathTest {
             assertEquals(2048, CapacityMath.slotCapacity(2048, STACK, 1000));
         }
 
+        /**
+         * At <b>exactly</b> one stack the three numbers cannot decide (a full ordinary slot and a barely started
+         * drawer look identical), and {@code slotCapacity} answers the conservative reading <b>on purpose</b>: the
+         * other reading would overestimate an ordinary slot, e.g. claim room for 64 ender pearls in a 99-limit slot
+         * that already holds a full stack of 16. Do not change this to {@code >=}. The ambiguity is resolved one level
+         * up instead, where it can be: {@link CapacityMath#capacityUnknown} marks such a slot and the estimate over a
+         * whole inventory answers {@link CapacityMath#UNKNOWN_CAPACITY} rather than a wrong number
+         * ({@link Unknown}).
+         */
         @Test
         void countAtStackSizeStaysConservative() {
             assertEquals(STACK, CapacityMath.slotCapacity(2048, STACK, STACK));
+            assertEquals(SMALL_STACK, CapacityMath.slotCapacity(CONTAINER_LIMIT, SMALL_STACK, SMALL_STACK));
         }
 
         @Test
@@ -126,6 +144,68 @@ class CapacityMathTest {
         void rejectsInvalidArguments() {
             assertThrows(IllegalArgumentException.class, () -> CapacityMath.insertable(SlotView.empty(64), "iron", 0));
             assertThrows(NullPointerException.class, () -> CapacityMath.insertable(SlotView.<String>empty(64), null, STACK));
+        }
+    }
+
+    /**
+     * The one count the numbers cannot decide: a slot holding exactly one full stack under a slot limit that no
+     * stack-size rule can explain. The estimate says so instead of guessing, and only when it would otherwise have to
+     * answer a false 0.
+     */
+    @Nested
+    class Unknown {
+        @Test
+        void theCeilingIsTheLargestStackAnItemCanHave() {
+            // Mirrors Item.ABSOLUTE_MAX_STACK_SIZE; GameTest `stacksizeceiling` pins it against the real constant.
+            assertEquals(99, CapacityMath.STACK_SIZE_CEILING);
+            assertEquals(Long.MAX_VALUE, CapacityMath.UNKNOWN_CAPACITY);
+        }
+
+        @Test
+        void onlyAFullStackUnderABulkLimitIsUnknown() {
+            assertTrue(CapacityMath.capacityUnknown(SlotView.of("iron", STACK, BULK_LIMIT, STACK), "iron"));
+            assertTrue(CapacityMath.capacityUnknown(SlotView.of("pearl", SMALL_STACK, BULK_LIMIT, SMALL_STACK), "pearl"));
+            assertFalse(CapacityMath.capacityUnknown(SlotView.of("iron", STACK - 1, BULK_LIMIT, STACK), "iron"),
+                    "below a stack both readings leave room");
+            assertFalse(CapacityMath.capacityUnknown(SlotView.of("iron", STACK + 1, BULK_LIMIT, STACK), "iron"),
+                    "above a stack the slot has proven it ignores stack sizes");
+            assertFalse(CapacityMath.capacityUnknown(SlotView.of("iron", STACK, CONTAINER_LIMIT, STACK), "iron"),
+                    "an ordinary container limit cannot be evidence of a drawer");
+            assertFalse(CapacityMath.capacityUnknown(SlotView.of("gold", STACK, BULK_LIMIT, STACK), "iron"),
+                    "another key is blocked, not unknown");
+            assertFalse(CapacityMath.capacityUnknown(SlotView.<String>empty(BULK_LIMIT), "iron"),
+                    "an empty slot has room under either reading");
+        }
+
+        @Test
+        void aBulkSlotAtOneStackAnswersUnknownInsteadOfZero() {
+            List<SlotView<String>> drawer = List.of(SlotView.of("cobblestone", STACK, BULK_LIMIT, STACK));
+            assertEquals(0, CapacityMath.insertable(drawer.getFirst(), "cobblestone", STACK),
+                    "the per-slot number stays conservative");
+            assertEquals(CapacityMath.UNKNOWN_CAPACITY, CapacityMath.insertable(drawer, "cobblestone", STACK),
+                    "but the inventory refuses to call itself full");
+            assertEquals(0, CapacityMath.insertable(drawer, "dirt", STACK), "another key is still blocked");
+        }
+
+        /** An ordinary slot full of a small-stacking item is genuinely full and must stay an exact 0. */
+        @Test
+        void aFullOrdinaryContainerStaysExactlyFull() {
+            List<SlotView<String>> pearls = List.of(
+                    SlotView.of("pearl", SMALL_STACK, CONTAINER_LIMIT, SMALL_STACK),
+                    SlotView.of("pearl", SMALL_STACK, CONTAINER_LIMIT, SMALL_STACK));
+            assertEquals(0, CapacityMath.insertable(pearls, "pearl", SMALL_STACK));
+        }
+
+        /** Known room anywhere answers the number: the gate would pass on it, so nothing is gained by "unknown". */
+        @Test
+        void knownRoomWinsOverAnUnknownSlot() {
+            List<SlotView<String>> slots = List.of(
+                    SlotView.of("iron", STACK, BULK_LIMIT, STACK),
+                    SlotView.of("iron", 40, CONTAINER_LIMIT, STACK));
+            assertEquals(STACK - 40, CapacityMath.insertable(slots, "iron", STACK));
+            assertEquals(STACK, CapacityMath.insertable(
+                    List.of(SlotView.of("iron", STACK, BULK_LIMIT, STACK), SlotView.<String>empty(CONTAINER_LIMIT)),
+                    "iron", STACK));
         }
     }
 

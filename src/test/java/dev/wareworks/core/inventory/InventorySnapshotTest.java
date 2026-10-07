@@ -55,7 +55,9 @@ class InventorySnapshotTest {
             boolean uniformLimits = random.nextBoolean();
             InventorySnapshot.Builder<String> builder = InventorySnapshot.builder(size);
             for (int i = 0; i < size; i++) {
-                int limit = uniformLimits ? LIMIT : random.nextInt(4) * 40;
+                // Limits above LIMIT (= CapacityMath.STACK_SIZE_CEILING) are drawer-like, so the rounds also cover the
+                // unknown answer and pin the O(1) path to the slot-by-slot one for it.
+                int limit = uniformLimits ? LIMIT : random.nextInt(5) * 40;
                 if (random.nextInt(3) == 0) {
                     builder.addEmpty(limit);
                 } else {
@@ -134,6 +136,43 @@ class InventorySnapshotTest {
         assertEquals(1_500_150, snapshot.totalItems());
         assertEquals((drawerLimit - 500_000L) + (drawerLimit - 1_000_000L), snapshot.insertable("cobblestone", STACK));
         assertEquals(new KeyCount<>("cobblestone", 1_500_000), snapshot.topEntries(1).getFirst());
+    }
+
+    /**
+     * A drawer behind a warehouse interface that holds exactly one stack: the snapshot cannot tell it from a full
+     * ordinary slot, so it answers {@link CapacityMath#UNKNOWN_CAPACITY} and the planner asks the live inventory
+     * instead of writing the location off ({@code JobPlannerTest#aDrawerHoldingExactlyOneStackIsStillOffered}).
+     */
+    @Test
+    void aBulkSlotAtOneStackAnswersUnknown() {
+        int drawerLimit = 1 << 16;
+        InventorySnapshot<String> drawer = InventorySnapshot.<String>builder(1)
+                .add("cobblestone", STACK, drawerLimit, STACK).build();
+        assertEquals(CapacityMath.UNKNOWN_CAPACITY, drawer.insertable("cobblestone", STACK));
+        assertEquals(0, drawer.insertable("dirt", STACK), "another key is blocked, not unknown");
+        assertEquals(STACK, drawer.count("cobblestone"), "the counts are untouched");
+
+        InventorySnapshot<String> past = InventorySnapshot.<String>builder(1)
+                .add("cobblestone", STACK + 1, drawerLimit, STACK).build();
+        assertEquals(drawerLimit - (STACK + 1), past.insertable("cobblestone", STACK),
+                "past one stack the drawer has proven itself and the estimate is a number again");
+
+        InventorySnapshot<String> withRoom = InventorySnapshot.<String>builder(2)
+                .add("cobblestone", STACK, drawerLimit, STACK).addEmpty(LIMIT).build();
+        assertEquals(STACK, withRoom.insertable("cobblestone", STACK), "known room needs no unknown answer");
+    }
+
+    /**
+     * The cost bound of the unknown answer: an ordinary container reports {@value #LIMIT} per slot whatever it holds,
+     * so a chest full of a 16-stacking item still answers an exact 0 and reaches no live call.
+     */
+    @Test
+    void aFullOrdinaryContainerStaysExactlyFull() {
+        int smallStack = 16;
+        InventorySnapshot.Builder<String> builder = InventorySnapshot.builder(CHEST_SLOTS);
+        for (int i = 0; i < CHEST_SLOTS; i++)
+            builder.add("pearl", smallStack, LIMIT, smallStack);
+        assertEquals(0, builder.build().insertable("pearl", smallStack));
     }
 
     @Test

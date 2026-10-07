@@ -20,8 +20,39 @@ import java.util.Objects;
  * Some inventories (e.g. drawers) ignore the item's stack size and only honour their slot limit. A slot that already
  * holds more than the key's max stack size proves that behaviour, so for such a slot the slot limit alone is used.
  * For every other slot the conservative {@code min(slotLimit, maxStackSize)} applies.
+ *
+ * <h2>The one count the numbers cannot decide</h2>
+ * At <b>exactly</b> one full stack the two rules disagree and nothing in the three numbers settles it: an ordinary slot
+ * is full, a drawer has barely started. Guessing either way is wrong — answering "full" is what killed drawers behind
+ * a warehouse interface at one stack, and answering "room" would plan jobs into an ordinary slot that cannot take
+ * them. So this class does not guess: {@link #capacityUnknown} marks such a slot, and an estimate over a whole
+ * inventory whose known room is <b>zero</b> while at least one such slot is present answers {@link #UNKNOWN_CAPACITY}
+ * instead of 0. The planner's capacity gate is a pre-filter, so an unknown answer costs one live simulate at the only
+ * place that can tell a drawer from a chest, and the live result stays authoritative as always.
+ * <p>
+ * "Such a slot" is deliberately narrow: only a slot limit <b>above</b> {@link #STACK_SIZE_CEILING} can mean anything
+ * other than a stack-size rule, so every vanilla container and every plain {@code ItemStackHandler} keeps its cheap,
+ * exact zero and reaches no live call at all. A bulk slot whose limit is at or below that ceiling stays conservative
+ * and loses at most {@code slotLimit - maxStackSize} items of headroom in that one slot — bounded and small, unlike
+ * the 65 536-item drawer this rule exists for.
  */
 public final class CapacityMath {
+    /**
+     * Insert estimate meaning "unknown, ask the live inventory". {@link Long#MAX_VALUE}, so a caller that only asks
+     * "is there room?" lets the location through; the same value as {@code core.job.JobPlanner.UNKNOWN_CAPACITY},
+     * which an estimate for a location without a snapshot has always answered.
+     */
+    public static final long UNKNOWN_CAPACITY = Long.MAX_VALUE;
+    /**
+     * The largest count any single item stack can reach, mirroring {@code Item.ABSOLUTE_MAX_STACK_SIZE} = 99 (this
+     * layer is pure Java and cannot see it; GameTest {@code stacksizeceiling} pins the mirror). Every ordinary slot
+     * limit is at or below it: {@code ItemStackHandler.getSlotLimit} returns exactly that constant and
+     * {@code InvWrapper.getSlotLimit} returns {@code Container.getMaxStackSize()}, which vanilla defaults to 99 — and
+     * both then clamp an insert by the item's own stack size. A slot limit <b>above</b> it can therefore not be a
+     * stack-size rule at all, which is the only evidence of a drawer available before a live call.
+     */
+    public static final int STACK_SIZE_CEILING = 99;
+
     private CapacityMath() {
     }
 
@@ -58,7 +89,18 @@ public final class CapacityMath {
     }
 
     /**
-     * Estimated amount of {@code key} that could be inserted into all given slots together.
+     * Whether this slot's remaining capacity for {@code key} cannot be decided from the snapshot: it holds
+     * <b>exactly</b> one full stack of {@code key} and its slot limit is above {@link #STACK_SIZE_CEILING}, so it is
+     * full under stack-size rules and has room under its slot limit, and nothing here says which applies.
+     */
+    public static <K> boolean capacityUnknown(SlotView<K> slot, K key) {
+        Objects.requireNonNull(key, "key");
+        return slot.holds(key) && slot.count() == slot.maxStackSize() && slot.slotLimit() > STACK_SIZE_CEILING;
+    }
+
+    /**
+     * Estimated amount of {@code key} that could be inserted into all given slots together, or
+     * {@link #UNKNOWN_CAPACITY} when no slot has known room while at least one is {@link #capacityUnknown}.
      *
      * @param keyMaxStackSize max stack size of {@code key} (at least 1)
      */
@@ -66,9 +108,12 @@ public final class CapacityMath {
         Objects.requireNonNull(key, "key");
         requireMaxStackSize(keyMaxStackSize);
         long total = 0;
-        for (SlotView<K> slot : slots)
+        boolean unknown = false;
+        for (SlotView<K> slot : slots) {
             total += insertable(slot, key, keyMaxStackSize);
-        return total;
+            unknown |= capacityUnknown(slot, key);
+        }
+        return total == 0 && unknown ? UNKNOWN_CAPACITY : total;
     }
 
     /** Amount of {@code key} stored in all given slots together, i.e. what could be extracted. */

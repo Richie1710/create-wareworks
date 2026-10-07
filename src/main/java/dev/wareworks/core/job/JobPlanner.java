@@ -150,8 +150,13 @@ public final class JobPlanner<K, L> {
      * direction in any case: it leaves the items in the player's machine, where they already are.
      */
     public static final int MAX_COLLECT_CANDIDATES = 12;
-    /** Capacity estimate meaning "unknown, ask the live inventory". */
-    public static final long UNKNOWN_CAPACITY = Long.MAX_VALUE;
+    /**
+     * Capacity estimate meaning "unknown, ask the live inventory". A location without a snapshot (counts restored from
+     * a save) and a snapshot that cannot judge its own slots (a drawer-like slot at exactly one stack,
+     * {@link CapacityMath#capacityUnknown}) both answer it, and the capacity gate in {@link #collectStorage} therefore
+     * ranks them for the live simulate instead of excluding them.
+     */
+    public static final long UNKNOWN_CAPACITY = CapacityMath.UNKNOWN_CAPACITY;
     /** Filter rank of a candidate no store filter applies to (stations, retrieve sources): neither better nor worse. */
     private static final int NEUTRAL_FILTER_RANK = FilterMatch.UNFILTERED.storeRank();
     /**
@@ -201,7 +206,8 @@ public final class JobPlanner<K, L> {
 
         /**
          * Estimates from the index snapshots ({@link InventorySnapshot#insertable}); unknown for locations without a
-         * snapshot (e.g. counts restored from a save).
+         * snapshot (e.g. counts restored from a save) and for a snapshot whose only slots for the key cannot be judged
+         * ({@link CapacityMath#capacityUnknown}).
          */
         static <K, L> InsertEstimate<K, L> fromSnapshots(StockView<K, L> stock, ToIntFunction<? super K> maxStackSize) {
             Objects.requireNonNull(stock, "stock");
@@ -740,6 +746,10 @@ public final class JobPlanner<K, L> {
                 note(survey, true);
                 continue;
             }
+            // A pre-filter, never a verdict: the estimate is an upper bound and answers UNKNOWN_CAPACITY when the
+            // snapshot cannot bound the location at all, so a location it cannot judge is ranked and decided by the
+            // live simulate below rather than excluded for the world's life (CapacityMath, "the one count the numbers
+            // cannot decide").
             long estimate = input.insertEstimate().estimateInsertable(location, key);
             if (estimate - input.reservations().reservedCapacity(location) <= 0) {
                 note(survey, false);

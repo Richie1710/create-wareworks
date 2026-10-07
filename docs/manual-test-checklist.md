@@ -2096,3 +2096,29 @@ you get tired of waiting, and put it back before judging check 160.
     server has `inputBufferSlots` set **below** 9, say 1 or 2, every multi-type package is refused **for ever** and
     that gold line will never go away; nothing is lost, the boxes queue up outside, but is "correct and permanently
     stuck" something the line should say differently?
+
+## AH. A drawer behind a warehouse interface (the drawer fix, before M28)
+
+> Everything that can be checked without a third-party mod is automated: the estimate's new "I do not know" answer and
+> the whole truth table around it in JUnit (`CapacityMathTest.Unknown`, `InventorySnapshotTest`), the planner still
+> offering such a location and the ender-pearl case costing no live call at all (`JobPlannerTest`), and in a running
+> server the two world facts the fix rests on (`stacksizeceiling`: the mirrored vanilla constant, a real chest
+> reporting exactly 99 per slot, and a chest full of ender pearls still answering an exact 0). What **cannot** be
+> automated is the thing the fix is for: no block in this mod, in Create or in vanilla reports a slot limit above 99,
+> so a real drawer is the only way to see it work. One check, and it needs a storage mod.
+
+197. **Does a drawer behind a warehouse interface fill past one stack now?** Install any mod with a drawer, barrel or
+    crate that holds **more than one stack per slot** (a Storage Drawers-style drawer is the clearest case). Build an
+    ordinary working warehouse, put that drawer where a chest would go — behind a **warehouse interface**, nothing
+    else different — and feed a few thousand cobblestone into the warehouse input. Watch the drawer. Before this
+    fix it took exactly **one stack** and was never touched again, however much the input held and however long you
+    waited; the crane simply drove past it for ever, with no message anywhere saying why. It should now keep filling,
+    stack after stack, up to whatever that drawer's real capacity is, and the terminal's stock list should keep
+    counting it up past 64. Then check the two things around it. **Nothing slowed down:** a warehouse of ordinary
+    chests, and especially a **full** one, should feel exactly as it did — the drawer rule deliberately cannot
+    apply to any vanilla container, so a full chest is still passed over for nothing. And **nothing is overfilled:**
+    put a full stack of **ender pearls** (16) into an ordinary chest behind an interface, leave no other free slot, and
+    ask the warehouse to store more pearls — it must simply report the warehouse full, never plan a trip that then
+    cannot be unloaded. If your drawer mod uses a slot limit **at or below 99** the drawer stays conservative by design
+    and will still stop at one stack; that is the one case the fix knowingly leaves alone (at most 35 items of a
+    99-limit slot go unused), so note which mod and which limit if you hit it.

@@ -6,6 +6,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.core.inventory.CapacityMath;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import net.minecraft.core.BlockPos;
@@ -19,6 +20,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -145,6 +147,37 @@ public final class WareworksGameTests {
         ItemKey iron = ItemKey.of(Items.IRON_INGOT);
         helper.assertValueEqual(snapshot.insertable(iron, iron.getMaxStackSize()), simulatedInsert(handler, iron),
                 "unrestricted items match the simulated insert");
+        helper.succeed();
+    }
+
+    /**
+     * The world facts the drawer fix rests on. {@link CapacityMath#STACK_SIZE_CEILING} mirrors
+     * {@code Item.ABSOLUTE_MAX_STACK_SIZE}, which the pure core layer cannot see, and a real vanilla container reports
+     * exactly that per slot. Both together are the cost bound: a chest full of a 16-stacking item still answers an
+     * exact 0 and provokes no live simulate, while only a slot limit <b>above</b> the ceiling (a drawer from a storage
+     * mod) can answer {@link CapacityMath#UNKNOWN_CAPACITY}.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void stackSizeCeiling(GameTestHelper helper) {
+        helper.assertValueEqual(CapacityMath.STACK_SIZE_CEILING, Item.ABSOLUTE_MAX_STACK_SIZE,
+                "the core mirror of Item.ABSOLUTE_MAX_STACK_SIZE");
+
+        BlockPos chestPos = new BlockPos(3, BASE_Y, 3);
+        helper.setBlock(chestPos, Blocks.CHEST);
+        IItemHandler handler = helper.getLevel()
+                .getCapability(Capabilities.ItemHandler.BLOCK, helper.absolutePos(chestPos), null);
+        if (handler == null)
+            helper.fail("chest exposes no item handler", chestPos);
+        helper.assertValueEqual(handler.getSlotLimit(0), CapacityMath.STACK_SIZE_CEILING,
+                "a vanilla container's slot limit is never above the ceiling");
+
+        ItemKey pearl = ItemKey.of(Items.ENDER_PEARL);
+        for (int slot = 0; slot < CHEST_SLOTS; slot++)
+            insertAll(helper, handler, pearl.toStack(pearl.getMaxStackSize()));
+        InventorySnapshot<ItemKey> snapshot = ItemHandlerSnapshots.capture(handler);
+        helper.assertValueEqual(snapshot.insertable(pearl, pearl.getMaxStackSize()), 0L,
+                "a full ordinary container is exactly full, not unknown");
+        helper.assertValueEqual(simulatedInsert(handler, pearl), 0L, "and the live handler agrees");
         helper.succeed();
     }
 
