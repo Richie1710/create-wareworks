@@ -60,15 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes a line into the server log saying exactly what fell and where. A **vanilla hopper** underneath will drain a
   pallet for you, item by item, and so will a **Deployer** — but Create's belts, chutes, funnels, depots and ejectors
   cannot see a pallet at all, which also means none of them can ever make one disappear
-- **A funnel, a chute, a belt or a hopper fills a storage location directly — and that is new.** Until now the only
-  automated way into a warehouse was a **warehouse input** and the crane, because an interface deliberately offers a
-  machine nothing at all. A bay offers its contents on every face, so a Create **funnel**, a **chute**, a **belt** or
-  a plain vanilla **hopper** fills it and empties it where it stands, with no input station and no warehouse anywhere
+- **A funnel, a chute, a belt or a hopper fills a rack bay directly — and that is new.** Until now the only automated
+  way into a warehouse was a **warehouse input** and the crane, because an interface deliberately offers a machine
+  nothing at all. A rack bay offers its contents on every face, so a Create **funnel**, a **chute**, a **belt** or a
+  plain vanilla **hopper** fills it and empties it where it stands, with no input station and no warehouse anywhere
   near it. Nothing about the rules bends for that: a machine moves items one real handler call at a time into the
   block in front of it, nothing teleports, and the warehouse is merely **told** that the bay changed — in the same
   tick, which is a better answer than a chest behind an interface has ever had. A **Mechanical Arm** is the one
-  machine that cannot reach a bay: clicking one with the arm item places an arm, as it does on a rail, so put a funnel
-  between the two
+  machine that cannot reach a rack bay: clicking one with the arm item places an arm, as it does on a rail
 - **A bay refuses to be placed where it would carry something stronger.** The rule is that a bay may carry nothing
   stronger **anywhere** above it, and you meet it while building rather than in a tooltip: try to put a wooden bay
   under an andesite one and the block is not placed, the item stays in your hand, and the action bar says
@@ -98,8 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worth of cobblestone fills a wooden bay and barely covers the pallet of a brass one. The three materials are the
   same rack in three colours — wood, andesite, brass — so a wall says what it is made of at a glance
 - **And up close a rack bay says *what* is in it, not only how much.** Stand in the aisle and the item a bay stores is
-  there on the shelf at the front of it, in front of the goods: a block of cobblestone, a sheet of paper standing up
-  facing you, an iron ingot, whatever that location is for. Walk an aisle and you can read what every bay holds
+  there at the mouth of the bay, in front of the goods: a block of cobblestone, a sheet of paper standing up facing
+  you, an iron ingot, whatever that location is for. Walk an aisle and you can read what every bay holds
   without goggles, without a terminal and without clicking anything. Flat things stand up so you can see them, blocks
   stand the way they do in the crane's grabber and at the same size, so nothing changes size when the crane sets it
   down — and a furnace faces you rather than showing you its back. Step away and the items stop being drawn while the
@@ -136,12 +135,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a tank wall is one block per 64 buckets instead of a multiblock. For scale: a Create Fluid Tank holds 8 buckets
   per block, so a copper bay is eight of them and a brass bay holds more than a 3×3×3 tower of them. There is
   deliberately no wooden and no andesite one: in Create fluids are copper, and a wooden barrel of lava is an
-  explanation nobody should owe. The two stand in the creative tab right after the three rack bays, and a bay behaves
-  like its item sibling everywhere it can — it carries nothing stronger above it, so a tank wall is rebuilt from the
-  bottom up when you upgrade it, and where a tank stands beside a rack of the same facing the two **share the upright
-  between them**, because a wall is a wall. Both numbers are server config in the same `storage` section as the rack
-  bays' (`copperFluidBayBuckets`, `brassFluidBayBuckets`), and lowering one below what a bay already holds never
-  destroys anything: that bay keeps its fluid and accepts nothing more until it has been drained
+  explanation nobody should owe. The two stand in the creative tab right after the three rack bays, and they are the
+  rack bay's own frame with its open middle filled in: **seven copper sheets and two copper casings** for the copper
+  bay, **seven brass sheets** and again **two copper casings** for the brass one — the brass bay takes **copper**
+  casings rather than brass ones, which follows the vessel inside it: it is copper in both tiers, as a tank in Create
+  is. A bay behaves like its item sibling everywhere it can — it carries nothing stronger above it, so a tank wall is
+  rebuilt from the bottom up when you upgrade it, and where a tank stands beside a rack of the same facing the two
+  **share the upright between them**, because a wall is a wall. Both numbers are server config in the same `storage`
+  section as the rack bays' (`copperFluidBayBuckets`, `brassFluidBayBuckets`), and lowering one below what a bay
+  already holds never destroys anything: that bay keeps its fluid and accepts nothing more until it has been drained
 - **Create's pipes connect to a fluid bay on every face but the one towards the aisle.** That is the bulk route into
   one and the thing a tank wall is really for: one Mechanical Pump within range fills a brass bay from a lava lake,
   and a second one on the other side feeds a machine from it. The aisle face carries no pipe connection at all, so a
@@ -175,11 +177,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the bay; right-click with an **empty** one and it fills from the bay. A container always moves **whole** — it is
   emptied completely or refused, never half — so a bay with less than a bucket of room left takes nothing rather
   than swallowing part of it, and a bay that holds another fluid simply says no. Hold a stack of sixteen empty buckets
-  and one of them is filled and tucked into your inventory, which is how every tank in the game behaves. The little
-  filter box in the middle of the face still keeps every click that hits it, a **wrench** still turns the bay, a
-  **clipboard** still copies its filter and priority onto the next one, the **Mechanical Arm** item still places an
-  arm, and **any bay** — rack or fluid — is always placed against the one you clicked rather than consumed by
-  it, which is how a wall grows. Two things to know: **Shift** has no meaning here, because a bucket is a bucket, so a
+  and one of them is filled and tucked into your inventory, which is how every tank in the game behaves. The face
+  works exactly as a rack bay's does — the filter box, the wrench, the clipboard, the arm item, and a bay placed
+  against the one you clicked. Two things differ: **Shift** has no meaning here, because a bucket is a bucket, so a
   sneaking click still places a block against the face as it always did; and a bay you have renamed an item for will
   tell you to name aisles at a controller instead rather than quietly empty your renamed bucket into itself. One
   surprise is deliberately gone: a **plain** right-click with a bucket of lava at a bay that cannot take it does
@@ -273,6 +273,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also refuses items because it already holds another type, or because the column rule has taken it out of service,
   and neither of those is a filter — so the line now reads **"no storage location takes these items, whatever room it
   has"**, which still tells the case apart from a warehouse that is merely full
+- **A terminal with nothing to list no longer says the warehouse holds nothing.** A warehouse can hold **fluid** now,
+  while a terminal lists **items** — so a wall of lava bays read as **"The warehouse holds nothing"** on the terminal
+  while the controller's goggles counted every bucket of it. The empty grid now says **"The warehouse holds no
+  items"**, which is true whichever way a warehouse is stocked. Asking a terminal for a fluid is still what comes next
+  in this series
 
 ### Fixed
 

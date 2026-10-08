@@ -500,7 +500,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_SHOW_ALL), "Showing everything the warehouse holds");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_AMOUNT_HINT),
                 "Click an item for this amount, Shift for a stack, Ctrl for everything, Alt to skip the question");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_EMPTY), "The warehouse holds nothing");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_EMPTY), "The warehouse holds no items");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NO_MATCH), "No item matches the search");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LOADING), "Reading the stock...");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NO_AISLE), "Not part of a warehouse");
@@ -1092,7 +1092,7 @@ public final class WareworksLangGen {
                         + "bay in one go is what _breaking_ it is for. _Funnels_, _chutes_, _belts_ and _hoppers_ "
                         + "fill a bay directly as well.",
                 "When setting the filter",
-                "Click the _filter slot_ below the arm port to say what belongs here; _hold_ the click to set a "
+                "Click the _filter slot_ low in the bay's face to say what belongs here; _hold_ the click to set a "
                         + "_priority_ from _0_ to _9_. A bay with _no_ filter takes the _first_ item that arrives and "
                         + "holds that type until it is _empty_ again, so you can put up a wall and let it fill.",
                 "When broken",
@@ -1143,7 +1143,7 @@ public final class WareworksLangGen {
                         + "default); the goggles always say which way it stands, and your own hand is never affected "
                         + "by it.",
                 "When setting the filter",
-                "Click the _filter slot_ below the arm port with a _filled container_: the _fluid_ inside it is what "
+                "Click the _filter slot_ low in the bay's face with a _filled container_: the _fluid_ inside it is what "
                         + "belongs here, never the container. _Hold_ the click to set a _priority_ from _0_ to _9_. A "
                         + "bay with _no_ filter takes the _first_ fluid that arrives and keeps it until it has "
                         + "_drained_, so you can put up a wall and let it fill.",
