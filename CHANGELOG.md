@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-alpha] - 2026-10-08
+
 ### Added
 
 - **A rack bay is the storage location itself, with no interface in front of it.** Every storage location this mod had
@@ -902,7 +904,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.8.0-alpha...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.9.0-alpha...HEAD
+[0.9.0-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.8.0-alpha...v0.9.0-alpha
 [0.8.0-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.7.0-alpha...v0.8.0-alpha
 [0.7.0-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.6.0-alpha...v0.7.0-alpha
 [0.6.0-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.5.0-alpha...v0.6.0-alpha
