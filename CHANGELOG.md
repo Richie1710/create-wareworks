@@ -13,13 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was an inventory plus a **warehouse interface** carrying its address, its filter and its priority, so a rack wall
   was a wall of chests with interfaces in their faces — fifty locations, a hundred blocks. A bay is one block that
   **is** the location: it carries its own **address**, its own **store filter** and its own **storage priority**, and
-  the crane reaches into it through the same slot it uses on an interface. The interface is unchanged and still the
-  right answer for the long tail you own three of — swords, enchanted books, anything a whole bay per type would
-  waste — and both kinds of location live side by side in one aisle. One thing is different from a chest, and it is
-  the point of the block: a bay holds **one item type at a time**. Give it a filter and that is what belongs there;
-  leave it unfiltered and it takes the first type that arrives and keeps it until the bay is empty again. A second
-  type is simply refused — your hand keeps the item, a funnel backs up instead of hammering the block, and the
-  warehouse plans that delivery somewhere else
+  the crane reaches into it through its open front. The interface is unchanged and still the right answer for the long
+  tail you own three of — swords, enchanted books, anything a whole bay per type would waste — and both kinds of
+  location live side by side in one aisle. One thing is different from a chest, and it is the point of the block: a
+  bay holds **one item type at a time**. Give it a filter and that is what belongs there; leave it unfiltered and it
+  takes the first type that arrives and keeps it until the bay is empty again. A second type is simply refused — your
+  hand keeps the item, a funnel backs up instead of hammering the block, and the warehouse plans that delivery
+  somewhere else
 - **Material decides how much a bay holds, and a server can move the whole curve.** A wooden bay holds **64 stacks**
   of its one item type, an andesite one **256** and a brass one **1,024** — 4,096, 16,384 and 65,536 cobblestone.
   They are counted in stacks rather than items, the way Create counts an Item Vault, so one number stands on the block
@@ -82,15 +82,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your first andesite alloy — a better barrel, long before there is a warehouse. The ladder is the same frame one
   material up: six **andesite alloy** and two andesite casings for the andesite bay, six **brass sheets** and two
   brass casings for the brass one, for four and sixteen times the capacity
-- **You can see how full a rack bay is from across the room.** A bay is drawn as a rack box with a **pallet** inside
-  and an open window towards the aisle, and the goods on that pallet grow in four steps as the bay fills: a single
-  carton when there is anything at all in it, cartons across the whole pallet when it is nearly full, one more stacked
-  on top when it is full. It is part of the block itself rather than something drawn on top of it, so it is still
-  there at any distance — walk past a rack wall and you can read which bays are still worth filling without goggles
-  and without opening anything. The level is a fraction of that bay's own capacity, so a wooden bay's worth of
-  cobblestone fills a wooden bay and barely covers the pallet of a brass one. The three materials are the same rack in
-  three colours — wood, andesite, brass — so a wall says what it is made of at a glance, and the crane reaches in
-  through the same slot it uses on a warehouse interface
+- **A wall of rack bays looks like pallet racking, not like a stack of crates.** A bay standing on its own is a rack
+  frame: an upright at each end, a load beam across the front and back, the pallet on it, and the bay open towards the
+  aisle so you can see what is in it. Put two side by side and they share the upright between them instead of each
+  bringing one, so a wall grows into a single structure the way real pallet racking does — uprights at an even pitch,
+  the beam lines running unbroken from one end of the wall to the other, and nothing in the middle of it that reads as
+  the edge of a box. It works in every direction a bay can face, up every column, and around a corner where two runs
+  meet: two runs that look different ways are two racks, and they keep their own ends. A bay that carries something
+  stronger above it still looks exactly like one that does not
+- **And you can see how full one is from across the room.** The goods on the pallet grow in four steps as the bay
+  fills: a single carton when there is anything at all in it, cartons across the whole pallet when it is nearly full,
+  one more stacked on top when it is full. It is part of the block itself rather than something drawn on top of it, so
+  it is still there at any distance — walk past a rack wall and you can read which bays are still worth filling
+  without goggles and without opening anything. The level is a fraction of that bay's own capacity, so a wooden bay's
+  worth of cobblestone fills a wooden bay and barely covers the pallet of a brass one. The three materials are the
+  same rack in three colours — wood, andesite, brass — so a wall says what it is made of at a glance
+- **And up close a rack bay says *what* is in it, not only how much.** Stand in the aisle and the item a bay stores is
+  there on the shelf at the front of it, in front of the goods: a block of cobblestone, a sheet of paper standing up
+  facing you, an iron ingot, whatever that location is for. Walk an aisle and you can read what every bay holds
+  without goggles, without a terminal and without clicking anything. Flat things stand up so you can see them, blocks
+  stand the way they do in the crane's grabber and at the same size, so nothing changes size when the crane sets it
+  down — and a furnace faces you rather than showing you its back. Step away and the items stop being drawn while the
+  cartons on the pallet stay, which is the whole idea: from across the warehouse the shape says how full every bay is,
+  and from the aisle the item says what it is. That cut-off is Create's own **filter item render distance** in the
+  client settings, ten blocks by default, and it is shared with the warehouse interface's filter for a reason — a
+  warehouse places bays by the hundred, and drawing a hundred items from sixty blocks away is frames better spent on
+  the crane
 - **A rack bay that no warehouse serves says so, and says it is fine.** Standing on its own it reads
   **"Not part of an aisle"** and, under it, **"A rack bay works by hand with no warehouse"** — because that is the
   whole point of the block: it is worth building long before there is a crane, and nothing about it is broken until
@@ -99,17 +116,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three Ponder scenes teach the rack bay, and they teach the block before the warehouse.** Hold **W** over any of
   the three bays and the first scene shows one bay standing on its own with no crane, no controller and no rails
   anywhere: how a click puts one item in and Shift a whole stack, how an empty hand takes them back out, how the load
-  behind the window grows as it fills, how a bay keeps the first item type that lands in it until it is empty, and
-  what breaking a full one really does — the empty block back and the whole load on one pallet, with the count written
+  on the pallet grows as it fills, how a bay keeps the first item type that lands in it until it is empty, and what
+  breaking a full one really does — the empty block back and the whole load on one pallet, with the count written
   above it. The second builds a rack wall out of all three materials and shows the rule that decides how you upgrade
   one: a bay carries nothing stronger above it, so a wall is rebuilt from the bottom up, and a column that a command
   put in the wrong order keeps every item in it and only stops being offered new ones. Only the third brings a
-  warehouse: rails laid in front of bays that were already full, what each one is called afterwards, the crane
-  reaching in through the slot above the window, and why a chest behind an interface is still the right answer for the
-  things you own three of. The order is deliberate — a wooden bay costs six planks and two andesite alloy and needs no
-  machine at all, so most players will meet this block long before they own a crane. The scene also says the one thing
-  you would otherwise find out the hard way: a **vanilla hopper** underneath a pallet drains it and a **Deployer**
-  can, while Create's belts, chutes and funnels cannot see a pallet at all
+  warehouse: rails laid in front of a bay somebody had already filled by hand, what each bay is called afterwards, the
+  crane reaching in through the open front of the empty one beside it, and why a chest behind an interface is still
+  the right answer for the things you own three of. All three scenes have real goods in them, so the cobblestone a bay
+  keeps is something you watch arrive and watch being refused rather than something a caption claims: the first bay
+  shows it the moment the first one goes in, the wall is a wall with stock in it, and in the aisle the hand-filled bay
+  shows what a hand put there while the bay beside it stays empty until the crane delivers into it. The order is
+  deliberate — a wooden bay costs six planks and two andesite alloy and needs no machine at all, so most players will
+  meet this block long before they own a crane. The scene also says the one thing you would otherwise find out the
+  hard way: a **vanilla hopper** underneath a pallet drains it and a **Deployer** can, while Create's belts, chutes
+  and funnels cannot see a pallet at all
 
 ### Changed
 
@@ -129,6 +150,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Two captions no longer overlap in the Ponder scene "Packages at a Warehouse Door".** While the crane delivered
   into the out door, the sentence about that trip stayed on screen for about a second and a half after the next one
   had appeared — two lines of text drawn through each other on two neighbouring blocks, both unreadable
+
+- **The warehouse stock keeper's front panel is a panel again instead of half a panel and half black.** Its display
+  stretched the whole of Create's factory-panel texture sheet over one face, and nearly half of that sheet is empty
+  space — which a block drawn in the solid layer paints pure black. So the stock keeper has stood there since the
+  stock rules arrived with black rectangles inside its frame and a black band down its right-hand side and along its
+  bottom edge. It now shows the same light display plate Create's own factory gauge uses, and nothing about the block
+  moved
 
 - **A drawer behind a warehouse interface is filled past one stack again.** Any inventory that holds more than a stack
   per slot — a drawer, a barrel from a storage mod, a crate — was handed exactly one stack and then written off as

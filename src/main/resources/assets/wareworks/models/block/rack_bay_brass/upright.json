@@ -1,0 +1,132 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"frame": "create:block/brass_block",
+		"deck": "create:block/bracket_plate_wooden",
+		"back": "create:block/andesite_casing",
+		"particle": "create:block/brass_block"
+	},
+	"elements": [
+		{
+			"name": "post_back",
+			"from": [0, 3, 2],
+			"to": [3, 16, 5],
+			"faces": {
+				"north": {
+					"uv": [11.375, 2, 14, 13.375],
+					"texture": "#frame"
+				},
+				"south": {
+					"uv": [0, 2, 2.625, 13.375],
+					"texture": "#frame"
+				},
+				"west": {
+					"uv": [1.75, 2, 4.375, 13.375],
+					"texture": "#frame",
+					"cullface": "west"
+				},
+				"east": {
+					"uv": [9.625, 2, 12.25, 13.375],
+					"texture": "#frame"
+				},
+				"up": {
+					"uv": [0, 3.75, 2.625, 6.375],
+					"texture": "#frame"
+				}
+			}
+		},
+		{
+			"name": "post_front",
+			"from": [0, 3, 11],
+			"to": [3, 16, 14],
+			"faces": {
+				"north": {
+					"uv": [11.375, 2, 14, 13.375],
+					"texture": "#frame"
+				},
+				"south": {
+					"uv": [0, 2, 2.625, 13.375],
+					"texture": "#frame"
+				},
+				"west": {
+					"uv": [9.625, 2, 12.25, 13.375],
+					"texture": "#frame",
+					"cullface": "west"
+				},
+				"east": {
+					"uv": [1.75, 2, 4.375, 13.375],
+					"texture": "#frame"
+				},
+				"up": {
+					"uv": [0, 11.625, 2.625, 14.25],
+					"texture": "#frame"
+				}
+			}
+		},
+		{
+			"name": "brace_0",
+			"from": [0, 6, 5],
+			"to": [3, 8, 11],
+			"faces": {
+				"north": {
+					"uv": [11.375, 9, 14, 10.75],
+					"texture": "#frame"
+				},
+				"south": {
+					"uv": [0, 9, 2.625, 10.75],
+					"texture": "#frame"
+				},
+				"west": {
+					"uv": [4.375, 9, 9.625, 10.75],
+					"texture": "#frame",
+					"cullface": "west"
+				},
+				"east": {
+					"uv": [4.375, 9, 9.625, 10.75],
+					"texture": "#frame"
+				},
+				"up": {
+					"uv": [0, 6.375, 2.625, 11.625],
+					"texture": "#frame"
+				},
+				"down": {
+					"uv": [0, 6.375, 2.625, 11.625],
+					"texture": "#frame"
+				}
+			}
+		},
+		{
+			"name": "brace_1",
+			"from": [0, 12, 5],
+			"to": [3, 16, 11],
+			"faces": {
+				"north": {
+					"uv": [11.375, 2, 14, 5.5],
+					"texture": "#frame"
+				},
+				"south": {
+					"uv": [0, 2, 2.625, 5.5],
+					"texture": "#frame"
+				},
+				"west": {
+					"uv": [4.375, 2, 9.625, 5.5],
+					"texture": "#frame",
+					"cullface": "west"
+				},
+				"east": {
+					"uv": [4.375, 2, 9.625, 5.5],
+					"texture": "#frame"
+				},
+				"up": {
+					"uv": [0, 6.375, 2.625, 11.625],
+					"texture": "#frame"
+				},
+				"down": {
+					"uv": [0, 6.375, 2.625, 11.625],
+					"texture": "#frame"
+				}
+			}
+		}
+	]
+}

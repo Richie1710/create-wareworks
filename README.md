@@ -27,6 +27,11 @@ teleported: every item you put in or take out is carried by the crane, where you
 | ![The warehouse terminal from the screen side](docs/screenshots/warehouse-terminal.png) | ![The same terminal from the aisle side, showing the crane's arm port](docs/screenshots/warehouse-terminal-aisle.png) |
 | The warehouse terminal from the player's side: a recessed display and a take-out tray where requested items come out. | The same block from the aisle, where the crane reaches in through the arm port. |
 
+| | |
+|---|---|
+| ![A wall of rack bays seen from the aisle, cobblestone on the pallets](docs/screenshots/rack-wall-aisle.png) | ![A rack wall of brass, andesite and wooden bays with goods in them](docs/screenshots/rack-bay-tiers.png) |
+| Rack bays from the aisle: uprights at an even pitch, the load beams running on from bay to bay, and the item each one stores standing at the front of it. | The three materials in the one order the column rule allows — brass low, then andesite, then wood — each row holding something different. |
+
 ![The showcase warehouse seen from the world spawn](docs/screenshots/showcase-world.png)
 
 | | |
@@ -60,15 +65,19 @@ teleported: every item you put in or take out is carried by the crane, where you
 * **Rack Bay** (wooden, andesite, brass): a storage location that **is** the block — one item type, a great deal of
   it, and **no warehouse interface in front of it**, so a fifty-bay rack wall is fifty blocks instead of a hundred.
   A wooden bay holds **64 stacks**, an andesite one **256** and a brass one **1,024** (all three server config), and
-  the goods behind its window grow in four steps as it fills, so you read how full a wall is by walking past it — no
-  goggles, nothing to open, and still visible at any distance. It needs **no warehouse at all**: a wooden bay is six
-  planks and two andesite alloy, with no machine anywhere in its chain, so you can put up a wall the evening you make
-  your first andesite alloy and fill it by hand — a plain right-click moves **one item**, Shift a whole **stack**, in
-  both directions. A funnel, a chute, a belt or a hopper fills one directly as well. Only when a crane's aisle reaches
-  it does the same block **also** become an addressable storage location, with its own filter and priority, and what
-  it already held is counted on the spot. A bay may carry **nothing stronger above it**, so a wall is upgraded from
-  the bottom up — and breaking a full one **loses nothing**: you get the empty bay back and its whole load as a single
-  **pallet** on the floor.
+  the goods on its pallet grow in four steps as it fills, so you read how full a wall is by walking past it — no
+  goggles, nothing to open, and still visible at any distance. A bay is drawn as a **rack frame** — an upright at each
+  end, a load beam across the front and back, the pallet on it, open towards the aisle — and **two bays side by side
+  share the upright between them**, so a wall grows into one structure the way real pallet racking does rather than
+  into a row of boxes. Up close it also shows **which** item it stores: the item itself stands at the front of the
+  bay, flat things standing up to be read, so you can walk an aisle and see what every location is for. It needs **no
+  warehouse at all**: a wooden bay is six planks and two andesite alloy, with no machine anywhere in its chain, so you
+  can put up a wall the evening you make your first andesite alloy and fill it by hand — a plain right-click moves
+  **one item**, Shift a whole **stack**, in both directions. A funnel, a chute, a belt or a hopper fills one directly
+  as well. Only when a crane's aisle reaches it does the same block **also** become an addressable storage location,
+  with its own filter and priority, and what it already held is counted on the spot. A bay may carry **nothing
+  stronger above it**, so a wall is upgraded from the bottom up — and breaking a full one **loses nothing**: you get
+  the empty bay back and its whole load as a single **pallet** on the floor.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse. Put a **Create Packager** against it and it becomes an **in door** for addressed **Create packages**:
   arriving boxes are opened and their contents stored like anything else.
@@ -192,9 +201,10 @@ that only their facing tells apart. The seventeenth, **Packages at a Warehouse D
 front of you and teaches the one rule that decides their direction. And the last three belong to the **rack bays**,
 all three tiers, in the order a player meets the block rather than the order the warehouse would: **Storing Bulk Goods
 in a Rack Bay** shows one bay standing alone with no warehouse anywhere — both hand gestures, the one item type it
-learns and forgets, the load growing behind its window, and the break that resets it onto a pallet; **Building a Rack
-Wall** shows the wall, the three materials and the rule that a bay carries nothing stronger above it; and **Rack Bays
-in a Warehouse Aisle** brings the rails to bays that were already full.
+learns and forgets, the load growing on its pallet, and the break that resets the bay and leaves its whole load on
+the floor; **Building a Rack Wall** shows the wall, the three materials and the rule that a bay carries nothing
+stronger above it; and **Rack Bays in a Warehouse Aisle** brings the rails to a bay somebody had already filled by
+hand.
 
 ## Requesting items
 

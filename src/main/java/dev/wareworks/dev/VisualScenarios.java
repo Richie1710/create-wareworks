@@ -15,6 +15,7 @@ final class VisualScenarios {
             Map.entry(CombVisualScenario.NAME, CombVisualScenario::new),
             Map.entry(HomeVisualScenario.NAME, HomeVisualScenario::new),
             Map.entry(BlocksVisualScenario.NAME, BlocksVisualScenario::new),
+            Map.entry(BaysVisualScenario.NAME, BaysVisualScenario::new),
             Map.entry(FiltersVisualScenario.NAME, FiltersVisualScenario::new),
             Map.entry(PrioritiesVisualScenario.NAME, PrioritiesVisualScenario::new),
             Map.entry(PortsVisualScenario.NAME, PortsVisualScenario::new),

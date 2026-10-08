@@ -2346,3 +2346,81 @@ you get tired of waiting, and put it back before judging check 160.
     pallet runs its collision step only every fourth tick, which is vanilla's own rule for a dropped item. Then mine
     the floor out from under one: **does it fall at once**, within a tick or two, rather than hanging in the air? And
     shove one across the floor: **does it still slide and stop as it did?**
+
+
+## AN. The load a rack bay shows (M29 step 13, issue #20)
+
+> The silhouette of cartons on the pallet is block state geometry and costs nothing at any distance; the **stored item
+> itself** is drawn by a block entity renderer whose view distance is cut to Create's `filterItemRenderDistance`
+> (10 blocks by default), because a warehouse places bays by the hundred. The `bays` visual scenario shoots and
+> measures all of that, but three things about it are feel rather than numbers.
+
+231. **Does the item fade out at a sensible distance?** Build a rack wall of one item, stand in the aisle, and walk
+    backwards. **At what distance do the goods disappear, and does losing them feel like "too far to read" or like a
+    glitch?** The fill silhouette must still be there after they go — that is the whole split, the shape says how full
+    and the item says what. If the cut feels too close, it is Create's own `filterItemRenderDistance` in the client
+    config and not a Wareworks setting; raising it costs frames on a big wall, which is the trade this check is for.
+232. **Does the value box still win where you aim?** The drawn item stands at the mouth of the bay, in front of the
+    store filter's value box at (8, 5) — the two overlap on screen while the crosshair rests on the block, which is
+    Create's own idiom (a funnel's filter box sits over its own model). **With a bay that already holds something,
+    does a plain right-click near the middle of the front still open the filter box rather than putting the held item
+    in?** And the other way round: **can you still get an item *into* a full-looking bay without fighting the box?**
+    The box's hit sphere is 4 px across and no automated test can feel it.
+233. **Does a bay read right in a dark aisle?** Light one aisle well and leave the next one unlit, and put the same
+    item in a bay of each. The drawn item takes the brighter of the bay's own light and the aisle block in front of
+    it. **Is the item in the dark aisle readable but clearly dark, rather than either pitch black or oddly glowing?**
+    Check it again with a bay in the middle of a wall three deep, which is the darkest a bay's own position gets.
+
+
+## AO. The verdict on issue #20's fourth reason (M29 step 14)
+
+> This is the milestone's own judgement, and the only place it can be made. Everything else about M29 is measured:
+> the joins are asserted on the block states of every wall the `bays` and `blocks` scenarios build, the drawn item's
+> anchor is read off the model files by `CraneModelLayoutTest`, and the per-frame budget is counted on the client's
+> own render list. What no gate can answer is the sentence the issue opens with — *a warehouse does not look like
+> one*. Checks 213 and 226 asked that question of M28 and were told to write down what still read as boxes; these
+> three ask it of the finished thing.
+>
+> **Do check 232 in the same pass.** It is the third of the three the milestone owes a person — the store filter's
+> 4 px value box sharing its place with the drawn item — and it was written with step 13 rather than here.
+
+234. **Does a wall read as racking *as it grows*?** This is the one the issue is really about: "you extend a wall by
+    placing a bay beside an existing one, and the wall joins visually as it grows". Stand still and build, one bay at
+    a time, a run six or seven long and two or three high, in survival, without moving the camera. **At the second
+    bay, does the wall become one structure — one upright between them rather than two — or does it still read as two
+    boxes pushed together?** Then look along the finished run from one end. **Do the uprights stand at an even pitch
+    and the beam lines run unbroken from end to end?** Then break one bay out of the middle: **do the two ends grow
+    their own uprights back, so the gap reads as the end of two racks rather than as a hole?** The automated side of
+    this is in `runVisualTest -Pwareworks.visualTest=bays` (`grow-1`, `grow-2`, `grow-3`, `grow-6` — the same camera
+    after each bay), but a screenshot cannot tell you whether *building* it feels like putting up racking.
+235. **Is the fill level readable while walking past, beyond ten blocks?** The split M29 rests on is that the shape
+    says *how full* at any distance and the item says *what* only from the aisle. Build a wall of at least a dozen
+    bays filled to different levels, walk past it at normal speed about five blocks out, then again at fifteen, then
+    look back at it from the far edge of your render distance. **Beyond ten blocks the items are gone — can you still
+    read which bays are full and which are nearly empty, or does the wall go blank?** If the silhouette alone does
+    not carry it, the four fill steps are the thing to argue about and not the renderer. Check 212 asked this of M28,
+    before anything was drawn at all; the question now is whether *losing* the items changes the answer.
+236. **Does the load look like a load, rather than like a floating item?** Stand in the aisle, close, in front of
+    bays at every fill step. **Does the item read as a sample set down at the front of the location — something a
+    worker put there — or as an item hanging in the air in front of a rack?** Try it with a flat item (paper, an
+    ingot) and with a block item (a log, a furnace) in neighbouring bays, and once with a bay whose cartons are at
+    the top step, where the item stands closest to them. The drawn item reaches about 1.7 px past the bay's front
+    posts on purpose, which is what stops it reading as buried; the question is whether that is too far.
+
+## AP. The stock keeper's panel after the black-texel sweep (M29 review)
+
+> The test the rack bays brought — no face of a model drawn in the solid layer may sample a texel its texture leaves
+> empty, because alpha is painted pure black there — was widened in the review to **every** block model of the mod.
+> It found exactly one other case, shipped since the stock rules in M15: the warehouse stock keeper's front panel
+> stretched the whole 16 x 16 sheet of `create:block/factory_panel` over its 10 x 8 px face, and 125 of that sheet's
+> 256 texels are empty. The face now maps the display plate Create's own factory gauge uses for the same surface.
+> The test can only say that nothing samples an empty texel any more; whether the block looks better is a person's
+> call.
+
+237. **Does the warehouse stock keeper's front panel read as a display?** Put one down and look at it from the front,
+    in daylight and at night, with its lamp lit and unlit, and beside a Create **factory gauge** if you have one.
+    **Does the panel read as one display plate inset in the brass frame, or as a flat grey patch?** Compare it with
+    `run/visual/m29-evidence/joining/visual-blocks-41-stock_keeper-front.png`, which is the block before the fix:
+    black rectangles inside the frame and a black band down its right-hand side and along its bottom edge. The shot
+    of the fixed block is `runVisualTest -Pwareworks.visualTest=blocks`, `stock_keeper-front`. If the plate reads as
+    too plain, the argument is about which part of Create's sheet to use and not about whether the black was wrong.

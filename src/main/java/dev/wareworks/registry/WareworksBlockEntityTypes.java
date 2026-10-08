@@ -4,6 +4,7 @@ import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.tterrag.registrate.util.entry.BlockEntityEntry;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.client.render.RackBayRenderer;
 import dev.wareworks.client.render.StackerCraneRenderer;
 import dev.wareworks.client.render.WarehouseInterfaceRenderer;
 import dev.wareworks.client.render.WarehouseOutputRenderer;
@@ -43,18 +44,21 @@ public final class WareworksBlockEntityTypes {
     /**
      * Rack bay ({@code docs/warehouse-system.md} §3.8, M28, issue #20): <b>one</b> type for all three materials, because
      * {@code .validBlocks(...)} is varargs and the tier is read off the block ({@code RackBayBlock#tier}) — one
-     * registration, one capability registrar, one renderer slot. <b>No renderer, deliberately</b> (ADR-047): everything a
-     * bay shows is block state geometry drawn into the chunk mesh, and registering one would put every bay of a rack
-     * wall into its chunk section's per-frame list at the vanilla 64-block default — the cost that cut the warehouse
-     * interface's own view distance to ten blocks. The visible consequence is that a bay's store filter is not drawn
-     * on the block the way an interface's is; it is read through the goggles and in the value box the crosshair rests
-     * on. Its item capability is the bay's own one-slot, one-type handler on every side, which is the whole of its
-     * contents.
+     * registration, one capability registrar, one renderer slot. Its item capability is the bay's own one-slot,
+     * one-type handler on every side, which is the whole of its contents.
+     * <p>
+     * {@code client.render.RackBayRenderer} draws the stored item at the mouth of the bay (M29 step 13, ADR-049; the
+     * only renderer registration for this type, and the lambda is only evaluated on the client). The coarse fill level
+     * stays block state geometry in the chunk mesh (ADR-047) — the renderer adds <b>which</b> item, nothing else — and
+     * its view distance is cut to Create's {@code filterItemRenderDistance}, because a renderer on this type puts every
+     * bay of a rack wall into its chunk section's per-frame list. That cap is the whole design and not a preference;
+     * see the renderer.
      */
     public static final BlockEntityEntry<RackBayBlockEntity> RACK_BAY = REGISTRATE
             .blockEntity("rack_bay", RackBayBlockEntity::new)
             .validBlocks(WareworksBlocks.RACK_BAY_WOOD, WareworksBlocks.RACK_BAY_ANDESITE,
                     WareworksBlocks.RACK_BAY_BRASS)
+            .renderer(() -> RackBayRenderer::new)
             .register();
 
     /**

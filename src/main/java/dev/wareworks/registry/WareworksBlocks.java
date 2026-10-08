@@ -288,12 +288,14 @@ public final class WareworksBlocks {
      * {@link BayTier}, protected from contraptions like every other block that holds warehouse state, and all three
      * served by the one {@code RACK_BAY} block entity type.
      * <p>
-     * <b>Its look</b> (M28 step 9) is a <b>multipart</b> blockstate over the tier's hand-made
-     * {@code models/block/rack_bay_<tier>/block.json} — a rack box with a pallet in it, open towards the aisle, and
-     * carrying the same 8 x 4 px arm port the warehouse interface has — plus the shared load models in
-     * {@code models/block/rack_bay/}, which draw four fill steps through that window
-     * ({@link WareworksBlockStateGen#rackBayBlockProvider()}). The item model is the empty shell, which is what a
-     * crafted bay is.
+     * <b>Its look</b> (M28 step 9, M29 step 12) is a <b>multipart</b> blockstate
+     * ({@link WareworksBlockStateGen#rackBayBlockProvider()}) over three hand-made models per tier: the
+     * {@code block} shell — the load beam of its own level, the pallet on it and the rack's back, open towards the
+     * aisle over the arm port's whole window — and the {@code upright} frame its blockstate stands at each end,
+     * halved to {@code upright_half} where the next bay shares it ({@code RackBayBlock#LEFT}). On top of those come
+     * the shared load models in {@code models/block/rack_bay/}, which draw four fill steps on the pallet. The item
+     * model is {@code item.json}, the shell between <b>both</b> of its uprights — a bay standing on its own, which
+     * is what a crafted one is.
      * <p>
      * <b>Its loot table is the plain block, and that is a rule rather than a default.</b> Registrate's self-drop is
      * exactly right and has to stay exactly that: no {@code copy_nbt}, no {@code setBlockEntityData}, nothing that
@@ -311,7 +313,7 @@ public final class WareworksBlocks {
                 .properties(p -> p.noOcclusion())
                 .blockstate(WareworksBlockStateGen.rackBayBlockProvider())
                 .item()
-                .transform(ModelGen.customItemModel("_", "block"));
+                .transform(ModelGen.customItemModel("_", "item"));
     }
 
     private WareworksBlocks() {

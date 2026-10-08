@@ -25,6 +25,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -118,6 +119,33 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
     public static final BooleanProperty OVERLOADED = BooleanProperty.create("overloaded");
 
     /**
+     * Whether another bay of the same facing stands on this one's <b>left</b> as the aisle sees it, i.e. on
+     * {@code FACING.getCounterClockWise()} — derived, cosmetic, and the whole of M29's joining (issue #20).
+     * <p>
+     * A bay alone in the world is a rack frame: two uprights, one at each end, carrying the load beam its pallet
+     * stands on. Two bays side by side are <b>one</b> rack, and a rack has one upright on the seam and not two, so
+     * each of the pair draws half of it ({@code models/block/rack_bay_<tier>/upright_half.json} against the full
+     * {@code upright.json}). That is the difference between a wall that grows into one structure and the row of
+     * framed boxes the issue complained about: a 3 x 3 wall drew nine complete frames, so every seam was a doubled
+     * 6 px post and every bay read as a crate with a window.
+     * <p>
+     * <b>The flag is relative to {@link #FACING} rather than to the world</b>, unlike the rail's four, because the
+     * model is turned onto the facing by the same blockstate that reads it: left stays left through every rotation,
+     * a structure rotated as a whole keeps its joins, and the part count stays at one condition per side instead of
+     * four. It asks only for the <b>same facing</b> and not for the same tier — a wall is a wall, and the one place
+     * a mixed wall shows is a seam post that is half wood and half brass, which is what it actually is. Two racks
+     * back to back face opposite ways and therefore never join, which is right: they are two racks.
+     * <p>
+     * Like {@link #FILL} it notifies no controller and is saved nowhere: it rides the ordinary chunk path, is set at
+     * placement, kept in step by {@code updateShape} and repaired by the scheduled tick for a bay that arrived by a
+     * command, a structure or a wrench.
+     */
+    public static final BooleanProperty LEFT = BooleanProperty.create("left");
+
+    /** The same on the right, i.e. on {@code FACING.getClockWise()} — see {@link #LEFT}. */
+    public static final BooleanProperty RIGHT = BooleanProperty.create("right");
+
+    /**
      * How full this bay looks, {@code 0} (empty) to {@link #FILL_LEVELS} (full) — the one thing about a bay a player
      * reads <b>without</b> goggles, by walking past a rack wall (M28 step 9).
      * <p>
@@ -148,7 +176,7 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
         super(properties);
         this.tier = Objects.requireNonNull(tier, "tier");
         registerDefaultState(defaultBlockState().setValue(FACING, Direction.NORTH).setValue(OVERLOADED, false)
-                .setValue(FILL, 0));
+                .setValue(FILL, 0).setValue(LEFT, false).setValue(RIGHT, false));
     }
 
     /** The material this bay is built from, which decides how much it holds and what it may carry above it. */
@@ -178,7 +206,7 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
 
     @Override
     protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-        super.createBlockStateDefinition(builder.add(FACING, OVERLOADED, FILL));
+        super.createBlockStateDefinition(builder.add(FACING, OVERLOADED, FILL, LEFT, RIGHT));
     }
 
     /**
@@ -201,8 +229,73 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
                 player.displayClientMessage(WareworksLang.translateDirect(WareworksLang.BAY_COLUMN_REFUSED), true);
             return null;
         }
-        return defaultBlockState().setValue(FACING, placementFacing(context))
-                .setValue(OVERLOADED, overloadedAt(level, pos, tier)).setValue(FILL, 0);
+        Direction facing = placementFacing(context);
+        return withJoins(level, pos, defaultBlockState().setValue(FACING, facing)
+                .setValue(OVERLOADED, overloadedAt(level, pos, tier)).setValue(FILL, 0));
+    }
+
+    /**
+     * {@code state} with {@link #LEFT} and {@link #RIGHT} read off the two bays beside {@code pos}. Two block-state
+     * reads, and never a search: the only neighbours a bay's picture depends on are the two its uprights are shared
+     * with.
+     */
+    public static BlockState withJoins(BlockGetter level, BlockPos pos, BlockState state) {
+        Direction facing = state.getValue(FACING);
+        return state.setValue(LEFT, joins(level, pos, facing, facing.getCounterClockWise()))
+                .setValue(RIGHT, joins(level, pos, facing, facing.getClockWise()));
+    }
+
+    /**
+     * Whether a bay facing {@code facing} at {@code pos} shares its upright with the block on {@code side}: that block
+     * is a rack bay and looks the same way. The tier is deliberately not compared ({@link #LEFT}).
+     */
+    private static boolean joins(BlockGetter level, BlockPos pos, Direction facing, Direction side) {
+        return joinsTowards(level.getBlockState(pos.relative(side)), facing);
+    }
+
+    /** Whether {@code neighbour} is a rack bay a bay facing {@code facing} shares an upright with. */
+    private static boolean joinsTowards(BlockState neighbour, Direction facing) {
+        return neighbour.getBlock() instanceof RackBayBlock && neighbour.getValue(FACING) == facing;
+    }
+
+    /**
+     * A neighbour changed shape, so a shared upright may have appeared or gone. Only the two sides beside the aisle
+     * face can carry one, so every other direction — including the column the overload flag travels down, which is
+     * {@code neighborChanged}'s business and not this one's — returns the state untouched.
+     */
+    @Override
+    protected BlockState updateShape(BlockState state, Direction direction, BlockState neighborState,
+                                     LevelAccessor level, BlockPos pos, BlockPos neighborPos) {
+        Direction facing = state.getValue(FACING);
+        boolean joined = joinsTowards(neighborState, facing);
+        if (direction == facing.getCounterClockWise())
+            return state.setValue(LEFT, joined);
+        if (direction == facing.getClockWise())
+            return state.setValue(RIGHT, joined);
+        return state;
+    }
+
+    /**
+     * Drops the faces a seam buries, which nothing else would ({@code docs/warehouse-system.md} §3.8, ADR-050).
+     * <p>
+     * Two joined bays meet at the block boundary with six coincident face pairs: the shell's {@code deck} and
+     * {@code back}, and the four elements of the {@code upright_half} each bay draws there. Every one of them carries
+     * a {@code cullface} towards that boundary, so they are offered to {@code Block#shouldRenderFace} — and a bay is
+     * {@code noOcclusion()}, so that method answers <b>true</b> for all of them and the chunk mesh keeps twelve quads
+     * per seam that no camera can ever see. On a 20 x 5 wall that is 1 140 of 6 000 quads.
+     * <p>
+     * {@code skipRendering} is the one hook that is asked before the occlusion test, and it is asked <b>only</b> for
+     * quads that carry a {@code cullface} in this direction — so answering true here drops exactly the buried twelve
+     * and can never take a face a player could see. The join is symmetric ({@link #joinsTowards}), so both bays drop
+     * their half of a seam and neither is left looking into the other. Only the two sides beside the aisle face can
+     * carry a seam; up, down, the aisle and the depth are left to vanilla.
+     */
+    @Override
+    protected boolean skipRendering(BlockState state, BlockState adjacentState, Direction direction) {
+        Direction facing = state.getValue(FACING);
+        if (direction != facing.getClockWise() && direction != facing.getCounterClockWise())
+            return false;
+        return joinsTowards(adjacentState, facing);
     }
 
     /**
@@ -367,7 +460,12 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
     @Override
     protected void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean movedByPiston) {
         super.onPlace(state, level, pos, oldState, movedByPiston);
-        if (!level.isClientSide && state.getValue(OVERLOADED) != overloadedAt(level, pos, tier))
+        if (level.isClientSide)
+            return;
+        // The joins come along for the ride, and this is the only path that repairs them for a bay that was turned by
+        // a wrench: a rotation changes which two neighbours the uprights are shared with, and a block's own
+        // updateShape is never called for a write at its own position.
+        if (state.getValue(OVERLOADED) != overloadedAt(level, pos, tier) || withJoins(level, pos, state) != state)
             level.scheduleTick(pos, this, 1);
     }
 
@@ -383,8 +481,8 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
     }
 
     /**
-     * Writes {@link #OVERLOADED} and {@link #FILL} if either is wrong, in <b>one</b> block state write, and nothing at
-     * all when both already agree — which is what makes a wall of a thousand bays cost nothing while a player builds
+     * Writes {@link #OVERLOADED}, {@link #FILL} and the two join flags if any of them is wrong, in <b>one</b> block
+     * state write, and nothing at all when they already agree — which is what makes a wall of a thousand bays cost nothing while a player builds
      * beside it, and what makes the column walk below terminate.
      * <p>
      * <b>The update flags differ by what changed, and that is not a micro-optimisation.</b> A changed
@@ -393,7 +491,9 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
      * tell <b>nothing but the client</b>: it happens on every fourth item that enters or leaves a bay, and a wall of
      * bays beside which every observer, comparator and piston fires on goods moving is noise nobody asked for.
      * {@code UPDATE_CLIENTS} still writes the chunk, marks it unsaved and sends the state to every client, which is
-     * the whole job of a fill level.
+     * the whole job of a fill level. A changed join takes {@code UPDATE_ALL} with the overload flag, because the bay
+     * beside it has to be told that their shared upright moved — this is the repair path for a bay a command or a
+     * wrench left out of step, so it is as rare as the overload write and may be as loud.
      * <p>
      * Dropping {@code UPDATE_NEIGHBORS} alone does <b>not</b> buy that silence, and it is worth saying exactly why:
      * comparators and pistons hook {@code neighborChanged}, which that flag gates, but an <b>observer</b> hooks
@@ -411,11 +511,14 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
         boolean overloaded = overloadedAt(level, pos, tier);
         int fill = level.getBlockEntity(pos) instanceof RackBayBlockEntity bay ? bay.fillStep()
                 : state.getValue(FILL);
+        BlockState joined = withJoins(level, pos, state);
         boolean columnChanged = state.getValue(OVERLOADED) != overloaded;
-        if (!columnChanged && state.getValue(FILL) == fill)
+        boolean joinChanged = joined != state;
+        if (!columnChanged && !joinChanged && state.getValue(FILL) == fill)
             return;
-        level.setBlock(pos, state.setValue(OVERLOADED, overloaded).setValue(FILL, fill),
-                columnChanged ? Block.UPDATE_ALL : Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
+        level.setBlock(pos, joined.setValue(OVERLOADED, overloaded).setValue(FILL, fill),
+                columnChanged || joinChanged ? Block.UPDATE_ALL
+                        : Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
     }
 
     /**

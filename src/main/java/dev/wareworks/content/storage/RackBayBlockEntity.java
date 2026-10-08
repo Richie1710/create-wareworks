@@ -238,6 +238,16 @@ public class RackBayBlockEntity extends SmartBlockEntity
         return handler.stored();
     }
 
+    /**
+     * The stored item type or {@code null} — {@link #storedKey()} without the {@link Optional}, for the one caller
+     * that runs per bay per frame ({@code client.render.RackBayRenderer}). A warehouse places this block by the
+     * hundred, so the renderer's hot path allocates nothing at all.
+     */
+    @Nullable
+    public ItemKey storedKeyOrNull() {
+        return handler.storedOrNull();
+    }
+
     /** How many items are stored. */
     public int storedCount() {
         return handler.count();

@@ -10,11 +10,89 @@
     },
     {
       "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright"
+      },
+      "when": {
+        "facing": "north",
+        "left": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half"
+      },
+      "when": {
+        "facing": "north",
+        "left": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright",
+        "y": 180
+      },
+      "when": {
+        "facing": "north",
+        "right": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half",
+        "y": 180
+      },
+      "when": {
+        "facing": "north",
+        "right": "true"
+      }
+    },
+    {
+      "apply": {
         "model": "wareworks:block/rack_bay_brass/block",
         "y": 90
       },
       "when": {
         "facing": "east"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright",
+        "y": 90
+      },
+      "when": {
+        "facing": "east",
+        "left": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half",
+        "y": 90
+      },
+      "when": {
+        "facing": "east",
+        "left": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright",
+        "y": 270
+      },
+      "when": {
+        "facing": "east",
+        "right": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half",
+        "y": 270
+      },
+      "when": {
+        "facing": "east",
+        "right": "true"
       }
     },
     {
@@ -28,11 +106,89 @@
     },
     {
       "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright",
+        "y": 180
+      },
+      "when": {
+        "facing": "south",
+        "left": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half",
+        "y": 180
+      },
+      "when": {
+        "facing": "south",
+        "left": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright"
+      },
+      "when": {
+        "facing": "south",
+        "right": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half"
+      },
+      "when": {
+        "facing": "south",
+        "right": "true"
+      }
+    },
+    {
+      "apply": {
         "model": "wareworks:block/rack_bay_brass/block",
         "y": 270
       },
       "when": {
         "facing": "west"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright",
+        "y": 270
+      },
+      "when": {
+        "facing": "west",
+        "left": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half",
+        "y": 270
+      },
+      "when": {
+        "facing": "west",
+        "left": "true"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright",
+        "y": 90
+      },
+      "when": {
+        "facing": "west",
+        "right": "false"
+      }
+    },
+    {
+      "apply": {
+        "model": "wareworks:block/rack_bay_brass/upright_half",
+        "y": 90
+      },
+      "when": {
+        "facing": "west",
+        "right": "true"
       }
     },
     {

@@ -7,6 +7,7 @@ import com.tterrag.registrate.util.entry.BlockEntry;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.RackBayBlock;
+import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.StorageFilterValueBox;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
@@ -54,6 +55,12 @@ import net.minecraft.world.phys.Vec3;
  * <li><b>A pallet cannot be spawned.</b> {@code PalletEntity#spawn} refuses a client level outright, so the break beat
  * builds the entity through {@code createEntity} and gives it its load with the documented display hook
  * {@link PalletEntity#showClientLoad} — the pallet's counterpart of {@code StackerCraneBlockEntity#showClientPose}.</li>
+ * <li><b>The goods have to be put in by hand</b> (M29 step 14). Since M29 step 13 a bay draws the item it stores at
+ * the mouth of the bay, and a scene that only wrote {@link RackBayBlock#FILL} into the block state showed anonymous
+ * cartons while telling a player that a bay keeps the <i>first item type</i> that lands in it. {@link #store} puts one
+ * item into the bay's own handler, which needs no hook at all: {@code RackBayBlockEntity#insert} is a plain handler
+ * call and the change callback behind it returns at once on anything that is not a {@code ServerLevel}, so nothing is
+ * sent, no controller is told and the fill level stays whatever the scene wrote.</li>
  * </ul>
  *
  * <h2>Every caption idles at least as long as it is shown</h2>
@@ -83,9 +90,9 @@ public final class RackBayScenes {
 
     /**
      * The face of a bay that the viewer sees in the two aisle-free scenes. Ponder draws a block's <b>north</b> and
-     * <b>west</b> faces, so a bay whose readable front faces north is the only way the window, the arm port and the
-     * filter slot are visible at all — and a bay's front is {@code FACING.getOpposite()}, so {@link #VIEWED_FACING}
-     * points south, into the rack depth and away from the camera.
+     * <b>west</b> faces, so a bay whose readable front faces north is the only way the open front, the goods on the
+     * pallet and the filter slot are visible at all — and a bay's front is {@code FACING.getOpposite()}, so
+     * {@link #VIEWED_FACING} points south, into the rack depth and away from the camera.
      */
     private static final Direction VIEWED_FRONT = Direction.NORTH;
     private static final Direction VIEWED_FACING = VIEWED_FRONT.getOpposite();
@@ -100,7 +107,7 @@ public final class RackBayScenes {
      * Ponder renders a scene at {@code 30 * scaleFactor} units per block <b>whatever the base plate is</b>
      * ({@code PonderScene.SceneTransform#refreshMatrix}); the plate size only centres it. The first cut used a square 5
      * plate at 1.2 and the second a square 3 plate at the default 1, and both drew the bay about the size of a
-     * fingernail — its window, its fill level and the pallet it leaves were all unreadable on the one scene whose whole
+     * fingernail — its goods, its fill level and the pallet it leaves were all unreadable on the one scene whose whole
      * job is to show what that block looks like. Create's own scenes sit between 0.5 and 0.95 because they show a whole
      * machine; this one shows a single block, so it is deliberately the largest scale in the mod, and the plate is cut
      * to 3 so the scene still fits the frame around it.
@@ -122,6 +129,26 @@ public final class RackBayScenes {
     }
 
     // --- shared helpers ---------------------------------------------------------------------------------------------
+
+    /**
+     * Puts one {@code item} into the bay at {@code pos}, so the renderer added in M29 step 13 draws the item the scene
+     * is talking about rather than leaving the bay anonymous behind its cartons.
+     * <p>
+     * <b>One</b> item, deliberately: the renderer draws a single copy whatever the amount, {@link RackBayBlock#FILL}
+     * is written by the scene itself (class comment), and a count of one cannot overflow a capacity or disturb a later
+     * beat. A bay that already holds another type refuses it, which is the behaviour the "one type at a time" beat of
+     * {@link #rackBay} is about — so this is never a way to put two things in one bay.
+     */
+    private static void store(CreateSceneBuilder scene, BlockPos pos, ItemStack item) {
+        scene.world().modifyBlockEntity(pos, RackBayBlockEntity.class, bay -> bay.insert(item.copyWithCount(1), false));
+    }
+
+    /** {@link #store} for a whole row of bays, from {@code firstX} to {@code lastX} inclusive. */
+    private static void storeRow(CreateSceneBuilder scene, SceneBuildingUtil util, int firstX, int lastX, int y, int z,
+                                 ItemStack item) {
+        for (int x = firstX; x <= lastX; x++)
+            store(scene, util.grid().at(x, y, z), item);
+    }
 
     private static BlockEntry<RackBayBlock> bayBlock(BayTier tier) {
         return switch (tier) {
@@ -186,7 +213,7 @@ public final class RackBayScenes {
         // Where the load lands once the bay is broken. Not the bay's own position, although that is where
         // PalletEntity#spawn really puts it: the empty bay comes back there, and a pallet is barely half a block
         // high, so the two would be drawn inside each other. West is the one free neighbour whose pallet cannot
-        // stand in front of the window either — the window faces VIEWED_FRONT.
+        // stand in front of the open face either — that face is VIEWED_FRONT.
         BlockPos palletPos = bay.relative(Direction.WEST);
         Selection baySelection = util.select().position(bay);
         Vec3 front = util.vector().blockSurface(bay, VIEWED_FRONT);
@@ -220,6 +247,7 @@ public final class RackBayScenes {
                 .withItem(BULK);
         scene.idle(CONTROL_LEAD);
         scene.world().modifyBlock(bay, state -> state.setValue(RackBayBlock.FILL, 1), false);
+        store(scene, bay, BULK);
         scene.overlay().showText(TEXT_TICKS)
                 .text("Right-Click with an item and one goes in; even the first item already shows on the front")
                 .attachKeyFrame()
@@ -250,7 +278,7 @@ public final class RackBayScenes {
 
         // --- what the front says ------------------------------------------------------------------------------------
         scene.overlay().showText(TEXT_TICKS)
-                .text("The load behind the window grows as the bay fills, so you read how full it is by walking past")
+                .text("The load on the pallet grows as the bay fills, so you read how full it is by walking past")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(front);
@@ -367,6 +395,8 @@ public final class RackBayScenes {
         scene.world().setBlocks(bottomRow, bayState(BayTier.BRASS, 4, VIEWED_FACING), false);
         scene.world().setBlocks(middleRow, bayState(BayTier.ANDESITE, 2, VIEWED_FACING), false);
         scene.world().setBlocks(topRow, bayState(BayTier.WOOD, 1, VIEWED_FACING), false);
+        for (int row = 0; row < 3; row++)
+            storeRow(scene, util, firstX, lastX, FLOOR_Y + row, wallZ, BULK);
 
         scene.showBasePlate();
         scene.idle(10);
@@ -422,6 +452,7 @@ public final class RackBayScenes {
         // A column a command broke. Both derived flags are written by hand here: a PonderLevel runs neither the
         // placement rule that refuses this nor the neighbour update that would carry the flag down (class comment).
         scene.world().setBlocks(topRow, bayState(BayTier.BRASS, 1, VIEWED_FACING), false);
+        storeRow(scene, util, firstX, lastX, FLOOR_Y + 2, wallZ, BULK);
         scene.world().modifyBlocks(carrying, state -> state.setValue(RackBayBlock.OVERLOADED, true), false);
         scene.idle(FADE_IDLE);
         scene.overlay().showOutline(PonderPalette.OUTPUT, "overloaded", carrying, TEXT_TICKS);
@@ -488,6 +519,7 @@ public final class RackBayScenes {
         aisle.placeInput(scene, util, inputPosition, 0, Side.RIGHT);
         scene.world().setBlock(filled, bayState(BayTier.ANDESITE, 2, PonderAisle.outward(Side.RIGHT)), false);
         scene.world().setBlock(empty, bayState(BayTier.ANDESITE, 0, PonderAisle.outward(Side.RIGHT)), false);
+        store(scene, filled, BULK);
         aisle.placeStorage(scene, util, interfacePosition, 0, Side.RIGHT);
         aisle.placeInsertingFunnelAbove(scene, filled);
         scene.world().setKineticSpeed(util.select().everywhere(), CraneScript.PONDER_RPM);
@@ -498,7 +530,7 @@ public final class RackBayScenes {
         scene.idle(FADE_IDLE);
 
         scene.overlay().showText(TEXT_TICKS)
-                .text("Two rack bays, filled by hand, with no warehouse anywhere near them")
+                .text("Two rack bays with no warehouse anywhere near them, one of them filled by hand")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(filled, aisleFace));
@@ -540,13 +572,14 @@ public final class RackBayScenes {
         crane.moveTo(CranePose.at(emptyPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
         crane.moveTo(new CranePose(emptyPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
         scene.overlay().showText(TEXT_TICKS)
-                .text("The crane reaches in through the slot above the window, exactly as it does on an interface")
+                .text("The crane reaches in through the open front of the bay, as it does through an interface's slot")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(empty, aisleFace));
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
         crane.release();
         scene.world().modifyBlock(empty, state -> state.setValue(RackBayBlock.FILL, 1), false);
+        store(scene, empty, BULK);
         scene.effects().indicateSuccess(empty);
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(emptyPosition, 0, Side.RIGHT), CranePhase.RETRACT_TARGET);
@@ -557,7 +590,7 @@ public final class RackBayScenes {
         scene.overlay().showFilterSlotInput(filterSlot(util, empty, aisleFace), CONTROL_TICKS);
         scene.idle(CONTROL_LEAD);
         scene.overlay().showText(TEXT_TICKS)
-                .text("The filter slot under the arm port says what belongs here; holding the click sets a priority")
+                .text("The filter slot low in the bay's face says what belongs here; holding the click sets a priority")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(filterSlot(util, empty, aisleFace));

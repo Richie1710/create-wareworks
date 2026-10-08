@@ -703,7 +703,7 @@ iron sheets already require a press and its brass casing already requires brass.
   * *Extended in M21 to fifteen scenes* (`warehouse/corner`, "Rails Around a Corner"), rails that bend; registered for the **warehouse rail and the stacker crane**, and last in both cases, so each block still opens on the scene it always did (ADR-033). Its stage is `client.ponder.scenes.PonderNetwork`, which asks the real `WarehouseLayout` for every position and address rather than computing them itself.
   * *Extended in M22 to sixteen scenes* (`warehouse/junction`, "Rails That Split"), rails that split; registered for the **same two components** and last again, so the rail and the crane now show overview → corner → junction. It is a storyboard of its own rather than beats added to `warehouse/corner` for the reason M20 gave: inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files, and a comb needs a third aisle, a second junction and three crane trips — more than the corner's stage and pacing hold. Its stage is `PonderNetwork#COMB` on the same square nine as the corner's, and `PonderNetwork#requireTwinOf` asserts the ownership claim its closing beats make against the layout itself, so the storyboard fails to compile rather than captioning a picture that stopped being true. Its captions each idle **longer** than they are shown (`NetworkScenes#SAY_IDLE`): `showText` does not block, and a scene whose captions all point at the same junction otherwise draws the next one on top of the one still fading out (found by looking at the shots of the first cut).
   * *Extended in M26 to seventeen scenes* (`warehouse/packages_at_the_door`, “Packages at a Warehouse Door”), Create packages at a warehouse door; registered for the **warehouse output and the warehouse input**, and last in both cases, so each block still opens on the scene it always did (ADR-040). Both stations show it because the build is the same Packager on either side of the warehouse and which station its back touches is the whole lesson, so a player who meets one door finds the other. It is a storyboard of its own for the reason M20 and M22 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because its build (two Packagers, a sign, a Smart Observer, a funnel) fits neither port schematic. Its stage is a new 9x7x9 plate in `scripts/gen_ponder_schematics.py`. Two things the plate itself taught, worth knowing before the next scene: a **standing sign** shows a scene its blank back unless `ROTATION` is set (6 points the writing at the plate's fixed camera), and a block's place on the plate is worth computing rather than guessing (screen-right ≈ −0.819·X + 0.574·Z, screen-up ≈ 0.329·X + 0.470·Z + 0.819·Y, from `PonderScene.SceneTransform`'s yRotation 145 / xRotation −35) — which is what shows, before any run, that a Packager on the **far** rack plane hides behind its own station. A ticking Create Packager in a scene is safe, which was doubted while this was being planned: `PackagerBlockEntity#lazyTick` returns at `if (level.isClientSide()) return;` before `recheckIfLinksPresent`, so the `setBlockAndUpdate` that worried it is unreachable from a `PonderLevel` — with or without a Stock Link beside it.
-  * *Extended in M28 to twenty scenes* (`warehouse/rack_bay`, `warehouse/rack_wall`, `warehouse/bays_in_an_aisle`), the rack bay's three, in `client.ponder.scenes.RackBayScenes` and registered for **all three tiers** (ADR-048). They are the one block of this mod whose scenes are deliberately **not** in warehouse-first order: a wooden bay needs no machine to craft, so its first audience owns no crane, and the standalone block comes first, the wall second and the aisle last. Three things they had to learn, each of which the next aisle-free scene will need as well. A `PonderLevel` is **client-side**, so it derives neither of a bay's flags (`FILL`, `OVERLOADED`) and cannot spawn a pallet at all — the scenes write both flags into the block state and build the pallet through `createEntity` plus the new display hook `PalletEntity#showClientLoad`, the counterpart of `showClientPose`. Ponder renders at **`30 * scaleFactor` units per block whatever the base plate is** (`PonderScene.SceneTransform#refreshMatrix`), so the plate only centres a scene and a single-block scene is made legible by `scaleSceneView` — `RackBayScenes.SINGLE_SCALE` is 2.0 on a square **3** plate, the largest scale and smallest plate in the mod. And the M22 caption rule is now written down rather than remembered (`RackBayScenes`' class comment): applying it found `warehouse/packages_at_the_door` still shipping the defect in one of its two trip beats, a caption shown 150 ticks longer than the scene then idled, drawn on top of the next one.
+  * *Extended in M28 to twenty scenes* (`warehouse/rack_bay`, `warehouse/rack_wall`, `warehouse/bays_in_an_aisle`), the rack bay's three, in `client.ponder.scenes.RackBayScenes` and registered for **all three tiers** (ADR-048). They are the one block of this mod whose scenes are deliberately **not** in warehouse-first order: a wooden bay needs no machine to craft, so its first audience owns no crane, and the standalone block comes first, the wall second and the aisle last. Three things they had to learn, each of which the next aisle-free scene will need as well. A `PonderLevel` is **client-side**, so it derives neither of a bay's flags (`FILL`, `OVERLOADED`) and cannot spawn a pallet at all — the scenes write both flags into the block state and build the pallet through `createEntity` plus the new display hook `PalletEntity#showClientLoad`, the counterpart of `showClientPose`. A third thing, added in **M29 step 14** once a bay drew the item it stores (ADR-049): the goods have to be put in by hand as well, or a scene teaches "a bay keeps the first item type that lands in it" over anonymous cartons. `RackBayScenes#store` does it with `modifyBlockEntity` and the bay's own `insert`, which needs no hook at all — the change callback behind it returns at once on anything that is not a `ServerLevel`, so nothing is sent, no controller is told and the scene's own `FILL` stands. Ponder renders at **`30 * scaleFactor` units per block whatever the base plate is** (`PonderScene.SceneTransform#refreshMatrix`), so the plate only centres a scene and a single-block scene is made legible by `scaleSceneView` — `RackBayScenes.SINGLE_SCALE` is 2.0 on a square **3** plate, the largest scale and smallest plate in the mod. And the M22 caption rule is now written down rather than remembered (`RackBayScenes`' class comment): applying it found `warehouse/packages_at_the_door` still shipping the defect in one of its two trip beats, a caption shown 150 ticks longer than the scene then idled, drawn on top of the next one.
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
@@ -3604,6 +3604,12 @@ own** — see `MAX_LOAD`.
 
 ### ADR-047 — A rack bay's fill level is block state geometry, and the three tiers are one model in three materials (M28, issue #20)
 
+> **Partly superseded by ADR-050 (M29).** The fill level, the three tiers and the one-model rule stand unchanged. The
+> **shell** does not: the two side walls, the shelf above and below, the solid back and the window below the port were
+> replaced by a load beam, a 2 px back and an upright at each end, so the aisle face is open across the whole block
+> and there is no port recess and no `dark_metal_block` back behind it any more. Read the aisle-face bullet below as
+> what M28 shipped, not as what the block is.
+
 *Context:* "you cannot see the stock" is half the reason rack bays exist, and the owner's picture of the block is a
 pallet with the goods stacked on it whose load grows as the bay fills — read by walking past, not by opening
 anything. A warehouse places bays by the hundred, so how that is drawn decides whether the feature works at the
@@ -3739,6 +3745,203 @@ possible: no item, no component, no entry. **Registering the scenes on the woode
 brass first would find the bay has nothing to teach them. **Touring only one tier in the visual scenario** — it is the
 count assertion that catches a lost registration, and there are three of them.
 
+
+### ADR-049 — A rack bay draws the item it stores at the mouth of the bay, and its renderer is capped at the distance that item is legible from (M29 step 13, issue #20)
+
+*Context:* ADR-047 decided that a bay shows how full it is in **block state geometry** — four carton steps on a pallet,
+baked into the chunk mesh and free at any distance — and that a bay has **no** block entity renderer at all, because
+registering one puts every block of that type into its chunk section's per-frame render list
+(`SectionCompiler#handleBlockEntity` adds a block entity exactly when its type has a renderer) at vanilla's 64-block
+default. That ADR named this as the decision to revisit in M29's look pass, and this is that pass. What a silhouette
+cannot carry is **which** item the cartons are, and the issue asks for both: a wall that reads as racking from across
+the warehouse, and goods a player can identify from the aisle.
+
+*Decision:*
+
+* **The coarse fill level stays exactly where it is.** `RackBayBlock.FILL` is untouched: four steps plus empty, in the
+  block state, drawn by the multipart blockstate. The renderer **adds** the item and nothing else. It never draws the
+  count, because `FILL` already answers "how much" and a second answer beside it would be the worse one, and it never
+  scales or stacks the item with the amount for the same reason. The split is: the **shape** says how full from across
+  the warehouse, the **item** says what from the aisle.
+* **`getViewDistance()` is cut to Create's `filterItemRenderDistance`** (default 10 blocks), exactly as
+  `WarehouseInterfaceRenderer` cuts it and for exactly the same reason (§3.1.1). This is the budget of the whole
+  decision rather than a preference, so it is measured rather than asserted: the `bays` visual scenario reads the
+  client's own per-frame list through `LevelRenderer#iterateVisibleBlockEntities`. A hundred-bay wall puts **100**
+  entries into it; beyond the cap **none** of them is drawn, and the frame pays one frustum test against the renderer's
+  bounding box plus one squared distance each — **about 1.5 µs per frame for the whole wall** once the loop is warm
+  (≈15 ns per bay, under 0.01 % of a 60 fps frame on the development machine); the first measured frame of a pass reads
+  6–10 µs, which is the same loop cold. Inside the cap, 40 of the 100 are drawn from the aisle and 28 from 9.5 blocks.
+  What the scenario **asserts** is the shape of that rather than the three figures — beyond the cap not one of the
+  hundred may be drawn, from the aisle at least one must be, and the edge camera must catch the cap in the act with
+  some of the wall inside it and some outside — so a change that widened the cap fails the run instead of quietly
+  costing frames, while a camera moved by a block does not. The counts and the nanoseconds are recorded in the run's
+  `index.txt`. The timed loop is the frustum test and the distance test and no more: for a bay in frustum and beyond
+  the cap a frame also pays the dispatcher's two renderer lookups, a pose push and pop, a `destructionProgress`
+  lookup and two validity checks, so the figure understates the real cost a little and never overstates it.
+* **The item stands at the mouth of the bay, on the load beam in front of the pallet** — not on the pallet, which is
+  where the design expected it. The reason is measured, not chosen: fill steps 3 and 4 spread their cartons over
+  `x/z 3..13`, which is the pallet's footprint exactly, so an item standing on the pallet at those steps is *inside*
+  them; and above a full load there are 1.5 px before `CraneModelLayout`'s arm floor at y 9.5, where nothing in a bay
+  may ever reach (ADR-047's own consequence). The 3 px between the load's front plane and the aisle face is the only
+  part of a bay that is free at **every** fill level, and it is the part a player in the aisle looks straight at. The
+  anchor is therefore one plane per axis — the block's centre in x, the beam's top in y, the pallet's front edge
+  in z — and `CraneModelLayoutTest#theItemDrawnInARackBayStandsClearOfTheArmAndTheLoad` reads all three off the model
+  files, so an edit to a load step, to the pallet or to the arm moves the bound with them.
+* **The drawn path allocates nothing** (M29 review). One display `ItemStack` is cached per stored key, because
+  `ItemKey#toStack()` allocates; the stored key itself is read through a `@Nullable` accessor rather than through the
+  `Optional` the rest of the mod uses; and the light lookup reuses one `BlockPos.MutableBlockPos` field instead of
+  `BlockPos#relative`. All three are render-thread-only state, as `StackerCraneRenderer`'s own cache is. It is a small
+  figure either way — two objects per drawn bay per frame, which escape analysis may well have removed — but the rule
+  is cheap to keep and the class states it for itself.
+* **A flat item stands up facing the aisle; a block item stands as it does on the arm.** This is the one place a bay
+  differs from the crane (`stacker-crane.md` §7), which lays flat items down: the arm's stage is a shelf seen from
+  above and from the side, while a bay is read **face-on** from the aisle, where a 0.3 px sheet lying flat is an
+  invisible line — and a flat item laid down is a whole block across, which does not fit in the 3 px the front of a bay
+  has. The test asserts that it does not fit, rather than merely recording that it is not done, so the convention can
+  go back to the crane's if the geometry ever allows it.
+* **The item is presented the way an item frame on the aisle face would present it**, i.e. with the half turn
+  `ItemFrameRenderer` applies on top of the fixed display transform. Verified against the vanilla transforms rather
+  than guessed: `item/generated` carries `fixed: rotation [0, 180, 0]`, `block/block` carries none, and a frame on a
+  south face adds `Axis.YP.rotationDegrees(180 - yRot)` = 180°. Without that turn a furnace shows the aisle its back
+  and a flat item the mirrored back of its two quads. The size is `CraneModelLayout.ITEM_SCALE`, the crane's own, so an
+  item does not change size when the arm sets it down.
+* **The item is lit by the brighter of the bay's own block and the aisle block in front of it**, the rule
+  `StackerCraneRenderer` already uses for arm parts that reach into a rack. A bay is not a solid block but still
+  attenuates light like any non-solid one, so deep in a wall its own position is dim while the goods face an open, lit
+  aisle.
+* **The renderer is a `SafeBlockEntityRenderer`, not Create's `SmartBlockEntityRenderer`.** The smart one would also
+  draw the bay's **store filter** item on the block, in the value box at (8, 5) — a second item a hand's breadth from
+  the stored one, saying something different. ADR-047's consequence therefore stands unchanged: a bay's store filter is
+  read through the goggles and in the value box the crosshair rests on, and is not drawn on the block.
+
+*Consequences:*
+
+* The drawn item reaches 1.7 px past the bay's front posts, though never past its aisle face. Deliberate, and shot: it
+  is what makes the item read as a sample set down at the front of the location rather than as something buried in the
+  rack, and it is still inside the block, so nothing the crane does touches it.
+* The item overlaps the area Create draws the **value box** in while the crosshair rests on the bay. That is Create's
+  own idiom — a funnel's filter box sits over its own model — and it is on the manual checklist, because the 4 px hit
+  sphere at (8, 5) is the one thing no automated test can feel.
+* Items with a **custom renderer** (a chest, a shulker box) go through `IClientItemExtensions#getCustomRenderer` inside
+  `ItemRenderer.render`, like any item in a frame. Shot and read: a chest arrives at the right size with its latch
+  towards the aisle. An item whose model gives `fixed` a scale of its own is placed from the two standard families'
+  numbers and may sit a pixel off, which is the same approximation `StackerCraneRenderer` has always made.
+* The display stacks are cached per `ItemKey` rather than per `Item`, so a stored potion or a dyed shulker box is drawn
+  as the variant it is — `ItemKey#toStack()` allocates, and the renderer of the mod's most mass-placed block must not
+  allocate per frame. The cache is dropped whole above 256 entries, which no warehouse reaches and a creative session
+  could otherwise walk up without bound.
+* A **Ponder** scene draws the item too, but only once its bay has contents, and when this ADR was written none of
+  them had any: the scenes wrote `FILL` into the block state and never touched the bay's handler, so they taught "a
+  bay keeps the first item type that lands in it" over anonymous cartons. M29 step 14 closed that with
+  `RackBayScenes#store`, which needed no new hook at all - `RackBayBlockEntity#insert` is a plain handler call and the
+  change callback behind it returns at once on anything that is not a `ServerLevel`.
+
+*Alternatives rejected:* **The item on top of the load**, which the design assumed — measured and impossible: 1.5 px of
+headroom at fill 4, and every placement that clears the arm is buried in the cartons. **A smaller item scaled to that
+headroom** — it would shrink as the bay fills, which reads backwards, and at fill 4 it is 1.5 px tall. **Lowering the
+load silhouette to make room** — it would undo the four distinguishable fill steps the joining pass was approved on.
+**Drawing the count as text beside the item** — a font batch per bay on the mod's most mass-placed block, to repeat what
+`FILL` already says. **A second, turned copy for large amounts**, the way the arm stacks held items — the same
+duplication of `FILL`. **Overriding `shouldRender` with the exact float distance instead of the whole-block
+`getViewDistance`** — on the defaults it is the same cut, and it would be one more place for the rule to live.
+
+
+### ADR-050 — A rack wall is one structure: neighbouring bays share the upright between them, carried by two derived flags relative to the facing (M29 step 12, issue #20)
+
+*Context:* Issue #20 opens with *"a warehouse does not look like one"* and settles the target in the owner's own
+words — *orientiere dich an typischen Lagerregalen*, real pallet racking with uprights, beams and pallets, not "a grid
+of decorated cubes". M28 shipped the block and three of the issue's four reasons; the fourth was left to M29, and a
+3 x 3 wall of the M28 model read as nine boxes with windows
+(`run/visual/m28-evidence/visual-blocks-49-bay_wall-wall.png`). The question is not what one bay looks like. It is
+what a **wall** of them looks like, and that is decided by what happens where two of them meet.
+
+*Decision:*
+
+* **A bay is a rack frame, not a box.** The M28 shell — two side walls, a shelf above and below, a solid back and a
+  window — is replaced by a 3 px **load beam** across the full width at the block's own floor, the **pallet** on it, a
+  2 px **back** and an **upright** at each end (a front and a rear post joined by two braces). Everything else is
+  open, so the whole aisle face above the beam is the crane's way in and the arm port is no longer a recess in a wall
+  but part of an opening that spans the bay. `CraneModelLayoutTest#aRackBayIsAShellBetweenTwoUprights` pins that
+  nothing but the back skin ever stands in the arm's path, over the whole depth it travels rather than only the 3 px
+  of a port.
+* **Where two bays meet there is one upright, not two.** Each bay draws, at each of its ends, either the whole
+  `upright.json` (3 px) or `upright_half.json` (1.5 px) when a rack bay of the **same facing** stands there. Two
+  halves on a seam make exactly one 3 px upright, so a wall's uprights stand at a **uniform one-block pitch** whatever
+  its length, and the load beams — full width in every bay — run unbroken from end to end. This is the whole of the
+  decision: a wall that merely drew its own uprights at its own ends would be a row of frames, and one that dropped
+  them between neighbours would leave the beams hanging.
+* **A seam hides the faces it buries** (M29 review). Twelve quads meet at the boundary of two joined bays and are
+  buried in each other: the shell's `deck` and `back` from each side, and the four elements of the `upright_half` each
+  of the two bays draws there. A bay is `noOcclusion()`, so `Block#shouldRenderFace` keeps every one of them — about a
+  sixth of a 20 x 5 wall's quads baked into the chunk mesh with no camera that could ever see them.
+  `RackBayBlock#skipRendering` answers true for exactly those two directions and exactly that neighbour, which is the
+  one hook asked *before* the occlusion test and is consulted **only** for quads carrying a `cullface` that way, so it
+  drops the buried twelve and can never take a face a player could see. The join is symmetric, so both bays drop their
+  own half of a seam. `RackBayGameTests#bayseamhidesthefacesitburies` pins the pairs and the four directions it must
+  leave alone; `CraneModelLayoutTest#everyFaceASeamBuriesIsCullfaced` pins the cullfaces without which the hook would
+  never be asked at all.
+* **Nothing is decided vertically.** A bay carries only the beam at its *own* floor and is open on top, so a column is
+  one beam per level and never a doubled floor. The same answer, for free, in the axis the column rule already
+  governs.
+* **The two flags are relative to `FACING`**, unlike the rail's four absolute ones (ADR-033), because the same
+  blockstate that reads them turns the model onto the facing: left stays left through every rotation, a structure
+  rotated as a whole keeps its joins, and the multipart costs one condition per side instead of four. They are
+  **derived and cosmetic** — set in `getStateForPlacement`, kept in step by `updateShape` on the two sides beside the
+  aisle face, and repaired by the scheduled tick that already exists for `OVERLOADED` when a bay arrives by a command,
+  a structure or a wrench. Nothing about them is saved, nothing is sent but the block state, and no tick costs
+  anything.
+* **A join asks for the same facing and never for the same tier.** A wall is a wall; the one place a mixed wall shows
+  is a seam upright that is half wood and half brass, which is what it is. Two racks back to back face opposite ways
+  and do not join, which is right: a corner is two racks and has to look like two racks.
+* **Every face of the rack is cut from texels that are really there.** `create:block/bracket_plate_wooden` — the
+  wooden tier's frame and every tier's pallet deck — is a 14 x 14 plate in the corner of a 16 x 16 file, and its 43
+  empty texels are all RGB 0,0,0. A rack bay is drawn in the **solid** layer, where alpha is ignored, so a UV reaching
+  into them is painted **pure black**. Every face textured `#frame` or `#deck` therefore maps the model's own 0..16
+  grid onto the plate's opaque window, `u 0..14` and `v 2..16`.
+  `CraneModelLayoutTest#theRackIsCutFromTexelsThatAreReallyThere` opens the texture **files** and fails on any face of
+  the rack, its loads or the pallet that samples an empty texel, and pins that none of these models declares a
+  `render_type` — switching one to `cutout` would turn the same texels into holes rather than into black, which is a
+  different decision and has to be taken on purpose.
+
+*Consequences:*
+
+* The look is **block state geometry**, so it is right at any distance, costs nothing per tick and nothing per frame,
+  and a wall of a thousand bays is the same chunk mesh work as a wall of a thousand of anything else. That is what
+  makes it affordable on a block a warehouse places by the hundred, and it is why the joining was done here rather
+  than in a renderer.
+* `OVERLOADED` is still a condition of **no** part: a bay that carries something stronger above it looks exactly like
+  one that does not (ADR-047), which `CraneModelLayoutTest#anOverloadedRackBayLooksLikeAnyOther` checks on the
+  generated blockstate rather than on the generator, and which the `bays` scenario's `column-front` exhibit shoots
+  beside its legal twin so a person can see it as well.
+* The item model is `item.json` rather than `block.json`, because the block model carries no upright at all — the
+  blockstate adds those — and a bay in the hand is one with **both** of them, which is what a crafted one is.
+* Create's connected-texture machinery (`CreateRegistrate.connectedTextures`, `CTSpriteShifter`) was available and is
+  **not** used: it changes textures only, never geometry, so it can dress a panel and can never make an upright. A
+  sheet of our own is ADR-023's territory, with a documented bar to clear. It stays open as dressing on top of this,
+  not as an alternative to it.
+* **The black-texel rule outlived the rack, and it caught one more block.** The review widened
+  `CraneModelLayoutTest` to sweep **every** block model of the mod rather than the rack's
+  (`everyBlockModelIsCutFromTexelsThatAreReallyThere`), with the three models that are genuinely drawn outside the
+  solid layer pinned by name. Exactly one other face in the repository was sampling empty texels: the **warehouse
+  stock keeper**'s front `panel`, which mapped the whole 16 x 16 sheet of `create:block/factory_panel` onto its
+  10 x 8 px face although 125 of that sheet's 256 texels are empty and 117 of those are RGB 0,0,0 — black rectangles
+  inside the panel frame and a black L along its right and bottom edges, shipped since M15 and never judged. It was
+  the sheet's layout showing through rather than a design, so the face now maps the plate Create's own factory gauge
+  uses for the same surface (`u 9..15`, `v 1..7`). The block stays in the solid layer and no geometry moved.
+* The milestone's own verdict is a person's call and nothing else can make it: `docs/manual-test-checklist.md`
+  section AO, checks 234–236.
+
+*Alternatives rejected:* **A bay that draws both its own uprights** — the row of framed boxes the issue complained
+about, and the thing the M28 shot showed. **Dropping the upright on the joined side entirely**, so one neighbour
+brings the whole post — it halves the model count, and it makes a wall's first bay look different from its second,
+breaks the moment a run is built right to left, and puts the pitch out by half a block at every seam. **Four absolute
+flags like the rail's** — the rail is not rotated by its own blockstate, a bay is; relative flags survive a structure
+rotation and cost one multipart condition per side instead of four. **A separate block state property for the tier**
+instead of three blocks — the item model is generated through `ModelGen.customItemModel` and cannot express three
+items for one block, and "nothing stronger above" reads against three block ids (ADR-043). **Turning off ambient
+occlusion, or overriding `propagatesSkylightDown`**, to deal with the black faces — proposed in review and measured
+wrong: brass and andesite bays in the same wall, with the same geometry, the same UVs and the same light, carried not
+one black pixel, so it was never lighting.
 
 ## Persistence & sync
 

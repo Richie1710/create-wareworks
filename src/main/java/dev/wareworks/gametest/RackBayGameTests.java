@@ -125,6 +125,9 @@ import net.neoforged.neoforge.items.IItemHandler;
  * {@code anoverloadedbaystoresnothingbutstaysretrievable} — the column rule (M28 step 5): refused when a bay is
  * placed, reported once one stands, repaired after every change to the column, and what it means for a running
  * warehouse;</li>
+ * <li>{@code bayseamhidesthefacesitburies} — the rack wall's seams (M29 step 12, ADR-050): where two bays join, each
+ * of them drops the faces the seam buries and nothing else, so a wall does not bake a sixth of its quads into the
+ * chunk mesh for no camera at all;</li>
  * <li>{@code bayhandgestures}, {@code baysyncisbounded} and {@code baygogglestatefollowsthewarehouse} — a player's own
  * hands (M28 step 6): one item for a plain click and one stack for Shift in both directions, everything the gesture
  * must <b>not</b> take, and the bounded client packet that carries the contents and the goggle state. The goggle
@@ -321,6 +324,64 @@ public final class RackBayGameTests {
             handler.extractItem(0, 1_000, false);
         helper.assertValueEqual(bay.storedCount(), 0, "a bay can be emptied by hand");
         helper.assertTrue(bay.storedKey().isEmpty(), "and forgets what it held");
+        helper.succeed();
+    }
+
+    /**
+     * <b>A seam between two bays hides the faces it buries</b> (M29 review, ADR-050).
+     * <p>
+     * Twelve quads meet at the boundary of two joined bays and are buried in each other: the shell's {@code deck} and
+     * {@code back} from each side, and the four elements of the {@code upright_half} each bay draws there. A rack bay
+     * is {@code noOcclusion()}, so {@code Block#shouldRenderFace} keeps every face a neighbour does not occlude — and
+     * the only hook asked before that test is {@code skipRendering}. Without it a 20 x 5 wall bakes 1 140 of its
+     * 6 000 quads into the chunk mesh for no camera at all.
+     * <p>
+     * Checked in a world rather than on the model files, because the question is about a pair of block states and a
+     * direction, which is what the chunk mesher asks. The model half of it — that every one of those faces carries
+     * the {@code cullface} without which {@code skipRendering} is never even consulted — is
+     * {@code CraneModelLayoutTest#everyFaceASeamBuriesIsCullfaced}.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void baySeamHidesTheFacesItBuries(GameTestHelper helper) {
+        BlockPos left = new BlockPos(1, BASE_Y, 3);
+        BlockPos middle = new BlockPos(2, BASE_Y, 3);
+        BlockPos right = new BlockPos(3, BASE_Y, 3);
+        BlockPos turned = new BlockPos(4, BASE_Y, 3);
+        for (BlockPos pos : List.of(left, middle, right))
+            placeBay(helper, pos, WareworksBlocks.RACK_BAY_WOOD.getDefaultState(), Direction.NORTH);
+        // A bay looking another way is a different rack: it joins nothing and hides nothing.
+        placeBay(helper, turned, WareworksBlocks.RACK_BAY_WOOD.getDefaultState(), Direction.EAST);
+        ServerLevel level = helper.getLevel();
+        BlockState leftState = level.getBlockState(helper.absolutePos(left));
+        BlockState middleState = level.getBlockState(helper.absolutePos(middle));
+        BlockState rightState = level.getBlockState(helper.absolutePos(right));
+        BlockState turnedState = level.getBlockState(helper.absolutePos(turned));
+        BlockState air = Blocks.AIR.defaultBlockState();
+
+        helper.assertTrue(middleState.getValue(RackBayBlock.LEFT) && middleState.getValue(RackBayBlock.RIGHT),
+                "the middle bay of a run of three joins on both sides");
+
+        // Both halves of a seam drop their own buried faces, which is what makes the hiding symmetric: neither bay
+        // is ever left looking into the other's geometry.
+        helper.assertTrue(middleState.skipRendering(leftState, Direction.WEST),
+                "a bay hides the faces its left-hand neighbour buries");
+        helper.assertTrue(leftState.skipRendering(middleState, Direction.EAST),
+                "and the neighbour hides its own half of the same seam");
+        helper.assertTrue(middleState.skipRendering(rightState, Direction.EAST),
+                "the same on the other side");
+        helper.assertTrue(rightState.skipRendering(middleState, Direction.WEST), "both ways again");
+
+        // A wall's end keeps every face it has, and so does a bay beside one that looks another way.
+        helper.assertTrue(!leftState.skipRendering(air, Direction.WEST),
+                "the end of a wall keeps the face nothing buries");
+        helper.assertTrue(!rightState.skipRendering(turnedState, Direction.EAST),
+                "a bay looking another way is a second rack and buries nothing");
+
+        // Only the two sides beside the aisle face can carry a seam. Everything else is vanilla's business, and a
+        // bay that hid its aisle face or its floor would be a hole in the wall.
+        for (Direction direction : List.of(Direction.NORTH, Direction.SOUTH, Direction.UP, Direction.DOWN))
+            helper.assertTrue(!middleState.skipRendering(leftState, direction),
+                    "a bay hides nothing towards " + direction);
         helper.succeed();
     }
 

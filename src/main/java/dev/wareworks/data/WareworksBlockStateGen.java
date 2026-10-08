@@ -21,6 +21,7 @@ import dev.wareworks.content.storage.RackBayBlock;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.neoforged.neoforge.client.model.generators.ConfiguredModel;
 import net.neoforged.neoforge.client.model.generators.ModelFile;
 import net.neoforged.neoforge.client.model.generators.MultiPartBlockStateBuilder;
@@ -34,6 +35,8 @@ public final class WareworksBlockStateGen {
     /** Y rotation of a model authored on the north face, so that its content ends up on {@code facing}. */
     private static final int NORTH_AUTHORED_OFFSET = 180;
     private static final int FULL_TURN = 360;
+    /** Half a turn: what makes a symmetric model authored on one side of a block serve the other side too. */
+    private static final int HALF_TURN = 180;
 
     private WareworksBlockStateGen() {
     }
@@ -246,17 +249,35 @@ public final class WareworksBlockStateGen {
     public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
             rackBayBlockProvider() {
         return (context, provider) -> {
-            ModelFile shell = provider.models().getExistingFile(provider.modLoc("block/" + context.getName() + "/block"));
+            String folder = "block/" + context.getName() + "/";
+            ModelFile shell = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+            ModelFile upright = provider.models().getExistingFile(provider.modLoc(folder + "upright"));
+            ModelFile half = provider.models().getExistingFile(provider.modLoc(folder + "upright_half"));
             MultiPartBlockStateBuilder builder = provider.getMultipartBuilder(context.getEntry());
             for (Direction facing : Direction.Plane.HORIZONTAL) {
-                builder.part().modelFile(shell).rotationY(rotationOnto(facing)).addModel()
+                int rotation = rotationOnto(facing);
+                builder.part().modelFile(shell).rotationY(rotation).addModel()
                         .condition(RackBayBlock.FACING, facing).end();
+                // The left upright is the model as it is authored, the right one is the very same model turned half a
+                // turn, which is what makes an upright frame symmetric about the block's depth a requirement and not
+                // a nicety (CraneModelLayoutTest#aRackBayIsAShellBetweenTwoUprights).
+                upright(builder, upright, rotation, facing, RackBayBlock.LEFT, false);
+                upright(builder, half, rotation, facing, RackBayBlock.LEFT, true);
+                upright(builder, upright, rotation + HALF_TURN, facing, RackBayBlock.RIGHT, false);
+                upright(builder, half, rotation + HALF_TURN, facing, RackBayBlock.RIGHT, true);
             }
             loadPart(builder, provider, "load_1", 1);
             loadPart(builder, provider, "load_2", 2);
             loadPart(builder, provider, "load_base", 3, 4);
             loadPart(builder, provider, "load_cap", 4);
         };
+    }
+
+    /** One upright of a rack bay: the whole frame at a wall's end, half of it where the next bay shares it. */
+    private static void upright(MultiPartBlockStateBuilder builder, ModelFile model, int rotation, Direction facing,
+                                BooleanProperty side, boolean joined) {
+        builder.part().modelFile(model).rotationY(rotation % FULL_TURN).addModel()
+                .condition(RackBayBlock.FACING, facing).condition(side, joined).end();
     }
 
     /** One shared load part of a rack bay, shown at the named fill steps ({@link #rackBayBlockProvider()}). */

@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
@@ -115,6 +116,12 @@ public class RackBayHandler implements IItemHandler {
     /** The stored item type, empty while the bay is empty — which is also how it forgets a learned type. */
     public Optional<ItemKey> stored() {
         return Optional.ofNullable(contents.stored());
+    }
+
+    /** {@link #stored()} without the wrapper, for the render thread ({@code RackBayBlockEntity#storedKeyOrNull}). */
+    @Nullable
+    public ItemKey storedOrNull() {
+        return contents.stored();
     }
 
     /** How many items are stored; 0 exactly when {@link #stored()} is empty. */
