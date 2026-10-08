@@ -19,9 +19,11 @@ import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
+import dev.wareworks.content.storage.FluidBayBlock;
 import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.storage.BayTier;
+import dev.wareworks.core.storage.FluidBayTier;
 import dev.wareworks.data.WareworksBlockStateGen;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.material.MapColor;
@@ -31,10 +33,11 @@ import net.minecraft.world.level.material.MapColor;
  * <p>
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
- * controller, interface, the three rack bays (wood, andesite, brass), input, output, terminal, production station,
- * stock keeper, home point (GameTest {@code creativetaborderandicon}). The bays stand directly after the interface
- * because they are the other half of the same answer: an interface turns somebody else's inventory into a storage
- * location, a bay <b>is</b> one. Recipes are hand-written JSON in
+ * controller, interface, the three rack bays (wood, andesite, brass), the two fluid bays (copper, brass), input,
+ * output, terminal, production station, stock keeper, home point (GameTest {@code creativetaborderandicon}). The bays
+ * stand directly after the interface because they are the other half of the same answer: an interface turns somebody
+ * else's inventory into a storage location, a bay <b>is</b> one — and the fluid bays stand directly after the item
+ * ones, weakest first, because they are the same block for the other kind of goods. Recipes are hand-written JSON in
  * {@code data/wareworks/recipe/} (GameTest {@code recipesloaded}). This class must only be initialised through
  * {@link #register()}, which {@code Wareworks} calls after {@code registerEventListeners}; otherwise Registrate silently
  * drops client-side listeners.
@@ -97,7 +100,7 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .transform(WareworksDisplaySources.bind(WareworksDisplaySources.AISLE_SUMMARY,
-                            WareworksDisplaySources.STOCK_LIST))
+                            WareworksDisplaySources.STOCK_LIST, WareworksDisplaySources.FLUID_STOCK))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
@@ -149,6 +152,26 @@ public final class WareworksBlocks {
                     .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK))
                     .lang("Brass Rack Bay")
                     .transform(TagGen.pickaxeOnly())
+                    .register();
+
+    /**
+     * Copper fluid bay ({@code docs/warehouse-system.md} §3.9, M30, issue #21): the rack bay of fluids, holding 64
+     * buckets of one fluid — eight Create Fluid Tank blocks in one. Copper, because in Create fluids are copper.
+     * {@link #fluidBay} explains what the two entries share.
+     */
+    public static final BlockEntry<FluidBayBlock> FLUID_BAY_COPPER =
+            fluidBay("fluid_bay_copper", FluidBayTier.COPPER)
+                    .initialProperties(SharedProperties::copperMetal)
+                    .properties(p -> p.mapColor(MapColor.COLOR_ORANGE).sound(SoundType.COPPER))
+                    .lang("Copper Fluid Bay")
+                    .register();
+
+    /** Brass fluid bay ({@link #fluidBay}): 256 buckets, more than a 3 x 3 x 3 Create tank tower, which is 216. */
+    public static final BlockEntry<FluidBayBlock> FLUID_BAY_BRASS =
+            fluidBay("fluid_bay_brass", FluidBayTier.BRASS)
+                    .initialProperties(SharedProperties::softMetal)
+                    .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK))
+                    .lang("Brass Fluid Bay")
                     .register();
 
     /**
@@ -208,7 +231,7 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .transform(WareworksDisplaySources.bind(WareworksDisplaySources.AISLE_SUMMARY,
-                            WareworksDisplaySources.STOCK_LIST))
+                            WareworksDisplaySources.STOCK_LIST, WareworksDisplaySources.FLUID_STOCK))
                     .blockstate(WareworksBlockStateGen.terminalBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "item"))
@@ -292,7 +315,7 @@ public final class WareworksBlocks {
      * ({@link WareworksBlockStateGen#rackBayBlockProvider()}) over three hand-made models per tier: the
      * {@code block} shell — the load beam of its own level, the pallet on it and the rack's back, open towards the
      * aisle over the arm port's whole window — and the {@code upright} frame its blockstate stands at each end,
-     * halved to {@code upright_half} where the next bay shares it ({@code RackBayBlock#LEFT}). On top of those come
+     * halved to {@code upright_half} where the next bay shares it ({@code TieredBay#LEFT}). On top of those come
      * the shared load models in {@code models/block/rack_bay/}, which draw four fill steps on the pallet. The item
      * model is {@code item.json}, the shell between <b>both</b> of its uprights — a bay standing on its own, which
      * is what a crafted one is.
@@ -312,6 +335,41 @@ public final class WareworksBlocks {
                 // cube: without this it would cull its neighbours' faces and light its own interior as if it were one.
                 .properties(p -> p.noOcclusion())
                 .blockstate(WareworksBlockStateGen.rackBayBlockProvider())
+                .item()
+                .transform(ModelGen.customItemModel("_", "item"));
+    }
+
+    /**
+     * The two fluid bays share everything but their material: one {@link FluidBayBlock} class carrying its
+     * {@link FluidBayTier}, protected from contraptions like every other block that holds warehouse state, and both
+     * served by the one {@code FLUID_BAY} block entity type. Pipes connect on every face but the one towards the
+     * aisle; no <b>item</b> capability is exposed at all, which is what makes "a container reaches a bay only through
+     * the crane's head or a player's hand" structural ({@link dev.wareworks.content.storage.FluidBayBlockEntity}).
+     * <p>
+     * <b>Its look</b> (M30 step 5) is the rack bay's own <b>multipart</b> blockstate
+     * ({@link WareworksBlockStateGen#fluidBayBlockProvider()}) over three hand-made models per tier: the {@code block}
+     * shell — the load beam of its own level, the rack's back, and on the beam a closed vessel open towards the aisle
+     * over the width of the arm port — and the {@code upright} frame its blockstate stands at each end, halved to
+     * {@code upright_half} where the next bay shares it. Those uprights are the rack bay's, pixel for pixel, because
+     * joining is across families: a tank at the end of a rack wall takes over half of that wall's post. What stands
+     * <b>in</b> the vessel is not a model at all — the level is the readout, so it is drawn over the fluid's own
+     * still texture by {@code client.render.FluidBayRenderer} ({@link dev.wareworks.client.render.FluidBayLayout}).
+     * The item model is {@code item.json}, the tank between <b>both</b> of its uprights.
+     * <p>
+     * <b>Its loot table is the plain block</b>, Registrate's self-drop, and that is a rule rather than a default: a
+     * fluid has no drop form at all, so breaking a full fluid bay <b>loses</b> what is in it and says so in three
+     * places before a player can hit it (D7) — exactly as Create's own Fluid Tank, which drops nothing either. A
+     * {@code copy_nbt} on this table would instead make a pocketable 256-bucket lava supply, which is the removal
+     * crate the owner refused for items in ADR-046, in its worse fluid form.
+     */
+    private static BlockBuilder<FluidBayBlock, CreateRegistrate> fluidBay(String name, FluidBayTier tier) {
+        return REGISTRATE.block(name, properties -> new FluidBayBlock(properties, tier))
+                .transform(WareworksTags.relocationProtected())
+                .transform(TagGen.pickaxeOnly())
+                // The aisle face is a window onto the fluid and the arm port is a recess, so the block is not a full
+                // cube: without this it would cull its neighbours' faces and light its own interior as if it were one.
+                .properties(p -> p.noOcclusion())
+                .blockstate(WareworksBlockStateGen.fluidBayBlockProvider())
                 .item()
                 .transform(ModelGen.customItemModel("_", "item"));
     }

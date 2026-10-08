@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "B": { "tag": "c:plates/brass" },
+    "K": { "item": "create:copper_casing" }
+  },
+  "pattern": [
+    "BBB",
+    "KBK",
+    "BBB"
+  ],
+  "result": { "count": 1, "id": "wareworks:fluid_bay_brass" }
+}

@@ -15,7 +15,6 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.IEventBus;
@@ -147,14 +146,16 @@ public final class RackBayGestures {
      * wall is dedicated in one gesture — Create's own handler cancels a plain click for it and returns on a sneaking
      * one, so without this a sneaking clipboard click would be stored in the bay;</li>
      * <li>the <b>Mechanical Arm</b> item aims an arm, as it does on a warehouse interface and an output (M12);</li>
-     * <li>a <b>rack bay</b> of any tier <b>builds the wall</b>, which is the one item on this list whose own click is
-     * the block's whole reason for existing: "you extend a wall by placing a bay beside an existing one" (issue #20),
-     * and {@link RackBayBlock#placementFacing} copies the clicked bay's facing for exactly that gesture. Without this
-     * entry a freshly placed bay — empty and unfiltered, which accepts anything once — <i>stored</i> the next bay
-     * instead of letting the row grow, in both postures: a plain click because {@code ServerPlayerGameMode} returns on
-     * a consuming {@code useItemOn} before {@code stack.useOn}, and a sneaking one because {@link #forcesBlockUse}
-     * hands it to the block. With it, what a player sees is the column rule's own refusal
-     * ({@link WareworksLang#BAY_COLUMN_REFUSED}) or a placed bay.</li>
+     * <li>a <b>bay</b> of any family and any tier <b>builds the wall</b>, which is the one item on this list whose own
+     * click is the block's whole reason for existing: "you extend a wall by placing a bay beside an existing one"
+     * (issue #20), and {@link BayColumn#placementFacing} copies the clicked bay's facing for exactly that gesture.
+     * Without this entry a freshly placed bay — empty and unfiltered, which accepts anything once — <i>stored</i> the
+     * next bay instead of letting the row grow, in both postures: a plain click because {@code ServerPlayerGameMode}
+     * returns on a consuming {@code useItemOn} before {@code stack.useOn}, and a sneaking one because
+     * {@link #forcesBlockUse} hands it to the block. With it, what a player sees is the column rule's own refusal
+     * ({@link WareworksLang#BAY_COLUMN_REFUSED}) or a placed bay. <b>Any</b> family since M30, because joining is
+     * across them (ADR-050): a <b>fluid</b> bay clicked against a rack bay's side takes that bay's facing and shares
+     * its upright, so a rack bay that swallowed it would make a mixed wall unbuildable by hand.</li>
      * </ul>
      * A <b>renamed</b> item is not in this list, because a plain click with one is <i>answered</i> rather than passed
      * on: the aisle-naming gesture a player learned on an interface collides head-on with "a right-click puts the item
@@ -164,12 +165,7 @@ public final class RackBayGestures {
      */
     private static boolean actsOnTheBlock(ItemStack stack) {
         return stack.is(Tags.Items.TOOLS_WRENCH) || AllBlocks.CLIPBOARD.isIn(stack)
-                || AllBlocks.MECHANICAL_ARM.isIn(stack) || isRackBay(stack);
-    }
-
-    /** Whether {@code stack} places a rack bay of any tier — the item that builds a rack wall. */
-    private static boolean isRackBay(ItemStack stack) {
-        return stack.getItem() instanceof BlockItem item && item.getBlock() instanceof RackBayBlock;
+                || AllBlocks.MECHANICAL_ARM.isIn(stack) || FluidBayGestures.isBay(stack);
     }
 
     /**

@@ -181,15 +181,20 @@ public final class CraneSoundGameTests {
     }
 
     /** One sound heard in the test area: its event id and world position. */
-    private record Heard(ResourceLocation sound, Vec3 position) {
+    record Heard(ResourceLocation sound, Vec3 position) {
         @Override
         public String toString() {
             return sound + "@" + position;
         }
     }
 
-    /** Records every sound the server plays inside one test's area while started. Server thread only. */
-    private static final class SoundRecorder implements Consumer<PlayLevelSoundEvent.AtPosition> {
+    /**
+     * Records every sound the server plays inside one test's area while started. Server thread only.
+     * <p>
+     * Package-private rather than private, so that a GameTest in another holder can assert its own cue with this
+     * recorder instead of a second copy of it ({@link ContainerExchangeJobGameTests}, M30).
+     */
+    static final class SoundRecorder implements Consumer<PlayLevelSoundEvent.AtPosition> {
         private final GameTestHelper helper;
         private final Level level;
         private final AABB area;

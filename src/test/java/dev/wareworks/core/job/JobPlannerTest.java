@@ -1010,6 +1010,67 @@ class JobPlannerTest {
         assertEquals(former, planner.planReroute(base.build(), IRON, 10, JobType.STORE, null).orElseThrow().location());
     }
 
+    /**
+     * M30 review fix (issue #21): a location that takes a carry <b>whole or not at all</b> — a fluid bay, whose
+     * containers are exchanged rather than inserted — is never offered part of one on a reroute, and the next
+     * candidate gets it instead.
+     * <p>
+     * It would otherwise refuse on arrival, and the ladder would send the same carry to the next such location: with
+     * two part-full bays of one fluid, which outrank every shelf because a container of their fluid is a dedication,
+     * the crane shuttled between them for ever and the shelf with room for all of it was never reached.
+     */
+    @Test
+    void aRerouteNeverOffersAnAllOrNothingLocationPartOfTheCarry() {
+        RackPosition bayA = rack(2, 0, Side.LEFT);
+        RackPosition bayB = rack(3, 0, Side.LEFT);
+        RackPosition shelf = rack(8, 0, Side.LEFT);
+        filter(bayA, IRON); // a dedicated location outranks every unfiltered one, as a fluid bay does
+        filter(bayB, IRON);
+        live.insertable.put(bayA, 1); // room for one of the two containers the head carries
+        live.insertable.put(bayB, 1);
+        live.insertable.put(shelf, STACK);
+        Set<RackPosition> bays = Set.of(bayA, bayB);
+        Supplier<PlannerInput.Builder<String, RackPosition>> base =
+                () -> input().crane(0, 0).storageLocations(List.of(bayA, bayB, shelf));
+
+        RerouteTarget<RackPosition> whole = planner
+                .planReroute(base.get().allOrNothing(bays::contains).build(), IRON, 2, JobType.STORE, null)
+                .orElseThrow();
+        assertEquals(shelf, whole.location(), "neither bay would take the carry whole, so the shelf gets it");
+        assertEquals(2, whole.amount(), "all of it, in one drop");
+
+        // The rule is per location and only about a reroute: an input that names no such location is the one the
+        // planner always received, and a bay that takes one of two is then offered one of two - which is exactly the
+        // trip that arrived, was refused and delivered nothing.
+        RerouteTarget<RackPosition> partial = planner.planReroute(base.get().build(), IRON, 2, JobType.STORE, null)
+                .orElseThrow();
+        assertEquals(bayA, partial.location(), "unchanged without the rule");
+        assertEquals(1, partial.amount());
+
+        // And the rule is not "never such a location": one with room for the whole carry is still the best target.
+        live.insertable.put(bayA, 2);
+        RerouteTarget<RackPosition> fits = planner
+                .planReroute(base.get().allOrNothing(bays::contains).build(), IRON, 2, JobType.STORE, null)
+                .orElseThrow();
+        assertEquals(bayA, fits.location(), "a bay that takes all of it outranks the shelf again");
+        assertEquals(2, fits.amount());
+    }
+
+    /**
+     * The same rule where it must <b>not</b> bite: an ordinary inventory may always take part of a carry, because its
+     * leftovers are rerouted again after the drop ({@link RerouteTarget#amount()}).
+     */
+    @Test
+    void aRerouteStillOffersAnOrdinaryLocationPartOfTheCarry() {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        live.insertable.put(chest, 3);
+        RerouteTarget<RackPosition> target = planner.planReroute(input().crane(0, 0)
+                .storageLocations(List.of(chest)).allOrNothing(location -> false).build(), IRON, 10, JobType.STORE,
+                null).orElseThrow();
+        assertEquals(chest, target.location());
+        assertEquals(3, target.amount(), "three of the ten, and the rest is rerouted after the drop");
+    }
+
     /** Review fix: storage candidates that use up the budget never hide a station that accepts the items. */
     @Test
     void theRerouteStationFallbackHasItsOwnBudget() {

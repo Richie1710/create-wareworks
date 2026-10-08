@@ -46,6 +46,29 @@ public sealed interface CraneEvent<K, L> {
         }
     }
 
+    /**
+     * Real <b>container exchange</b> result for {@link CraneEffect.PerformDrop}, the fourth legal answer to it (M30,
+     * issue #21, D1): the {@code amount} items the head carried are gone into the target and {@code amount} items of
+     * {@code newKey} are in the head instead — a filled container became fluid in a fluid bay's tank and an empty
+     * container in the head.
+     * <p>
+     * It is a separate event from {@link DropResult} and not a special case of it, because a drop result is defined as
+     * {@code delivered + leftover == heldAmount} of the job's <b>own</b> key ({@link CraneStateMachine}'s item
+     * conservation rules): an exchange delivers nothing of that key and leaves nothing of it either. The job that comes
+     * out of it carries {@code newKey} and the same count, so the head and the job stay in step and the existing
+     * reroute ladder puts the empty containers away like any other carry nobody asked for.
+     *
+     * @param newKey the key the head now holds, never the one it held before
+     * @param amount how many of them, which must be exactly what the job held
+     */
+    record Exchanged<K, L>(K newKey, int amount) implements CraneEvent<K, L> {
+        public Exchanged {
+            Objects.requireNonNull(newKey, "newKey");
+            if (amount < 1)
+                throw new IllegalArgumentException("an exchange moves at least one container: " + amount);
+        }
+    }
+
     /** Answer to {@link CraneEffect.RequestReroute}: a new target, or none (hold the items). */
     record RerouteResult<K, L>(Optional<L> target, Optional<LocationKind> kind) implements CraneEvent<K, L> {
         public RerouteResult {
@@ -94,6 +117,10 @@ public sealed interface CraneEvent<K, L> {
 
     static <K, L> CraneEvent<K, L> dropResult(int delivered, int leftover) {
         return new DropResult<>(delivered, leftover);
+    }
+
+    static <K, L> CraneEvent<K, L> exchanged(K newKey, int amount) {
+        return new Exchanged<>(newKey, amount);
     }
 
     static <K, L> CraneEvent<K, L> rerouteTo(L target, LocationKind kind) {

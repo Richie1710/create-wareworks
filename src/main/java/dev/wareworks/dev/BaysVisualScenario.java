@@ -11,9 +11,9 @@ import com.tterrag.registrate.util.entry.BlockEntry;
 import dev.wareworks.client.render.RackBayRenderer;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.storage.PalletEntity;
+import dev.wareworks.content.storage.BayColumn;
 import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.RackBayBlockEntity;
-import dev.wareworks.core.storage.BayTier;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -399,15 +399,15 @@ public final class BaysVisualScenario implements VisualScenario {
         for (int row = 0; row < TIER_ROWS.size(); row++) {
             for (int column = 0; column < TIERS_WIDTH; column++) {
                 BlockPos at = pos.offset(column, row, 0);
-                if (RackBayBlock.isOverloaded(level.getBlockState(at)))
+                if (BayColumn.isOverloaded(level.getBlockState(at)))
                     throw new VisualTestException("the tier wall's bay at " + at + " came out overloaded, so its rows "
                             + "are not in the order the column rule allows");
             }
         }
         BlockPos onTop = pos.above(TIER_ROWS.size());
-        if (RackBayBlock.columnAccepts(level, onTop, BayTier.BRASS))
+        if (BayColumn.accepts(level, onTop, WareworksBlocks.RACK_BAY_BRASS.get()))
             throw new VisualTestException("the column rule allows a brass bay on top of the tier wall at " + onTop);
-        if (!RackBayBlock.columnAccepts(level, onTop, BayTier.WOOD))
+        if (!BayColumn.accepts(level, onTop, WareworksBlocks.RACK_BAY_WOOD.get()))
             throw new VisualTestException("the column rule refuses a wooden bay on top of the tier wall at " + onTop);
     }
 
@@ -429,16 +429,16 @@ public final class BaysVisualScenario implements VisualScenario {
                         COLUMN_ITEM, fill);
         }
         BlockPos cap = overloaded.above(COLUMN_HEIGHT);
-        if (RackBayBlock.columnAccepts(level, cap, BayTier.BRASS))
+        if (BayColumn.accepts(level, cap, WareworksBlocks.RACK_BAY_BRASS.get()))
             throw new VisualTestException("the column rule allows a brass bay at " + cap + ", so a command is not "
                     + "needed to build the illegal column and the exhibit proves nothing");
         bay(level, cap, WareworksBlocks.RACK_BAY_BRASS.getDefaultState(), Direction.NORTH, COLUMN_ITEM, 1);
         for (int row = 0; row < COLUMN_HEIGHT; row++) {
             BlockState plain = level.getBlockState(legal.above(row));
             BlockState under = level.getBlockState(overloaded.above(row));
-            if (RackBayBlock.isOverloaded(plain))
+            if (BayColumn.isOverloaded(plain))
                 throw new VisualTestException("the legal column's bay at " + legal.above(row) + " is overloaded");
-            if (!RackBayBlock.isOverloaded(under))
+            if (!BayColumn.isOverloaded(under))
                 throw new VisualTestException("the bay at " + overloaded.above(row) + " under a brass cap is not "
                         + "overloaded, so the exhibit shows two legal columns");
             if (!plain.setValue(RackBayBlock.OVERLOADED, true).equals(under))
@@ -480,7 +480,7 @@ public final class BaysVisualScenario implements VisualScenario {
     private static void bay(ServerLevel level, BlockPos pos, BlockState tier, Direction facing, Item item,
                             int fillStep) {
         BlockState state = tier.setValue(RackBayBlock.FACING, facing);
-        level.setBlockAndUpdate(pos, RackBayBlock.withJoins(level, pos, state));
+        level.setBlockAndUpdate(pos, BayColumn.withJoins(level, pos, state));
         if (!(level.getBlockEntity(pos) instanceof RackBayBlockEntity entity))
             throw new VisualTestException("no rack bay block entity at " + pos);
         ItemKey key = ItemKey.of(item);

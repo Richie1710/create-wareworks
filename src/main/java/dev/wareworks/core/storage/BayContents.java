@@ -7,18 +7,24 @@ import org.jetbrains.annotations.Nullable;
 import dev.wareworks.core.inventory.CapacityMath;
 
 /**
- * What a rack bay holds: <b>one item key and a count</b>, never a list of slots (M28, issue #20).
+ * What a bay holds: <b>one key and a count</b>, never a list of slots (M28, issue #20).
  * <p>
- * That is the whole of a bay's contents, and it is why a bay can hold 65 536 items without 1 024 stacks of save data,
- * without a slot array and without a single {@code ItemStack} of its own. The capacity is <b>not</b> a field here: it
- * depends on the tier and on the configured stack count ({@link BayTier#capacity}), both of which may change under a
+ * Both bay families keep their contents here, in whatever unit the family counts in: a rack bay an item key and a
+ * number of items ({@code content.storage.RackBayHandler}), a fluid bay a {@code FluidKey} and a number of
+ * <b>millibuckets</b> ({@code content.storage.FluidBayHandler}, M30, issue #21). Nothing in this class knows which,
+ * because nothing in it needs to.
+ * <p>
+ * That is the whole of a bay's contents, and it is why a bay can hold 65 536 items — or 256 buckets — without 1 024
+ * stacks of save data, without a slot array and without a single {@code ItemStack} or {@code FluidStack} of its own.
+ * The capacity is <b>not</b> a field here: it depends on the tier and on the configuration ({@link BayTier#capacity}
+ * for an item bay, {@code FluidBayTier#capacityMillibuckets} for a fluid one), both of which may change under a
  * standing bay, so every call that needs it is given it.
  *
  * <h2>The one invariant</h2>
- * {@code stored != null} exactly when {@code count > 0}. A bay therefore <b>forgets its item type the moment it
+ * {@code stored != null} exactly when {@code count > 0}. A bay therefore <b>forgets what it held the moment it
  * empties</b>, which is what the issue asks of an unfiltered bay: put up a wall, let it fill, and a bay that has been
- * drained takes whatever comes next. There is no fourth field remembering a type beside the contents, because the
- * stored key <i>is</i> the memory.
+ * drained takes whatever comes next — the next item type, or the next fluid. There is no fourth field remembering a
+ * type beside the contents, because the stored key <i>is</i> the memory.
  *
  * <h2>Why nothing here clamps silently</h2>
  * {@link #insert} and {@link #extract} return what they really accepted and really took, and the caller is expected to
@@ -28,9 +34,15 @@ import dev.wareworks.core.inventory.CapacityMath;
  * never destroy an item.
  * <p>
  * Pure Java, no world access: the content layer adapts this to an {@code IItemHandler}
- * ({@code content.storage.RackBayHandler}).
+ * ({@code content.storage.RackBayHandler}) and to an {@code IFluidHandler}
+ * ({@code content.storage.FluidBayHandler}).
  *
- * @param <K> the item key type; must implement {@code equals}/{@code hashCode} by item identity
+ * <h2>Why {@link #extract} has a per-call cap</h2>
+ * An {@code IItemHandler} must bound an extracted stack by its own maximum stack size, so the item side passes one
+ * stack of the stored key. A fluid handler has no such rule — a drain of 64 000 mB is one {@code FluidStack} — so the
+ * fluid side passes {@code Integer.MAX_VALUE} and the cap never bites. One parameter, not a second method (M30's D8).
+ *
+ * @param <K> the key type; must implement {@code equals}/{@code hashCode} by the identity of the thing it names
  */
 public final class BayContents<K> {
     @Nullable
@@ -62,7 +74,8 @@ public final class BayContents<K> {
      * other. Clamped into the non-negative {@code int} range, so an over-full bay answers 0 rather than a negative
      * number.
      *
-     * @param capacity how many items of {@code key} this bay holds in total ({@link BayTier#capacity})
+     * @param capacity how much of {@code key} this bay holds in total, in the family's own unit
+     *                 ({@link BayTier#capacity}, {@code FluidBayTier#capacityMillibuckets})
      */
     public int roomFor(K key, long capacity) {
         Objects.requireNonNull(key, "key");
@@ -72,12 +85,13 @@ public final class BayContents<K> {
     }
 
     /**
-     * Stores up to {@code amount} of {@code key} and answers how much was really accepted: 0 for an item of another
-     * type than the one stored, and 0 for a bay with no room left. A real call that accepted anything also fixes the
-     * stored type, which is how an unfiltered bay learns what it holds.
+     * Stores up to {@code amount} of {@code key} and answers how much was really accepted: 0 for anything other than
+     * what is stored, and 0 for a bay with no room left. A real call that accepted anything also fixes the stored key,
+     * which is how an unfiltered bay learns what it holds.
      *
-     * @param amount   how much the caller offers (a number at or below 0 accepts nothing)
-     * @param capacity how many items of {@code key} this bay holds in total ({@link BayTier#capacity})
+     * @param amount   how much the caller offers, in the family's own unit (a number at or below 0 accepts nothing)
+     * @param capacity how much of {@code key} this bay holds in total ({@link BayTier#capacity},
+     *                 {@code FluidBayTier#capacityMillibuckets})
      * @param simulate whether to leave the contents untouched and only answer what a real call would accept
      * @return the accepted amount, never more than {@code amount} and never negative
      */
@@ -100,7 +114,9 @@ public final class BayContents<K> {
      * was really taken. A real call that empties the bay also <b>forgets the item type</b>.
      *
      * @param perCall the largest amount one call may return — one stack of the stored key for an item handler, whose
-     *                contract bounds an extracted stack by its own max stack size; a value below 1 counts as 1
+     *                contract bounds an extracted stack by its own max stack size, and
+     *                {@link Integer#MAX_VALUE} for a fluid handler, which has no such rule (see the class comment);
+     *                a value below 1 counts as 1
      * @return the taken amount, 0 for an empty bay
      */
     public int extract(int amount, int perCall, boolean simulate) {

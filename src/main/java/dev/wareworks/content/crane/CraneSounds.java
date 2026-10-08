@@ -100,6 +100,16 @@ final class CraneSounds {
     private static final Voice PICK = Voice.vanilla(Anchor.GRABBER, SoundEvents.ITEM_PICKUP, 0.15F, 0.5F, 0.25F);
     /** Dropping items, like an item landing on a Create depot. */
     private static final Voice DROP = Voice.create(Anchor.GRABBER, AllSoundEvents.DEPOT_PLOP, 1.0F, 1.0F, 0.0F);
+    /**
+     * A container emptied into a fluid bay (M30, issue #21): the vanilla bucket-empty sample, which is what the stop
+     * physically is and what the same gesture by hand already sounds like ({@code FluidUtil.interactWithFluidHandler}
+     * plays the fluid's own empty sound for a player). A little lower than a hand-held bucket, so a machine doing it is
+     * not mistaken for somebody standing there, and its subtitle reads "Bucket emptying" either way.
+     * <p>
+     * Deliberately <b>not</b> the fluid's own {@code SoundActions.BUCKET_EMPTY} event: a cue maps to exactly one sound
+     * event here ({@link #voiceOf}), which is what keeps the decision of <i>when</i> a crane makes a sound in pure Java.
+     */
+    private static final Voice EXCHANGE = Voice.vanilla(Anchor.GRABBER, SoundEvents.BUCKET_EMPTY, 0.6F, 0.85F, 0.1F);
 
     private final CraneSoundCues cues = new CraneSoundCues();
 
@@ -128,6 +138,11 @@ final class CraneSounds {
         CraneSoundCues.dropped(amount).ifPresent(sound -> play(level, crane, crane.craneState().pose(), sound));
     }
 
+    /** A real container exchange emptied {@code amount} containers into the target (M30, issue #21). */
+    void onExchanged(Level level, StackerCraneBlockEntity crane, int amount) {
+        CraneSoundCues.exchanged(amount).ifPresent(sound -> play(level, crane, crane.craneState().pose(), sound));
+    }
+
     private static void play(Level level, StackerCraneBlockEntity crane, CranePose pose, CraneSoundCues.Sound sound) {
         Objects.requireNonNull(level, "level");
         if (level.isClientSide)
@@ -150,6 +165,7 @@ final class CraneSounds {
             case ARM_RETRACT -> ARM_RETRACT;
             case PICK -> PICK;
             case DROP -> DROP;
+            case EXCHANGE -> EXCHANGE;
         };
     }
 

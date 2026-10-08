@@ -10,14 +10,15 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly **thirteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
-   interface, **wooden rack bay, andesite rack bay, brass rack bay**, warehouse input, warehouse output, warehouse
-   terminal, warehouse production station, warehouse stock keeper, warehouse home point — the three bays stand
-   directly after the interface, weakest first. (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read
-   it from there if the two ever disagree.)
+   lists exactly **fifteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   interface, **wooden rack bay, andesite rack bay, brass rack bay**, **copper fluid bay, brass fluid bay**, warehouse
+   input, warehouse output, warehouse terminal, warehouse production station, warehouse stock keeper, warehouse home
+   point — the three rack bays stand directly after the interface, weakest first, and the two fluid bays directly
+   after them, weakest first again. (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from
+   there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **thirteen** items shows a Create-style description; the stacker crane additionally
+3. Holding Shift on each of the **fifteen** items shows a Create-style description; the stacker crane additionally
    shows its stress impact. A rack bay's summary says it **shows how full it is on the front** — not what is in it,
    which only the goggles say until M29 draws the real item.
 4. JEI/EMI shows **thirteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
@@ -2424,3 +2425,103 @@ you get tired of waiting, and put it back before judging check 160.
     black rectangles inside the frame and a black band down its right-hand side and along its bottom edge. The shot
     of the fixed block is `runVisualTest -Pwareworks.visualTest=blocks`, `stock_keeper-front`. If the plate reads as
     too plain, the argument is about which part of Create's sheet to use and not about whether the black was wrong.
+
+## AQ. A warehouse that holds fluid (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+> Everything measurable about M30 is measured: the bay's persistence, its capability on every face, the break that
+> loses exactly the fluid its own log line names, the exchange against a scripted lying location, the whole loop as
+> one crane job with items **and** fluid conserved jointly on every tick, the store gate in all three dedication
+> states, the readouts, and the renderer's own box corners against the arm's path. What no gate can answer is whether
+> **one trip is one bucket** feels like the reason pipes exist or like a bug, whether a refusal reads as a refusal,
+> and whether the scene teaches the loop. The last check is the one that decides how M31 is built.
+>
+> Setup: a creative world with a **copper fluid bay**, a **brass** one, a few rack bays, a working one-aisle
+> warehouse with an input, a stack of **lava buckets**, a stack of empty ones, a **Mechanical Pump** with a source of
+> lava or water, and goggles.
+
+238. **Does one trip per bucket feel right?** Fill a copper bay through the warehouse: drop lava buckets into the
+    warehouse input and watch. A filled bucket stacks to **one**, so that is **64 crane trips** for one copper bay and
+    256 for a brass one, while the empty ones come back sixteen at a time. **Watch a few minutes of it. Does it read
+    as "this is what the pipe at the back is for", or as the warehouse being broken?** If it reads as broken, the
+    thing to argue about is the item description and the Ponder scene, not the crane: the mod deliberately has no
+    bulk container. Then do the same with a **pump** at the back and compare the two in your own head.
+239. **Does a bay that cannot take a bucket read as a refusal rather than as a lost bucket?** Fill a copper bay to
+    63 001 mB (pump it, or fill it by hand and then draw a little off), then put a lava bucket into the input. The
+    bucket must be **shelved as an item** and the bay must take nothing. Look at the bay through goggles: it says
+    `Lava 63.00 / 64 buckets` **and**, in gold, *"Less than a bucket of room: a whole bucket does not fit"*. **Without
+    the gold line, would you have thought the warehouse ate your bucket?** And with it: **is it the sentence you
+    needed?** Do it in German too.
+240. **Does a bucket in your hand feel like a bucket?** Right-click a bay with a filled bucket, with an empty one,
+    with a **stack of sixteen** empty ones, with a full inventory, with a bay that holds another fluid, with the
+    bucket in your **off hand** (main hand empty, and again with a pickaxe in it), and with **Shift held**. The whole
+    container moves or nothing does; a stack of sixteen fills **one** and tucks it away; either hand works the same
+    way; Shift still places a block against the face. **Does any of it surprise you in a way the game did not warn you
+    about?** Then the refusal, which has one deliberate hole in it: aim a bucket of lava at a bay that cannot take it
+    and confirm that a **plain** click — in either hand — does **nothing at all** and pours no lava against the front
+    of your warehouse. Now do the same click **sneaking**: the lava *is* poured, because the game never offers a block
+    a sneaking click at all and Shift has to keep its own meaning so you can place a block against a tank's face.
+    **Is that trade the right way round, or would you rather lose sneak-placing at a bay?**
+241. **Is a tank wall readable from across the room, and does it cost you frames?** Build a wall of at least a dozen
+    fluid bays at different levels and with two different fluids. Walk past it at five blocks, at fifteen, and look
+    back from sixty. Every bay keeps its level the whole way: a fluid bay draws as far as any other block entity in
+    the game, where the item drawn in a rack bay and the filter on an interface stop after ten blocks. That is
+    deliberate — the level *is* the readout, and a gauge you have to walk up to is not one — and the cost is the other
+    half of the check. **With F3 open, does standing in front of that wall cost you anything you can see?** Then build
+    the unreasonable case, forty or fifty bays in sight at once, and look again. If it ever bites, the fix is a cap in
+    this renderer, which is exactly what the two other renderers already do; say so here and it gets one.
+242. **Does a tank beside a rack read as one wall?** Put a copper fluid bay directly beside a rack bay of the same
+    facing, then a brass one on the other side. They must **share the upright** between them, exactly as two rack bays
+    do. **Does the row read as one rack holding both kinds of goods, or as a tank parked next to a shelf?** Then put a
+    rack bay **on top** of a copper fluid bay and a copper one on top of a brass one: the first is refused (the
+    families do not carry each other), the second is allowed. **Does the refusal message say something you can act
+    on?**
+243. **Were you warned before you broke a full one?** Fill a bay, then break it — in survival. The fluid is **gone**,
+    the empty bay comes back, and three things should have told you so first: the **item description** (Shift in the
+    inventory), the **goggle line** in gold while there is anything in it, and the **first hit** on the block, which
+    names the fluid in your action bar. **Did any of the three reach you before the loss?** Note that a **creative**
+    break shows no action-bar line at all — the server never calls that hook for a creative player — so judge this in
+    survival. Then check the server log for the one `WARN` naming the fluid, the amount and the position.
+    Now the other way to take a bay away: fill one again and **sneak-click it with a wrench**. The bay comes into your
+    inventory, the fluid is gone, and the same line names it — but it arrives **with** the loss rather than before it,
+    because a wrench is one click where mining is a warning hit and then a break. **Is a notice enough there, or did
+    you want the wrench to refuse the first click?** (Refusing it at all was rejected: a block you cannot move is
+    worse than one that says what moving it costs.)
+244. **Does the scene teach the loop?** Hold **W** over a fluid bay and watch *"Fluids Travel in Containers"* once,
+    at speed, as a stranger would — then answer without scrolling back: **what happened to the bucket?** The scene's
+    whole reason to exist is that nothing else in the game says the fluid stays in the bay and the **empty container
+    comes back as stock**. If you cannot answer it after one watch, say which beat you lost it at. Then watch it again
+    from the **warehouse terminal**, where it is also registered, and judge whether it belongs there.
+245. **No two captions at once.** Watch the new scene once more with your eye on the text box alone. **Is there ever a
+    moment where two captions are drawn on top of each other?** This is the defect M22 found and M26 shipped again
+    (check 223); the schedule is written so it cannot happen, and the three beats that ride the crane's motion are the
+    ones to watch.
+246. **The German pass.** Restart with `de_de` and look at everything this milestone says: the two bays' names and
+    their Shift descriptions, every goggle row (including the gold ones), the controller's `Flüssigkeitsarten` and
+    `Flüssigkeit gelagert` lines, the Fluid Stock board and the `Flüssigkeiten:` row on a warehouse summary, and all
+    twelve captions of the Ponder scene. **Does every line fit its surface at your own GUI scale** (1 and 4 for the
+    goggles, which is the scale no measured budget covers) **and does it say the same thing as the English?** The
+    units are Create's own (`B`, `mB`), so they are the one thing that should *not* be translated. One thing that
+    looks like a bug and is not: the **decimal separator** of a bucket amount follows the machine's locale and not the
+    game's language, so a Fluid Stock board reads `52,0B Lava` on a German system even while the game is in English.
+    That is Create's own `FluidFormatter` (`String.format("%.1f", …)` with no locale), which this mod reuses verbatim
+    so that a Wareworks board and a Create fluid board never disagree on the same machine. **Would you rather have the
+    separator follow the game's language, and accept that the two boards then differ?**
+247. **Does a dedicated bay outranking every shelf surprise you?** This is the decision most likely to be argued
+    about. Set up a lava bay at the far end of an aisle and a chest behind an interface right beside the input, both
+    able to take a lava bucket. Drop lava buckets in: while the bay has room, **every one of them goes to the bay**,
+    past the nearer chest, and none can be kept as item stock. **Is that what you want?** If you wanted a crate of
+    lava buckets for building, you now have to keep them out of the warehouse or fill the bay first. The opposite
+    surprise is on the same wall: an **unfiltered** bay takes a container of whichever fluid reaches it first, milk
+    or water included.
+248. **Pipes at the back: does the config read the way you expect?** With `storage.fluidBayPipeExtraction` at its
+    default, put a pump on the back face of a full bay and draw lava out of it, then set the key to `false`, reload
+    and try again. The goggles state which way it stands **either way**, in both settings. **Is the line the one you
+    would have looked for?** And the question behind it: a pipe drawing fluid off means fluid leaves a warehouse with
+    no crane carrying it — the same thing a vanilla hopper under a rack bay has always done for items. **Does that
+    feel consistent, or does it want to be off by default?**
+249. **The question that decides M31.** Hand a player a warehouse holding 60 buckets of lava and **no empty buckets
+    in stock at all**, and let them try to get lava out of it at a terminal. Today there is no fluid row, so watch
+    what they reach for and how long it takes them to find the pipe at the back of a bay. **Do they reach for buckets
+    within ten seconds, or do they conclude the warehouse cannot give lava back?** M31 adds the request, the
+    empty-container economy and the refusal that names it; what this answer decides is how loudly that refusal has to
+    speak.

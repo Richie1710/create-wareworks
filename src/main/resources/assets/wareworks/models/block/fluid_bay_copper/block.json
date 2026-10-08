@@ -1,0 +1,185 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"frame": "create:block/fluid_tank",
+		"tank": "create:block/fluid_tank",
+		"back": "create:block/andesite_casing",
+		"particle": "create:block/fluid_tank"
+	},
+	"display": {
+		"gui": {
+			"rotation": [30, 45, 0],
+			"translation": [0, 0, 0],
+			"scale": [0.625, 0.625, 0.625]
+		}
+	},
+	"elements": [
+		{
+			"name": "deck",
+			"from": [0, 0, 0],
+			"to": [16, 3, 16],
+			"faces": {
+				"north": {
+					"uv": [0, 13, 16, 16],
+					"texture": "#frame",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [0, 13, 16, 16],
+					"texture": "#frame",
+					"cullface": "east"
+				},
+				"south": {
+					"uv": [0, 13, 16, 16],
+					"texture": "#frame",
+					"cullface": "south"
+				},
+				"west": {
+					"uv": [0, 13, 16, 16],
+					"texture": "#frame",
+					"cullface": "west"
+				},
+				"up": {
+					"uv": [0, 0, 16, 16],
+					"texture": "#frame"
+				},
+				"down": {
+					"uv": [0, 0, 16, 16],
+					"texture": "#frame",
+					"cullface": "down"
+				}
+			}
+		},
+		{
+			"name": "sump",
+			"from": [3, 3, 3],
+			"to": [13, 4, 13],
+			"faces": {
+				"north": {
+					"uv": [3, 12, 13, 13],
+					"texture": "#tank"
+				},
+				"east": {
+					"uv": [3, 12, 13, 13],
+					"texture": "#tank"
+				},
+				"south": {
+					"uv": [3, 12, 13, 13],
+					"texture": "#tank"
+				},
+				"west": {
+					"uv": [3, 12, 13, 13],
+					"texture": "#tank"
+				},
+				"up": {
+					"uv": [3, 3, 13, 13],
+					"texture": "#tank"
+				}
+			}
+		},
+		{
+			"name": "back",
+			"from": [0, 3, 0],
+			"to": [16, 16, 2],
+			"faces": {
+				"north": {
+					"uv": [0, 0, 16, 13],
+					"texture": "#frame",
+					"cullface": "north"
+				},
+				"east": {
+					"uv": [14, 0, 16, 13],
+					"texture": "#frame",
+					"cullface": "east"
+				},
+				"south": {
+					"uv": [0, 0, 16, 13],
+					"texture": "#back"
+				},
+				"west": {
+					"uv": [0, 0, 2, 13],
+					"texture": "#frame",
+					"cullface": "west"
+				},
+				"up": {
+					"uv": [0, 0, 16, 2],
+					"texture": "#frame"
+				}
+			}
+		},
+		{
+			"name": "wall_west",
+			"from": [3, 4, 3],
+			"to": [4, 9, 13],
+			"faces": {
+				"north": {
+					"uv": [12, 7, 13, 12],
+					"texture": "#tank"
+				},
+				"east": {
+					"uv": [3, 7, 13, 12],
+					"texture": "#tank"
+				},
+				"south": {
+					"uv": [3, 7, 4, 12],
+					"texture": "#tank"
+				},
+				"west": {
+					"uv": [3, 7, 13, 12],
+					"texture": "#tank"
+				},
+				"up": {
+					"uv": [3, 3, 4, 13],
+					"texture": "#tank"
+				}
+			}
+		},
+		{
+			"name": "wall_east",
+			"from": [12, 4, 3],
+			"to": [13, 9, 13],
+			"faces": {
+				"north": {
+					"uv": [3, 7, 4, 12],
+					"texture": "#tank"
+				},
+				"east": {
+					"uv": [3, 7, 13, 12],
+					"texture": "#tank"
+				},
+				"south": {
+					"uv": [12, 7, 13, 12],
+					"texture": "#tank"
+				},
+				"west": {
+					"uv": [3, 7, 13, 12],
+					"texture": "#tank"
+				},
+				"up": {
+					"uv": [12, 3, 13, 13],
+					"texture": "#tank"
+				}
+			}
+		},
+		{
+			"name": "wall_back",
+			"from": [4, 4, 3],
+			"to": [12, 9, 4],
+			"faces": {
+				"north": {
+					"uv": [4, 7, 12, 12],
+					"texture": "#tank"
+				},
+				"south": {
+					"uv": [4, 7, 12, 12],
+					"texture": "#tank"
+				},
+				"up": {
+					"uv": [4, 3, 12, 4],
+					"texture": "#tank"
+				}
+			}
+		}
+	]
+}

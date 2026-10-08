@@ -10,7 +10,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  * @param location    the new target
  * @param kind        its kind
  * @param amount      how many of the held items it accepted in the live simulation (at least 1; it may be fewer than
- *                    held, the rest is rerouted again after the drop)
+ *                    held, the rest is rerouted again after the drop). A location that takes a carry
+ *                    {@linkplain PlannerInput#allOrNothing() whole or not at all} is never offered here with fewer
+ *                    than the held amount, because it would take none of it on arrival (M30, issue #21)
  * @param travelTicks travel time from the crane's position
  * @param <L>         location type
  */

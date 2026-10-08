@@ -34,11 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so emptying one in a single move is what breaking it is for. Nothing is ever lost on the way — you only ever get
   what fits, and what the bay really took is what leaves your hand. The little filter box in the middle of the face
   still keeps every click that hits it, a **wrench** still turns the bay, a **clipboard** still copies its filter and
-  priority onto the next bay, the **Mechanical Arm** item still places an arm, and **another rack bay** is always
-  placed against the one you clicked rather than stored in it, which is how a wall grows. Two things to know: while a
-  bay would accept what you are holding, clicking it — plain or with **Shift** — puts the item in instead of placing
-  a block against it, so aim at a neighbouring block for that; and a bay you have renamed an item for will tell you
-  that aisles are named at a **controller** or an **interface**, rather than swallowing the item
+  priority onto the next bay, the **Mechanical Arm** item still places an arm, and **any bay** — rack or fluid — is
+  always placed against the one you clicked rather than stored in it, which is how a wall grows. Two things to know:
+  while a bay would accept what you are holding, clicking it — plain or with **Shift** — puts the item in instead of
+  placing a block against it, so aim at a neighbouring block for that; and a bay you have renamed an item for will
+  tell you that aisles are named at a **controller** or an **interface**, rather than swallowing the item
 - **The goggles read a rack bay out loud.** Look at one through Engineer's Goggles and it names itself —
   **"Brass Rack Bay"** — then tells you where it stands, what may go in, and last what is in it:
   **"Cobblestone 4,096 / 65,536"** and **"Capacity: 1,024 stacks"**. A bay nobody has filtered says
@@ -131,6 +131,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   meet this block long before they own a crane. The scene also says the one thing you would otherwise find out the
   hard way: a **vanilla hopper** underneath a pallet drains it and a **Deployer** can, while Create's belts, chutes
   and funnels cannot see a pallet at all
+- **A fluid bay is the same block for fluids: a storage location that is a tank.** One fluid bay holds **one fluid**,
+  **64 buckets** in copper and **256** in brass, with its own address, its own filter and its own storage priority —
+  so a tank wall is one block per 64 buckets instead of a multiblock. For scale: a Create Fluid Tank holds 8 buckets
+  per block, so a copper bay is eight of them and a brass bay holds more than a 3×3×3 tower of them. There is
+  deliberately no wooden and no andesite one: in Create fluids are copper, and a wooden barrel of lava is an
+  explanation nobody should owe. The two stand in the creative tab right after the three rack bays, and a bay behaves
+  like its item sibling everywhere it can — it carries nothing stronger above it, so a tank wall is rebuilt from the
+  bottom up when you upgrade it, and where a tank stands beside a rack of the same facing the two **share the upright
+  between them**, because a wall is a wall. Both numbers are server config in the same `storage` section as the rack
+  bays' (`copperFluidBayBuckets`, `brassFluidBayBuckets`), and lowering one below what a bay already holds never
+  destroys anything: that bay keeps its fluid and accepts nothing more until it has been drained
+- **Create's pipes connect to a fluid bay on every face but the one towards the aisle.** That is the bulk route into
+  one and the thing a tank wall is really for: one Mechanical Pump within range fills a brass bay from a lava lake,
+  and a second one on the other side feeds a machine from it. The aisle face carries no pipe connection at all, so a
+  pipe can never end up in the crane's lane and the face you click keeps its own meaning. Whether a pipe may also
+  **draw fluid off** a bay is a new key in the same section, **`fluidBayPipeExtraction`**, on by default — set it to
+  false for a one-way tank that pipes may only fill. Filling is never affected by it, and neither is anything you do
+  by hand. One thing is different from a rack bay, and it follows from how containers work: a **Funnel, a Chute, a
+  Belt or a Hopper cannot fill a fluid bay**. A funnel handing a bay a lava bucket would have to be given the empty
+  bucket back, which a funnel does not read — it would take the lava and destroy your bucket — so a container reaches
+  a fluid bay only through a pipe, your own hand, or the crane's own handling head. A bay also takes **one fluid at
+  a time**, the way a rack bay takes one item type: put a bucket of something in its filter slot and the **fluid**
+  inside that bucket is what belongs there, or leave it unfiltered and it takes the first fluid that arrives and keeps
+  it until it is empty again
+- **You read a fluid bay by looking at it: the level is the readout.** A fluid bay is the rack bay's own frame — the
+  same beam at every level, the same posts, and the same shared upright where a tank stands next to a rack — with a
+  copper **vessel** where a rack bay carries its pallet, open towards the aisle. The fluid stands in that vessel and
+  is drawn in the fluid's own colour, so lava glows, water is blue, and a tank that holds a quarter looks like a tank
+  that holds a quarter. A bay with a single millibucket in it still shows a film, because "is there anything in this
+  one at all" is the question you ask walking past, and an empty one shows a bare copper floor. A gas hangs from the
+  rim instead of lying on the bottom. The vessel is copper in both materials and the frame around it tells you which
+  bay it is, exactly the way a rack bay's pallet is wood in all three — in Create a tank is copper, so a brass rack
+  holding a copper vessel reads as what it is. The tank stops just under the slot the crane's arm reaches through, so
+  a crane fetching from a full bay passes over the fluid rather than through it
+- **A tank wall is readable from across the room.** The item drawn in a rack bay and the filter item on a warehouse
+  interface fade out after ten blocks, because a warehouse places those by the hundred and each one costs a frame
+  something whether you can see it or not. A fluid bay's level does **not** fade: it is the whole readout rather than
+  a detail of a block you can see anyway, and a tank you have to walk up to in order to tell full from empty is not a
+  gauge. So the fluid is drawn as far as any other block entity in the game, 64 blocks, and what that costs is
+  bounded by how many **fluids** a warehouse holds — three or four — rather than by how many item types
+- **Fill and empty a fluid bay with your own bucket.** Right-click a bay with a **filled** bucket and it empties into
+  the bay; right-click with an **empty** one and it fills from the bay. A container always moves **whole** — it is
+  emptied completely or refused, never half — so a bay with less than a bucket of room left takes nothing rather
+  than swallowing part of it, and a bay that holds another fluid simply says no. Hold a stack of sixteen empty buckets
+  and one of them is filled and tucked into your inventory, which is how every tank in the game behaves. The little
+  filter box in the middle of the face still keeps every click that hits it, a **wrench** still turns the bay, a
+  **clipboard** still copies its filter and priority onto the next one, the **Mechanical Arm** item still places an
+  arm, and **any bay** — rack or fluid — is always placed against the one you clicked rather than consumed by
+  it, which is how a wall grows. Two things to know: **Shift** has no meaning here, because a bucket is a bucket, so a
+  sneaking click still places a block against the face as it always did; and a bay you have renamed an item for will
+  tell you to name aisles at a controller instead rather than quietly empty your renamed bucket into itself. One
+  surprise is deliberately gone: a **plain** right-click with a bucket of lava at a bay that cannot take it does
+  **nothing at all** instead of pouring the lava against the front of your warehouse. That holds for a bucket in
+  either hand — your off hand fills and empties a bay exactly as your main hand does. It does not hold for a
+  **sneaking** click, which the game never offers a block at all: Shift keeps its own meaning here, so a sneaking
+  click with a bucket pours it, the same way it does at any other wall
+- **Goggles read a fluid bay out in full.** Its material, where it stands in the warehouse — or that no warehouse
+  serves it, which for this block is perfectly normal — which **fluid** belongs here, what is in it in buckets
+  ("Lava 37.25 / 64 buckets"), its capacity, and whether **pipes may draw from the back** or only fill, which is
+  stated either way so you never have to guess which it is. A bay holding less than a hundredth of a bucket says the
+  millibuckets instead, because a tank that is being filled must not read as empty. A filter slot that names no fluid
+  at all — a list filter, an attribute filter, an empty bucket — says so in gold and then says what the bay
+  really does, so a bay you thought you had dedicated cannot look dedicated
+- **A fluid bay warns you three times before you break it.** Breaking one **loses what is in it**, exactly as breaking
+  a Create Fluid Tank does: a fluid has no form it could drop as, so there is nothing to put the contents into. So the
+  **item description** says it before you ever place the block, the **goggles** say it in gold while there is anything
+  in it, and the **first hit** on the block puts it in your action bar, naming the fluid you are about to lose. None
+  of the three stops you — a block you cannot break is worse than one that tells you the price — and the empty
+  bay always comes back. Taking a bay away with a **wrench** names the fluid too, though a wrench is one click, so
+  there that line arrives as the bay goes rather than before it. For a server owner the loss is also a single line in
+  the log, with the fluid, the amount and the position, so an emptied tank wall is never a mystery. Commands that
+  replace a block (`/setblock`, `/fill`, `/clone`, a structure) empty a bay silently, exactly as they empty a chest
+- **The crane fills a fluid bay for you: a filled bucket goes in, an empty bucket comes back out as stock.** Put a
+  bucket of lava into a **warehouse input** and the warehouse carries it to a fluid bay that takes lava, the bay
+  **drains it**, and the crane shelves the now-empty bucket in an ordinary chest or rack bay like any other item. The
+  warehouse then holds **lava as a fluid** and **a bucket as stock**, with nothing pretending one is the other. A
+  container is always moved **whole** — emptied completely or refused, never half — so you never end up with a
+  quarter-full bucket nobody can stack, and the empty buckets you get back are ordinary stock you can pick up, craft
+  with or set a stock-keeper minimum on. Nothing teleports: the crane really drives to the bay, really empties the
+  bucket into it and really carries the empty one away, and the bucket is in exactly one place at every moment of the
+  trip
+- **A fluid bay takes a container of its fluid before any shelf does — and this one will surprise you.** A bay that is
+  dedicated to a fluid outranks **every** chest and rack bay for a container of that fluid, including one standing
+  much closer to the input. So while a lava bay has room, a bucket of lava arriving at an input always goes **into the
+  bay** and can no longer be kept on a shelf: if you wanted a crate of lava buckets for building, keep them out of the
+  warehouse, or fill the bay to the brim first. The flip side is the part you want: a wall of fluid bays fills itself
+  from one input without a single filter or priority anywhere else
+- **Everything that is not a container of a bay's fluid stays ordinary stock.** A bucket of **water** at a lava bay, an
+  **empty** bucket, a bucket of milk, a block of cobblestone — all of them are shelved in a chest or a rack bay as the
+  items they are, whatever room the bay has and whatever priority you gave it. An **unfiltered** bay is the one to
+  watch: it takes a container of **whichever fluid reaches it first** and only that fluid afterwards, so put a filled
+  container in its filter slot if you care which one it is
+- **A bay with less than a bucket of room is never sent one, and the goggles say why.** A container is emptied whole or
+  refused, so a bay with 999 millibuckets free takes **nothing** from a bucket — and because its readout says
+  "Lava 63.00 / 64 buckets", that refusal would look exactly like a lost bucket. Such a bay now says in gold
+  **"Less than a bucket of room: a whole bucket does not fit"** while that is really the case. The warehouse never
+  sends the bucket there in the first place: it is shelved as an item instead, and a pipe topping the bay up or
+  drawing it down changes the answer the moment it happens
+- **The warehouse now says how much of what fluid it holds.** Until now the fluid was only on the bays themselves, so
+  a tank wall was something you had to walk along and count. Look at the **warehouse controller** through Engineer's
+  Goggles and two new lines stand under the item ones: **"Fluid types: 2"** and **"Fluid stored: 60.00 buckets"**. They
+  are a second pair beside **"Item types"** and **"Items stored"** and never mixed into them, because a warehouse that
+  holds **lava: 60 buckets** and **bucket: 17** has to be able to say both without either number pretending to be the
+  other. A warehouse with no fluid bay shows exactly the tooltip it always showed — the two lines appear only once
+  there is fluid to report — and a bay drained down to a few drops says **"Fluid stored: 7 mB"** rather than
+  rounding itself down to nothing
+- **A new Display Link source, "Fluid Stock", puts the fluid on a board.** Point a Display Link at a **warehouse
+  controller** or a **warehouse terminal**, pick it from the list beside "Warehouse Summary" and "Stock List", and the
+  board writes one row per fluid, most first: **"48.0B Lava"**, **"12.0B Water"**. The unit is Create's own, so the
+  Display Link's **"shortened / full number"** switch is what decides between buckets and millibuckets, exactly as it
+  does for a Smart Observer on a tank. It is a source of its own rather than more rows on "Stock List" for the reason
+  above: one number column cannot carry 17 buckets and 48,000 millibuckets and be read as one scale
+- **"Warehouse Summary" gained a fluid line.** Under the four rows every board shows — the warehouse and its status,
+  the locations in use, the item types and the items stored — a warehouse that holds fluid now adds
+  **"Fluids: 2 · 60.0 B"**. It is the first of that source's optional rows, so a short board keeps it ahead of the
+  aisle letters, the ports and the names, and a warehouse without a fluid bay writes the same four rows it always did
+- **A Ponder scene teaches what becomes of the bucket.** Hold **W** over either fluid bay — or over a **warehouse
+  terminal**, where it is also listed — and **"Fluids Travel in Containers"** shows the whole of it in one scene,
+  because this is the part of the mod you could not guess by looking at it: a bay filled by hand with a bucket, a
+  **pipe at the back** doing the bulk work, the aisle that turns it into an ordinary storage location whose filter is
+  a **fluid**, and then the loop — a bucket of lava dropped into a warehouse input, the crane carrying the whole
+  container, the bay draining it, and the **empty bucket coming back as ordinary stock** in a rack bay beside it,
+  with the warehouse counting the lava as a fluid and the bucket as an item. It ends on the two things a fluid bay is
+  deliberately worse at than its item sibling, so you meet both before they cost you anything: a **funnel, a chute, a
+  belt or a hopper cannot fill one** — it would keep your empty bucket — and **breaking a full one loses the fluid**.
+  Both languages, as always
+- **What a warehouse that holds fluid cannot do yet.** You cannot **ask** for a fluid at a terminal or a port: fluid
+  leaves a warehouse through a pipe at the back of a bay, or through your own bucket. That half — the request, the
+  empty-container economy and the terminal's fluid rows — comes next in this series
 
 ### Changed
 

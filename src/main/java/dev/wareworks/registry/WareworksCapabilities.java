@@ -7,6 +7,7 @@ import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
@@ -39,6 +40,18 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
  * <i>not</i> buy: an arm reaches only blocks a registered {@link WareworksArmInteractionPoints arm interaction point}
  * accepts, and the bay has none.
  * <p>
+ * <b>The fluid bay is the one entry that is not an item capability, and the one that is sided</b> (M30, issue #21,
+ * §3.9). It registers {@code Capabilities.FluidHandler.BLOCK} and <b>no</b> {@code ItemHandler.BLOCK} at all: a bay
+ * that took a lava bucket would have to hand back an empty bucket as the insert remainder, and a funnel does not read
+ * a remainder of a <i>different</i> item — it would take the lava and destroy the bucket. So M28's headline above
+ * does <b>not</b> transfer to fluids: a funnel, a chute, a belt and a hopper cannot fill a fluid bay, and the
+ * compensation is the pipe at the back, which is the fluid analogue and strictly better for bulk. It is also the
+ * first registrar here that answers <b>per face</b> — every entry above answers on all sides: the aisle face carries
+ * no fluid connection, so a pipe is never in the crane's lane, while the lateral, top, bottom and back faces do (and
+ * a {@code null} query does too, or a fluid census could not see the bay's contents at all). Whether a pipe may also
+ * <b>draw off</b> is one server config key, {@code storage.fluidBayPipeExtraction}; the bay's own operations go
+ * through its ungated handler, which is Create's own {@code forceFill} pattern.
+ * <p>
  * <b>The pallet is the one entry that is not a block at all</b> (M28, §3.8): the load of a broken rack bay, carried by
  * {@code PalletEntity}. It registers the <i>entity</i> item capabilities — {@code ItemHandler.ENTITY} and
  * {@code ENTITY_AUTOMATION} — over one slot that is <b>extract-only</b>, because the only way goods may get <i>into</i>
@@ -53,6 +66,7 @@ public final class WareworksCapabilities {
             WarehouseTerminalBlockEntity::registerCapabilities,
             WarehouseProductionBlockEntity::registerCapabilities,
             RackBayBlockEntity::registerCapabilities,
+            FluidBayBlockEntity::registerCapabilities,
             PalletEntity::registerCapabilities);
 
     private WareworksCapabilities() {

@@ -373,6 +373,81 @@ class LangConsistencyTest {
     }
 
     /**
+     * Every goggle row of a <b>fluid bay</b> fits a goggle tooltip in both languages (M30, issue #21), with the widest
+     * arguments each of them can draw already in it.
+     * <p>
+     * The same bound and the same argument as the two tests above: a goggle line is never wrapped, so one over-long row
+     * drags the whole tooltip to the screen edge and is cut there. A fluid bay has no screen of its own, so the goggle
+     * tooltip is the only place its texts can run out of room, and this is the gate for it.
+     * <p>
+     * It is a <b>new</b> gate rather than a widening of the rack bay's, because the two blocks own two sets of rows
+     * with two different widest arguments: a rack bay's rows draw an <b>item</b> name and a stack count, and a fluid
+     * bay's draw a <b>fluid</b> name and a bucket figure. The fluid name is measured with
+     * {@value #GOGGLE_FLUID_NAME_CHARS} characters — more than any vanilla fluid needs ("Flowing Water"), because no
+     * bound of this mod governs what a modded fluid is called and a bay takes any fluid there is. A row that only fits
+     * because its fluid is called "Lava" is not a row that fits.
+     */
+    @Test
+    void theFluidBayRowsFitAGoggleTooltip() throws IOException {
+        int budget = (GOGGLE_ROW_PIXELS - GOGGLE_INDENT_PIXELS) / GOGGLE_PIXELS_PER_CHARACTER;
+        for (Map.Entry<String, Path> lang : Map.of("en_us", GENERATED_EN_US, "de_de", HAND_WRITTEN_DE_DE).entrySet()) {
+            Map<String, String> texts = readFlatJson(lang.getValue());
+            String blockName = "";
+            for (String blockKey : WareworksLangKeys.FLUID_BAY_BLOCK_KEYS) {
+                String name = texts.get("block." + blockKey);
+                assertTrue(name != null, lang.getKey() + " has no name for block." + blockKey);
+                if (name.length() > blockName.length())
+                    blockName = name;
+            }
+            for (String relativeKey : WareworksLangKeys.FLUID_BAY_GOGGLE_KEYS) {
+                String key = "wareworks." + relativeKey;
+                String text = texts.get(key);
+                assertTrue(text != null, lang.getKey() + " has no text for " + key);
+                // The header's one argument is the longer of the two block names; the capacity row's is a bucket
+                // count; every other first argument of these rows is a fluid name, which is the widest of the three.
+                String first = relativeKey.equals(WareworksLangKeys.FLUID_BAY_HEADER_KEY) ? blockName
+                        : relativeKey.equals(WareworksLangKeys.FLUID_BAY_CAPACITY_KEY) ? GOGGLE_COUNT_ARGUMENT
+                                : "W".repeat(GOGGLE_FLUID_NAME_CHARS);
+                String filled = text.replace("%1$s", first).replace("%2$s", GOGGLE_COUNT_ARGUMENT)
+                        .replace("%3$s", GOGGLE_COUNT_ARGUMENT);
+                assertTrue(filled.length() <= budget, lang.getKey() + ": " + key + " needs " + filled.length()
+                        + " of the " + budget + " characters a goggle row holds: '" + filled + "'");
+            }
+        }
+    }
+
+    /**
+     * The list the test above measures is <b>complete</b>: every goggle row a fluid bay owns is in it (M30, issue #21).
+     * <p>
+     * {@link #everyRackBayGoggleRowIsMeasured}'s argument, for the other bay: without it the width gate silently stops
+     * covering a fluid bay the moment a row is added to it, which is the one failure mode of a hand-written list of
+     * keys and an expensive one here, because an over-long row is only visible on a screenshot of a goggle tooltip and
+     * only in the language it is too long in. The rule is mechanical: a fluid bay's own rows are exactly the keys named
+     * after it, so a new one cannot be written without a new {@code gui.goggles.fluid_bay*} key, and a new key fails
+     * here until it is measured.
+     * <p>
+     * The two bays' sweeps cannot catch each other's keys, and that is deliberate: {@code gui.goggles.bay_*} is the
+     * rack bay's prefix and {@code gui.goggles.fluid_bay*} is this one's, which is also why the fluid bay's header is a
+     * key of its own rather than the rack bay's reused. The rows the two blocks really <b>share</b> —
+     * {@code gui.goggles.bay_misaligned_hint}, {@code gui.goggles.empty}, {@code gui.goggles.storage_priority} — are
+     * measured once, by the gate of the block they are named after.
+     */
+    @Test
+    void everyFluidBayGoggleRowIsMeasured() throws IOException {
+        Set<String> measured = new TreeSet<>(WareworksLangKeys.FLUID_BAY_GOGGLE_KEYS);
+        assertEquals(WareworksLangKeys.FLUID_BAY_GOGGLE_KEYS.size(), measured.size(),
+                "the measured fluid bay rows must be listed once each");
+        Set<String> own = new TreeSet<>();
+        for (String key : readFlatJson(GENERATED_EN_US).keySet()) {
+            String relative = key.startsWith("wareworks.") ? key.substring("wareworks.".length()) : key;
+            if (relative.startsWith("gui.goggles.fluid_bay"))
+                own.add(relative);
+        }
+        assertEquals(own, measured, "every goggle row of a fluid bay must be measured by the test above, and every "
+                + "measured row must still exist (run ./gradlew runData, then update FLUID_BAY_GOGGLE_KEYS)");
+    }
+
+    /**
      * Room a goggle tooltip has in the window every visual run uses, in scaled pixels: 1600x900 at GUI scale auto is a
      * scaled width of <b>534</b>, and Create's placement leaves 24 px of it unusable
      * ({@code CombVisualScenario#TOOLTIP_SIDE_SPACE}).
@@ -401,6 +476,12 @@ class LangConsistencyTest {
      * Weathered Cut Copper Stairs", 33), because no bound of this mod governs what a bay can hold.
      */
     private static final int GOGGLE_ITEM_NAME_CHARS = 36;
+    /**
+     * Stand-in for a <b>fluid</b> name in a fluid bay's rows, the item stand-in's twin: vanilla's longest is "Flowing
+     * Water" (13), and a bay takes any fluid any mod registers, so the bound is this mod's own generosity rather than
+     * a measurement.
+     */
+    private static final int GOGGLE_FLUID_NAME_CHARS = 36;
 
     /**
      * The keys of the tests above, spelled out here rather than read from {@code WareworksLang}: this test suite runs
@@ -439,6 +520,22 @@ class LangConsistencyTest {
         /** The three bay blocks, whose names the header row draws. */
         private static final List<String> RACK_BAY_BLOCK_KEYS = List.of("wareworks.rack_bay_wood",
                 "wareworks.rack_bay_andesite", "wareworks.rack_bay_brass");
+        /** The header row of a fluid bay, whose one argument is the block's own name (M30, issue #21). */
+        private static final String FLUID_BAY_HEADER_KEY = "gui.goggles.fluid_bay";
+        /** The one fluid bay row whose argument is a bucket count rather than a fluid name. */
+        private static final String FLUID_BAY_CAPACITY_KEY = "gui.goggles.fluid_bay_capacity";
+        /** Every goggle row a fluid bay can draw (M30, issue #21). */
+        private static final List<String> FLUID_BAY_GOGGLE_KEYS = List.of(FLUID_BAY_HEADER_KEY,
+                FLUID_BAY_CAPACITY_KEY, "gui.goggles.fluid_bay_contents",
+                "gui.goggles.fluid_bay_contents_small", "gui.goggles.fluid_bay_filter",
+                "gui.goggles.fluid_bay_filter_no_fluid", "gui.goggles.fluid_bay_learned",
+                "gui.goggles.fluid_bay_accepts_first", "gui.goggles.fluid_bay_overloaded",
+                "gui.goggles.fluid_bay_break_loses", "gui.goggles.fluid_bay_no_bucket_room",
+                "gui.goggles.fluid_bay_pipes_draw",
+                "gui.goggles.fluid_bay_pipes_fill", "gui.goggles.fluid_bay_no_warehouse");
+        /** The two fluid bay blocks, whose names the header row draws. */
+        private static final List<String> FLUID_BAY_BLOCK_KEYS = List.of("wareworks.fluid_bay_copper",
+                "wareworks.fluid_bay_brass");
 
         private WareworksLangKeys() {
         }

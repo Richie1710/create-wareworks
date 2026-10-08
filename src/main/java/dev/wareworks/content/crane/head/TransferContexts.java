@@ -11,22 +11,28 @@ import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.StorageMember;
 import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.controller.WarehouseMember;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseDeliveryStationBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.storage.FluidBayTier;
 import dev.wareworks.core.warehouse.LocationKind;
+import dev.wareworks.util.LogThrottle;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.Containers;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 /**
- * Resolves aisle locations to {@link TransferContext}s and implements the three kinds.
+ * Resolves aisle locations to {@link TransferContext}s and implements the five kinds (the four item ones, plus the
+ * fluid bay of M30 whose one real operation is a container exchange).
  * <p>
  * {@link #resolve} never loads a chunk: a rack position (or, for storage, the attached inventory position) that is not
  * loaded gives {@link Status#UNLOADED}, so the crane waits and retries; a position outside the aisle geometry, without
@@ -36,6 +42,13 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  */
 public final class TransferContexts {
     private static final Logger LOGGER = LogUtils.getLogger();
+
+    /**
+     * Rate limit for the one line {@link FluidBayContext#insert} can log. Deliberately <b>static</b>, i.e. one line a
+     * minute for the whole server rather than per bay: it reports that a caller reached a code path which by design has
+     * no caller at all, so the first line is the whole message and a second bay saying the same thing adds nothing.
+     */
+    private static final LogThrottle FLUID_BAY_INSERT_LOG = new LogThrottle();
 
     /** Outcome of {@link #resolve}. */
     public enum Status {
@@ -121,6 +134,12 @@ public final class TransferContexts {
             case STORAGE -> {
                 if (!(member instanceof StorageMember storage))
                     yield Resolution.MISSING;
+                // A fluid bay IS its own tank: it holds no items, offers no item handler and has nothing attached, so
+                // the test below would answer MISSING for a location that is perfectly reachable. It gets a context of
+                // its own, whose one real operation is the container exchange (M30, issue #21, D2). Its own position
+                // was checked for loading above, so no second check is needed.
+                if (blockEntity instanceof FluidBayBlockEntity bay)
+                    yield Resolution.available(ofFluidBay(level, pos, bay));
                 if (!level.isLoaded(storage.attachedPos()))
                     yield Resolution.UNLOADED;
                 Optional<IItemHandler> handler = storage.attachedHandler();
@@ -173,6 +192,16 @@ public final class TransferContexts {
      */
     public static TransferContext ofCollect(Level level, BlockPos position, IItemHandler handler) {
         return new CollectContext(new HandlerContext(level, position.immutable(), handler));
+    }
+
+    /**
+     * A fluid bay context: a storage location that holds <b>no items at all</b> and whose one real operation is the
+     * container exchange (M30, issue #21).
+     *
+     * @param position the bay's own position, which is where the arm reaches in and where anything is spilled
+     */
+    public static TransferContext ofFluidBay(Level level, BlockPos position, FluidBayBlockEntity bay) {
+        return new FluidBayContext(level, position.immutable(), bay);
     }
 
     /** An input station context (extract and put back). */
@@ -399,6 +428,164 @@ public final class TransferContexts {
         @Override
         public void spill(ItemStack stack) {
             inventory.spill(stack);
+        }
+    }
+
+    /**
+     * A <b>fluid bay</b> ({@code docs/warehouse-system.md} §3.9, M30, issue #21): a storage location that is a tank.
+     * <p>
+     * Every item operation answers "nothing", because a fluid bay holds no items: there is nothing to extract, and an
+     * insertion is refused by returning the caller's stack unchanged — never by swallowing it and never by handing a
+     * <i>different</i> item back as the remainder, which is the trap the whole exchange primitive exists to avoid
+     * ({@link TransferContext#exchange}). The one real operation is {@link #exchange}.
+     *
+     * <h2>The two asymmetries, said out loud</h2>
+     * <ul>
+     * <li>{@link #simulateInsert} is <b>monotone</b>: it answers how many <i>whole</i> containers of the key the bay
+     * would take right now, up to the amount asked, because every caller of it wants a bound — the planner's live
+     * callbacks bound a job by it, and a bound that collapsed to 0 as soon as one container too many was offered would
+     * make a half-full bay look full.</li>
+     * <li>{@link #exchange} is <b>all or nothing</b>: it exchanges the amount asked for or nothing, because a partial
+     * exchange would leave two item keys in one handling head.</li>
+     * </ul>
+     * So the two deliberately disagree, and they disagree in the safe direction: a caller that asks
+     * {@code simulateInsert} first and then exchanges exactly what it answered always gets an exchange. That holds
+     * because both measure the container the same way, by really draining a probe
+     * ({@link FluidContainers#drained}) — the whole of the M30 review fix in this class.
+     *
+     * @param bay the live bay; its <b>ungated</b> API is used, so {@code storage.fluidBayPipeExtraction} never changes
+     *            what the crane can do — that key is about pipes
+     */
+    private record FluidBayContext(Level level, BlockPos position, FluidBayBlockEntity bay)
+            implements TransferContext {
+        @Override
+        public LocationKind kind() {
+            return LocationKind.STORAGE;
+        }
+
+        /** <b>Yes</b>: this is the one location whose items arrive by exchange and never by insertion. */
+        @Override
+        public boolean exchangesOnly() {
+            return true;
+        }
+
+        /** Nothing: a fluid bay holds no items, so there is never an item in it to take. */
+        @Override
+        public ItemStack extract(ItemKey key, int maxAmount, boolean simulate) {
+            return ItemStack.EMPTY;
+        }
+
+        /**
+         * <b>Refuses everything</b>, by giving the caller its own stack back untouched — the one answer that loses
+         * nothing whoever asks. A container reaches a bay through {@link #exchange} or a player's hand and in no other
+         * way (D1/D3), so a real call here is a caller using the wrong operation rather than a situation; it is logged
+         * once in a while instead of being silently correct.
+         */
+        @Override
+        public ItemStack insert(ItemStack stack, boolean simulate) {
+            if (!simulate && !stack.isEmpty() && FLUID_BAY_INSERT_LOG.tryLog(level.getGameTime()))
+                LOGGER.warn("Something tried to insert {} into the fluid bay at {}; a fluid bay holds no items, so the"
+                        + " stack was given back untouched. A filled container is exchanged, never inserted", stack,
+                        position);
+            return stack;
+        }
+
+        @Override
+        public int simulateExtract(ItemKey key, int maxAmount) {
+            return 0;
+        }
+
+        /**
+         * How many <b>whole</b> containers of {@code key} this bay would exchange right now, at most {@code amount}:
+         * 0 for anything that is not a filled container (so an <i>empty</i> one is never planned into a bay, which
+         * closes the churn loop structurally), 0 for a fluid the bay's filter or its current contents refuse, and 0
+         * for a bay with less than one whole container of room — a copper bay with 999 mB free takes <b>nothing</b>
+         * from a bucket, which is the vanilla bucket's own rule too.
+         * <p>
+         * The container is measured by {@link FluidContainers#drained}, which is the <b>same authority</b>
+         * {@link #exchange} asks and not the cheaper {@code contents} read beside it (M30 review fix, issue #21). The
+         * two differ for a container {@code contents} can read and a drain cannot honour — a per-call cap, a
+         * multi-tank item, a consumable, a handler answering with two items — and a container measured by the lenient
+         * one would be planned into a bay, driven there and refused on arrival, against the issue's own settled rule
+         * that a container which does not fit is never sent in the first place. The cost is the same order either way:
+         * both build a probe stack and resolve the item's fluid capability on it.
+         * <p>
+         * No change: the container is drained on a throw-away probe that exists only inside that call, and the room is
+         * measured with a simulated fill.
+         */
+        @Override
+        public int simulateInsert(ItemKey key, int amount) {
+            if (amount <= 0)
+                return 0;
+            FluidContainers.Drained drained = FluidContainers.drained(key).orElse(null);
+            if (drained == null)
+                return 0;
+            int room = bay.fill(drained.fluid().toStack(Integer.MAX_VALUE), true);
+            return Math.min(amount, FluidBayTier.wholeContainers(drained.millibuckets(), room));
+        }
+
+        /**
+         * The real thing: {@code amount} containers of {@code held} are emptied into this bay's tank and the item they
+         * turn into is reported back, all of them or none ({@link TransferContext#exchange}).
+         * <p>
+         * In order, and the order is the contract:
+         * <ol>
+         * <li><b>What one container holds and becomes</b> ({@code FluidContainers.drained}), measured by really
+         * draining a probe stack of exactly one item that exists only inside that call — so this step changes nothing
+         * while still being the truth rather than a prediction, which a simulated drain could not be because it leaves
+         * {@code getContainer()} holding the filled item. Everything the all-or-nothing rule refuses is refused
+         * here: a non-container, an empty container, a per-call cap, a container that is not empty afterwards, a
+         * consumable that leaves nothing to carry back.</li>
+         * <li><b>Whether the whole load fits</b>, with a simulated fill of all {@code amount} containers' worth at
+         * once. The bay's filter and its stored fluid are part of that answer, so a wrong fluid and a full bay are the
+         * same refusal, and both happen before anything moves.</li>
+         * <li><b>The fill</b>, for a real call. A fill that accepted less than the whole load — which this bay's own
+         * handler cannot do, because its arithmetic is the same pure function for a simulation and for a real call and
+         * nothing runs between the two — has exactly that much <b>drained back out</b> and is reported as a refusal,
+         * so this method keeps its promise that a refusal moved nothing.</li>
+         * </ol>
+         */
+        @Override
+        public Optional<TransferContext.ContainerExchange> exchange(ItemKey held, int amount, boolean simulate) {
+            Objects.requireNonNull(held, "held");
+            if (amount <= 0)
+                return Optional.empty();
+            FluidContainers.Drained drained = FluidContainers.drained(held).orElse(null);
+            if (drained == null)
+                return Optional.empty();
+            long total = (long) amount * drained.millibuckets();
+            if (total <= 0 || total > Integer.MAX_VALUE)
+                return Optional.empty();
+            int load = (int) total;
+            // A fresh stack per call: a FluidStack is mutable and no handler promises not to touch what it is given.
+            if (bay.fill(drained.fluid().toStack(load), true) != load)
+                return Optional.empty();
+            if (simulate)
+                return Optional.of(new TransferContext.ContainerExchange(drained.emptied(), amount, load));
+            int accepted = bay.fill(drained.fluid().toStack(load), false);
+            if (accepted == load)
+                return Optional.of(new TransferContext.ContainerExchange(drained.emptied(), amount, accepted));
+            rollBack(drained, accepted, load);
+            return Optional.empty();
+        }
+
+        /**
+         * Undoes a fill that took less than the whole load, so that the refusal this method's caller reports is the
+         * truth. Unreachable with this mod's own handler; a log line either way, because a bay contradicting its own
+         * simulation is a defect whether the roll-back worked or not.
+         */
+        private void rollBack(FluidContainers.Drained drained, int accepted, int load) {
+            FluidStack back = accepted > 0 ? bay.drain(accepted, false) : FluidStack.EMPTY;
+            boolean whole = accepted <= 0 || (drained.fluid().matches(back) && back.getAmount() == accepted);
+            LOGGER.error("The fluid bay at {} simulated room for {} mB of {} and then took only {}; {}", position, load,
+                    drained.fluid(), accepted,
+                    whole ? "the exchange was refused and the difference drained back out"
+                            : "draining it back out gave " + back + ", so that much fluid is unaccounted for");
+        }
+
+        @Override
+        public void spill(ItemStack stack) {
+            spillAt(level, position, stack);
         }
     }
 

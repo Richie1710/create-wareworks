@@ -96,10 +96,18 @@ public final class WareworksLangGen {
         // rule — the strength of a column never rises going upwards.
         lang.accept(WareworksLang.key(WareworksLang.BAY_COLUMN_REFUSED),
                 "A rack bay may carry nothing stronger above it");
+        // M30 (issue #21): the same rule on the fluid ladder, in its own sentence - the two ladders are separate, so a
+        // player holding a tank is told about tanks.
+        lang.accept(WareworksLang.key(WareworksLang.FLUID_BAY_COLUMN_REFUSED),
+                "A fluid bay may carry nothing stronger above it");
         // M28 step 6: the gesture a bay does NOT carry. A right-click with an item puts that item in, so the aisle
         // naming a player learned on an interface would silently swallow the renamed item they held out at the bay.
         lang.accept(WareworksLang.key(WareworksLang.BAY_NO_NAMING),
                 "Name an aisle at a warehouse controller or interface");
+        // M30 step 6 (issue #21, D7): the third of the three places that say the break loses the fluid, at the one
+        // moment a player is about to find out. It warns and never refuses, and it names the fluid and not the amount.
+        lang.accept(WareworksLang.key(WareworksLang.FLUID_BAY_BREAK_LOSES),
+                "Breaking this bay loses what is in it: %1$s");
         // M28 step 6: the rack bay's goggle lines. The header's argument is the block's own name, so "Brass" is said
         // once, by the block, instead of in three more lang keys that could drift from it.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RACK_BAY), "%1$s:");
@@ -119,6 +127,44 @@ public final class WareworksLangGen {
         // is an early-game barrel long before there is a crane. One line says so, so nobody goes looking for a fault.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_NO_WAREHOUSE),
                 "A rack bay works by hand with no warehouse");
+        // M30 step 6 (issue #21): the fluid bay's own goggle rows. The header's argument is the block's own name, as
+        // the rack bay's is; the misaligned hint is shared with the rack bay, because "turn the open front towards the
+        // aisle" is the same sentence for a tank.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY), "%1$s:");
+        // Counted in millibuckets, shown in buckets - with the one exception that keeps a bay holding 7 mB from
+        // reading as empty, which a two-fraction-digit number format would otherwise produce (§3.9, D9).
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_CONTENTS), "%1$s %2$s / %3$s buckets");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_CONTENTS_SMALL),
+                "%1$s %2$s mB of %3$s buckets");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_CAPACITY), "Capacity: %1$s buckets");
+        // "Holds" and not "Filter", because the slot holds a CONTAINER and what is read from it is the FLUID inside:
+        // a line saying "Filter: Lava Bucket" would describe the one reading this block never makes (D6).
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_FILTER), "Holds: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_LEARNED), "Holds %1$s until it has drained");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_ACCEPTS_FIRST),
+                "Takes the first fluid that arrives");
+        // A Create list or attribute filter, or an empty container: the slot names no fluid, so the bay is unfiltered
+        // and the row below still says what it really does.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_FILTER_NO_FLUID),
+                "That filter names no fluid");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_OVERLOADED),
+                "The tanks above this bay are overloaded");
+        // The second of the three places that say the break loses the fluid, shown only while there is something to
+        // lose and standing directly under the contents row it is about (D7).
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_BREAK_LOSES),
+                "Breaking it loses what is in it");
+        // The one refusal of this block nothing else explains: 63 001 of 64 000 mB draws "63.00 / 64 buckets", which
+        // looks like a bucket of room, and then a bucket does not fit because a container is emptied whole or refused
+        // (D5). Shown only while that is really the case.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_NO_BUCKET_ROOM),
+                "Less than a bucket of room: a whole bucket does not fit");
+        // One of these two is shown ALWAYS, whichever way storage.fluidBayPipeExtraction stands: a rule about where
+        // fluid may leave a warehouse must never be invisible (D4).
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_PIPES_DRAW), "Pipes may draw from the back");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_PIPES_FILL),
+                "Pipes may only fill from the back");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_BAY_NO_WAREHOUSE),
+                "A fluid bay works by hand with no warehouse");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ADDRESS), "Address: %1$s");
         // The name is in brackets behind the address, never instead of it: the address is what the terminal, the
         // crane's own lines and every report speak, and the name is the label a player put beside it.
@@ -208,6 +254,9 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_MISALIGNED_COUNT), "Misaligned blocks: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ITEM_TYPES), "Item types: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ITEMS_STORED), "Items stored: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_TYPES), "Fluid types: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_STORED), "Fluid stored: %1$s buckets");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_FLUID_STORED_SMALL), "Fluid stored: %1$s mB");
         lang.accept(WareworksLang.key(WareworksLang.CONTROLLER_AISLE_LETTER), "Aisle");
         lang.accept(WareworksLang.key(WareworksLang.CONTROLLER_AISLE_LETTER_ROW), "Letter");
         lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_FILTER), "Stored Items");
@@ -684,7 +733,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_INCOMING), "Incoming: %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_OUTGOING), "Reserved for pickup: %1$s x%2$s");
 
-        // Display Link sources (M14). The four names must stay in step with the registry paths in
+        // Display Link sources (M14, M25, M30). The names must stay in step with the registry paths in
         // WareworksDisplaySources: Create builds a source name as "wareworks.display_source.<path>". The line texts are
         // deliberately short, because a row of four nixie tubes shows eight characters.
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_AISLE_SUMMARY), "Warehouse Summary");
@@ -692,6 +741,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_FILTERED_STOCK), "Stock of the Filtered Item");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_STATUS), "Crane Status");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_THROUGHPUT), "Crane Throughput");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_FLUID_STOCK), "Fluid Stock");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLE), "Warehouse %1$s: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS), "Locations: %1$s / %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES), "Item types: %1$s");
@@ -704,6 +754,7 @@ public final class WareworksLangGen {
                 "Ports: %1$s accepting, %2$s collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_PORTS_COLLECTING), "Ports: %1$s collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_CHUNKS), "Chunks: %1$s held");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_FLUIDS), "Fluids: %1$s · %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES), "Aisles: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLES_CUT), "Aisles: %1$s (cut short)");
         // M25 (issue #15, ADR-038): the aisles a player named, letters and all, last of the optional lines and only
@@ -804,6 +855,14 @@ public final class WareworksLangGen {
                 "an _andesite_ bay carries wooden and andesite bays, never _brass_");
         rackBayTooltip(lang, "rack_bay_brass", "1024 stacks",
                 "a _brass_ bay carries every bay there is");
+
+        // The two fluid bays (M30, issue #21). Written once with the two numbers passed in, exactly as the rack bays'
+        // are, and for the same reason: a player reading both tiers in JEI has to see at a glance that only the
+        // capacity and the column rule changed.
+        fluidBayTooltip(lang, "fluid_bay_copper", "64 buckets",
+                "a _copper_ bay carries only copper bays");
+        fluidBayTooltip(lang, "fluid_bay_brass", "256 buckets",
+                "a _brass_ bay carries both copper and brass bays");
 
         tooltip(lang, "block.wareworks.warehouse_input",
                 "A _station_ of a warehouse _aisle_ where items _enter_ the warehouse. It _buffers_ arriving items until "
@@ -1043,6 +1102,60 @@ public final class WareworksLangGen {
                 "When looked at with Goggles",
                 "Shows its _material_, its _address_, its _filter_, its _priority_, what is _in_ it, how _full_ it is "
                         + "and the items _reserved_ for a running crane job.");
+    }
+
+    /**
+     * Create item description of one fluid bay ({@code docs/warehouse-system.md} §3.9). The two tiers share every word
+     * but {@code buckets} and {@code carries}, as the three rack bays do.
+     * <p>
+     * It is the <b>first of the three places that say breaking a bay loses the fluid</b> (D7) — the goggle line and
+     * the warning on the first punch are the other two — and it is the only one of the three a player reads <i>before
+     * the block is ever placed</i>, which is why the sentence is there rather than only in a release note. The other
+     * thing it has to say and the rack bay's does not is the asymmetry: a funnel, a chute, a belt and a hopper
+     * <b>cannot</b> fill this bay, and the pipe at the back is what stands in for them.
+     *
+     * @param buckets how much one bay of this tier holds, as it is written in the summary
+     * @param carries the column rule for this tier, as a clause inside the placement sentence
+     */
+    private static void fluidBayTooltip(BiConsumer<String, String> lang, String block, String buckets,
+                                        String carries) {
+        tooltip(lang, "block.wareworks." + block,
+                "A _storage location_ that is the block itself, for _fluids_: it holds _one fluid_ and " + buckets
+                        + " of it, and the _level_ you read off the front is the whole readout. _Pipes_ connect at the "
+                        + "back; it works _by hand_ with no warehouse at all, and becomes an _addressable_ storage "
+                        + "location as soon as a crane's aisle reaches it.",
+                "When placed",
+                "Set bays _beside_ and _above_ each other to build a tank wall; clicking the _side_ of another bay "
+                        + "copies its direction, so a row grows however you stand. Keep the _open front_ towards the "
+                        + "_aisle_. A bay may carry _nothing stronger_ above it — " + carries + " — so a wall is "
+                        + "rebuilt from the _bottom_ up when you upgrade it. A _rack bay_ and a fluid bay _share the "
+                        + "upright_ between them where they stand side by side, and neither carries the other.",
+                "When filling it by hand",
+                "_Right-Click_ with a _filled_ bucket and it empties into the bay; with an _empty_ one it fills from "
+                        + "the bay. A container is always moved _whole_ — emptied completely or refused, never half — "
+                        + "so a bay with less than a bucket of room left takes nothing. _Funnels_, _chutes_, _belts_ "
+                        + "and _hoppers_ _cannot_ fill a fluid bay: a funnel would keep your empty bucket. Use a "
+                        + "_pipe_ at the back or your own hand.",
+                "When piping fluid in and out",
+                "Create's _pipes_ connect on every face _except_ the one towards the _aisle_, so one _Mechanical "
+                        + "Pump_ fills a whole bay from a lake and a second one feeds a machine from it. Whether pipes "
+                        + "may also _draw fluid off_ a bay is a server setting (_fluidBayPipeExtraction_, on by "
+                        + "default); the goggles always say which way it stands, and your own hand is never affected "
+                        + "by it.",
+                "When setting the filter",
+                "Click the _filter slot_ below the arm port with a _filled container_: the _fluid_ inside it is what "
+                        + "belongs here, never the container. _Hold_ the click to set a _priority_ from _0_ to _9_. A "
+                        + "bay with _no_ filter takes the _first_ fluid that arrives and keeps it until it has "
+                        + "_drained_, so you can put up a wall and let it fill.",
+                "When broken",
+                "A fluid bay _loses what is in it_, exactly as a _Fluid Tank_ does: a fluid has no form it could drop "
+                        + "as, so there is nothing to put the contents into. _Empty it first_ — pipe it out, or take "
+                        + "it out by the bucket. You get the empty bay back, and while there is anything in it both "
+                        + "the _goggles_ and the _first hit_ on the block warn you.",
+                "When looked at with Goggles",
+                "Shows its _material_, its _address_, which _fluid_ belongs here, what is _in_ it in buckets, its "
+                        + "_capacity_, whether pipes may _draw_ from the back, and that breaking it would lose the "
+                        + "contents.");
     }
 
     /** Create item description: summary plus condition/behaviour pairs ({@code .tooltip.conditionN/behaviourN}). */

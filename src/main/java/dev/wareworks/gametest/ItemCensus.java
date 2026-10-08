@@ -12,6 +12,7 @@ import com.simibubi.create.content.logistics.box.PackageItem;
 
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
@@ -56,6 +57,11 @@ import net.neoforged.neoforge.items.IItemHandler;
  * so without this branch a broken brass bay could delete 65 536 items while every conservation test reported PASS. A
  * pallet is a new <b>carrier</b>, exactly as a package is, and not a fifth place an item can be
  * ({@code docs/warehouse-system.md} §8).
+ * <p>
+ * <b>What a container item holds is not counted here</b> (M30): the fluid inside a bucket is {@link FluidCensus}'s
+ * business, and the two censuses only state something true together ({@link FluidCensus#assertConserved}). The one
+ * place this census has to know about fluid at all is {@link #exchange}, the declared and verified container
+ * exchange — the only move under which an item in this mod legitimately changes identity.
  * <p>
  * A census reads every block position of the test bounds once, which is fine for tests (a few thousand lookups).
  */
@@ -154,6 +160,39 @@ final class ItemCensus {
         add(expected, key, delta);
     }
 
+    /**
+     * Declares a <b>container exchange</b> on an item expectation — {@code containers} fewer of {@code filled} and
+     * that many more of {@code empty} — after verifying against the game that this is really what emptying
+     * {@code filled} does (M30, issue #21).
+     * <p>
+     * An exchange is the one move that changes the item census while the fluid census stands still: the fluid leaves
+     * the container and enters the bay's tank, both of which {@link FluidCensus} counts, so the <b>fluid expectation
+     * is not touched here</b> and a transfer that lost a drop still fails {@link FluidCensus#assertConserved}. It is
+     * also the only move in this mod under which an item legitimately changes identity, which is why it may not simply
+     * be written by hand: a test that declared {@code lava_bucket -> glass_bottle} would make its own census agree
+     * with a bug.
+     * <p>
+     * The verification is {@link FluidContainers#drained}, i.e. the <b>same routine the bay uses</b>, run on a
+     * single-item probe that touches nothing in the world. A test can therefore declare only the exchange the game
+     * performs, and never a fake one — the discipline M28 used for the pallet branch, applied to the first carrier in
+     * this mod that is not an item at all.
+     */
+    static void exchange(GameTestHelper helper, Map<ItemKey, Long> expected, ItemKey filled, ItemKey empty,
+            long containers) {
+        if (containers <= 0)
+            helper.fail("an exchange moves at least one container, not " + containers);
+        FluidContainers.Drained drained = FluidContainers.drained(filled).orElse(null);
+        if (drained == null)
+            helper.fail("declared the exchange " + filled + " -> " + empty + ", but the game refuses to empty "
+                    + filled + " at all, so no bay could perform it");
+        else if (!drained.emptied().equals(empty))
+            helper.fail("declared the exchange " + filled + " -> " + empty + ", but emptying " + filled
+                    + " really yields " + drained.emptied() + " and " + drained.millibuckets() + " mB of "
+                    + drained.fluid());
+        change(expected, filled, -containers);
+        change(expected, empty, containers);
+    }
+
     private static void add(Map<ItemKey, Long> counts, ItemStack stack) {
         add(counts, stack, stack.getCount());
     }
@@ -201,7 +240,8 @@ final class ItemCensus {
             counts.put(key, value);
     }
 
-    private static String describe(Map<ItemKey, Long> counts) {
+    /** A stable, readable rendering of a census, sorted by item key. */
+    static String describe(Map<ItemKey, Long> counts) {
         Map<String, Long> sorted = new TreeMap<>();
         counts.forEach((key, count) -> sorted.put(key.toString(), count));
         return sorted.toString();

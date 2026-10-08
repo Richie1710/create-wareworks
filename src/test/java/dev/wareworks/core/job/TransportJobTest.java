@@ -151,6 +151,63 @@ class TransportJobTest {
         assertThrows(IllegalArgumentException.class, () -> held.withTarget("machine", LocationKind.PRODUCTION));
     }
 
+    /**
+     * A container exchange (M30, issue #21): the same trip continues under another key, with the carry starting again
+     * from it. The job that comes out must satisfy the one invariant every reader relies on —
+     * {@code heldAmount()} is what the handling head really carries — which is why the planned and the picked amount
+     * are both the amount that was held and nothing is delivered yet.
+     */
+    @Test
+    void exchangingTheCarriedKeyContinuesTheSameTrip() {
+        TransportJob<String, String> job = TransportJob.store(JOB, "in", "bay", "lava_bucket", 4)
+                .withPicked(3).plusDelivered(1);
+        TransportJob<String, String> exchanged = job.exchangedFor("bucket");
+        assertEquals(job.id(), exchanged.id(), "the same trip, so the same id");
+        assertEquals(job.type(), exchanged.type());
+        assertEquals(job.source(), exchanged.source());
+        assertEquals(job.target(), exchanged.target(), "the bay stays the target until the reroute moves it");
+        assertEquals(job.targetKind(), exchanged.targetKind());
+        assertEquals("bucket", exchanged.key());
+        assertTrue(exchanged.picked());
+        assertEquals(2, exchanged.heldAmount(), "the two containers that were held");
+        assertEquals(2, exchanged.pickedAmount());
+        assertEquals(2, exchanged.plannedAmount());
+        assertEquals(0, exchanged.deliveredAmount());
+        assertFalse(exchanged.isFinished());
+    }
+
+    /**
+     * The exchange drops the request: what the head holds now is not what the request's station was promised.
+     */
+    @Test
+    void exchangingDropsTheRequest() {
+        TransportJob<String, String> job = TransportJob.retrieve(JOB, "chest", "out", "lava_bucket", 2, REQUEST)
+                .withPicked(2);
+        assertEquals(Optional.of(REQUEST), job.requestId());
+        TransportJob<String, String> exchanged = job.exchangedFor("bucket");
+        assertEquals(Optional.empty(), exchanged.requestId());
+        assertNull(exchanged.requestIdOrNull());
+        assertSame(exchanged, exchanged.withoutRequest(), "and detaching it again is a no-op");
+    }
+
+    /** What {@code exchangedFor} refuses, each because accepting it would lose track of real items. */
+    @Test
+    void exchangingRefusesWhatWouldLoseTrack() {
+        TransportJob<String, String> unpicked = TransportJob.store(JOB, "in", "bay", "lava_bucket", 1);
+        assertThrows(IllegalStateException.class, () -> unpicked.exchangedFor("bucket"),
+                "nothing is in the head before the pick");
+        assertThrows(IllegalStateException.class, () -> unpicked.withPicked(0).exchangedFor("bucket"),
+                "nor after a pick of nothing");
+        TransportJob<String, String> done = TransportJob.store(JOB, "in", "bay", "lava_bucket", 1)
+                .withPicked(1).plusDelivered(1);
+        assertThrows(IllegalStateException.class, () -> done.exchangedFor("bucket"),
+                "nor once everything has been delivered");
+        TransportJob<String, String> held = unpicked.withPicked(1);
+        assertThrows(IllegalArgumentException.class, () -> held.exchangedFor("lava_bucket"),
+                "an exchange is a swap, never a key for itself");
+        assertThrows(NullPointerException.class, () -> held.exchangedFor(null));
+    }
+
     /** Nobody asked for collected items, so a collect job can carry no request id at all. */
     @Test
     void aCollectJobServesNobody() {

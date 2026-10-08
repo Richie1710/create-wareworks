@@ -68,6 +68,15 @@ public enum BayTier {
     }
 
     /**
+     * {@link BayFamily#ITEM}: this is the item ladder, and its strengths are comparable only with each other. A fluid
+     * bay's tier belongs to the other ladder ({@link FluidBayTier#family()}), and the column rule compares the family
+     * <b>before</b> any strength, so a fluid bay ends an item bay's column exactly as air does.
+     */
+    public BayFamily family() {
+        return BayFamily.ITEM;
+    }
+
+    /**
      * How much weight this tier carries, rising with capacity: {@code WOOD} 0, {@code ANDESITE} 1, {@code BRASS} 2.
      * It only ever means something compared with another tier's.
      */

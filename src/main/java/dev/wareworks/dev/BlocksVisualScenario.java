@@ -3,6 +3,7 @@ package dev.wareworks.dev;
 import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.function.BiConsumer;
@@ -13,6 +14,7 @@ import com.tterrag.registrate.util.entry.BlockEntry;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
@@ -21,14 +23,20 @@ import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.BayColumn;
+import dev.wareworks.content.storage.FluidBayBlock;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCreativeTabs;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -48,6 +56,10 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
+import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.fluids.FluidStack;
 
 /**
  * Scenario "blocks": close-ups of every static Wareworks block model and the item icons (M4, visual
@@ -170,6 +182,33 @@ public final class BlocksVisualScenario implements VisualScenario {
     private static final double ARM_HEIGHT = 1.65;
     /** The corner seen from the inside of the L, where a player would stand. */
     private static final String CORNER_LABEL = "bay_corner";
+    /**
+     * The fluid bays (M30 step 5, issue #21). A tank's level <b>is</b> its readout, so the yard carries two exhibits
+     * no single-block close-up can answer: a row through every level from empty to full, and a run that mixes tanks
+     * into a rack wall, where the seam post between a tank and a rack is half of each.
+     */
+    private static final String TANK_LEVELS_LABEL = "tank_levels";
+    private static final String TANK_RUN_LABEL = "tank_run";
+    /** The shares the level row is filled to, left to right: empty, a drop, and then quarters up to the brim. */
+    private static final double[] TANK_LEVEL_SHARES = {0.0, -1.0, 0.25, 0.5, 0.75, 1.0};
+    /** What a share of {@code -1} means: one millibucket, the smallest amount a bay can hold at all. */
+    private static final int TANK_DROP_MILLIBUCKETS = 1;
+    /** Two fluids a player tells apart without reading anything: one glows, one does not. */
+    private static final Fluid TANK_FIRST_FLUID = Fluids.LAVA;
+    private static final Fluid TANK_SECOND_FLUID = Fluids.WATER;
+    /** How the mixed run alternates: a rack bay wherever this is false, a tank wherever it is true. */
+    private static final boolean[] TANK_RUN_PATTERN = {false, true, true, false, true, false, false};
+    private static final int TANK_RUN_HEIGHT = 2;
+    /**
+     * A camera one block past Create's default {@code filterItemRenderDistance}, where every tank of the level row
+     * must <b>still</b> be drawn: the fluid is the whole of a bay's readout, so this renderer deliberately keeps the
+     * vanilla view distance where the rack bay's and the interface's are cut to ten blocks, and that is measured here
+     * rather than claimed ({@code client.render.FluidBayRenderer}, ADR-053).
+     */
+    private static final double TANK_FAR_DISTANCE = 11.0;
+    /** Vanilla's own bound ({@code BlockEntityRenderer#getViewDistance}), which this renderer must not fall below. */
+    private static final int VANILLA_VIEW_DISTANCE = 64;
+    private static final double TANK_FAR_EYE_HEIGHT = 3.0;
     private static final double CORNER_EYE = 6.0;
     private static final double CORNER_SIDE = 2.5;
 
@@ -200,7 +239,15 @@ public final class BlocksVisualScenario implements VisualScenario {
             new YardExhibit("bay_tiers", 4, BlocksVisualScenario::tierWall),
             // Two runs meeting at a right angle. They face different ways, so they do not join - which is the point:
             // a corner is two racks, and it has to look like two racks.
-            new YardExhibit(CORNER_LABEL, 4, BlocksVisualScenario::corner));
+            new YardExhibit(CORNER_LABEL, 4, BlocksVisualScenario::corner),
+            // Every level a tank can show, left to right: empty, one millibucket, a quarter, half, three quarters and
+            // full. The one shot that answers whether a level reads as a level, and whether an almost-empty tank
+            // still says it holds something.
+            new YardExhibit(TANK_LEVELS_LABEL, TANK_LEVEL_SHARES.length, BlocksVisualScenario::tankLevels),
+            // Tanks set into a rack wall, two high. Joining is across families (ADR-050), so a tank and a rack share
+            // their uprights: this is the shot that says whether a seam post that is half brass rack and half copper
+            // tank reads as one post, and whether the beams of a mixed wall run on through it.
+            new YardExhibit(TANK_RUN_LABEL, TANK_RUN_PATTERN.length, BlocksVisualScenario::tankRun));
 
     private static final List<Exhibit> EXHIBITS = List.of(
             new Exhibit("dock", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.STACKER_CRANE.getDefaultState()
@@ -232,6 +279,14 @@ public final class BlocksVisualScenario implements VisualScenario {
                     (level, pos) -> bay(level, pos, WareworksBlocks.RACK_BAY_ANDESITE.getDefaultState(), 2)),
             new Exhibit("bay_brass", (level, pos) -> bay(level, pos,
                     WareworksBlocks.RACK_BAY_BRASS.getDefaultState(), RackBayBlock.FILL_LEVELS)),
+            // The two fluid bays (M30 step 5, issue #21): the rack bay's frame with a tank where its pallet goes,
+            // open towards the aisle over the width of the arm port. Each is shown with a different fluid at a
+            // different level, so the close-ups answer both halves of the look at once - the vessel, which is a
+            // model, and the level, which is the only thing in this mod a renderer answers in full.
+            new Exhibit("tank_copper", (level, pos) -> tank(level, pos, WareworksBlocks.FLUID_BAY_COPPER,
+                    Direction.NORTH, TANK_FIRST_FLUID, 0.5)),
+            new Exhibit("tank_brass", (level, pos) -> tank(level, pos, WareworksBlocks.FLUID_BAY_BRASS,
+                    Direction.NORTH, TANK_SECOND_FLUID, 0.25)),
             new Exhibit("input", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_INPUT
                     .getDefaultState().setValue(WarehouseInputBlock.FACING, Direction.SOUTH))),
             new Exhibit("output", (level, pos) -> level.setBlockAndUpdate(pos, WareworksBlocks.WAREHOUSE_OUTPUT
@@ -292,7 +347,7 @@ public final class BlocksVisualScenario implements VisualScenario {
             // Last, because it is the only exhibit wider than its own block: a wall of wooden bays running through
             // every fill step from empty to full, left to right and bottom to top. It is built from the middle
             // column outwards and upwards so that every bay is placed beside one that is already standing, which is
-            // how a player builds one (RackBayBlock#placementFacing).
+            // how a player builds one (BayColumn#placementFacing).
             new Exhibit(WALL_LABEL, BlocksVisualScenario::wall));
 
     /** A rail at {@code pos} with one rail on each named side, so the middle one draws the shape those sides make. */
@@ -313,7 +368,7 @@ public final class BlocksVisualScenario implements VisualScenario {
      * built in and no shot can be taken of a half-finished one.
      */
     private static void bay(ServerLevel level, BlockPos pos, BlockState bay, Direction facing, int fillStep) {
-        level.setBlockAndUpdate(pos, RackBayBlock.withJoins(level, pos,
+        level.setBlockAndUpdate(pos, BayColumn.withJoins(level, pos,
                 bay.setValue(RackBayBlock.FACING, facing)));
         if (fillStep <= 0)
             return;
@@ -362,12 +417,22 @@ public final class BlocksVisualScenario implements VisualScenario {
 
     /**
      * Fails unless the bay at {@code pos} derived exactly the joins the wall around it calls for
-     * ({@code RackBayBlock#LEFT}).
+     * ({@code TieredBay#LEFT}).
      */
     private static void assertJoins(ServerLevel level, BlockPos pos, boolean left, boolean right) {
-        BlockState state = level.getBlockState(pos);
-        if (!(state.getBlock() instanceof RackBayBlock))
+        if (!(level.getBlockState(pos).getBlock() instanceof RackBayBlock))
             throw new VisualTestException("no rack bay at " + pos);
+        assertBayJoins(level, pos, left, right);
+    }
+
+    /**
+     * The same for a bay of any family, which is what a mixed wall needs: joining reaches across families, so a tank
+     * at the end of a rack run has to carry the same flags a rack bay there would ({@code TieredBay#LEFT}).
+     */
+    private static void assertBayJoins(ServerLevel level, BlockPos pos, boolean left, boolean right) {
+        BlockState state = level.getBlockState(pos);
+        if (!state.hasProperty(RackBayBlock.LEFT) || !state.hasProperty(RackBayBlock.RIGHT))
+            throw new VisualTestException("no bay at " + pos + ", but " + state);
         if (state.getValue(RackBayBlock.LEFT) != left || state.getValue(RackBayBlock.RIGHT) != right)
             throw new VisualTestException("the bay at " + pos + " joined left="
                     + state.getValue(RackBayBlock.LEFT) + " right=" + state.getValue(RackBayBlock.RIGHT)
@@ -380,6 +445,65 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.RACK_BAY_ANDESITE, WareworksBlocks.RACK_BAY_WOOD);
         for (int row = 0; row < rows.size(); row++)
             run(level, pos.above(row), rows.get(row), 4, 1, Direction.NORTH, rows.size() - row);
+    }
+
+    /**
+     * One fluid bay at {@code pos}, turned onto {@code facing} and filled to {@code share} of its own capacity - or,
+     * for a negative share, to {@value #TANK_DROP_MILLIBUCKETS} mB, which is the smallest thing a tank can be asked to
+     * show. The joins are derived here rather than left to a later tick, so a wall is right in the server step it is
+     * built in, and what the bay really took is checked, because a shot of a tank that refused its fluid would look
+     * exactly like a shot of an empty one.
+     */
+    private static void tank(ServerLevel level, BlockPos pos, BlockEntry<FluidBayBlock> tier, Direction facing,
+                             Fluid fluid, double share) {
+        level.setBlockAndUpdate(pos, BayColumn.withJoins(level, pos,
+                tier.getDefaultState().setValue(FluidBayBlock.FACING, facing)));
+        if (!(level.getBlockEntity(pos) instanceof FluidBayBlockEntity bay))
+            throw new VisualTestException("no fluid bay block entity at " + pos);
+        if (share == 0.0)
+            return;
+        int wanted = share < 0.0 ? TANK_DROP_MILLIBUCKETS : (int) Math.round(share * bay.capacity());
+        int filled = bay.fill(new FluidStack(fluid, wanted), false);
+        if (filled != wanted)
+            throw new VisualTestException("the fluid bay at " + pos + " took " + filled + " of " + wanted + " mB");
+        if (bay.storedFluid().filter(FluidKey.of(fluid)::equals).isEmpty())
+            throw new VisualTestException("the fluid bay at " + pos + " holds " + bay.storedFluidOrNull()
+                    + " instead of the fluid it was given");
+    }
+
+    /** The level row: one copper tank per share of {@link #TANK_LEVEL_SHARES}, all holding the same fluid. */
+    private static void tankLevels(ServerLevel level, BlockPos pos) {
+        for (int column = 0; column < TANK_LEVEL_SHARES.length; column++) {
+            tank(level, along(pos, Direction.NORTH, column), WareworksBlocks.FLUID_BAY_COPPER, Direction.NORTH,
+                    TANK_FIRST_FLUID, TANK_LEVEL_SHARES[column]);
+        }
+    }
+
+    /**
+     * The mixed run: {@value #TANK_RUN_HEIGHT} rows of {@link #TANK_RUN_PATTERN}, tanks and rack bays side by side and
+     * all facing the camera, with the two fluids alternating so that neither row is one colour. Every bay's derived
+     * join flags are asserted afterwards, tanks included - a wall that happens to look joined while the flags are
+     * wrong fails here rather than in a screenshot nobody compares.
+     */
+    private static void tankRun(ServerLevel level, BlockPos pos) {
+        int width = TANK_RUN_PATTERN.length;
+        for (int row = 0; row < TANK_RUN_HEIGHT; row++) {
+            for (int column = 0; column < width; column++) {
+                BlockPos at = along(pos, Direction.NORTH, column).above(row);
+                if (TANK_RUN_PATTERN[column]) {
+                    tank(level, at, WareworksBlocks.FLUID_BAY_BRASS, Direction.NORTH,
+                            (column + row) % 2 == 0 ? TANK_FIRST_FLUID : TANK_SECOND_FLUID,
+                            0.25 + 0.25 * ((column + row) % 3));
+                } else {
+                    bay(level, at, WareworksBlocks.RACK_BAY_BRASS.getDefaultState(), Direction.NORTH,
+                            1 + (column + row) % RackBayBlock.FILL_LEVELS);
+                }
+            }
+        }
+        for (int row = 0; row < TANK_RUN_HEIGHT; row++) {
+            for (int column = 0; column < width; column++)
+                assertBayJoins(level, along(pos, Direction.NORTH, column).above(row), column > 0, column < width - 1);
+        }
     }
 
     /** The corner exhibit: a run facing the camera and a second one turning away from it, two bays high. */
@@ -476,6 +600,18 @@ public final class BlocksVisualScenario implements VisualScenario {
                 script.shotFrom(CameraView.of("aisle", left - AISLE_ALONG_OFFSET, ARM_HEIGHT,
                         BLOCK_CENTER + AISLE_EYE_OFFSET, right, ARM_HEIGHT, BLOCK_CENTER), exhibit.label());
             }
+            if (exhibit.label().equals(TANK_LEVELS_LABEL)) {
+                // The same row from one block past the distance every other renderer of this mod is cut to, with the
+                // client's own per-frame list counted at both cameras: the level is the readout, so it has to be
+                // there at both of them.
+                script.client("blocks: measure the fluid bay budget from the aisle",
+                        context -> measureTankBudget(context, "front"));
+                script.camera(CameraView.of("far", center, TANK_FAR_EYE_HEIGHT, BLOCK_CENTER + TANK_FAR_DISTANCE,
+                                center, YARD_LOOK_HEIGHT, BLOCK_CENTER))
+                        .client("blocks: measure the fluid bay budget past the filter cap",
+                                context -> measureTankBudget(context, "far"))
+                        .shot(TANK_LEVELS_LABEL + "-far");
+            }
             if (exhibit.label().equals(CORNER_LABEL)) {
                 // The inside of the L, where the aisles of both runs meet: the second run starts at the first one's
                 // left end and turns towards the camera, so a player stands off the left end and looks back at it.
@@ -524,6 +660,15 @@ public final class BlocksVisualScenario implements VisualScenario {
                 YARD.size(), lastX);
     }
 
+    /** The index of the named yard exhibit, so a client step can find the blocks it built. */
+    private static int yardIndex(String label) {
+        for (int i = 0; i < YARD.size(); i++) {
+            if (YARD.get(i).label().equals(label))
+                return i;
+        }
+        throw new VisualTestException("no yard exhibit called " + label);
+    }
+
     /** The x offset of yard exhibit {@code index} from the scene origin. */
     private static int yardX(int index) {
         int x = (EXHIBITS.size() - 1) * SPACING + YARD_GAP;
@@ -569,6 +714,57 @@ public final class BlocksVisualScenario implements VisualScenario {
         return true;
     }
 
+    /**
+     * What the level row costs the client at the camera that is currently set, measured on the client's own per-frame
+     * render list rather than argued about - the discipline {@code BaysVisualScenario} established for the rack bay's
+     * renderer, applied to the one block of this mod whose <b>whole</b> readout a renderer draws.
+     * <p>
+     * Registering a block entity renderer puts every block of that type into its chunk section's per-frame list
+     * whether anything is drawn or not, and vanilla's bound is 64 blocks. The other renderers of this mod cut that to
+     * Create's {@code filterItemRenderDistance}, ten blocks, because they draw a <b>detail</b> of a block that is
+     * visible without them. {@code FluidBayRenderer} keeps the vanilla bound, because beyond a cut a fluid bay would
+     * show an <b>empty tank</b> — the whole readout gone (ADR-053). So this measures the opposite of a cap: every tank
+     * of the row must be drawn at both cameras, including the one past ten blocks, and the renderer's own answer must
+     * not have fallen below vanilla's bound.
+     */
+    private static void measureTankBudget(VisualContext context, String label) {
+        Minecraft minecraft = context.minecraft();
+        int fromX = yardX(yardIndex(TANK_LEVELS_LABEL));
+        List<FluidBayBlockEntity> row = new ArrayList<>();
+        minecraft.levelRenderer.iterateVisibleBlockEntities(be -> {
+            if (!(be instanceof FluidBayBlockEntity bay))
+                return;
+            int x = bay.getBlockPos().getX() - context.origin().getX();
+            if (x >= fromX && x < fromX + TANK_LEVEL_SHARES.length
+                    && bay.getBlockPos().getY() == context.origin().getY())
+                row.add(bay);
+        });
+        if (row.size() != TANK_LEVEL_SHARES.length)
+            throw new VisualTestException("only " + row.size() + " of the " + TANK_LEVEL_SHARES.length
+                    + " tanks of the level row are in the client's per-frame list at the " + label + " camera");
+        BlockEntityRenderer<FluidBayBlockEntity> renderer =
+                minecraft.getBlockEntityRenderDispatcher().getRenderer(row.getFirst());
+        if (renderer == null)
+            throw new VisualTestException("the fluid bay block entity type has no renderer");
+        Frustum frustum = minecraft.levelRenderer.getFrustum();
+        Vec3 camera = minecraft.gameRenderer.getMainCamera().getPosition();
+        int drawn = 0;
+        for (FluidBayBlockEntity bay : row) {
+            if (frustum.isVisible(renderer.getRenderBoundingBox(bay)) && renderer.shouldRender(bay, camera))
+                drawn++;
+        }
+        LOGGER.info(PREFIX + "blocks: fluid bay budget {}: {} of {} tanks drawn, view distance {} blocks", label,
+                drawn, row.size(), renderer.getViewDistance());
+        if (renderer.getViewDistance() < VANILLA_VIEW_DISTANCE)
+            throw new VisualTestException("the fluid bay renderer answers a view distance of "
+                    + renderer.getViewDistance() + " blocks, so a bay's level is hidden before vanilla's "
+                    + VANILLA_VIEW_DISTANCE + " blocks (ADR-053 keeps the vanilla bound)");
+        if (drawn != row.size())
+            throw new VisualTestException("only " + drawn + " of " + row.size()
+                    + " tanks of the level row are drawn at the " + label + " camera, so the level is not the readout"
+                    + " there");
+    }
+
     /** Rebuilds the creative tabs like the creative inventory does and checks the Wareworks tab's order and icon. */
     private void checkCreativeTab(VisualContext context) {
         ClientLevel level = context.minecraft().level;
@@ -584,6 +780,8 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_CONTROLLER.asItem(), WareworksBlocks.WAREHOUSE_INTERFACE.asItem(),
                 WareworksBlocks.RACK_BAY_WOOD.asItem(), WareworksBlocks.RACK_BAY_ANDESITE.asItem(),
                 WareworksBlocks.RACK_BAY_BRASS.asItem(),
+                // The two fluid bays follow the item ones, weakest first (M30, issue #21).
+                WareworksBlocks.FLUID_BAY_COPPER.asItem(), WareworksBlocks.FLUID_BAY_BRASS.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem());

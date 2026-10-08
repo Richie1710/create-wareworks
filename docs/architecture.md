@@ -178,7 +178,16 @@ dev.wareworks
 │   │                          StorageFilterValueBox (its slot on the aisle face) (M8, ADR-021);
 │   │                          AttachedInventoryCache (the BlockCapabilityCache lifecycle of one neighbouring
 │   │                          inventory, extracted here in M18 and shared with the collecting warehouse port,
-│   │                          ADR-030)
+│   │                          ADR-030);
+│   │                          BayColumn and TieredBay (M30: the column rule, the shared uprights and the derived
+│   │                          state both bay families share, lifted out of RackBayBlock, ADR-044);
+│   │                          FluidBayBlock / BlockEntity, FluidBayHandler and FluidBayGestures (M30, ADR-051..054:
+│   │                          the same storage location for ONE fluid - 64/256 buckets by tier, pipes on every face
+│   │                          but the aisle one, no item capability at all, and breaking it loses the fluid)
+│   ├── fluid                  FluidKey (fluid + components, amount-less, ItemKey's sibling), FluidTypeSummaries,
+│   │                          FluidContainers (the one place "is this a filled container, and what comes back when
+│   │                          it is drained" is answered) and FluidDedication (this fluid / whichever arrives first /
+│   │                          not a fluid location at all, ADR-056) (M30, issue #21)
 │   ├── controller             BranchLayout (world mapping of ONE straight aisle — the M2 AisleLayout, renamed in M21
 │   │                          and unchanged in shape) and WarehouseLayout (the whole warehouse: dock, NetworkGeometry
 │   │                          and one BranchLayout per branch; it owns candidates(), the corner-ownership rule, the
@@ -3316,6 +3325,18 @@ nothing to reconcile: the bay is the inventory, so it knows every change exactly
 
 ### ADR-044 — The column rule is one derived block state flag, refused at placement and only reported afterwards (M28, issue #20)
 
+> **Extended by M30 step 3 (issue #21), without a change to any of it.** The rule, the flag, the closure, the scheduled
+> repair and the notification below are lifted out of `RackBayBlock` into `content.storage.BayColumn` over a
+> `content.storage.TieredBay` interface, so the fluid bay uses them rather than forking them; the block state
+> properties move to that interface and every generated blockstate file stays byte-identical. The one thing added is
+> the **family** (`core.storage.BayFamily`): a column is an unbroken stack of bays of one family, so a bay of the other
+> family ends a column exactly as air does — *"is a copper tank stronger than an andesite rack"* is a question the rule
+> would otherwise have to answer and nobody can. The gate is structural: a walk reaches a neighbour only through
+> `BayColumn.sameFamilyBay`, so a bay of another family never reaches the pair rule and can only end a column, never
+> refuse one. **Joining is across families** (ADR-050 asks for the same facing and deliberately not the same tier), and
+> the refusal sentence is per family, because *"A rack bay may carry nothing stronger above it"* is the wrong sentence
+> for a tank.
+
 *Context:* a rack bay may have **nothing stronger anywhere above it** in its column — no andesite on top of wood,
 because the rack below would give way. That rule is what makes upgrading a wall a rebuild from the bottom up and the
 tiers a progression rather than a label (issue #20). It has to hold for a wall of hundreds of bays, it is asked by the
@@ -3942,6 +3963,252 @@ items for one block, and "nothing stronger above" reads against three block ids 
 occlusion, or overriding `propagatesSkylightDown`**, to deal with the black faces — proposed in review and measured
 wrong: brass and andesite bays in the same wall, with the same geometry, the same UVs and the same light, carried not
 one black pixel, so it was never lighting.
+
+### ADR-051 — A fluid bay's contents are `BayContents<FluidKey>` behind a hand-written handler, and `FluidBayTier` is its own enum (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+*Context:* issue #21 asks for a storage location that **is** a tank: one fluid, 64 buckets in copper and 256 in brass,
+counted in a `storage` config section a modpack may move. The rack bay answered the same question for items in ADR-043
+with one `ItemKey` and a count in `BayContents<K>`, and NeoForge ships a ready-made `FluidTank` that looks like the
+obvious answer for the fluid half.
+
+*Decision:*
+
+* **The contents are `BayContents<FluidKey>` and an `int` of millibuckets.** That class is already generic over a key
+  whose only contract is value equality, and its invariant — `stored != null ⟺ count > 0` — is exactly a tank's: a bay
+  **forgets its fluid when it empties**, which is what makes an unfiltered bay take whatever arrives next. `insert`
+  already refuses a different key, clamps to the room there is, answers what it really accepted, and treats
+  `capacity < count` as a legal state the bay keeps.
+* **`FluidKey` is `ItemKey`'s sibling, not a `FluidStack`.** `FluidStack` overrides neither `equals` nor `hashCode`,
+  is mutable, and its `save` **throws** on an empty stack — the exact mistake `ItemKey` exists to prevent. `FluidKey`
+  wraps a count-less stack it never hands out, compares with `isSameFluidSameComponents`, hashes with
+  `hashFluidAndComponents`, saves and loads through the never-throwing `saveOptional`/`parseOptional` pair, and carries
+  a **value-based** `ORDER`, because `Fluid` overrides neither method either and an identity-hash fallback would
+  reshuffle every readout after a restart.
+* **NeoForge's `FluidTank` is not used.** With `capacity < getFluidAmount()`, which a lowered config legitimately
+  produces, its `fill` computes a negative `filled` and then sets the amount to the new capacity — silent destruction
+  on the first fill after a config change, and the exact promise `storage` makes to a server owner is that lowering a
+  capacity destroys nothing. It also hands out its internal `FluidStack` from `getFluidInTank`, against its own
+  interface's instruction. So the handler is hand-written, for `RackBayHandler`'s own reason.
+* **`FluidBayTier` is a new enum rather than two constants in `BayTier`.** `BayTier.strength()` is `ordinal()` and that
+  file states the declaration order *is* the strength order: inserting `COPPER` is the silent reordering it forbids,
+  appending it would make copper the strongest material in the mod, and *"is a copper tank stronger than an andesite
+  rack"* is a question the column rule would then have to answer and nobody can. The two families meet in
+  `BayColumn` instead (ADR-044's extension): a bay of the other family ends a column exactly as air does, while the
+  **visual** join is across families, because a wall is a wall.
+* **Counted in millibuckets, shown in buckets.** Millibuckets are forced by the ecosystem (a Create pipe network moves
+  as little as 1 mB a tick, and a bottle is 250); buckets are forced for a player, because nobody reads 256 000. The
+  conversion happens at the edge — see §3.9.4 for which surface converts how and why the two differ.
+
+*Consequences:* a bay's whole state is one key and one int, so persistence is `RackBayHandler.writeTo`'s shape with the
+schematic-print guard carried over verbatim, and the sync tag is a registry id string and an int, asserted against its
+own byte bound. Lowering a configured capacity under what a bay already holds keeps every drop and accepts nothing more
+until it has drained, which is the rack bays' promise word for word. A fluid bay has **no ticker on either side**, as a
+rack bay has none, so a tank farm costs nothing per tick.
+
+*Alternatives rejected:* **`FluidTank`** (above). **A union `BayContents` holding either kind**, which would have put a
+`Fluid` and an `Item` behind one key type and spread the two units through every call site. **A fluid amount as a
+`long`**, which the capacity bound makes unnecessary: 65 536 buckets is 65 536 000 mB, 3 % of an `int`.
+
+### ADR-052 — A fluid bay answers the fluid capability on every face but the aisle one, in both directions behind one config key, and **no** item capability at all (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+*Context:* M28's headline for the rack bay was that *a Funnel, a Chute, a Belt or a Hopper fills a storage location
+directly*, which no other location of this mod allows. The obvious move is to give the fluid bay the same openness in
+both capabilities. Issue #21 decided where pipes connect ("at the back, so water and lava get pumped in rather than
+shovelled bucket by bucket") and left one question open: whether a pipe may also **draw off**.
+
+*Decision:*
+
+* **No `Capabilities.ItemHandler.BLOCK`, on any face.** A funnel handing a bay a lava bucket would have to be given the
+  empty bucket back as an insert remainder, and a funnel does not read a remainder of a *different* item — it would
+  take the lava and destroy the bucket (ADR-055 states the same trap for the crane's own `drop`). Exposing none makes
+  *"a container reaches a bay only through the crane's handling head or a player's hand"* **structural** rather than a
+  rule somebody must remember, and keeps the bay out of `ItemCensus`'s capability sweep for free.
+* **`Capabilities.FluidHandler.BLOCK` on every face except the aisle face, and on `side == null`.** The aisle face is
+  excluded so a pipe can never stand in the crane's lane and so the face a player clicks keeps its own meaning; the
+  null side is **not** optional, because a census sweeps with `null` and a fluid census written the other way would
+  read nothing at a bay while every conservation test stayed green. This is the mod's first **sided** registrar, and
+  the null view is the same gated handler, so a null query can never do more than a pipe can.
+* **Pipes may draw off as well as fill, config-gated, default on** (`storage.fluidBayPipeExtraction`), with a goggle
+  line stating which it is, **always, both ways**. The argument is not a matter of taste: `RackBayBlockEntity`
+  registers its item handler on **every** face in **both** directions, so a vanilla hopper under a brass rack bay
+  already drains 65 536 items out of a warehouse with no crane. A tappable fluid bay is therefore *narrower* than what
+  the item side already allows rather than a softening of the premise; the hard rule and ADR-006 are written about
+  items either way. The gate is Create's own shape — `drain` answers `EMPTY` unless allowed — and the bay's own
+  operations, including a player's bucket, go through the **ungated** handler, which is `forceFill`'s pattern.
+
+*Consequences:* fluid can leave a warehouse without a crane carrying it, which is stated in the goggles, in the item
+description, in §3.9 and in the config comment. A player's three ways into a bay are a pipe, a hand and the crane, and
+the asymmetry with §3.8 is paid for at the back face, which is strictly better for bulk. The census reads a bay through
+its **own API** rather than through the capability, because the pipe gate makes a simulated drain answer 0 whenever
+extraction is off.
+
+*Alternatives rejected:* **a one-way tank** (`false` by default), which leaves a tank that can be filled and never
+tapped and is inconsistent with the item side rather than principled. **An item capability that refuses everything**,
+which is strictly worse than none: a funnel would still attach to it and back up for a reason nothing explains.
+
+### ADR-053 — A fluid bay's level is drawn by a block entity renderer, and ADR-047 does not transfer (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+*Context:* ADR-047 decided that a rack bay's fill level is **block state geometry and never renderer state**, because
+registering a renderer puts every block of that type into its chunk section's per-frame list at the vanilla 64-block
+default, and a warehouse places bays by the hundred. Issue #21 says the level **is** the readout for a fluid bay, which
+is half of why the block exists.
+
+*Decision:* a `SafeBlockEntityRenderer` draws the fluid with Catnip's `renderFluidBox`, and the blockstate carries no
+fill condition at all. ADR-047 does not transfer for two reasons in its own premise:
+
+* **Its premise is the mod's most mass-placed block.** An item bay's count is bounded by how many *item types* a player
+  stores — hundreds. A fluid bay's is bounded by how many *fluids* — three or four. The capacity table says so.
+* **Block state geometry cannot draw lava.** A fluid's look is its own still sprite with its own tint, and the set of
+  fluids is open, so no finite set of baked variants can name a sprite it has never heard of.
+
+The price is a view distance, and this is the one renderer of the mod that keeps the **vanilla** 64-block bound
+instead of cutting it. `RackBayRenderer` and `WarehouseInterfaceRenderer` cut `getViewDistance()` to Create's
+`filterItemRenderDistance`, ten blocks by default, and that is right for them: they draw a *detail* of a block that is
+visible without them, so past the cap a rack bay still shows the shape of its load from the chunk mesh. Cutting this
+one makes a full bay and an empty bay pixel-identical from eleven blocks away, i.e. it removes the readout the block
+exists for. What the vanilla bound costs is bounded by this ADR's own premise — three or four fluids, not hundreds of
+item types — and `dev.BlocksVisualScenario` counts what is really drawn at both cameras from the client's own
+per-frame list and fails if this renderer ever answers less than vanilla's bound.
+
+*Consequences:* a bay holding anything at all shows at least half a pixel of film, because "is there anything in this
+one" is the question asked walking past; a gas hangs from the rim instead of lying on the floor. There is **no
+smoothing**: Create's tanks glide because a `LerpedFloat` is advanced from a block entity **tick**, and a fluid bay's
+`getTicker` is `null` on both sides — a guarantee worth more than the glide, and a bay's own step is a twentieth of a
+Create tank's anyway.
+
+The block state carries **no** fill property either, unlike a rack bay's: `TieredBay#publishesFillLevel` lets a family
+say so, and `BayColumn` then neither reads nor writes `FILL` for it. Writing a property nothing draws cost a client
+block-state change and a chunk-section recompile into a byte-identical mesh on every fill step, beside the block-entity
+sync in the same call that already carries the level (M30 review fix).
+
+*Alternatives rejected:* **baked variants per fill step**, which cannot name a fluid's sprite. **A `LerpedFloat` and a
+ticker**, which costs a basement of a thousand bays a tick each. **Cutting the view distance to
+`filterItemRenderDistance`** the way the two renderers before it do, which is the mitigation the design reserved for a
+tank farm and not the default: it hides the readout at eleven blocks, where the two cuts it copies hide only a detail
+of a block that stays visible. **Declaring `FILL` and never drawing it**, which multiplied the block's states by five
+for nothing and made two comments about a free chunk mesh untrue.
+
+### ADR-054 — Breaking a full fluid bay loses the fluid, resets the bay and logs the loss (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+*Context:* ADR-046 decided that breaking a rack bay **loses nothing**: the load leaves as one pallet that cannot be
+pocketed, and the roadmap says so out loud. The fluid half looks like the same question and is not.
+
+*Decision:* `destroy()` zeroes the contents first, the loot table is the plain block, and one `WARN` names the fluid,
+the amount and the position. The reason is an asymmetry in the world rather than a shortcut: **the pallet exists
+because 65 536 item entities was unacceptable, not because items needed a drop form invented — items already drop. A
+fluid has none.** Every way of inventing one is worse: filled containers would create items from nothing and violate
+ADR-006 outright; source blocks would mean 256 lava sources, which Create gates behind two config keys for exactly
+that reason; a bay item carrying its fluid is the pocketable removal crate ADR-046 refused for items, worse in fluid
+form; refusing to break while full is the `canSurvive`-style refusal M28 rejected; and a fluid tote on a pallet — the
+only real contender — costs a second contents on the entity, a renderer branch, a save field, a tracked field, an
+entity fluid capability **and** a fluid branch in both censuses for an entity, which enlarges exactly the surface this
+milestone's biggest risk lives on, for the rarest case.
+
+The parity argument settles it: **the block issue #21 measures a fluid bay against loses its fluid when broken.**
+Create's own `FluidTankBlock` drops nothing and drains its overflow away. A fluid bay at parity is not a surprise to a
+Create player.
+
+*Consequences:* four places say so before a player can hit it — the item description, the goggle line while there is
+anything to lose, the action-bar warning on the first punch, and the Ponder caption (§3.9, §3.9.5). None of them
+refuses; a block that cannot be broken is worse than one that says what breaking it costs. A **creative** break shows
+no action-bar line, because the server returns before `attack` for a creative player, which is a reason for the other
+three to exist rather than a gap, and is pinned by a test. A **sneaking wrench** click reaches none of the in-world
+three either, because `IWrenchable#onSneakWrenched` destroys the block without calling `attack`, so the block shows
+the same line from that hook as well — with the loss rather than before it, which is as much as one click allows
+(M30 review fix). `clearContent()` is silent, which is vanilla parity for
+`/setblock`, `/fill`, `/clone` and structure placement.
+
+*Reversibility:* a tote is purely additive — a new entity, a new census branch, a new renderer branch — and can be
+added later. Shipping one and then removing it is not available. That is why this direction and not the other.
+
+### ADR-055 — A container exchange is one new crane primitive: the head gives up one item and receives a different one at the same stop (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+*Context:* issue #21 decided the loop in its own words: a filled container arrives at an input, the crane carries it to
+a fluid bay, the bay drains it, and *"the crane now holds an empty bucket, and stores it like any other item"*. The mod
+has two transfers — pick and drop — and neither can express a stop at which what the head holds **changes identity**.
+
+*Decision:* a third transfer, `HandlingHead.exchange`, over one default method on `TransferContext`, with
+`CraneEvent.Exchanged` as the **fourth** legal answer to `PerformDrop`, `CraneEffect.ReportExchanged`,
+`TransportJob.exchangedFor` and one branch in `CraneExecution.performDrop`. `CranePhase` is untouched, no record
+component is added, and the controller's `onCraneExchanged` does `track(job)` and `refreshLocation(bay)` and nothing
+else. §3.9.2 carries the full shape; the three things that make it a decision rather than a mechanism:
+
+* **It cannot ride `insert`.** `InventoryGrabber.drop` computes its accepted amount as `chunk - remainder.getCount()`,
+  which is **0** when a bay hands back one empty bucket for one filled one, and then breaks *without putting the
+  remainder anywhere*: the filled bucket stays counted as held and the empty bucket never existed in any inventory, so
+  no item census can see the loss. The tempting one-liner destroys items.
+* **It is all or nothing**, because a partial exchange would leave two keys in a head whose job is monotone in one, and
+  `reconcileHeadWithJob` spills every held key that is not the job's key at the dock. The same rule falls out of the
+  fluid side anyway (ADR-051: a container is drained whole or refused).
+* **It is not a `DropResult`.** `CraneStateMachine.dropped` asserts `delivered + leftover == heldAmount()` of the job's
+  own key, and an exchange delivers nothing of that key. Reporting it as a delivery would also credit
+  `onResultStored` — a restock order credited with a lava bucket that was never stored, a stock index showing none,
+  and ADR-027's safety stop firing for no reason.
+
+Two guarantees are worth naming because later work will lean on them. The **interruption** case needs no save format:
+the fill and the head mutation are one synchronous call chain with no tick boundary between them, so the state a save
+finds is always "the fluid is in the bay and the empty container is on the head", and `exchangedFor` keeps the job
+consistent with the head under the new key. And a location that **contradicts the plan it just gave** cannot leave the
+fluid created from nothing: the containers it says it took leave the head, what it handed back is spilled at the
+location, and the caller is still told 0, so the job follows the head.
+
+*Consequences:* a fluid bay also answers `exchangesOnly()`, so a refused exchange never falls through to an item
+insert — the bay's insert path has no legitimate caller and says so in the log, and without that answer the most
+everyday situation (a pipe topping the bay up between the plan and the drop) would have been reported as the crane
+using the wrong operation. Conservation is **joint** from here on: items plus the fluid inside containers, asserted in
+one statement by both censuses (§8), with `ItemCensus.exchange` verifying a declared swap against the game's own
+emptying routine so a test cannot declare a fake one.
+
+*Alternatives rejected:* **the insert remainder** (above). **A buffer of empty containers in the bay**, which the
+issue's own step 3 rules out and which would make the empties invisible to the stock index. **A new `CranePhase`**,
+which is a save name and would force arms into `sanitize`, `stopChunksLoaded` and `checkJobLocations` permanently.
+
+### ADR-056 — A fluid bay's store filter is a three-state fluid dedication that replaces the item filter, and the planner reaches the bay through a positive "is this a fluid location" estimate (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+*Context:* issue #21 settled that *a container that does not fit is never sent in the first place* and that *a fluid
+bay's filter is a fluid*, which follows from it: the warehouse decides where a thing may go before it moves it, so the
+bay must say what it holds in terms of the fluid rather than of the container that happens to bring it.
+
+*Decision:*
+
+* **One answer, `StorageMember.storeFluidFilter()`, evaluated before the Create filter and replacing it.** A container
+  of the bay's fluid is `DEDICATED`, the top store key; everything else — an empty container, another fluid, every
+  ordinary item — is `REJECTED`, whatever room the bay has and whatever priority it carries. The slot's stack is read
+  **only** as a fluid container and **never** resolved into a Create `FilterItemStack`, because a filter built from a
+  lava bucket matches the *item* `lava_bucket` and would route containers where fluid was meant. The churn loop is
+  closed structurally by the same answer rather than by a rule: an empty container is refused in **both** bay states.
+* **Three states, not two.** `content.fluid.FluidDedication` is *this fluid*, *whichever arrives first* (`ANY`), or
+  *not a fluid location at all*. An `Optional<FluidKey>` cannot express it: an empty unfiltered bay would answer
+  absent, fall through to the item filter and come back `UNFILTERED` — "accepts everything" — so a fresh tank wall
+  would have swallowed cobblestone. `ANY` ranks `DEDICATED`, because an unfiltered *item* location takes whatever a
+  player puts in it for life while an unfiltered bay takes exactly one fluid and has merely not been told which. The
+  cached answer is invalidated on the **empty ↔ non-empty transition and on a fluid change only**, never per
+  millibucket.
+* **The planner's gate is an insert estimate, and the question it asks is positive.** `collectStorage` skips a location
+  whose estimate minus its reservations is not positive **before** the store filter is consulted, and a bay's snapshot
+  estimate is 0, so `DEDICATED` was necessary and not sufficient. The controller answers `UNKNOWN_CAPACITY` for a
+  location it knows **takes filled containers** — one read of the cache that already answers the filter and the
+  priority — and never by reading an empty snapshot, because a warehouse interface whose chest was taken away reports
+  the *same* empty snapshot for the opposite reason and must go on being skipped (ADR-041's own distinction).
+* **The amount is not part of the gate.** A bay with less than a bucket of room passes the filter, answers 0 live and
+  is passed over like any candidate that turned out to be full, with the refusal remembered until its contents change.
+  `simulateInsert` is monotone while `exchange` is all or nothing, and they disagree in the safe direction, so a caller
+  that bounds by the one and then performs the other always succeeds — which is what M31's fill stage wants.
+
+*Consequences:* a dedicated bay **outranks every shelf**, including a nearer one, so while a lava bay has room a bucket
+of lava can no longer be kept as item stock — the issue's loop, and the one surprise of this milestone, stated in the
+changelog and in §3.9.3. A warehouse whose only storage is a fluid bay now reports `NO_MATCHING_FILTER` for an ordinary
+item where it used to report `WAREHOUSE_FULL` about a warehouse with 64 buckets free. `holdsOneTypeOnly()` stays
+**false** and the bay stays out of `filteredCount`, because both count item types and a bay holds none. And one rule
+about the store-settings cache follows from the branch: a location that changed **kind** is always rebuilt, because a
+lava bucket in a bay's filter slot is byte for byte the same stack as one in an interface's slot, and an interface that
+inherited a bay's entry would carry no resolved filter and read as "accepts everything" for ever.
+
+*Alternatives rejected:* **`holdsOneTypeOnly()`**, which is meaningless for a location that holds no item types and
+would cost a count lookup per candidate for nothing. **A `FilterItemStack` built from the slot**, which routes
+containers instead of fluids. **Refusing at the bay instead of in the plan**, which issue #21 rejected outright: a
+crane trip whose only outcome is a trip back.
+
 
 ## Persistence & sync
 

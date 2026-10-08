@@ -55,6 +55,9 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 #   nothing stands between the camera and the bays' fronts (dev.wareworks.client.ponder.scenes.RackBayScenes).
 #   rack_bay's plate is deliberately the smallest of all of them, because that scene draws one block at twice the
 #   usual scale (RackBayScenes.SINGLE_SCALE) and the plate is what has to fit around it.
+# The fluid bay scene (M30) uses the shared square 9 plate: it needs the aisle, because the loop it teaches is the
+#   crane's (dev.wareworks.client.ponder.scenes.FluidBayScenes), with the rack plane RIGHT carrying the input, a rack
+#   bay, the fluid bay, a fluid pipe and a Create Fluid Tank from positions 2 to 6.
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
@@ -76,6 +79,7 @@ TEMPLATES = {
     "warehouse/rack_bay": (3, 6, 3),
     "warehouse/rack_wall": (7, 7, 7),
     "warehouse/bays_in_an_aisle": (9, 7, 9),
+    "warehouse/fluid_bay": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

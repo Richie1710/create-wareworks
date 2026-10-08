@@ -29,6 +29,7 @@ import com.simibubi.create.content.trains.display.FlapDisplayBlockEntity;
 import com.simibubi.create.content.trains.display.FlapDisplaySection;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
+import com.simibubi.create.foundation.utility.FluidFormatter;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.Wareworks;
@@ -36,18 +37,23 @@ import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.content.crane.CraneJobSummary;
 import dev.wareworks.content.crane.CranePauseReason;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.display.StockListDisplaySource;
 import dev.wareworks.content.station.StockKeeperRules;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.content.storage.FluidBayBlock;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksDisplaySources;
 import dev.wareworks.util.WareworksLang;
+import net.createmod.catnip.data.Couple;
 import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -58,6 +64,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.Clearable;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.WrittenBookContent;
@@ -68,11 +75,15 @@ import net.minecraft.world.level.block.entity.LecternBlockEntity;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.ChestType;
+import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
+import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.fluids.FluidType;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
 /**
- * GameTests of the five Display Link sources ({@code docs/warehouse-system.md} §10, M14 and M25): they are registered
+ * GameTests of the six Display Link sources ({@code docs/warehouse-system.md} §10, M14, M25 and M30): they are registered
  * and bound to the right blocks, and a real {@code AllBlocks.DISPLAY_LINK} placed on a Wareworks block delivers the
  * expected text to a real display target, degraded cases included.
  * <p>
@@ -153,6 +164,18 @@ public final class DisplayLinkGameTests {
     private static final int RULE_MAXIMUM = 1;
     /** Both keys of the tie-break test hold the same amount, so only the item id may decide their order. */
     private static final int TIED_AMOUNT = 9;
+    /** The fluid bays of the M30 tests: two of them, so a list has rows to order and a total to add up. */
+    private static final RackPosition LAVA_BAY = new RackPosition(2, 0, Side.RIGHT);
+    private static final RackPosition WATER_BAY = new RackPosition(3, 0, Side.RIGHT);
+    private static final FluidKey LAVA = FluidKey.of(Fluids.LAVA);
+    private static final FluidKey WATER = FluidKey.of(Fluids.WATER);
+    /** Round bucket counts, and the lava deliberately the larger, so the order of the rows is decided by the amount. */
+    private static final int LAVA_MB = 48 * FluidType.BUCKET_VOLUME;
+    private static final int WATER_MB = 12 * FluidType.BUCKET_VOLUME;
+    /** Both bays of the tie-break test hold this, so only the fluid id may decide their order. */
+    private static final int TIED_MB = 9 * FluidType.BUCKET_VOLUME;
+    /** Empty buckets in the chest: the item number that must not move when a bay is filled. */
+    private static final int STORED_BUCKETS = 17;
     private static final int TIE_PULLS = 5;
     private static final int STORE_JOB_IRON = 32;
     private static final int JOB_TIMEOUT_TICKS = 1200;
@@ -175,13 +198,14 @@ public final class DisplayLinkGameTests {
     // --- registration ----------------------------------------------------------------------------------------------
 
     /**
-     * The five sources are in Create's registry under their {@code wareworks} ids, their names use exactly the lang keys
+     * The six sources are in Create's registry under their {@code wareworks} ids, their names use exactly the lang keys
      * the generated English carries, and every bound block offers them in the declared order while rail, input and
      * production station and stock keeper offer none.
      * <p>
-     * The <b>order</b> on the dock is the load-bearing part since M25 (issue #16): a Display Link screen preselects the
-     * first source a block offers, so "Crane Status" has to stay first or every link a player has already hung on a
-     * dock would quietly change what it shows.
+     * The <b>order</b> is the load-bearing part since M25 (issue #16): a Display Link screen preselects the first
+     * source a block offers, so "Crane Status" has to stay first on the dock, and "Warehouse Summary" first on the
+     * controller and the terminal, or every link a player has already hung there would quietly change what it shows.
+     * That is exactly why "Fluid Stock" is the <b>third</b> entry of those two blocks and not the first (M30).
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void displaysourcesregistered(GameTestHelper helper) {
@@ -195,6 +219,8 @@ public final class DisplayLinkGameTests {
                 WareworksLang.DISPLAY_SOURCE_CRANE_STATUS);
         assertRegistered(helper, WareworksDisplaySources.CRANE_THROUGHPUT, "crane_throughput",
                 WareworksLang.DISPLAY_SOURCE_CRANE_THROUGHPUT);
+        assertRegistered(helper, WareworksDisplaySources.FLUID_STOCK, "fluid_stock",
+                WareworksLang.DISPLAY_SOURCE_FLUID_STOCK);
 
         List<BlockState> blocks = List.of(WareworksBlocks.STACKER_CRANE.getDefaultState(),
                 WareworksBlocks.WAREHOUSE_RAIL.getDefaultState(), WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState(),
@@ -205,10 +231,12 @@ public final class DisplayLinkGameTests {
         List<List<DisplaySource>> expected = List.of(
                 List.of(WareworksDisplaySources.CRANE_STATUS.get(), WareworksDisplaySources.CRANE_THROUGHPUT.get()),
                 List.of(),
-                List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get()),
+                List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get(),
+                        WareworksDisplaySources.FLUID_STOCK.get()),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()), List.of(),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()),
-                List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get()),
+                List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get(),
+                        WareworksDisplaySources.FLUID_STOCK.get()),
                 List.of(), List.of());
         for (int i = 0; i < blocks.size(); i++) {
             BlockPos pos = SOURCE_BLOCKS[i];
@@ -637,6 +665,216 @@ public final class DisplayLinkGameTests {
                 .thenSucceed();
     }
 
+    // --- fluid stock (M30, issue #21) -------------------------------------------------------------------------------
+
+    /**
+     * Fluid stock on the controller: one row per fluid the warehouse's bays hold, most first, with the amount
+     * <b>and its unit</b> in front of the fluid's name.
+     * <p>
+     * The unit is the point of the row and of the source existing at all. The index counts millibuckets, because a
+     * bottle is 250 mB and buckets cannot express it, and a brass bay holds 256 000 of them, which nobody reads — so
+     * the row is formatted by Create's own {@code FluidFormatter}, the way its fluid list source formats a tank:
+     * {@code "48.0 B Lava"} with the link's "shortened numbers" default, {@code "48000 mB Lava"} with full numbers.
+     * Both are asserted, because the switch is the player's and either reading has to be true.
+     * <p>
+     * The item stock list stands beside it on the same warehouse and must be <b>untouched</b> by any of it: that is
+     * why the two are separate sources ({@code IntAttached} is one number column, so 17 buckets next to 48 000
+     * millibuckets would be read as one scale).
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void fluidstockoncontroller(GameTestHelper helper) {
+        AisleFixture aisle = fluidWarehouse(helper);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 0))
+                .thenExecute(() -> {
+                    fillBay(helper, aisle, LAVA_BAY, LAVA, LAVA_MB);
+                    fillBay(helper, aisle, WATER_BAY, WATER, WATER_MB);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().fluidStockIndex().distinctKeys(), 2,
+                        "both bays indexed"))
+                .thenExecute(() -> {
+                    DisplayLinkBlockEntity link = link(helper, aisle.controllerPos(), Direction.UP, tube,
+                            WareworksDisplaySources.FLUID_STOCK);
+                    helper.assertValueEqual(nixieText(helper, tube).getString(), fluidRow(LAVA_MB, Fluids.LAVA, true),
+                            "the nixie row shows the fluid there is most of");
+
+                    List<String> rows = new ArrayList<>();
+                    for (MutableComponent line : provideText(helper, link, WareworksDisplaySources.FLUID_STOCK, 4))
+                        rows.add(line.getString());
+                    helper.assertValueEqual(rows,
+                            List.of(fluidRow(LAVA_MB, Fluids.LAVA, true), fluidRow(WATER_MB, Fluids.WATER, true)),
+                            "one row per fluid, most first");
+                    helper.assertValueEqual(provideText(helper, link, WareworksDisplaySources.FLUID_STOCK, 1).size(), 1,
+                            "the list is cut to the rows of the target");
+
+                    // The player's own "full number" option: the same amount in millibuckets, Create's other unit.
+                    link.getSourceConfig().putInt("Format", 1);
+                    link.updateGatheredData();
+                    helper.assertValueEqual(nixieText(helper, tube).getString(), fluidRow(LAVA_MB, Fluids.LAVA, false),
+                            "full numbers state millibuckets");
+                    link.getSourceConfig().putInt("Format", 0);
+                    link.updateGatheredData();
+
+                    // And the item list beside it is about items only, whatever the bays hold.
+                    DisplayLinkBlockEntity items = link(helper, aisle.controllerPos(), Direction.NORTH, tube,
+                            WareworksDisplaySources.STOCK_LIST);
+                    helper.assertValueEqual(nixieText(helper, tube).getString(),
+                            STORED_BUCKETS + " " + Items.BUCKET.getDescription().getString() + " ",
+                            "the stock list counts the buckets in the chest and no millibucket");
+                    helper.assertValueEqual(provideText(helper, items, WareworksDisplaySources.STOCK_LIST, 4).size(), 1,
+                            "and lists one item type");
+                })
+                .thenExecute(() -> retireBays(helper, aisle))
+                .thenSucceed();
+    }
+
+    /**
+     * Two fluids holding the same amount keep a fixed order over repeated pulls, and it is the documented one:
+     * {@link FluidKey#ORDER}, i.e. the smaller fluid id first.
+     * <p>
+     * {@link StockListDisplaySource}'s own argument, for the other index (M14 review fix): the index keeps its keys in
+     * a {@code HashSet}, whose iteration order may differ between launches, and {@code FluidKey#hashCode} mixes in
+     * {@code Fluid}'s identity hash, which differs after every restart — so a fallback to the hash would swap two
+     * equally stocked rows between launches, and the order has to be value-based.
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void fluidstockdeterministicties(GameTestHelper helper) {
+        AisleFixture aisle = fluidWarehouse(helper);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 0))
+                .thenExecute(() -> {
+                    fillBay(helper, aisle, LAVA_BAY, LAVA, TIED_MB);
+                    fillBay(helper, aisle, WATER_BAY, WATER, TIED_MB);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().fluidStockIndex().distinctKeys(), 2,
+                        "both bays indexed"))
+                .thenExecute(() -> {
+                    DisplayLinkBlockEntity link = link(helper, aisle.controllerPos(), Direction.UP, tube,
+                            WareworksDisplaySources.FLUID_STOCK);
+                    // minecraft:lava sorts before minecraft:water, so lava is the first row whatever the index's
+                    // iteration order happens to be in this run.
+                    helper.assertTrue(FluidKey.ORDER.compare(LAVA, WATER) < 0, "lava's id sorts before water's");
+                    String expected = fluidRow(TIED_MB, Fluids.LAVA, true);
+                    for (int pull = 0; pull < TIE_PULLS; pull++) {
+                        link.updateGatheredData();
+                        helper.assertValueEqual(nixieText(helper, tube).getString(), expected,
+                                "equal amounts order by fluid id, pull " + pull);
+                    }
+                    helper.assertValueEqual(FluidKey.ORDER.compare(LAVA, FluidKey.of(Fluids.LAVA)), 0,
+                            "two equal keys tie");
+                })
+                .thenExecute(() -> retireBays(helper, aisle))
+                .thenSucceed();
+    }
+
+    /**
+     * A warehouse with no fluid in it lists nothing, and the warehouse summary beside it goes on writing exactly its
+     * four core lines — the guard that keeps every board a player hung before M30 showing what it showed.
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void fluidstockwithoutfluid(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STOCKED, IRON.toStack(STORED_IRON));
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 0))
+                .thenExecute(() -> {
+                    DisplayLinkBlockEntity link = link(helper, aisle.controllerPos(), Direction.UP, tube,
+                            WareworksDisplaySources.FLUID_STOCK);
+                    helper.assertTrue(provideText(helper, link, WareworksDisplaySources.FLUID_STOCK, 4).isEmpty(),
+                            "a warehouse holding no fluid lists nothing");
+                    helper.assertValueEqual(nixieText(helper, tube).getString(), "", "the row stays blank");
+
+                    link(helper, aisle.controllerPos(), Direction.NORTH, LECTERN,
+                            WareworksDisplaySources.AISLE_SUMMARY);
+                    assertFullSummary(helper, lecternPages(helper, LECTERN), 1, 1, 1, STORED_IRON);
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The warehouse summary's fifth line, for a warehouse that holds fluid: how many fluids and how much in all.
+     * <p>
+     * It is the <b>first</b> of the optional lines, directly under the four every board shows, and that is a decision
+     * about which row a short board keeps: it is the fifth stock number, and a board is hung on a warehouse that holds
+     * fluid because of it. Asserted on a lectern, which keeps the components, so the two arguments can be read — the
+     * second of them is Create's pre-formatted amount with its unit, which is what keeps a German word out of the
+     * line.
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void aislesummarywithfluid(GameTestHelper helper) {
+        AisleFixture aisle = fluidWarehouse(helper);
+        lectern(helper, LECTERN);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 0))
+                .thenExecute(() -> {
+                    link(helper, aisle.controllerPos(), Direction.UP, LECTERN, WareworksDisplaySources.AISLE_SUMMARY);
+                    helper.assertValueEqual(lecternPages(helper, LECTERN).size(), 4,
+                            "no fluid, no fluid line");
+                    fillBay(helper, aisle, LAVA_BAY, LAVA, LAVA_MB);
+                    fillBay(helper, aisle, WATER_BAY, WATER, WATER_MB);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().fluidStockIndex().distinctKeys(), 2,
+                        "both bays indexed"))
+                .thenExecute(() -> {
+                    linkAt(helper, aisle.controllerPos().relative(Direction.UP)).updateGatheredData();
+                    List<Component> lines = lecternPages(helper, LECTERN);
+                    helper.assertValueEqual(lines.size(), 5, "the fluid line is added to the four counts");
+                    // The four core lines are exactly what they were: three storage locations, one of them in use,
+                    // one item type, seventeen items. A fluid bay is a storage location that holds no items.
+                    assertFullSummary(helper, lines.subList(0, 4), 1, 3, 1, STORED_BUCKETS);
+                    assertKey(helper, lines.get(4), WareworksLang.DISPLAY_AISLE_LINE_FLUIDS, "fluid line");
+                    Object[] args = argsOf(helper, lines.get(4), "fluid line");
+                    helper.assertValueEqual(args.length, 2, "the line carries the types and the amount");
+                    helper.assertValueEqual(argText(args[0]), number(2), "fluid types");
+                    helper.assertValueEqual(argText(args[1]),
+                            FluidFormatter.asString(LAVA_MB + WATER_MB, true), "fluid in all, with Create's unit");
+                })
+                .thenExecute(() -> retireBays(helper, aisle))
+                .thenSucceed();
+    }
+
+    /**
+     * A display board is served through {@code provideFlapDisplayText}, which is the only path that reaches
+     * {@code loadFlapDisplayLayout}: the row has <b>three</b> sections — amount, unit and fluid name — where the
+     * inherited two-section layout would have given the unit no flaps of its own.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void fluidstockonflapdisplay(GameTestHelper helper) {
+        AisleFixture aisle = fluidWarehouse(helper);
+        displayBoard(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 0))
+                .thenExecute(() -> fillBay(helper, aisle, LAVA_BAY, LAVA, LAVA_MB))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().fluidStockIndex().distinctKeys(), 1,
+                        "the bay is indexed"))
+                .thenIdle(BOARD_SETTLE_TICKS)
+                .thenExecute(() -> {
+                    FlapDisplayBlockEntity board = boardAt(helper);
+                    helper.assertTrue(board.isSpeedRequirementFulfilled(), "the board turns fast enough");
+                    link(helper, aisle.controllerPos(), Direction.UP, BOARD, WareworksDisplaySources.FLUID_STOCK);
+
+                    List<FlapDisplaySection> sections = board.getLines().get(0).getSections();
+                    helper.assertValueEqual(sections.size(), 3, "amount, unit and name column");
+                    helper.assertValueEqual(sections.get(0).getText().getString(),
+                            FluidFormatter.asComponents(LAVA_MB, true).getFirst().getString(), "the amount column");
+                    helper.assertValueEqual(sections.get(1).getText().getString(),
+                            FluidFormatter.asComponents(LAVA_MB, true).getSecond().getString(), "the unit column");
+                    helper.assertValueEqual(sections.get(2).getText().getString(),
+                            " " + new FluidStack(Fluids.LAVA, 1).getHoverName().getString(), "the name column");
+                })
+                .thenExecute(() -> retireBays(helper, aisle))
+                .thenSucceed();
+    }
+
     // --- filtered stock --------------------------------------------------------------------------------------------
 
     /** The output's request filter names the item; the line is the aisle's stored total, and 0 without a filter. */
@@ -1037,6 +1275,57 @@ public final class DisplayLinkGameTests {
             return sign;
         helper.fail("missing sign block entity", SIGN);
         return null;
+    }
+
+    // --- helpers: fluid bays (M30, issue #21) -----------------------------------------------------------------------
+
+    /** The aisle of the fluid tests: one chest-backed location holding buckets, and two unfiltered copper bays. */
+    private static AisleFixture fluidWarehouse(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS);
+        for (RackPosition bay : List.of(LAVA_BAY, WATER_BAY))
+            helper.setBlock(aisle.rackPos(bay), WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                    .setValue(FluidBayBlock.FACING, aisle.sideDirection(bay)));
+        aisle.build(true);
+        aisle.storage(STOCKED, new ItemStack(Items.BUCKET, STORED_BUCKETS));
+        return aisle;
+    }
+
+    /** Fills a bay as a pipe or a player's hand would, through its own ungated handler. */
+    private static void fillBay(GameTestHelper helper, AisleFixture aisle, RackPosition rack, FluidKey fluid,
+            int millibuckets) {
+        FluidBayBlockEntity bay = WareworksBlockEntityTypes.FLUID_BAY.getNullable(helper.getLevel(),
+                helper.absolutePos(aisle.rackPos(rack)));
+        if (bay == null)
+            helper.fail("missing fluid bay block entity", aisle.rackPos(rack));
+        helper.assertValueEqual(bay.fill(fluid.toStack(millibuckets), false), millibuckets,
+                "the bay at " + rack + " takes " + millibuckets + " mB");
+    }
+
+    /**
+     * Empties both bays and takes them away, so the teardown of a bay with fluid in it does not report the one loss
+     * this mod allows (M30, D7) in the log of a passing run.
+     */
+    private static void retireBays(GameTestHelper helper, AisleFixture aisle) {
+        for (RackPosition rack : List.of(LAVA_BAY, WATER_BAY)) {
+            BlockPos pos = aisle.rackPos(rack);
+            Clearable.tryClear(helper.getLevel().getBlockEntity(helper.absolutePos(pos)));
+            helper.setBlock(pos, Blocks.AIR);
+        }
+    }
+
+    /**
+     * A fluid stock row as a text target receives it: the amount, its unit and then the fluid's name, as
+     * {@code "48.0B Lava"} with the link's default "shortened numbers" and {@code "48000mB Lava"} with full numbers.
+     * <p>
+     * Built from Create's own formatter rather than written out, so the assertion is about the <b>source's</b> choice
+     * of unit and not about this file's idea of it: {@code create.generic.unit.buckets} is {@code "B"} and
+     * {@code millibuckets} is {@code "mB"} in every language Create ships, and a row that spelled a unit out here
+     * would pass while the real one said something else.
+     */
+    private static String fluidRow(int millibuckets, Fluid fluid, boolean shortened) {
+        Couple<MutableComponent> amount = FluidFormatter.asComponents(millibuckets, shortened);
+        return amount.getFirst().getString() + amount.getSecond().getString() + " "
+                + new FluidStack(fluid, 1).getHoverName().getString();
     }
 
     // --- helpers: assertions ----------------------------------------------------------------------------------------

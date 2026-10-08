@@ -406,6 +406,12 @@ public final class JobPlanner<K, L> {
      * Finds a new target for {@code amount} items of {@code key} left in the handling head of a job of {@code type}
      * whose target {@code failedTarget} failed (§8). The crane position of {@code input} is the travel origin.
      *
+     * A location that takes a carry {@linkplain PlannerInput#allOrNothing() whole or not at all} is offered the carry
+     * only when it takes <b>all</b> of it, and is skipped otherwise (M30 review fix, issue #21): the amount is already
+     * in the handling head and cannot be made smaller, so such a location would refuse on arrival and the ladder would
+     * send the carry to the next one — with two of them, for ever. Every ordinary inventory is unaffected and may
+     * still take part of the carry.
+     *
      * @param failedTarget the target to exclude, or {@code null} (a hold retry: every location may be chosen)
      * @return the best target that accepts at least one item in the live simulation, or empty (hold the items); at most
      * three times {@link PlannerInput#liveSimulationBudget()} live calls for a {@code STORE} reroute (storage, then the
@@ -431,29 +437,31 @@ public final class JobPlanner<K, L> {
             // anyway, because the next store plan offers them to the port. The port list is the gated one, so "off means
             // off" holds on a reroute too, and a port's filter is hard here — which cannot park the crane, because
             // advisory-filter storage is still a target and HOLDING is still the floor.
-            case STORE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null)
+            case STORE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null, true)
                     .map(Selection::target)
                     .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
-                            new Budget(input.liveSimulationBudget())).map(Selection::target))
+                            new Budget(input.liveSimulationBudget()), true).map(Selection::target))
                     .or(() -> selectPorts(input, key, amount, failedTarget, branch, x, y,
-                            new Budget(input.liveSimulationBudget())).map(Selection::target));
+                            new Budget(input.liveSimulationBudget()), true).map(Selection::target));
             // Back into storage first: another output never asked for these items (its own requests are served by
             // their own jobs), so delivering there would over-deliver. Only when no storage location accepts them.
             // Store filters are advisory here (M8 review fix): these items already left the warehouse, so a location
             // whose filter rejects them is ranked last rather than dropped — otherwise a location that was
             // re-dedicated while its stock was inside could not take that stock back, and a fully partitioned aisle
             // could park the crane in HOLDING for ever (§8).
-            case RETRIEVE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null)
+            case RETRIEVE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null,
+                    true)
                     .map(Selection::target)
                     .or(() -> selectStation(input, withoutPorts(input, input.outputs()), LocationKind.OUTPUT, key,
-                            amount, failedTarget, new Budget(input.liveSimulationBudget())).map(Selection::target));
+                            amount, failedTarget, new Budget(input.liveSimulationBudget()), true)
+                            .map(Selection::target));
             // Supply leftovers go back into storage and nowhere else: nobody requested them at a station, and putting
             // them into an output would hand a player ingredients they never asked for (ADR-024). Rejecting filters
             // are advisory here for the same reason as on a retrieve reroute — these items already left the warehouse.
             // Retrieve and supply leftovers are never offered to an accepting port (M17): only items the warehouse chose
             // not to store may leave through one, so a player can reason that what comes out of a port is surplus and
             // the mod never quietly feeds a shredder with items somebody requested.
-            case SUPPLY -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null)
+            case SUPPLY -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null, true)
                     .map(Selection::target);
             // Collected items are storing items (M18, issue #13), so a rejecting filter drops the location as in the
             // store plan, and the fallback is an input buffer — from where they are stored normally. A port is
@@ -461,10 +469,11 @@ public final class JobPlanner<K, L> {
             // OUTPUT target at all, which is what keeps a diversion from defeating the headroom that stopped the
             // collecting in the first place (§5, guard 2). The station fallback gets its own budget, so storage
             // candidates that used it up never hide an input that accepts the items.
-            case COLLECT -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null)
+            case COLLECT -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null,
+                    true)
                     .map(Selection::target)
                     .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
-                            new Budget(input.liveSimulationBudget())).map(Selection::target));
+                            new Budget(input.liveSimulationBudget()), true).map(Selection::target));
         };
     }
 
@@ -615,7 +624,7 @@ public final class JobPlanner<K, L> {
                 continue;
             }
             Optional<Selection<L>> selection = selectStorage(input, key, Math.min(limit, extractable), null,
-                    sourcePos.branch(), sourcePos.x(), sourcePos.y(), toSource, budget, false, survey);
+                    sourcePos.branch(), sourcePos.x(), sourcePos.y(), toSource, budget, false, survey, false);
             if (selection.isPresent()) {
                 L target = selection.get().location();
                 TransportJob<K, L> job = TransportJob.collect(newId(), source, target, key,
@@ -654,7 +663,7 @@ public final class JobPlanner<K, L> {
         collectStorage(input, candidates, key, storageLimit, excluded, fromBranch, fromX, fromY, baseTravel, false,
                 survey);
         candidates.sort(RANKING);
-        return tryInsert(input, candidates, key, budget);
+        return tryInsert(input, candidates, key, budget, false);
     }
 
     /**
@@ -672,12 +681,12 @@ public final class JobPlanner<K, L> {
      */
     private Optional<Selection<L>> selectStorage(PlannerInput<K, L> input, K key, int limit, @Nullable L excluded,
             int fromBranch, double fromX, double fromY, long baseTravel, Budget budget, boolean allowRejected,
-            @Nullable StoreSurvey survey) {
+            @Nullable StoreSurvey survey, boolean wholeCarry) {
         List<Candidate<L>> candidates = new ArrayList<>();
         collectStorage(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, baseTravel, allowRejected,
                 survey);
         candidates.sort(RANKING);
-        return tryInsert(input, candidates, key, budget);
+        return tryInsert(input, candidates, key, budget, wholeCarry);
     }
 
     /**
@@ -706,11 +715,11 @@ public final class JobPlanner<K, L> {
 
     /** Accepting warehouse ports alone, for the last resort of a store reroute (§8, M17). */
     private Optional<Selection<L>> selectPorts(PlannerInput<K, L> input, K key, int limit, @Nullable L excluded,
-            int fromBranch, double fromX, double fromY, Budget budget) {
+            int fromBranch, double fromX, double fromY, Budget budget, boolean wholeCarry) {
         List<Candidate<L>> candidates = new ArrayList<>();
         collectPorts(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, 0L, null);
         candidates.sort(RANKING);
-        return tryInsert(input, candidates, key, budget);
+        return tryInsert(input, candidates, key, budget, wholeCarry);
     }
 
     /** Adds the storage candidates for {@code key} to {@code candidates}; see {@link #selectStorage}. */
@@ -852,7 +861,7 @@ public final class JobPlanner<K, L> {
 
     /** Stations of one {@code kind} ranked by travel time from the crane. */
     private Optional<Selection<L>> selectStation(PlannerInput<K, L> input, List<L> stations, LocationKind kind, K key,
-            int limit, @Nullable L excluded, Budget budget) {
+            int limit, @Nullable L excluded, Budget budget, boolean wholeCarry) {
         List<Candidate<L>> candidates = new ArrayList<>();
         int order = 0;
         for (L location : stations) {
@@ -868,11 +877,22 @@ public final class JobPlanner<K, L> {
                     NEUTRAL_PRIORITY, travel, rank, limit));
         }
         candidates.sort(RANKING);
-        return tryInsert(input, candidates, key, budget);
+        return tryInsert(input, candidates, key, budget, wholeCarry);
     }
 
+    /**
+     * The first candidate that really accepts something in a live simulation, and how much of its {@code limit} it took.
+     *
+     * @param wholeCarry the caller must place its whole amount at one location, so a candidate that takes a carry
+     *                   {@linkplain PlannerInput#allOrNothing() whole or not at all} is <b>skipped</b> unless it takes
+     *                   all of it. True only on a reroute, where the amount is already in the handling head and cannot
+     *                   be made smaller: offering such a location part of a carry means the crane arrives, is refused
+     *                   and is rerouted to the next one — which, with two of them, never ends (M30 review fix,
+     *                   issue #21). A location that accepts partially, which is every ordinary inventory, is
+     *                   unaffected: its leftovers are rerouted again after the drop ({@link RerouteTarget#amount()})
+     */
     private Optional<Selection<L>> tryInsert(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key,
-            Budget budget) {
+            Budget budget, boolean wholeCarry) {
         for (Candidate<L> candidate : candidates) {
             if (!budget.tryUse())
                 return Optional.empty();
@@ -881,9 +901,12 @@ public final class JobPlanner<K, L> {
             int ask = CapacityMath.toIntClamped(limit + reserved);
             long live = input.liveInsert().simulateInsert(candidate.location(), key, ask);
             long amount = Math.min(limit, live - reserved);
-            if (amount > 0)
-                return Optional.of(new Selection<>(candidate.location(), candidate.kind(), (int) amount,
-                        candidate.travelTicks()));
+            if (amount <= 0)
+                continue;
+            if (wholeCarry && amount < limit && input.allOrNothing().test(candidate.location()))
+                continue; // it would take none of it on arrival; the next candidate may take all of it
+            return Optional.of(new Selection<>(candidate.location(), candidate.kind(), (int) amount,
+                    candidate.travelTicks()));
         }
         return Optional.empty();
     }

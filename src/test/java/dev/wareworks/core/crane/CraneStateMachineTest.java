@@ -25,6 +25,12 @@ import dev.wareworks.core.warehouse.LocationKind;
 
 class CraneStateMachineTest {
     private static final String ORE = "ore";
+    /**
+     * What a container exchange gives back — in the warehouse the empty container a fluid bay hands over once it has
+     * drained the filled one (M30, issue #21). The machine knows nothing about fluids: a key goes in and another comes
+     * out.
+     */
+    private static final String EMPTIED = "emptied";
     private static final int TRANSFER = 3;
     private static final int RETRY = 4;
     private static final int HOLD = 5;
@@ -53,6 +59,12 @@ class CraneStateMachineTest {
         IntUnaryOperator dropper = IntUnaryOperator.identity();
         Function<CraneEffect.RequestReroute<String, RackPosition>, CraneEvent<String, RackPosition>> rerouter =
                 request -> CraneEvent.noReroute();
+        /**
+         * When set, the <b>next</b> {@code PerformDrop} is answered with a container exchange for this key instead of a
+         * drop result and the field is cleared again (M30, issue #21) — one stop of a trip is an exchange, the rest are
+         * ordinary drops, which is exactly what a fluid bay in a warehouse of racks looks like.
+         */
+        String exchangeFor;
         boolean answer = true;
         int ticks;
 
@@ -84,8 +96,14 @@ class CraneStateMachineTest {
                 case CraneEffect.PerformPick<String, RackPosition> pick ->
                         send(CraneEvent.pickResult(picker.applyAsInt(pick.amount())));
                 case CraneEffect.PerformDrop<String, RackPosition> drop -> {
-                    int delivered = dropper.applyAsInt(drop.amount());
-                    send(CraneEvent.dropResult(delivered, drop.amount() - delivered));
+                    if (exchangeFor != null) {
+                        String received = exchangeFor;
+                        exchangeFor = null;
+                        send(CraneEvent.exchanged(received, drop.amount()));
+                    } else {
+                        int delivered = dropper.applyAsInt(drop.amount());
+                        send(CraneEvent.dropResult(delivered, drop.amount() - delivered));
+                    }
                 }
                 case CraneEffect.RequestReroute<String, RackPosition> reroute -> {
                     CraneEvent<String, RackPosition> result = rerouter.apply(reroute);
@@ -443,6 +461,130 @@ class CraneStateMachineTest {
     /** One ingredient of a production order on its way to the station that will consume it. */
     private static TransportJob<String, RackPosition> supplyJob() {
         return TransportJob.supply(JOB, STORAGE_A, PRODUCTION, ORE, 16, REQUEST);
+    }
+
+    // --- the container exchange (M30, issue #21) ------------------------------------------------------------------
+
+    /**
+     * The exchange as the crane really runs it: the drop at the target answers with <b>another key</b>, the job
+     * continues under it, the arm retracts and the carry is rerouted — with the stop it just happened at excluded,
+     * which is the reroute loop closing itself with no extra argument (D15).
+     * <p>
+     * The two reports are the point: exactly one {@code ReportExchanged}, which names the key that was given up, and
+     * exactly one {@code ReportDelivered}, which names the key that came back. An exchange reported as a delivery would
+     * credit a restock order with a container that was never stored (D14), so these two must never be the same effect.
+     * And the phase list is the one from an ordinary store job plus a reroute: no new phase anywhere.
+     */
+    @Test
+    void anExchangeContinuesTheJobUnderTheNewKeyAndReroutesIt() {
+        Harness h = new Harness();
+        h.exchangeFor = EMPTIED;
+        List<Optional<RackPosition>> excluded = new ArrayList<>();
+        h.rerouter = request -> {
+            excluded.add(request.failedTarget());
+            return CraneEvent.rerouteTo(STORAGE_B, LocationKind.STORAGE);
+        };
+        h.send(CraneEvent.jobAssigned(storeJob()));
+        h.tickUntilPhase(CranePhase.COMPLETE);
+
+        assertEquals(1, h.count(CraneEffect.ReportExchanged.class));
+        CraneEffect.ReportExchanged<?, ?> exchanged = h.effects(CraneEffect.ReportExchanged.class).get(0);
+        assertEquals(ORE, exchanged.formerKey(), "what the head gave up, which the job no longer carries");
+        assertEquals(STORAGE_A, exchanged.target());
+        assertEquals(16, exchanged.amount());
+        assertEquals(EMPTIED, exchanged.job().key());
+        assertEquals(16, exchanged.job().heldAmount());
+        assertEquals(0, exchanged.job().deliveredAmount(), "an exchange delivers nothing");
+        assertEquals(JOB, exchanged.job().id(), "the same trip");
+
+        assertEquals(List.of(Optional.of(STORAGE_A)), excluded, "the stop the exchange happened at is skipped");
+        assertEquals(1, h.count(CraneEffect.ReportDelivered.class));
+        CraneEffect.ReportDelivered<?, ?> delivered = h.effects(CraneEffect.ReportDelivered.class).get(0);
+        assertEquals(EMPTIED, delivered.job().key(), "what is shelved is the item that came back");
+        assertEquals(STORAGE_B, delivered.target());
+        assertEquals(16, delivered.delivered());
+        assertEquals(List.of(CranePhase.TRAVEL_TO_SOURCE, CranePhase.EXTEND_SOURCE, CranePhase.PICK,
+                CranePhase.RETRACT_SOURCE, CranePhase.TRAVEL_TO_TARGET, CranePhase.EXTEND_TARGET, CranePhase.DROP,
+                CranePhase.RETRACT_TARGET, CranePhase.REROUTE, CranePhase.TRAVEL_TO_TARGET, CranePhase.EXTEND_TARGET,
+                CranePhase.DROP, CranePhase.RETRACT_TARGET, CranePhase.COMPLETE), h.phases(),
+                "an ordinary store job plus a reroute: no new phase");
+        assertEquals(0, h.state.heldAmount());
+    }
+
+    /**
+     * The one rule the dropped request exists for: a job that would normally park at the delivery station of its
+     * request leaves instead once the exchange has happened, because what the head holds now is not what that station
+     * was promised. Without it the crane would sit in {@code WAITING_FOR_TARGET} in front of a station that is never
+     * going to want empty containers, with the aisle blocked.
+     */
+    @Test
+    void afterAnExchangeNothingWaitsAtTheFormerTarget() {
+        Harness h = new Harness();
+        h.exchangeFor = EMPTIED;
+        h.rerouter = request -> CraneEvent.rerouteTo(STORAGE_B, LocationKind.STORAGE);
+        h.send(CraneEvent.jobAssigned(retrieveJob()));
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertFalse(h.phases().contains(CranePhase.WAITING_FOR_TARGET),
+                "the crane never parks at the station it was serving");
+        assertEquals(1, h.count(CraneEffect.RequestReroute.class));
+        assertEquals(Optional.of(OUTPUT), h.effects(CraneEffect.RequestReroute.class).get(0).failedTarget());
+        assertEquals(Optional.empty(), h.state.job().orElseThrow().requestId(), "the request was dropped");
+        assertEquals(EMPTIED, h.state.job().orElseThrow().key());
+    }
+
+    /**
+     * A result that contradicts the state throws, exactly as a drop result that does not add up does. The amount of an
+     * exchange is the whole held amount or nothing at all, because a partial one would leave two keys in the head and
+     * the second of them would be spilled at the dock; a key exchanged for itself would silently restart the delivery
+     * count of a job that is part way through. {@code CraneExecution.drain} catches both and answers by re-reading the
+     * real handling head.
+     */
+    @Test
+    void anExchangeThatContradictsTheStateThrows() {
+        Harness h = new Harness();
+        h.answer = false;
+        h.send(CraneEvent.jobAssigned(storeJob()));
+        h.tickUntil(() -> h.count(CraneEffect.PerformPick.class) > 0);
+        h.send(CraneEvent.pickResult(16));
+        h.tickUntil(() -> h.count(CraneEffect.PerformDrop.class) > 0);
+        CraneState<String, RackPosition> atTheStop = h.state;
+        assertEquals(CranePhase.DROP, atTheStop.phase());
+        assertTrue(atTheStop.awaitingResult());
+
+        assertThrows(IllegalArgumentException.class, () -> MACHINE.apply(atTheStop, CraneEvent.exchanged(EMPTIED, 15)),
+                "fewer containers than the head holds");
+        assertThrows(IllegalArgumentException.class, () -> MACHINE.apply(atTheStop, CraneEvent.exchanged(EMPTIED, 17)),
+                "and more");
+        assertThrows(IllegalArgumentException.class, () -> MACHINE.apply(atTheStop, CraneEvent.exchanged(ORE, 16)),
+                "and a key exchanged for itself, which is no exchange at all");
+        assertThrows(IllegalArgumentException.class, () -> CraneEvent.exchanged(EMPTIED, 0),
+                "an exchange of nothing cannot even be built");
+        assertThrows(NullPointerException.class, () -> CraneEvent.exchanged(null, 1));
+        assertEquals(atTheStop, h.state, "and the state is untouched by all of them");
+        assertEquals(ORE, h.state.job().orElseThrow().key());
+    }
+
+    /** Every phase but a drop whose result is being awaited ignores the event, like every other result. */
+    @Test
+    void anExchangeOutsideAnAwaitedDropChangesNothing() {
+        Harness idle = new Harness();
+        assertFalse(idle.send(CraneEvent.exchanged(EMPTIED, 1)).changed(), "an idle crane has nothing to exchange");
+
+        Harness h = new Harness();
+        h.answer = false;
+        h.send(CraneEvent.jobAssigned(storeJob()));
+        assertEquals(CranePhase.EXTEND_SOURCE, h.state.phase());
+        assertFalse(h.send(CraneEvent.exchanged(EMPTIED, 16)).changed(), "nothing is in the head before the pick");
+        h.tickUntil(() -> h.count(CraneEffect.PerformPick.class) > 0);
+        assertEquals(CranePhase.PICK, h.state.phase());
+        assertFalse(h.send(CraneEvent.exchanged(EMPTIED, 16)).changed(), "a pick is not a drop");
+        h.send(CraneEvent.pickResult(16));
+        assertEquals(CranePhase.RETRACT_SOURCE, h.state.phase());
+        assertFalse(h.send(CraneEvent.exchanged(EMPTIED, 16)).changed(), "nor is a retract");
+        h.tickUntilPhase(CranePhase.DROP);
+        assertFalse(h.state.awaitingResult(), "the transfer is still running");
+        assertFalse(h.send(CraneEvent.exchanged(EMPTIED, 16)).changed(), "and no result has been asked for yet");
+        assertEquals(ORE, h.state.job().orElseThrow().key());
     }
 
     // --- pause ---------------------------------------------------------------------------------------------------

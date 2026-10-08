@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "C": { "tag": "c:plates/copper" },
+    "K": { "item": "create:copper_casing" }
+  },
+  "pattern": [
+    "CCC",
+    "KCK",
+    "CCC"
+  ],
+  "result": { "count": 1, "id": "wareworks:fluid_bay_copper" }
+}

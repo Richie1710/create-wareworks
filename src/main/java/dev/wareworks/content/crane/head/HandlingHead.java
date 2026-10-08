@@ -11,8 +11,10 @@ import net.minecraft.world.level.Level;
 /**
  * The exchangeable tool at the tip of a stacker crane's arm ({@code docs/stacker-crane.md} §6). It is the only thing that
  * ever moves items between locations: {@link #pick} really extracts from the source into the head, {@link #drop} really
- * inserts from the head into the target, and whatever does not fit stays held. The MVP implementation is the
- * {@link InventoryGrabber}; pallet, package and fluid handlers can implement this interface later.
+ * inserts from the head into the target, and whatever does not fit stays held. {@link #exchange} is the third and
+ * youngest of them, and the only one that changes <i>what</i> the head holds rather than how much (M30, issue #21).
+ * The MVP implementation is the {@link InventoryGrabber}; pallet, package and fluid handlers can implement this
+ * interface later.
  * <p>
  * <b>Deviation from the design signature</b> ({@code drop(TransferContext)}): {@link #drop} takes the key and the amount,
  * because the crane reports the result per job key to its state machine and must never deliver more than the job holds.
@@ -36,6 +38,22 @@ public interface HandlingHead {
      * @return the delivered amount, {@code 0..min(amount, held)}
      */
     int drop(TransferContext target, ItemKey key, int amount);
+
+    /**
+     * Gives up {@code amount} held items of {@code from} at {@code target} and takes back that many of {@code to} —
+     * the <b>container exchange</b> (real operation, M30, issue #21). The one stop at which the head leaves with
+     * something other than what it arrived with: a filled container goes into a fluid bay's tank and an empty one
+     * comes back out as ordinary stock.
+     * <p>
+     * <b>All or nothing</b> ({@link TransferContext#exchange}): either {@code amount} containers are exchanged or the
+     * head is untouched, because a partial exchange would leave two item keys in one head. A head that cannot
+     * exchange, or a target that is not an exchange location, answers 0 and changes nothing — the same answer a full
+     * target gives {@link #drop}, so a caller needs no new failure path.
+     *
+     * @param to the item the head expects back, as a simulated exchange at {@code target} in this same tick named it
+     * @return {@code amount} when the exchange happened, 0 when it did not
+     */
+    int exchange(TransferContext target, ItemKey from, ItemKey to, int amount);
 
     /** What the head holds right now. */
     HeldItems held();

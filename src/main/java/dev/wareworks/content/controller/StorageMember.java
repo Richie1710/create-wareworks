@@ -1,7 +1,10 @@
 package dev.wareworks.content.controller;
 
+import java.util.Map;
 import java.util.Optional;
 
+import dev.wareworks.content.fluid.FluidDedication;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.warehouse.LocationKind;
@@ -28,6 +31,29 @@ public interface StorageMember extends WarehouseMember {
     InventorySnapshot<ItemKey> snapshot();
 
     /**
+     * What this location holds as <b>fluid</b>, in millibuckets per fluid, for the controller's parallel fluid stock
+     * index ({@code docs/warehouse-system.md} §3.9, M30 step 10, D10). A fluid bay answers one entry while it holds
+     * anything; every other storage member leaves the default, which is the empty map.
+     * <p>
+     * It is a <b>map</b> and not a fluid plus an amount because that is what {@code StockIndex#restore} takes, and
+     * that index is the whole reason this method exists: the controller never learns an amount it cannot put straight
+     * into it. A bay holds exactly one fluid, so the map is empty or a single entry — and the entry disappears the
+     * moment the bay empties, which is what makes an unfiltered bay take whatever arrives next ({@code BayContents}).
+     * <p>
+     * It rides beside {@link #snapshot()} rather than inside it for the reason D10 refuses a union key: the item index
+     * feeds {@code StockView#totalItems()} and {@code distinctKeys()}, which the controller's goggles, its display
+     * board, its save and every plan read as <b>items</b>, and summing millibuckets into that number would corrupt all
+     * of them at once. Two indexes are also the issue's own answer to "what does the warehouse hold": {@code lava: 64
+     * buckets} <b>and</b> {@code bucket: 17}, with nothing pretending one is the other.
+     * <p>
+     * Read on the same paths as {@link #snapshot()} and never cached by the caller, so it has to be cheap: a bay
+     * answers it from two fields.
+     */
+    default Map<FluidKey, Long> fluidStock() {
+        return Map.of();
+    }
+
+    /**
      * The live item handler of the attached inventory (server: cached), empty without inventory or while its position is
      * not loaded. The crane transfers through it and the controller simulates through it (M3); never keep it across
      * ticks.
@@ -44,6 +70,26 @@ public interface StorageMember extends WarehouseMember {
      */
     default ItemStack storeFilter() {
         return ItemStack.EMPTY;
+    }
+
+    /**
+     * Which fluid this location takes <b>filled containers</b> of, or empty for a location that stores items
+     * ({@code docs/warehouse-system.md} §3.9, M30, issue #21, D6). A fluid bay answers it; every other storage member
+     * leaves the default.
+     * <p>
+     * It rides beside {@link #storeFilter()} rather than inside it because the two are read in opposite ways: a store
+     * filter is a Create {@code FilterItemStack} evaluated against an arriving item, while a fluid bay's filter slot
+     * holds a <b>container</b> whose only meaning is the fluid inside it. Evaluating that slot as an item filter would
+     * match the <i>item</i> {@code lava_bucket} and route containers where fluid was meant, which is the dangerous kind
+     * of free — so a location that answers this is never asked the item question at all.
+     * <p>
+     * A present answer is a <b>hard</b> rule in both directions: such a location takes a container of its fluid
+     * ({@code FilterMatch#DEDICATED}, so it outranks a shelf) and nothing else at all, not even an item an unfiltered
+     * chest beside it would take. An empty container carries no fluid and is therefore refused, which is what keeps the
+     * warehouse from carrying the empties it just produced straight back to the bay.
+     */
+    default Optional<FluidDedication> storeFluidFilter() {
+        return Optional.empty();
     }
 
     /**

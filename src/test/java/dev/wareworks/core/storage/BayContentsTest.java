@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 class BayContentsTest {
     private static final String COBBLESTONE = "cobblestone";
     private static final String DIRT = "dirt";
+    /** A fluid bay's contents are the same class over a fluid key and millibuckets (M30, issue #21). */
+    private static final String LAVA = "lava";
     /** A wooden bay of cobblestone: 64 stacks x 64 ({@link BayTier#WOOD}). */
     private static final long WOOD_COBBLESTONE = 64L * 64L;
     /** How far cobblestone stacks, i.e. what one item-handler call may return. */
@@ -244,6 +246,54 @@ class BayContentsTest {
         assertTrue(bay.isEmpty());
         assertEquals(0, bay.count());
         assertEquals(64, bay.insert(DIRT, 64, WOOD_COBBLESTONE, false));
+    }
+
+    // --- the same contents as a tank (M30, issue #21) --------------------------------------------------------------
+
+    /**
+     * A <b>fluid</b> bay is this same class over a fluid key and a millibucket count ({@code FluidBayHandler}), and the
+     * one thing it does differently is the per-call cap: an {@code IItemHandler} must never answer with more than one
+     * stack, so a rack bay passes the stack size, while an {@code IFluidHandler} has no such bound at all — a pump
+     * asking a 256-bucket bay for everything gets 256 000 mB in <b>one</b> call.
+     */
+    @Test
+    void aTankTakesAndGivesItsWholeLoadInOneCall() {
+        long capacity = FluidBayTier.BRASS.capacityMillibuckets(FluidBayTier.BRASS.defaultBuckets());
+        assertEquals(256_000L, capacity);
+        assertEquals(256_000, bay.insert(LAVA, 1_000_000, capacity, false));
+        assertEquals(256_000, bay.count());
+        assertEquals(256_000, bay.extract(Integer.MAX_VALUE, Integer.MAX_VALUE, false));
+        assertTrue(bay.isEmpty(), "a drained tank forgets its fluid, which is what makes an unfiltered bay take the "
+                + "next one that arrives");
+    }
+
+    /**
+     * The largest capacity any fluid configuration can produce still fits an {@code int} of room, which is what lets a
+     * bay report its contents and its capacity to a fluid handler at all (both are {@code int} there).
+     */
+    @Test
+    void theLargestConfigurableTankStillAnswersInInts() {
+        long ceiling = FluidBayTier.BRASS.capacityMillibuckets(FluidBayTier.MAX_BUCKETS);
+        assertEquals(FluidBayTier.MAX_CAPACITY_MILLIBUCKETS, ceiling);
+        assertEquals(FluidBayTier.MAX_CAPACITY_MILLIBUCKETS, bay.roomFor(LAVA, ceiling));
+        assertEquals(FluidBayTier.MAX_CAPACITY_MILLIBUCKETS, bay.insert(LAVA, Integer.MAX_VALUE, ceiling, false));
+        assertEquals(FluidBayTier.MAX_CAPACITY_MILLIBUCKETS, bay.count());
+    }
+
+    /**
+     * A capacity <b>lowered under a tank that is already fuller than it</b> keeps every millibucket and accepts
+     * nothing — the one case NeoForge's own {@code FluidTank.fill} gets wrong, where it computes a negative fill and
+     * then drops the tank to the new capacity anyway.
+     */
+    @Test
+    void aTankOverItsLoweredCapacityKeepsEveryMillibucket() {
+        long before = FluidBayTier.COPPER.capacityMillibuckets(64);
+        bay.insert(LAVA, (int) before, before, false);
+        long lowered = FluidBayTier.COPPER.capacityMillibuckets(3);
+        assertEquals(0, bay.roomFor(LAVA, lowered));
+        assertEquals(0, bay.insert(LAVA, 1, lowered, false));
+        assertEquals(before, bay.count());
+        assertEquals(1_000, bay.extract(1_000, Integer.MAX_VALUE, false), "while draining normally");
     }
 
     // --- callers that pass nothing ---------------------------------------------------------------------------------

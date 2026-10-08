@@ -4276,6 +4276,27 @@ wall a rebuild from the bottom up, and therefore what makes the tiers a progress
   bay's neighbour below — clears the wooden bay underneath. The brass bay above the break has **nothing** happen to it:
   it keeps standing, keeps its load, and its own flag never depended on what stood below it.
 
+**All of that is shared machinery as of M30, and it asks one new question: the family.** The column rule, the shared
+uprights of M29 and the fill level are the same questions about different goods, so they live once, in
+`content.storage.BayColumn` over the `content.storage.TieredBay` interface a bay block implements, and M30's fluid bay
+uses them unchanged rather than forking them. Nothing a player can see about a rack bay changed with the lift —
+every generated blockstate file is byte-identical, which is what makes that claim checkable rather than a promise.
+
+* **Carrying is within a family, joining is across them.** A column is an unbroken stack of bays of **one** family
+  (`core.storage.BayFamily`: item bays on `BayTier`, fluid bays on `FluidBayTier`), so a bay of the other family ends a
+  column exactly as air does — because *"is a copper tank stronger than an andesite rack"* is a question the rule would
+  otherwise have to answer and nobody can. The joining asks no such question: it asks for the same **facing** and
+  deliberately not for the same tier or the same family, so a tank at the end of a rack wall shares its upright with
+  the bay beside it and the seam post is half rack and half tank, which is what it actually is.
+* The gate is **structural**, not a comparison somebody has to remember: every walk and the closure reach a neighbour
+  only through `BayColumn.sameFamilyBay`, so a bay of another family never reaches the pair rule at all and can
+  therefore only *end* a column, never *refuse* one. The pair rule itself stays in the pure layer, where it is written
+  once and tested by JUnit (`BayTier.mayCarry`).
+* A **click on the side** of a bay copies that bay's facing, which is how a wall is built, and it reaches across
+  families for the same reason joining does.
+* The **refusal sentence is per family**, because *"A rack bay may carry nothing stronger above it"* is the wrong
+  sentence to show someone holding a tank.
+
 **A player's own hands: a plain click moves one item, Shift moves one stack, in both directions** (ADR-045). An item
 in hand puts in, an empty hand takes out, and there is deliberately **no "take everything"** — emptying a bay in one
 go is what breaking it is for, and a brass bay holds 65 536 items against a player inventory's 2 304. The amounts are
@@ -4575,7 +4596,8 @@ crane is carrying items** and then carries the pallet it left through a real chu
 chunk hold, counting it in every census on the way (§8.1).
 
 **Tests**: `core.storage.BayContentsTest` (22 JUnit) for the arithmetic and the one invariant,
-`core.storage.BayTierTest` (16 JUnit) for the ladder and the column rule's strength order, and
+`core.storage.BayTierTest` (16 JUnit) for the ladder and the column rule's strength order,
+`core.storage.BayFamilyTest` (4 JUnit) for the two ladders never meeting, and
 `gametest.RackBayGameTests` for the world behaviour — standalone, one type until empty, the capacity of all three tiers
 for a 64- and a 16-stacking item, the filter, a save and reload of 65 536 items (the only test that can catch the
 `ItemStack.save` trap, and it fails only *after* the reload), untrusted save data, the two removal paths, a bay serving
@@ -4583,7 +4605,10 @@ a real aisle with the crane storing into it and retrieving out of it, a belt and
 one with no warehouse in sight, a machine's fill reaching the stock index in the same tick, the column rule refused at
 placement in both directions, the flag following commands and breaks, a bay a command placed under a stronger one
 reading its own flag, and an overloaded bay in a running warehouse storing nothing while staying retrievable — on
-storage priority 9, so the gate is shown to decide before the priority. The hand gestures and the client packet are
+storage priority 9, so the gate is shown to decide before the priority. `baycolumnissharedandfamilyaware` is the half
+of the M30 lift the tests above cannot see: the shared entry points, the five block state properties `BayColumn` reads
+a neighbour by, the pair rule asked of all nine tier pairs and compared with `BayTier.mayCarry`'s own answer, and the
+family gate — proved on `BayColumn.sameFamilyBay`, because the second family's block does not exist yet. The hand gestures and the client packet are
 `bayhandgestures`, `baysyncisbounded` and `baygogglestatefollowsthewarehouse`: both amounts in both directions, the
 four items a click must never store, the renamed item that is answered instead, a `FakePlayer` refused both ways, the
 sneaking click that has to be forced to the block at all, the update tag's shape and both its budgets, and the address
@@ -4677,6 +4702,522 @@ machine somewhere, and the one thing that is not is said out loud:
 | `runVisualTest -Pwareworks.visualTest=ponder` | That the three scenes **compile and draw**, which is the only automated check a Ponder scene gets at all; since step 14 their bays carry goods, so the scene that teaches "a bay keeps the first item type that lands in it" shows the type. |
 | `docs/manual-test-checklist.md` **section AO** (234–236), and 232 | Whether a wall reads as racking **as it is built**, whether the fill level still carries the wall beyond ten blocks once the items are gone, whether the drawn item reads as a load rather than as something floating — and whether the store filter's 4 px value box still wins the click it shares its place with. No gate can answer any of the four. |
 
+
+### 3.9 Fluid Bay (`content.storage`, M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+> The three config keys are §9. The joint item-and-fluid conservation invariant is §8. Its ADRs are written with the
+> milestone's last step, together with the crane's container exchange.
+
+**What it is.** The rack bay of fluids: a storage location that **is** a tank. One fluid bay holds **one fluid** as a
+millibucket count and carries its own address, filter and storage priority, so a tank wall is one block per 64 buckets
+and not a multiblock. Measured against what stands beside it, a Create Fluid Tank holds 8 buckets per block, so a
+copper bay is eight tank blocks and a brass one beats a 3 × 3 × 3 tower, which is 216.
+
+| Tier | Buckets | Millibuckets | Measured against |
+|---|---|---|---|
+| Copper Fluid Bay | 64 | 64 000 | eight Create Fluid Tank blocks |
+| Brass Fluid Bay | 256 | 256 000 | more than a 27-block tank tower |
+
+**There is no wooden and no andesite fluid bay**, unlike the three rack bays, and that is Create's own material
+language rather than a gap: in Create fluids are **copper** — the pipes, the pumps, the tank casing — andesite plays no
+part in its fluid world, and a wooden barrel of lava is an explanation nobody should owe. The tier is its own enum
+(`core.storage.FluidBayTier`) and not two more `BayTier` constants, because that enum's declaration order *is* the
+strength order its column rule reads: inserting copper would silently reorder it, appending it would make copper the
+strongest material in the mod, and "is a copper tank stronger than an andesite rack" is a question nobody can answer.
+Both numbers are server config (§9), clamped into 1–65 536 buckets, which is the bound that keeps a bay's millibucket
+count inside an `int`.
+
+**Counted in millibuckets, shown in buckets.** Millibuckets are forced by the ecosystem — the smallest portion a
+container carries is 250 mB — and buckets are forced for display, because nobody reads 256 000.
+
+**Everything a bay is, it shares with the rack bay.** The two blocks implement one `TieredBay` interface over one
+`BayColumn`: the column rule (ADR-044), the shared uprights (ADR-050), the fill level (ADR-047), the placement
+refusal, the `FACING` that points into the rack depth, the filter slot's value box and the storage priority board are
+the same code, and `FluidBayBlock` answers only what a **fluid** bay can — which tier ladder it is on, where its fill
+level comes from, and its own refusal sentence. **Carrying is within a family and joining is across it**: a rack bay
+above a fluid bay *ends* that column exactly as air does rather than being refused by it, while a tank beside a rack of
+the same facing shares the upright between them, because a wall is a wall and a seam post that is half rack and half
+tank is what it actually is.
+
+**One fluid, learned and forgotten, and the filter names a fluid.** The contents are `BayContents<FluidKey>` and an
+`int` — the same class the rack bay's items live in, whose invariant *stored ⟺ count > 0* is exactly a tank's, so an
+emptied bay **forgets** its fluid and takes whatever comes next. The filter slot is Create's `StorageFilterBehaviour`
+for the **UI only**: the stack in it is read solely as a fluid container (`FluidUtil.getFluidContained`) and
+**never** evaluated as a Create `FilterItemStack`, because a filter built from a water bucket matches the *item*
+`water_bucket` and would route containers instead of fluids. A lava bucket in the slot therefore dedicates the bay to
+lava; a Create list or attribute filter names no fluid and leaves the bay unfiltered, which the goggles say in gold.
+
+**The handler is hand-written, and NeoForge's `FluidTank` is not used.** Two reasons, both about losing fluid.
+`FluidTank.fill` with a capacity **below** what the tank holds — which lowering a config under a standing bay
+legitimately produces — computes a negative fill and then drops the tank to the new capacity anyway, silently; and
+`FluidTank.getFluidInTank` hands out its own live `FluidStack`, against its own interface's "SERIOUSLY: DO NOT MODIFY
+THE RETURNED FLUIDSTACK". A fluid bay keeps every millibucket and accepts nothing instead, and it has no
+`FluidStack` field at all. `isFluidValid` answers the filter **and** the stored fluid — the same documented departure
+from that method's contract `RackBayHandler#isItemValid` makes — which is what makes a pipe back up instead of
+hammering a bay that will never take its fluid. One `drain` call may return **everything**, because an
+`IFluidHandler` has no per-call cap, unlike the item handler that must never answer with more than one stack.
+
+**Pipes at the back, and nothing at the aisle face.** A fluid bay answers `Capabilities.FluidHandler.BLOCK` on every
+face except the one towards the aisle, plus for a `null` query — this mod's **first sided registrar**. Create decides a
+pipe connection with exactly that question (`FluidPropagator.hasFluidCapability`), so there is no interface to
+implement; the aisle face is excluded so that a pipe is never in the crane's lane and the one face a player clicks
+keeps its own meaning, and the `null` query is answered because a fluid census sweeps with `null` and a block that
+hid its contents behind a face would be invisible to every conservation test (§8). Whether a pipe may also **draw
+off** is one server config key, `storage.fluidBayPipeExtraction`, default on: filling and reading are never gated, the
+bay's own operations go through its ungated handler (Create's own `forceFill` pattern), and a goggle line states which
+of the two it is either way, so the rule is never invisible.
+
+**No item capability at all, and that is the deliberate asymmetry with §3.8.** M28's headline — a funnel, a chute, a
+belt or a hopper fills a bay directly — does **not** transfer, and the reason is the insert remainder: a bay that took
+a lava bucket would have to hand an empty bucket back as the remainder, and a funnel does not read a remainder of a
+*different* item — it would take the lava and **destroy the bucket**. Exposing none makes "a container reaches a bay
+only through the crane's handling head or a player's hand" structural rather than a rule, and it keeps the bay out of
+the item census's capability sweep for free. The compensation is the pipe at the back, which is the fluid analogue and
+strictly better for bulk, plus the bucket click at the front.
+
+**It is a storage location that counts no items.** `LocationKind.STORAGE` is reused, so aisle discovery, membership,
+addressing and the crane's reach accept a fluid bay unchanged. But it holds no items, so `attachedHandler()` is
+**empty** and `snapshot()` has **zero slots** — the documented "no inventory is attached", and precisely the state a
+warehouse interface whose chest was taken away reports. Two consequences follow with no code: the planner's insert
+estimate for it is 0, so it is excluded **before** any live simulation, and `TransferContexts.resolve` answers
+`MISSING` for it, which the crane has always handled by rerouting and losing nothing. That is also what keeps a filled
+container away from a fluid bay until the crane's container exchange exists; the bay's own fluid is counted in a
+parallel index of fluid keys and never in the item one, because `StockView.totalItems()` feeds the controller's goggle
+lines and summing millibuckets into an item count would corrupt every readout downstream.
+
+**No ticker, on either side.** A tank farm must cost nothing per tick, exactly as a rack wall does: a bay works only on
+events — a pipe's transfer, a hand, a filter change, a load — and tells the controllers of its rack position the moment
+its contents change. It is also why the level is drawn without interpolation: Create's tank glides because a
+`LerpedFloat` is advanced from its own tick, and that guarantee is worth more than the glide (a bay's fill step moves
+by 0.4–1.6 % of its capacity against a tank's 12.5 %).
+
+**What is saved, and what crosses the network.** A save carries one `FluidKey` and one `int` of millibuckets, never a
+`FluidStack`, whose `save` **throws** on an empty one. The load is bounded and never throws — a world written before
+M30, `/data merge`, an uploaded schematic and crafted block entity data all reach it — and it carries the rack bay's
+**schematic-print guard** verbatim: a tag that names neither key says nothing about the contents and therefore changes
+nothing, because `BlockHelper.placeSchematicBlock` calls `loadWithComponents` on a block entity that survives the
+write, and without the guard a creative instant print would empty a full bay in place with no log line at all. An
+amount above the current capacity is **kept in full** and logged once; one above what no configuration allows is
+clamped and logged as the loss it is. A **client packet** carries the fluid's registry **id** and the amount, never a
+`FluidKey` — a fluid's component patch is unbounded where an item's count is not — and it is sent on **every** change
+without a throttle, because the level *is* the readout and has to be right for a player walking past with no goggles
+on; a throttle on a block with no ticker and no observer could never be flushed at all. The visible price is that a
+fluid whose components differ from the plain one shows the plain fluid's name and colour on the client.
+
+**Breaking one loses the fluid**, which is the one place a fluid bay is deliberately worse than its item sibling: a
+fluid has no drop form at all, and every alternative is worse than the loss (filled containers would create items from
+nothing, source blocks would mean 256 lava sources, and a filled bay item is the pocketable removal crate ADR-046
+refused). `Clearable` — `/setblock`, `/fill`, `/clone`, structure placement — empties a bay without placing or
+dropping anything, which is vanilla parity and Create's own Fluid Tank's behaviour.
+
+#### 3.9.1 Hands, goggles and the break (M30 step 6)
+
+**A bucket in hand works both ways, in one call.** A right-click with a filled container empties it into the bay, and
+one with an empty container fills it from the bay — `FluidUtil.interactWithFluidHandler`, the routine every tank in
+the ecosystem uses, which already handles the four traps a hand-written version would hit: a container operation needs
+a stack of exactly one, the result is `getContainer()` and may be a different item, a simulated drain lies about that
+result, and a creative player's stack must not change. A hand holding sixteen empty buckets therefore fills **one** of
+them and stows it, which is that routine's own rule and the only correct one. It is given the bay's **ungated**
+handler, never its pipe view: `storage.fluidBayPipeExtraction` is a rule about pipes, and a player's own bucket is
+never refused by it (Create's `forceFill` pattern).
+
+**A container's click is consumed even when nothing moves, and that is a safety rule rather than a convenience.** A
+click that is passed on reaches the item's own use, and a bucket of lava's own use **places a lava source** against the
+face it was aimed at — so a bay that is full, holds another fluid or is filtered against it would set a wooden rack
+wall on fire the moment a player tried to pour into it, which reads as this mod destroying a warehouse rather than as a
+refused transfer. Create's own Fluid Tank answers the same way and for the same reason (its `useItemOn` returns
+`SUCCESS` for anything that can be emptied or filled, whether the transfer happened or not). Everything that is **not**
+a container is passed straight on and keeps its own meaning.
+
+**Shift has no fluid meaning, so the fluid bay needs no interaction listener.** A rack bay's Shift gesture moves a whole
+*stack*, which is unreachable from the block alone — vanilla drops a sneaking interaction before the block whenever a
+hand holds something — and that is why `RackBayGestures` carries one. A container is **one** container: it is
+emptied whole or refused (D5), so there is no larger amount for Shift to mean. A sneaking click is therefore passed on,
+and sneak-placing a block against a tank's face goes on working. What a fluid bay does not take is `RackBayGestures`'
+own list — a wrench, a clipboard, the Mechanical Arm item — with the bay entry widened to **any** bay of either
+family, because joining is across them (ADR-050) and a bay that swallowed the next one would make a mixed wall
+unbuildable by hand. That widening also went into the **rack** bay, which until M30 would have stored a fluid bay a
+player held out at it. A `FakePlayer` is refused outright, and a **renamed** container is answered with the
+aisle-naming refusal rather than emptied, both for the rack bay's reasons.
+
+**The goggle rows.** The header is the block's own name, then the address block every warehouse member shares, then the
+bay's own rows:
+
+| Row | When | Colour |
+|---|---|---|
+| `A fluid bay works by hand with no warehouse` | no aisle serves it | dark grey |
+| `Holds: Lava` | the filter slot names a fluid | grey |
+| `That filter names no fluid` | the slot holds something that names none | gold |
+| `Holds Lava until it has drained` | unfiltered and not empty | dark grey |
+| `Takes the first fluid that arrives` | unfiltered and empty | dark grey |
+| `Priority: 7` | a priority was set | grey |
+| `The tanks above this bay are overloaded` | the column rule took it out of service | gold |
+| `Lava 37.25 / 64 buckets` or `Empty` | always | grey / dark grey |
+| `Breaking it loses what is in it` | **while it holds anything** | gold |
+| `Capacity: 64 buckets` | always | grey |
+| `Pipes may draw from the back` / `Pipes may only fill from the back` | **always** | dark grey |
+
+Five of those are decisions rather than phrasing. The filter row says **"Holds"** and not "Filter", because the slot
+holds a container and what is read from it is the fluid inside; a slot that names no fluid gets the gold line **and**
+the row for what the bay really does, because such a bay is unfiltered and a player who thought they had dedicated it
+needs both halves. The contents are **buckets**, not Create's millibucket pair, because nobody reads 64 000 — with
+one exception that is not a corner case: below a hundredth of a bucket the row states millibuckets, because a goggle
+line carries two fraction digits and a bay holding 7 mB would otherwise read "Lava 0 / 64 buckets", and a Create pipe
+network moves as little as 1 mB per tick, so every bay being filled passes through that row. The **pipe** row is shown
+whichever way the config stands, always, because a rule about where fluid may leave a warehouse must never be invisible
+and the two answers are indistinguishable from the outside until a pipe is already draining the wall. And the bay's own
+rows are built by `ownGoggleRows()` rather than written straight into `addToGoggleTooltip`, because
+`LangBuilder#forGoggles` measures the **client's** font: a tooltip assembled in one piece can only be checked on a
+client, while every decision above is in that list and a GameTest asserts it row by row.
+
+**Four places say that breaking it loses the fluid, before a player can hit it:**
+
+1. the **item description**, which is the only one of the four a player reads before the block is ever placed;
+2. the **goggle line** above, shown while there is anything to lose, directly under the contents row it is about;
+3. the **action-bar warning on the first punch** (`FluidBayBlock#attack`), which names the fluid and is the only one
+   that reaches a player who wears no goggles and read no tooltip;
+4. the **Ponder caption** of §3.9.5, which is the only one of the four a player meets while they are still deciding
+   what to build rather than while they are already holding the pickaxe.
+
+The third one warns and never refuses — `canSurvive`-style refusals were rejected for bays outright (M28's D8), and
+a block that cannot be broken is worse than one that says what breaking it costs. One asymmetry is worth knowing rather
+than discovering: a **creative** break never shows it, because `ServerPlayerGameMode#handleBlockBreakAction` returns at
+`destroyAndAck` before `attack` is called for a creative player. That is a reason for the other two places to exist
+rather than a gap in this one, and it is pinned by a test so that nobody later reads the missing message as a bug.
+
+**A sneaking wrench click gets the same line, with the loss rather than before it** (`FluidBayBlock#onSneakWrenched`,
+M30 review fix). Create's own relocation gesture never calls `attack`: `IWrenchable#onSneakWrenched` posts the break
+event, puts the block item into the player's inventory and destroys the block, so a wrench user reached three of the
+four places above and not the one that would have stopped them — the one route by which a player wearing no goggles
+who had read no tooltip could lose 64 buckets of lava in silence. The same action-bar line is therefore shown from
+that hook. It is honestly a **notice and not a warning**: a wrench is one click and this one removes the bay, where
+mining is a hit that warns and then a second one that breaks. Refusing the first wrench click was considered and
+rejected for the reason above, and the manual checklist (check 243) asks the one question no gate can: whether a
+notice is enough there.
+
+**The loss itself is loud.** `destroy()` takes the contents first — so a second pass over the block entity finds
+nothing, which is the discipline the station buffer and the rack bay already use — and then logs **one** `WARN`
+naming the fluid, the millibuckets and the position. That line is the only record a server owner ever gets of the one
+deliberate loss this mod allows, so it is asserted in a GameTest through a real log4j appender rather than through a
+seam a refactor could satisfy without anything reaching a log file. `clearContent()` is deliberately **silent** by
+contrast: a command that empties a block is the caller's own doing and happens by the thousand in a structure
+placement, so a warning per bay would bury the one line that is about a player losing something. The log message
+carries no section sign, because Minecraft's own log4j layout strips formatting codes and would print "§3.9" as ".9"
+in the very line the warning exists to be found in.
+
+**The look: a tank standing in the rack bay's own frame** (M30 step 5). A fluid bay is drawn by the same multipart
+blockstate a rack bay uses — the tier's hand-made shell turned onto `FACING`, plus the `upright` frame at each end of
+the block, halved to `upright_half` where the next bay shares one. Those uprights, the load beam of the bay's own level
+and the rack's back skin are the rack bay's **pixel for pixel**, which is a requirement and not a resemblance: joining
+is across families, so a tank at the end of a rack wall takes over half of that wall's post, and two halves of
+different posts would not make one. Where a rack bay puts a pallet, a fluid bay puts a **vessel**: a floor on the
+pallet's own plane and three walls around it, open towards the aisle over exactly the eight pixels the crane's arm
+port is wide. The item model is the tank between **both** of its uprights, which is what a crafted one is.
+
+| | Copper Fluid Bay | Brass Fluid Bay |
+|---|---|---|
+| Frame, uprights, beam | `create:block/fluid_tank` | `create:block/brass_block` |
+| Vessel | `create:block/fluid_tank` | `create:block/fluid_tank` |
+
+**The vessel is copper in both tiers**, and the tier is read off the frame around it — exactly as a rack bay's pallet
+is wood in all three tiers and its frame says the material. In Create a tank is copper, so a brass rack holding a
+copper vessel is a sentence a Create player can already read, and it is what makes a tank tell itself apart from a
+rack bay at a glance in a mixed wall.
+
+**The vessel's rim is the arm port's sill**, 9 px, and that one number is what the whole shape is cut to. The crane's
+arm sweeps the block from end to end at every depth once it is extended, through the 8 × 4 px port every warehouse
+member carries on its aisle side; its lowest point is 9.5 px. A tank whose rim or whose fluid reached into that window
+would be a grabber visibly travelling through lava on its way to a container. So the tank stops at the sill, the fluid
+stops with it, and the window a player reads the level through is the **same** eight pixels the arm reaches through,
+one storey lower. Five pixels of fluid is the whole budget, and `CraneModelLayoutTest` holds both the model and the
+renderer's own corners to it.
+
+**The level is drawn, not baked, and that is the one place ADR-047 does not transfer.** A rack bay answers "how full"
+with block state geometry in the chunk mesh and uses its renderer only for *which* item it holds; a fluid bay carries
+**no** fill condition in its blockstate at all and `client.render.FluidBayRenderer` draws the whole answer in one
+`renderFluidBox` call over the fluid's own still sprite. The reason is in the API rather than in taste: a fluid's look
+is its own sprite with its own tint, the set of fluids is open, and no finite set of baked variants can name a sprite
+it has never heard of. Where the box stands is `client.render.FluidBayLayout` — inset from the walls by Create's own
+tank hull gap, so no quad of the fluid ever z-fights with one of the model's, and recessed behind the opening rather
+than flush with it. A bay holding **anything at all** shows at least half a pixel of film, which is the same rounding
+`BayColumn.fillStep` already does for items and a far milder one. A gas hangs from the rim instead of lying on the
+floor.
+
+**The price of that renderer is a view distance, and this is the one renderer of the mod that does not pay it by
+cutting one.** Registering a block entity renderer puts *every* block of that type into its chunk section's per-frame
+render list whether anything is drawn or not, and vanilla's bound is 64 blocks — the regression this project paid for
+once with the warehouse interface, and the reason `RackBayRenderer` and `WarehouseInterfaceRenderer` cut
+`getViewDistance()` to Create's `filterItemRenderDistance`, ten blocks by default. Those two draw a **detail** of a
+block that is visible without them: past the cap a rack bay still shows the shape of its load, because that lives in
+the chunk mesh. A fluid bay's renderer draws the **whole readout**, so the same cut makes a full bay and an empty bay
+pixel-identical from eleven blocks — and "the level is the readout" is half of why the block exists. So
+`FluidBayRenderer` keeps the **vanilla** bound, which is what the design decided (D11) and what ADR-053 records. What
+it costs is bounded by the premise of that decision: a warehouse holds three or four *fluids*, not hundreds of item
+types, so a bay outside the frustum is one test and one squared distance a frame. If a pack ever builds a tank farm,
+a cap of this renderer's own is the mitigation — and it is a mitigation, not the default.
+`dev.BlocksVisualScenario` counts what is really drawn at both cameras from the client's own per-frame list, including
+one block past the distance every other renderer here is cut to, and fails the run if the renderer ever answers less
+than vanilla's bound.
+
+#### 3.9.2 The container exchange: the crane's third transfer (M30 steps 7 and 8)
+
+**The loop, in one sentence.** A filled container arrives at a warehouse input, the crane carries it to a fluid bay,
+the bay drains it, and the crane shelves the now-empty container as ordinary item stock — so the warehouse ends up
+holding `lava: 64 buckets` as a fluid **and** `bucket: 17` as stock, with nothing pretending one is the other.
+Issue #21 decided that shape (its step 3 is literally *"The crane now holds an empty bucket, and stores it like any
+other item"*), and everything below is what it costs.
+
+**It is a third transfer beside pick and drop**, and the only one that changes *what* the head holds:
+
+```java
+// TransferContext — one default, so no existing location implementation changed
+default Optional<ContainerExchange> exchange(ItemKey held, int amount, boolean simulate) { return Optional.empty(); }
+record ContainerExchange(ItemKey result, int containers, int millibuckets) {}   // zero containers is forbidden
+default boolean exchangesOnly() { return false; }                              // a fluid bay answers true
+
+// HandlingHead / InventoryGrabber — the third transfer
+int exchange(TransferContext target, ItemKey from, ItemKey to, int amount);     // containers really swapped, or 0
+```
+
+`TransferContexts.resolve`'s `STORAGE` case gained one `instanceof FluidBayBlockEntity` branch — the concrete type, as
+the switch already does for the input and the delivery station — and `FluidBayContext` answers **nothing** to extract,
+**0** to `simulateExtract`, the caller's own stack back to `insert`, **whole containers** to `simulateInsert`, and the
+real thing to `exchange`.
+
+**Why the obvious one-liner is wrong, written down because it is tempting.** The shortest version of this feature is to
+let the bay take the lava in `insert` and hand the **empty container back as the insert remainder**. That destroys
+items. `InventoryGrabber.drop` computes `accepted = chunk - remainder.getCount()`, which is **0** for a chunk of one,
+and then `break`s *without putting the remainder anywhere*: the filled bucket stays counted as held and the empty
+bucket never existed in any inventory, so no item census can see the loss. The same arithmetic is in
+`TransferContexts.accepted`. Hence a primitive of its own.
+
+**All or nothing, and for a reason that has nothing to do with convenience.** A container is drained to empty or
+refused, filled to full or refused, never partially (D5): the fluid in a component container lives in a data component
+and `ItemKey` equality is `ItemStack.isSameItemSameComponents`, so a half-full container is a **different key per
+millibucket value**, and one such key per fill level would blow up `StockIndex.countsByKey`, the terminal's row list
+and the controller's save. A bucket enforces the same rule by itself — `FluidBucketWrapper.fill` refuses anything
+under 1 000 mB — so **a bay with 999 mB of room gets nothing from a bucket**, which is the gate of §3.9.3 and the gold
+goggle row of §3.9.1.
+
+**Three outcomes, not two.** The real call is the authority: on exactly the planned swap the head does
+`remove(from, n); add(to, n)`; on anything that did not move, nothing changes and the answer is 0. The third outcome
+exists because a location that **contradicts the plan it just gave** has already moved the fluid — leaving the
+containers on the head would create fluid from nothing. So the containers the location says it took leave the head,
+whatever it handed back is spilled *at the location*, and the caller is still told 0, so the job follows the head. A
+`RuntimeException` out of a foreign location is caught and treated as a refusal, as it is for pick and drop.
+
+**In the job it is the fourth legal answer to `PerformDrop`** (that effect's contract already listed three), and
+deliberately not a `DropResult`: a drop result is *defined* as `delivered + leftover == heldAmount()` of the job's own
+key, and an exchange delivers nothing of that key and leaves nothing of it.
+
+| Piece | What it is |
+|---|---|
+| `CraneEvent.Exchanged(newKey, amount)` | the event, asserted against the phase and the held amount |
+| `CraneEffect.ReportExchanged(job, formerKey, target, amount)` | carries `formerKey`, the one thing the new job no longer holds |
+| `CraneStateMachine.exchanged` | one handler beside `dropped`: gate, assertion, `exchangedFor`, report, `enter(RETRACT_TARGET)` |
+| `TransportJob.exchangedFor(newKey)` | same id, type, source, target and kind; `planned == picked == heldAmount()`; `delivered = 0`; the **request is dropped** |
+| `CraneExecution.performExchange` | one branch in `performDrop`, after the head-count guard and before the `outputFull` gate |
+| `WarehouseControllerBlockEntity.onCraneExchanged` | `track(job)` and `refreshLocation(bay)`, and **nothing else** |
+| one sound cue | the vanilla bucket-empty sample, which **replaces** the drop cue at that stop, because nothing was dropped there |
+
+**No new `CranePhase`, and no change to the save format.** `exchangedFor` adds no record component, so the crane's save
+is byte-identical in shape; what is new is that a saved job's key may be the empty container, which is exactly what
+makes an interruption survivable — there is no tick boundary, chunk check or save point between the fill and the head
+mutation, so the state a save finds is always "the fluid is in the bay and the empty container is on the head". The
+reroute loop closes itself: entering `REROUTE` records the bay as the failed target, so the planner skips the bay it
+just emptied a container into and shelves the empty one somewhere else. The dropped `requestId` is what keeps a crane
+from parking in front of a station that will never want empty containers.
+
+**`onCraneExchanged` must never route through `onCraneDelivered`.** That method credits `onResultStored` for a `STORE`
+job into `STORAGE` with `delivered > 0`, so an exchange reported as a delivery would credit a restock order with a
+lava bucket that was never stored, the stock index would show none, and ADR-027's safety stop would fire for no
+reason. A tooth was applied to prove it: routed that way, the throughput assertion reads "the one container that
+really arrived, counted once to be 1, but was 2".
+
+**`exchangesOnly()` is the one API here the design did not name.** At a fluid bay a drop is an exchange or a refusal
+and never an insert, so `performDrop` asks the location first. Without it the most everyday situation there is — a
+pipe topping the bay up between the plan and the drop — would fall through to the ordinary `head.drop`, reach the
+bay's item-insert path, and be logged as a caller error: the log would blame the crane for using the wrong operation.
+The negative log assertion in `fluidbayexchangerefusedmidcarryisrerouted` is what keeps it that way.
+
+**Conservation is joint, never separate** (§8): draining a bucket at a bay moves 1 000 mB out of a container into a
+tank *and leaves an empty bucket where a filled one was*, so an item census alone sees one key turn into another out of
+nowhere and a fluid census alone sees a total that has not moved. `ItemCensus.exchange` declares the swap and
+**verifies it against the game's own emptying routine**, so a test cannot declare a fake exchange — only the one the
+game really performs.
+
+#### 3.9.3 The store gate: which container is ever sent to a bay (M30 step 9)
+
+Issue #21 settled it: *a container that does not fit is never sent in the first place.* A bucket of water is not
+carried to a lava bay and refused there, because the warehouse decides where a thing may go before it moves it. Two
+things make that true, and only one of them is the filter.
+
+**The filter, which replaces the item filter rather than joining it.** `StorageMember.storeFluidFilter()` answers a
+`content.fluid.FluidDedication`, and `AisleFilters.match` branches on it **before** the Create filter is evaluated: a
+container carrying the bay's fluid is `FilterMatch.DEDICATED`, the top store key, so a bay outranks every shelf
+including a nearer one; **everything else is `REJECTED`** — an empty container, a container of another fluid, and every
+ordinary item, whatever room the bay has and whatever priority it carries. The filter slot's stack is **never**
+resolved into a Create `FilterItemStack`, because a filter built from a lava bucket matches the *item* and would route
+containers where fluid was meant; that also keeps a bay out of `filteredCount`, which counts item partitions. The
+churn loop a careless gate would open — the crane brings an empty container, the bay fills it, the crane reroutes a
+filled one, the store plan brings it back — is closed **structurally** by the same answer: an empty container is
+`REJECTED`, in both bay states.
+
+**Three states, not two.** A dedication is *this fluid*, *whichever arrives first* (`ANY`), or *not a fluid location at
+all* (an absent `Optional`, every other storage member). An `Optional<FluidKey>` cannot say it: an **empty unfiltered**
+bay would answer absent, fall through to the item filter and come back `UNFILTERED` — "accepts everything" — so a
+fresh tank wall would have swallowed cobblestone. `ANY` ranks `DEDICATED` like a named dedication, which is the right
+reading rather than a convenience: an unfiltered *item* location takes whatever a player puts in it for life, while an
+unfiltered bay takes exactly **one** fluid and has merely not been told which. Because that answer changes, the bay
+notifies the store-settings cache on the **empty ↔ non-empty transition and on a fluid change only**, never per
+millibucket — a pump filling a bay a bucket at a time must not make the controller re-read its settings twenty times a
+second.
+
+**The insert estimate is the other half, and it is the half that decides.** `JobPlanner.collectStorage` skips a
+location at `estimate - reserved <= 0` **before** the store filter is ever consulted, and a bay's snapshot estimate is
+**0**, because its snapshot has no slots. So `DEDICATED` was necessary and not sufficient: without a hook the bay never
+becomes a candidate at all. The hook is a **positive question about what the location is** — "does this location take
+filled containers", one read of the cache that already answers the filter and the priority — and never a reading of an
+empty snapshot, because a warehouse interface whose chest was taken away reports the *same* empty snapshot for the
+opposite reason and must go on being skipped. A bay answers `JobPlanner.UNKNOWN_CAPACITY`, "ask the live inventory",
+which is honest: how many containers it takes is `FluidBayContext.simulateInsert`.
+
+**The amount is deliberately not part of the gate.** A bay with 999 mB of room passes the filter, answers 0 live, and
+is passed over like any candidate that turned out to be full — one live call, no special case — and the refusal is
+remembered by `RefusalMemory` until the bay's contents change, which `refreshLocation` undoes in the same tick a pipe
+tops it up. `JobType.STORE.waitsAtAFullTarget()` is false, so a crane never parks in front of a bay it cannot fill.
+The two live answers disagree in one axis and in the safe direction, which is worth keeping: `simulateInsert` is
+**monotone** (`min(amount, whole containers that fit)`) while `exchange` is **all or nothing**, so a caller that bounds
+by `simulateInsert` and then exchanges exactly that much always succeeds. They must therefore agree about **the
+container**, and that is a review fix rather than a given: the gate first measured one with `FluidContainers.contents`,
+a simulated whole drain, while the exchange measures it with `FluidContainers.drained`, a real probe drain that
+additionally refuses a per-call cap, a multi-tank item, a consumable and a handler answering with two items. A modded
+container between the two was ranked `DEDICATED`, planned, driven to the bay and refused there — against the settled
+rule that a container which does not fit is never sent in the first place. Both the gate (`AisleFilters.carried`) and
+`simulateInsert` now ask `drained`, which runs on a throw-away probe and is memoised once per key per planning run.
+
+**A reroute asks for the whole carry.** `simulateInsert`'s monotone answer is a *bound*, which is exactly what the
+store plan wants: it sizes the job by what the bay answers, so a bay with room for one bucket gets a job of one
+bucket. A **reroute** has no such freedom — the containers are already in the handling head — so the planner is told
+which locations take a carry whole or not at all (`PlannerInput.allOrNothing`, the same `takesFluidContainers`
+question) and skips such a location on a reroute unless it takes **all** of it. Without that rule the crane arrived at
+a bay that fitted one of two buckets, was refused, and was rerouted to the next bay, which refused it too: with two
+part-full bays of the same fluid — which outrank every shelf — it shuttled between them for ever while room stood
+free on a shelf. Every ordinary inventory is untouched and may still take part of a carry, with the rest rerouted
+after the drop. It is only reachable at `crane.grabberStacks` above 1 or with a stackable modded container, which is
+why the GameTest that pins it raises that config.
+
+**One rule about the cache that a later reader must not undo.** `AisleFilters.set` keeps a resolved filter while the
+slot's stack is unchanged, and a lava bucket in a bay's slot is byte for byte the same stack as one in an interface's
+slot — so a bay replaced by an interface carrying the same filter item took over the bay's entry, which by design
+carries **no** resolved Create filter, and that interface then read as "accepts everything": the warehouse would have
+stored anything into a chest the player had dedicated to lava buckets, permanently. The membership reconcile does not
+catch it either, because `LocationRecord` is `(position, kind)` and both are `STORAGE`. The fast path therefore also
+requires the location to still be the **same kind** of location.
+
+**What a player notices, and it is the one surprise of this milestone:** while a lava bay has room, a bucket of lava
+arriving at an input can no longer be kept on a shelf, however near that shelf is. If a crate of lava buckets is
+wanted for building, keep them out of the warehouse or fill the bay first. The refusal of everything else is reported
+rather than silent: a warehouse whose only storage is a lava bay answers `NO_MATCHING_FILTER` — "no storage location
+takes these items, whatever room it has", literally true — where before this gate existed the same arrival was
+reported as `WAREHOUSE_FULL` about a warehouse with 64 buckets free.
+
+#### 3.9.4 What the warehouse says it holds (M30 step 10)
+
+**A parallel index, never a union key.** `WarehouseControllerBlockEntity.fluidStock` is a
+`StockIndex<FluidKey, RackPosition>` beside the item one, fed by one `StorageMember.fluidStock()` default that only a
+fluid bay overrides, written on exactly one path (`refreshLocation`, where the member is already resolved) and dropped
+with the location. A union key was refused three times over: `totalItems()` and `distinctKeys()` feed the controller's
+`TOTAL_ITEMS`/`ITEM_TYPES` lines and would sum millibuckets into an item count, `countsAt(location)` is part of the
+controller's **save** format, and `locationsOf(key)` is `ItemKey`-typed end to end through `PlannerInput`. Two indexes
+also give issue #21's own answer to "what does the warehouse hold": `lava: 60 buckets` **and** `bucket: 17`.
+
+Two differences from the item index, both deliberate:
+
+* **It is not saved.** A fluid bay *is* its own tank, so its contents live in its own block entity and the first
+  `refreshLocation` brings everything back; the item index is saved for the opposite reason, that a chest can stay
+  unloaded while its interface is not. The visible consequence is the same as for an unloaded chest: a surface opened
+  in the first ticks after a world load fills up over one snapshot cycle.
+* **A location holding no fluid is removed** rather than kept with empty counts, so the index holds the warehouse's
+  fluid bays and nothing else. Nothing asks it how many locations a warehouse has, which is the one question the item
+  index keeps every location for. There is also no `setChanged()` for a fluid change: nothing is saved, and a pump
+  reports a change several times a second.
+
+**Three surfaces read it.** Two guarded goggle lines on the controller ("Fluid types: 2", "Fluid stored: 60.00
+buckets") as two new `ControllerGoggleSummary` components, with their tag keys **left out** while `fluidTypes == 0`, so
+an item-only warehouse's tooltip and chunk packet are what they were before M30 — asserted on the tag rather than on
+the record. A separate **"Fluid Stock"** Display Link source, bound third on the controller and the terminal, one row
+per fluid, most first. And one `AisleSummaryDisplaySource` line, `Fluids: 2 · 60.0 B`, as the **first** of the optional
+rows, because it is the fifth stock number and everything below it is the shape of the warehouse rather than its
+contents.
+
+**The unit rule, which is where two surfaces deliberately differ.** Millibuckets inside, buckets wherever a player
+reads a number (D9). The **goggles** convert at the edge with the fluid bay's own two rules — buckets with two
+fraction digits, millibuckets below a hundredth of a bucket — because a controller saying `256000 mB` beside a bay
+saying `Lava 37.25 / 64 buckets` would be two units for one quantity on two blocks a player reads in the same breath.
+The **display sources** hand the formatting to Create's own `FluidFormatter`, exactly as `FluidListDisplaySource` does
+for a tank, so `create.generic.unit.buckets` travels **with** the number in every language Create ships and no German
+word is invented. **Fluid Stock** is a `ValueListDisplaySource`, so the Display Link's own "shortened / full number"
+switch chooses between `48.0B` and `48000mB` there, exactly as it does for Create's own lists. The **Warehouse
+Summary**'s one fluid row is always the **shortened** form instead, and that is not a switch it declines to read: that
+source is a plain `DisplaySource`, so it has no Format widget and no `shortenNumbers` at all — both live on
+`ValueListDisplaySource` — a summary row is short, and `asComponents` falls back to plain millibuckets below 1 000 mB
+anyway. The row's separating space sits in **front of the fluid's name**, because the unit
+is one flap matched against Create's own `fluid_units` cycle and cannot carry a trailing blank.
+
+One Create quirk to know before it is reported as a bug: `FluidFormatter.asComponents` formats with no `Locale`, so on
+a JVM whose default locale is German the rows read `48,0B Lava` even on an English client. That is Create's own
+behaviour for its own fluid list source — a Smart Observer on a tank beside the board shows the same thing — and the
+fix, if it is ever wanted, is to format the number with `WareworksLang.number(...)` and keep `create.generic.unit.*`
+for the unit.
+
+**The sync budget is measured on the two fields rather than on the whole tag.** `MAX_SUMMARY_SYNC_BYTES` is 2 048 and
+the readout fixture's tag is about 1 929 accounting bytes before a drop of fluid, so the two keys are guarded by their
+own measured cost (210 bytes, bound 224, slack smaller than one more entry) while the item-only case keeps guarding the
+whole tag against the old bound. `CompoundTag#sizeInBytes` charges a per-entry overhead plus two bytes per key
+character, which is far more than the twelve bytes an int and a long really send; that is the same reading
+`MAX_NAME_SYNC_BYTES` is written on.
+
+#### 3.9.5 What the game teaches, and what is still missing (M30 step 11)
+
+**One Ponder scene, "Fluids Travel in Containers"** (`client.ponder.scenes.FluidBayScenes`), registered on both fluid
+bays **and on the warehouse terminal**. One scene rather than the rack bay's three, and the reason is the loop rather
+than the block: what a player cannot guess is not what a tank is but what happens to the **container**, and nothing
+else in the game says that a filled bucket goes in, the fluid stays, and the **empty bucket comes back as stock**. The
+terminal carries it because that is where a player holding a stocked warehouse looks for a fluid row, finds buckets,
+and needs the answer; the closing beats say where fluid really goes in and out until M31 adds the request.
+
+Its twelve beats are the whole of §3.9 in order: what the block is; a bucket in the hand, both ways, with one bucket
+showing as a film in a 64-bucket tank; the pipe that does the bulk work, reaching every face but the one towards the
+aisle; the aisle that makes it an ordinary storage location whose **filter is a fluid**; and then the loop — a bucket
+of lava at a warehouse input, the crane carrying the whole container, the bay draining it, the crane left holding the
+empty bucket and shelving it in an ordinary rack bay, and the warehouse counting both. The last three beats carry the
+two things a fluid bay is deliberately worse at than its item sibling, which is why they are in the scene rather than
+only in this document: **a funnel cannot fill one** (it would keep the empty bucket) and **breaking one loses whatever
+is in it**. Both of those captions say *whatever is in it* and not *a full bay* (M30 review fix): the scene's bay stands
+at about two fifths when it is broken, and the goggle row and the first punch warn while a bay holds **anything at
+all**, so "a full bay" invited exactly the wrong reading — that a part-filled one is safe.
+
+Four things a `PonderLevel` does not do for this scene, each one a lesson the class comment keeps: a bay's contents can
+simply be written, because the change callback behind `fill` returns at once off a `ServerLevel`, so nothing is synced
+and no block state is rewritten; the **shared uprights** are derived from neighbour updates a scene never runs, so the
+scene writes `LEFT`/`RIGHT` itself — which is also the one picture that says a tank and a rack are one wall; a rack
+bay's fill level needs the same hand; and the plumbing is a **diagram**, with only the dock's own column given a
+kinetic speed, because a live Create pipe network would keep filling the bay through every later beat and the one beat
+that matters would land in a bay that was already full.
+
+**Recipes and the creative tab.** Both bays are hand-written shaped recipes, with no two recipes of this mod sharing an
+ingredient set: seven **copper sheets** around two copper casings for the copper bay, seven **brass sheets** around
+two copper casings for the brass one — the casing is copper in both, because in Create a tank is copper, exactly as the
+vessel is copper in both models. They stand in the creative tab immediately after the three rack bays, weakest first,
+which is declaration order in `WareworksBlocks` and is asserted as an explicit list.
+
+**What is still missing, and it is a milestone of its own.** You cannot **ask** for a fluid at a terminal or a port:
+fluid leaves a warehouse through a pipe at the back of a bay, or through your own bucket. M31 is the other direction —
+the fill stage that takes empty containers out of stock, fills them at the bay and delivers them; the new refusal when
+no empty container is in stock; the container plan the terminal states **before** it starts; and the terminal's own
+fluid rows. The empty-container economy itself needs nothing built: an empty bucket is an ordinary `ItemKey`, so a
+stock keeper's minimum, maximum and reserve already cover it.
 
 ## 4. Discovery and membership (no permanent world searches)
 
@@ -5051,10 +5592,72 @@ item against a freshly built bay, so a loot table that learned to copy block ent
 robustness run then carries one real pallet through a real chunk unload and a real save and rejoin, counting it in
 **every** census after the break (§8.1).
 
+**M30's fluid is the first thing this invariant covers that is not an item at all**, and it needs a second sentence
+beside the first:
+
+> An **item** is always in exactly one of: source inventory, crane grabber (persisted), target inventory, or an
+> `ItemEntity` in the world.
+> A **fluid** is always in exactly one of: a block's fluid handler, or a **container item — wherever that item is**.
+
+A container is a **carrier**, exactly as a Create package and a pallet are carriers, and not a third place a fluid can
+be. **The two halves do not conserve separately**, which is the whole reason the fluid work started with the censuses
+rather than with a block: emptying a bucket at a bay moves 1 000 mB out of a container into a tank *and leaves an empty
+bucket where a filled one was*. Read alone, an item census sees one key turn into another out of nowhere and a fluid
+census sees a total that has not moved. Only the joint statement is true, so `gametest.FluidCensus#assertConserved` and
+`dev.SceneFluidCensus#assertConserved` assert both halves at once and report both in one message.
+
+| The thing | What it holds | What a census counts | How the census reaches it |
+|---|---|---|---|
+| **A block's fluid handler** | whatever its tanks hold | its fluid, once per **handler instance** | `Capabilities.FluidHandler.BLOCK` with `side == null`, then `getTanks()` / `getFluidInTank(tank)` |
+| **A container item** | its own fluid | the fluid inside it | `content.fluid.FluidContainers#contents` applied to `ItemCensus#take`'s own result — deliberately **not** a sweep of its own |
+| **An empty container** | nothing | nothing here; an ordinary item to the item census | — |
+| **The bay item a break drops** | nothing: a fluid has no drop form, and the loss is logged instead (§3.9) | nothing | — |
+
+Three decisions inside those rows, each of them a trap already paid for somewhere else:
+
+* **Never a drain.** Create's `SmartFluidTankBehaviour.InternalFluidHandler` returns `EMPTY` from both `drain`
+  overloads unless `extractionAllowed` and leaves `getFluidInTank` open, and `FluidUtil.getFluidContained` *is* a
+  simulated drain — so the obvious read reports 0 for a bay with `storage.fluidBayPipeExtraction` turned off, and
+  (measured, and a surprise) **0 for a partially filled vanilla water cauldron**. Every stack is copied the moment it
+  is read, because `FluidTank.getFluidInTank` hands out its live field against its own interface's instruction.
+* **Once per handler instance, not once per position.** Every block of a multiblock Create Fluid Tank answers the
+  *same* `IFluidHandler`, so a per-position count reads 3 000 mB as 6 000. That is the double-chest problem of
+  `ItemCensus#isSecondChestHalf` in fluid form, and handler identity is the general answer to it — Create's own
+  `FluidNetwork` keys its fill accounting on an `IdentityHashMap` of handlers for exactly this reason. The semantics
+  match the double chest: a tank straddling the census boundary is counted once, in full.
+* **Containers are read off the item census, never swept for.** The fluid in a container is a pure function of its
+  `ItemKey`, so fluid is counted at *exactly* the places the item census already reaches — inventories, station
+  buffers, handling heads, arm claws, `ItemEntity`, `PackageEntity`, pallets — by construction rather than by a
+  second carrier list kept in step. M26 and M28 each shipped a carrier a census could not see; a fluid census with a
+  list of its own would have been the third instance waiting to happen.
+
+The block sweep asks **every** position and not only those with a block entity, because a cauldron has none; and a
+block that answers a handler on a face but **nothing** for a `null` query **fails the census** instead of being
+skipped, because a silent 0 is how a carrier goes unread. Every fluid registration in Create answers `null` even where
+it refuses a face (Spout, Item Drain, Hose Pulley), and a fluid bay must do the same (§3.9). Not counted on purpose:
+fluid lying in the world as a source block (that is terrain, and nothing in this mod places or consumes one — so a
+census box must not contain an open Create pipe end, whose own source placement would read as a loss here) and entity
+fluid handlers (nothing in NeoForge, Create or this mod registers one; a fluid tote on a pallet would be the first, and
+would need a branch in **both** censuses before it could be trusted).
+
+**The one move that changes the item half while the fluid half stands still** is the container exchange, and it is
+declared rather than written by hand: `ItemCensus#exchange` and `SceneItemCensus#exchanged` take "these *n* filled
+containers became these empty ones" and **verify it against `FluidContainers#drained`, the same routine a bay uses**,
+on a single-item probe that touches nothing in the world. A test can therefore declare only the exchange the game
+performs and never a fake one. The fluid expectation is deliberately untouched by it, which is the invariant in one
+line: a bay that swallowed 1 000 mB and stored 900 still fails, with every item accounted for.
+
+Verified by teeth, as M28 verified its pallet branch. Blinding the container branch, the no-drain rule and the exchange
+verification turns **four** tests red (`fluidcensusseesfluidwhereveranitemis`,
+`fluidcensusneverdrainsandneverkeepsalivestack`, `fluidcensuscountsonetankonce` — that one twice over — and
+`censusexchangeonlydeclareswhatthegamedoes`); blinding the handler deduplication reads 3 000 mB as 6 000; and taking
+the item census's "no block entity, skip" shortcut loses both cauldrons. GameTests `gametest.FluidCensusGameTests`.
+
 | Situation | Behaviour |
 |---|---|
 | Source empty / less than planned at pick time | Pick what is there (real extract). If 0, abort the job after retracting. |
 | Target full / partially full at drop time | Insert what fits. The remainder stays in the grabber, then **reroute**. |
+| Target is a **fluid bay** that cannot take the whole carry (M30) | The exchange is refused, **nothing** moves, and the carry is rerouted with the bay excluded. A reroute never offers such a location part of a carry in the first place (`PlannerInput.allOrNothing`, §3.9.3): it takes a carry whole or not at all, so offering it one of two containers would send the crane to a bay that takes none — and two part-full bays of one fluid, which outrank every shelf, would pass the carry back and forth for ever. |
 | Target interface or inventory removed | Reroute. |
 | Output station full | Wait at the output (`WAITING_FOR_TARGET`, retry every `retryTicks`, default 20). A job that serves no request at that output (its request was lost, or it was rerouted there) reroutes instead (M3 review: otherwise it could wait for ever). **M17:** a `STORE` job never waits, however delivery-like its target is — waiting is right when somebody is waiting for the items, and a store into an accepting port would park the crane in front of a full overflow and block the whole aisle, so it drops, delivers 0 and reroutes (§3.2.3). Every `RETRIEVE` and `SUPPLY` is unchanged. |
 | Reroute for STORE leftovers | Another storage location **whose filter accepts the items**, else any input station buffer, else `HOLDING`. Storing leftovers is still storing, so a dedicated location never receives what it rejects. `HOLDING` is the documented, recoverable outcome when nothing accepts them (the crane's goggles read "Holding items, no target found" and list the items, and every hold retry re-tries every location with no exclusion); M8 adds one more way to reach it, and that is deliberate — ignoring filters as a last resort would break the binding rule that a dedicated location never gets what its filter rejects. **M16:** this is a storing path, so it goes through the same `selectStorage` and honours the storage priority as well. **M17:** after the input buffers comes one more stage, an **accepting warehouse port** — last, whatever its rank, because putting items back into an input is reversible and exporting them is not, and it converges anyway (the next store plan offers them to the port again). It is a stage of its own with a live-simulation budget of its own, and a port's filter is a hard rule there too (§3.2.3). |
@@ -5070,6 +5673,7 @@ robustness run then carries one real pallet through a real chunk unload and a re
 | **An unreadable item key or an impossible count on a pallet (M28)** | A key that cannot be decoded (its mod was removed) or a count at or below 0 **discards** the pallet — vanilla's own answer for an item entity whose stack it cannot read, and better than an unremovable husk. A count above `MAX_LOAD` (= `BayTier.MAX_CAPACITY_ITEMS`, the bay's own ceiling) is clamped and logged as the loss it is. GameTest `palletsurvivesanysavedata`. |
 | **A pallet drained by a machine or a hand (M28)** | Real `extractItem` results only, one stack per call, and **extract-only**: nothing can be put into a pallet, because the way into storage is a bay. A hand take is simulated against the player's own inventory first and takes only what fits. A vanilla hopper and a Create Deployer reach it; Create's belts, chutes, funnels, depots and ejectors do not (`ItemHelper.fromItemEntity`), which also means no Create block can delete or teleport one. GameTests `ahopperdrainsapalletandafunneldoesnot`, `pallethandgestures`. |
 | **Refilling a bay from a pallet (M28)** | Two independent real-result transfers through the player's hand. There is deliberately **no** one-move path: the pallet has no item form at all, so goods never move without being touched. GameTest `bayrefilledfromapalletbyhand`. |
+| **Fluid bay broken with fluid in it (M30)** | The fluid is **lost**, and that is the one deliberate loss in this mod: a fluid has no drop form, so there is nothing a pallet could carry, and every alternative is worse (§3.9, D7). `destroy()` clears the contents **before** anything else can see them, exactly as a rack bay's does, and logs one `WARN` with the fluid, the millibuckets and the position — the only record a server owner gets. **Three places say so beforehand**: the item description, a gold goggle row while there is anything to lose, and an action-bar warning on the first punch; a sneaking **wrench** click gets that same line as the bay goes, which is as early as one click allows (§3.9.1). Nothing is placed in its stead, so the loss is exactly what was in the bay and no more. GameTests `breakingafullfluidbaylosesitsfluidandlogsit`, `breakingafluidbayincreative`. |
 | Needed chunk not loaded | The crane waits in the current phase and retries. **M19:** unchanged, and still the behaviour of every aisle on a default server. Where `chunkLoading` is switched on and the aisle is allowed to hold, this case simply does not arise for the aisle's own chunks while it has work (§11); where it is refused by a cap or has given up, the pause path is what carries it, exactly as before. |
 | Chunk loading on, and the aisle has work (M19) | It holds the chunks of its own footprint — the aisle box plus one block horizontally — with a non-ticking block ticket, so the crane, the controller and the player's own machines in those chunks keep running with nobody nearby. Crops still do not grow and mobs still do not spawn there. It lets go `releaseDelayTicks` after its last work (§11.4). |
 | A ticket's owner is broken, replaced or unloaded, or the level or server goes down (M19) | The tickets go with the owner: `remove()` releases in the same tick, `invalidate()` releases unless the level or the server is going down (then the hold has to reach the save, or a restart would throw away an in-progress job), and on the next load the validation callback keeps one seed chunk per owner and a watchdog releases every seed no controller claims within 100 ticks (§11.6). A ticket that outlives its owner is the one defect this feature must not have, and the leak probe of every chunk GameTest is what proves it does not. |
@@ -5117,11 +5721,12 @@ The table above is covered by automated tests. What only a running game can reac
   * `cranetargetinventorybrokenmidjob`: the **inventory** behind the target interface is broken while the crane carries 32 iron (the interface itself stays, so the location resolves as missing through the empty attached handler, not through a missing member). With the input broken as well the crane holds the items, the interface stays a storage location, and an inventory placed behind it again is used by the next hold retry. Added in M5: the design names crane, interface **and** inventory, and only the first two were covered.
   * Config extremes (§9): `configzerospeedfactorpausescranes`, `configtinystationbuffers` (one buffer slot per station), `configdispatchintervalextremes` (interval 1 and 200), `configaisleandmastlimits` (`maxAisleLength` and `maxMastHeight` at 1, `maxMastHeight` at its maximum of 64, and the proof that a lowered `maxMastHeight` is reversible). The default rail cap is covered by `cranerailcap` on the 48-rail template; the top of the `maxAisleLength` range (128) is not exercised by any test.
   * **Config tests get one batch each.** The tests of a batch run at the same time, so a test that changes a global config value would change it for its neighbours; batches run one after another. `gametest.ConfigOverrides` applies an override with `ModConfigSpec.ConfigValue#set` plus `clearCache()` (needed because `set` does not update the cache of `worldRestart` values) and an `@AfterBatch` method per batch restores every override, also after a failure.
-* **Dev harness scenario** (`dev.wareworks.dev.RobustnessVisualScenario`, `./gradlew runRobustnessTest`, ADR-014): one aisle built 512 blocks from the world spawn (the spawn keeps about 11 chunks permanently loaded, so an aisle at spawn could never unload), with a creative motor, 6 rails, an input and ten storage locations — **nine chests behind interfaces and one rack bay** (M28), filled before the warehouse is ready, so every phase carries a bay through it as well as a foreign inventory. After the first job starts it runs its phases, and after **every** phase it counts every item of the scene (`dev.SceneItemCensus`: inventories, station buffers, handling head, dropped item entities, Create packages and pallets) and logs one `robustness PASS` or `robustness FAIL` line. A census runs only once **every chunk the census box touches** is loaded and refuses to count otherwise (**M5 review fix**: the box is inflated around the aisle and spans four chunks, so skipping unloaded positions could have reported a chunk-loading race as a lost item):
-  1. *a full rack bay broken while the crane carries items* (**M28**, and it runs first on purpose): the bay holds two stacks — more than one `ItemStack` could ever carry — and the crane is storing into it when it goes. The step asserts that exactly **one** pallet is left carrying exactly what the bay held, counts the scene right after the break, while the crane is still carrying and its target has just vanished under it, and counts it again once the job has finished without that location. Going first is the point: the pallet is then on the floor for every phase below and is counted by **every** census after it, so "a pallet survives a save, a reload and a chunk unload with its load intact" is proved by a *real* unload and a *real* world reload, which no GameTest can reach. The phase is only meaningful because `SceneItemCensus` was taught about pallets in the same change as the entity; before that it would have reported PASS while 128 diamonds disappeared.
-  2. *chunk round trip*: the camera flies from (512, 512) to (1500, 1500), about 1400 blocks — far beyond the client's 8-chunk view distance, but close enough that the trip does not generate and save a large amount of new terrain. It waits until the dock's block entity is really **removed** and the position is no longer loaded (`isLoaded` alone would flip while the same block entity still waits in the unload queue, which would prove nothing), stays away 100 ticks and comes back. The phase then asserts that the dock is a **different** block entity, read from the save; the controller becomes ready again and the interrupted job finishes.
-  3. *save, quit and rejoin*: `saveEverything` mid job, then back to the title screen (which stops the integrated server) and `WorldOpenFlows#openWorld` on the same world; the resumed job finishes.
-  4. *blocks broken at defined moments*: the controller is broken while the crane carries items (the crane finishes the job without it), a controller is placed again, and then the **dock** is broken while the crane carries items, which drops the head at the dock as item entities.
+* **Dev harness scenario** (`dev.wareworks.dev.RobustnessVisualScenario`, `./gradlew runRobustnessTest`, ADR-014): one aisle built 512 blocks from the world spawn (the spawn keeps about 11 chunks permanently loaded, so an aisle at spawn could never unload), with a creative motor, 6 rails, an input and ten storage locations — **eight chests behind interfaces, one rack bay** (M28) and one **fluid bay** (M30), both filled before the warehouse is ready, so every phase carries both kinds of bay through it as well as a foreign inventory. After the first job starts it runs its phases, and after **every** phase it counts every item of the scene (`dev.SceneItemCensus`: inventories, station buffers, handling head, dropped item entities, Create packages and pallets) **and every millibucket of it** (`dev.SceneFluidCensus`: tanks, and the fluid inside container items) and logs one `robustness PASS` or `robustness FAIL` line. The two are asserted **jointly**, because they do not conserve separately: a container exchange moves fluid out of an item and into a tank, so only one assertion carrying both can tell a real transfer from a lost bucket. A census runs only once **every chunk the census box touches** is loaded and refuses to count otherwise (**M5 review fix**: the box is inflated around the aisle and spans four chunks, so skipping unloaded positions could have reported a chunk-loading race as a lost item):
+  1. *a container exchange* (**M30**, and it runs first on purpose): a **lava bucket** is dropped into the input and nothing else is said — the store gate sends a container of a bay's fluid to that bay, so the plan is the real one — and the phase waits until the bay has really drained it. The item expectation then changes by exactly **one swap**, declared through `SceneItemCensus.exchanged`, which verifies the swap against the game's own emptying routine so a scenario cannot declare one the game would not make; the **fluid** expectation does not change at all, because 1 000 mB inside a bucket and 1 000 mB in a tank are the same millibuckets. Going first is the point for the reason the broken bay goes second: the lava in the tank and the empty bucket that came back then ride the chunk unload, the world reload, the chunk hold and the broken blocks, and are counted by **every** census after them. It is also what exercises `SceneFluidCensus` at all, which is the class M26's and M28's lesson was written for — each of those shipped a carrier a census could not see, and each time every check reported PASS while items vanished into it.
+  2. *a full rack bay broken while the crane carries items* (**M28**): the bay holds two stacks — more than one `ItemStack` could ever carry — and the crane is storing into it when it goes. The step asserts that exactly **one** pallet is left carrying exactly what the bay held, counts the scene right after the break, while the crane is still carrying and its target has just vanished under it, and counts it again once the job has finished without that location. Going early is the point: the pallet is then on the floor for every phase below and is counted by **every** census after it, so "a pallet survives a save, a reload and a chunk unload with its load intact" is proved by a *real* unload and a *real* world reload, which no GameTest can reach. The phase is only meaningful because `SceneItemCensus` was taught about pallets in the same change as the entity; before that it would have reported PASS while 128 diamonds disappeared.
+  3. *chunk round trip*: the camera flies from (512, 512) to (1500, 1500), about 1400 blocks — far beyond the client's 8-chunk view distance, but close enough that the trip does not generate and save a large amount of new terrain. It waits until the dock's block entity is really **removed** and the position is no longer loaded (`isLoaded` alone would flip while the same block entity still waits in the unload queue, which would prove nothing), stays away 100 ticks and comes back. The phase then asserts that the dock is a **different** block entity, read from the save; the controller becomes ready again and the interrupted job finishes.
+  4. *save, quit and rejoin*: `saveEverything` mid job, then back to the title screen (which stops the integrated server) and `WorldOpenFlows#openWorld` on the same world; the resumed job finishes.
+  5. *blocks broken at defined moments*: the controller is broken while the crane carries items (the crane finishes the job without it), a controller is placed again, and then the **dock** is broken while the crane carries items, which drops the head at the dock as item entities.
   A FAIL throws, so the harness writes a crash report and the Gradle task exits non-zero. The logs are the evidence; the single screenshot per pass only documents the end state.
 * **Intentional behaviour that surprises players** (repeated in the manual checklist):
   * Lowering `aisle.maxMastHeight` shortens the mast of every crane at once, because the height is clamped **when it is read**. The stored value is not touched, so raising the limit again brings the player's own height back (**M5 review fix**: the clamped number used to be written back into the saved scroll value, which lost the setting for good, on every dock in a loaded chunk, within one geometry refresh).
@@ -5204,6 +5809,9 @@ The table above is covered by automated tests. What only a running game can reac
 | `woodBayStacks` | 64 | item **stacks** one wooden rack bay holds (M28, §3.8). Counted in stacks, not items, so the item says what a stack is: 4 096 cobblestone or 1 024 ender pearls. Range 1–4 096 for all three keys, which is the bound that keeps a bay's content count inside an `int`. Lowering a capacity under what a bay already holds **destroys nothing**: it keeps everything and accepts nothing until it has drained |
 | `andesiteBayStacks` | 256 | the same for an andesite rack bay — four times a wooden one |
 | `brassBayStacks` | 1 024 | the same for a brass rack bay, level with a fully upgraded drawer. One **terminal request** is still bounded by `maxTerminalRequestAmount`, so emptying a full brass bay through a terminal takes several |
+| `copperFluidBayBuckets` | 64 | **buckets** one copper fluid bay holds (M30, issue #21). A fluid bay is a storage location that *is* a tank: it holds one fluid, counted in buckets here and in **millibuckets** inside, so one number stands on the block and means the same for water as for lava. Range 1–65 536 for both keys, which is the bound that keeps a bay's millibucket count inside an `int` (65 536 000 mB, 3 % of it). Measured against what stands beside it, a Create Fluid Tank holds 8 buckets per block, so the default is eight tank blocks. Lowering a capacity under what a bay already holds **destroys nothing**, for the same reason the rack bays give |
+| `brassFluidBayBuckets` | 256 | the same for a brass fluid bay — four times the copper one, and more than a 3 × 3 × 3 Create tank tower, which is 27 × 8 = **216**. There is deliberately no wooden and no andesite fluid bay: in Create fluids are copper, andesite plays no part in its fluid world, and a wooden barrel of lava is an explanation nobody should owe |
+| `fluidBayPipeExtraction` | `true` | whether Create's pipes may **draw fluid off** a fluid bay and not only fill it. A bay offers its fluid connection on every face except the one towards the aisle, so a pump fills it from a lava lake and, at the default, a second one feeds a machine from it. The honest consequence: fluid then leaves a warehouse with no crane carrying it — which is already true of **items**, since a rack bay answers its item capability on every face in both directions and a vanilla hopper under one drains it, so a tappable fluid bay is *narrower* than what the item side allows rather than a softening. `false` makes it a one-way tank. The bay's goggle tooltip states which of the two it is, either way, and a player's own bucket click is never affected |
 | `maxTicketedAislesPerLevel` | **0 (off)** | how many aisles of **one dimension** may hold their own chunks loaded while they have work. **0 switches the whole feature off, and that is the default**, so a server that does not want a chunk loader pays nothing and every aisle behaves exactly as before M19. Above 0 this **is** a chunk loader; the aisle lets go as soon as it is idle (§11) |
 | `maxChunksPerAisle` | 10 | how many chunks **one whole warehouse** may hold, over all of its aisles together. A warehouse whose footprint needs more holds **nothing** (never a partial hold) and says so through goggles **and in `/wareworks chunks`**, both naming the number it would have needed. Since M21 this no longer follows from `maxAisleLength`, because a corner turns one long rectangle into two shorter ones at right angles: one straight aisle needs 8 (12 at a length cap of 64, 20 at 128), an L of 32 + 16 rails needs 10, an L of two full 32-rail aisles 12, a U of three 16, and the widest chain `maxNetworkRails = 256` allows 36. **The default is deliberately not the worst case any more** — it covers every straight aisle of the default length plus a first corner, and a bigger warehouse has to raise it. It is a chunk-loading budget, not a build limit (§11.3) |
 | `releaseDelayTicks` | 100 | how long a holding aisle lingers after its last work before it lets go (5 s). The anti-thrash bound: work that comes back inside the window never releases in between (§11.4) |
@@ -5217,7 +5825,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks`, `maxNetworkRails`, `maxBranches`, `maxJunctions` | 1–128, 1–64, 1–1200, 16–1024, 1–26, 0–128 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `turnPenaltyBlocks`, `returnHomeIdleTicks`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 0–16, 0–72000, 1–200, 1–27, 1–1728 |
 | `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `maxTerminalUsageEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–256; 1–16; 1–1200; 0–432000; 1–8 |
-| `storage` (M28) | `woodBayStacks`, `andesiteBayStacks`, `brassBayStacks` | 1–4096 each |
+| `storage` (M28, M30) | `woodBayStacks`, `andesiteBayStacks`, `brassBayStacks`; `copperFluidBayBuckets`, `brassFluidBayBuckets`, `fluidBayPipeExtraction` | 1–4096 each; 1–65536 each, boolean |
 | `controller` | `snapshotIntervalTicks`, `snapshotCycleTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 0–432000, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
 

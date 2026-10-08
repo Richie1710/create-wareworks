@@ -87,6 +87,14 @@ import dev.wareworks.core.inventory.StockView;
  * @param insertRefused        whether a storage location is known to refuse a key right now (it refused a live
  *                             insertion recently, {@link RefusalMemory}); such locations are skipped without a live call
  * @param extractRefused       whether a storage location is known to give none of a key right now; skipped likewise
+ * @param allOrNothing         whether a location takes a carry <b>whole or not at all</b> (M30, issue #21): a fluid
+ *                             bay, whose containers are exchanged rather than inserted, cannot keep part of a carry
+ *                             because a handling head holds one item key. Consulted only by
+ *                             {@link JobPlanner#planReroute}, which has a <b>fixed</b> amount it must place: such a
+ *                             location is dropped there unless it takes all of it, and the next candidate is tried.
+ *                             The store plan is untouched — it sizes a job by what the location answers, so a bay with
+ *                             room for one bucket legitimately gets a job of one bucket. The default is {@code false}
+ *                             for every location, which makes the planner the function it was before M30
  * @param storeFilter          what a storage location's store filter says about a key ({@link FilterMatch}, §3.1):
  *                             {@link FilterMatch#REJECTED} skips the location before the estimate and before any live
  *                             call, {@link FilterMatch#DEDICATED} ranks it above every unfiltered location, and
@@ -131,7 +139,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Function<? super L, InventorySnapshot<K>> inputBuffers, int inputCursor, LocationAvailability<L> available,
         JobPlanner.InsertEstimate<K, L> insertEstimate, JobPlanner.LiveExtract<K, L> liveExtract,
         JobPlanner.LiveInsert<K, L> liveInsert, BiPredicate<? super L, ? super K> insertRefused,
-        BiPredicate<? super L, ? super K> extractRefused,
+        BiPredicate<? super L, ? super K> extractRefused, Predicate<? super L> allOrNothing,
         BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
         ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, int liveSimulationBudget) {
     /**
@@ -217,6 +225,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Objects.requireNonNull(liveInsert, "liveInsert");
         Objects.requireNonNull(insertRefused, "insertRefused");
         Objects.requireNonNull(extractRefused, "extractRefused");
+        Objects.requireNonNull(allOrNothing, "allOrNothing");
         Objects.requireNonNull(storeFilter, "storeFilter");
         Objects.requireNonNull(storePriority, "storePriority");
         Objects.requireNonNull(portRank, "portRank");
@@ -313,6 +322,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private JobPlanner.LiveInsert<K, L> liveInsert = (location, key, amount) -> 0;
         private BiPredicate<? super L, ? super K> insertRefused = (location, key) -> false;
         private BiPredicate<? super L, ? super K> extractRefused = (location, key) -> false;
+        private Predicate<? super L> allOrNothing = location -> false;
         private BiFunction<? super L, ? super K, FilterMatch> storeFilter = (location, key) -> FilterMatch.UNFILTERED;
         private ToIntFunction<? super L> storePriority = NO_PRIORITY;
         private ToIntFunction<? super L> portRank = NO_PORT_RANK;
@@ -459,6 +469,15 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * Which locations take a carry whole or not at all ({@link PlannerInput#allOrNothing()}). Left out, no location
+         * does, which is the input the planner received before M30.
+         */
+        public Builder<K, L> allOrNothing(Predicate<? super L> allOrNothing) {
+            this.allOrNothing = allOrNothing;
+            return this;
+        }
+
         public Builder<K, L> storeFilter(BiFunction<? super L, ? super K, FilterMatch> storeFilter) {
             this.storeFilter = storeFilter;
             return this;
@@ -504,7 +523,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     reservations,
                     requests, supplies, storageLocations, inputs, outputs, ports, collectSources, collectBuffers,
                     inputBuffers, inputCursor, LocationAvailability.of(available),
-                    insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, storeFilter, storePriority,
+                    insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, storeFilter,
+                    storePriority,
                     portRank, storeHeadroom, liveSimulationBudget);
         }
     }

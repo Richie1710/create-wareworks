@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.StorageMember;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.head.HandlingHead;
@@ -65,7 +66,9 @@ import net.minecraft.world.level.Level;
  * <b>Effects.</b> {@code PerformPick} / {@code PerformDrop} resolve the location ({@link TransferContexts#resolve}): not
  * loaded → no answer (the machine repeats it every unpaused tick), missing → {@code SourceMissing} /
  * {@code TargetMissing}, available → the real transfer through the handling head, whose real result is the answer. A full
- * output station answers {@code OutputFull} without touching the inventory. {@code RequestReroute} asks the linked
+ * output station answers {@code OutputFull} without touching the inventory. A target that takes containers by
+ * <b>exchange</b> only — a fluid bay — answers {@code Exchanged} instead of a drop result, with the item to expect back
+ * taken from a simulated exchange in the same tick ({@link #performExchange}). {@code RequestReroute} asks the linked
  * controller ({@code planReroute}); without controller the answer is "none" (hold). Reports go to the linked controller
  * if there is one; the controller re-derives its reservations from the crane's job anyway.
  * <p>
@@ -445,6 +448,7 @@ final class CraneExecution {
             case CraneEffect.ReportPicked<ItemKey, RackPosition> picked ->
                     crane.linkedControllerEntity().ifPresent(controller -> controller.onCranePicked(crane, picked.job()));
             case CraneEffect.ReportDelivered<ItemKey, RackPosition> delivered -> reportDelivered(delivered);
+            case CraneEffect.ReportExchanged<ItemKey, RackPosition> exchanged -> reportExchanged(exchanged);
             case CraneEffect.ReportRerouted<ItemKey, RackPosition> rerouted -> reportRerouted(rerouted);
             case CraneEffect.ReportComplete<ItemKey, RackPosition> complete -> {
                 if (!resuming)
@@ -505,6 +509,14 @@ final class CraneExecution {
                     return;
                 }
                 TransferContext target = resolution.context().orElseThrow();
+                // A fluid bay takes containers by exchange and never by insertion (M30, issue #21, D1/D3), so its drop
+                // is a different operation and its refusal must not fall through to one: the bay logs an insertion as
+                // the caller error it would otherwise be. Asked before the full-station gate below, which a STORAGE
+                // target can never reach anyway.
+                if (target.exchangesOnly()) {
+                    performExchange(level, job, target, drop.amount(), events);
+                    return;
+                }
                 // Every station the crane delivers to on someone's behalf is checked, not only an output: a
                 // production station that filled up between planning and the drop would otherwise be handed a full
                 // carry, deliver nothing and send all of it back into storage, one wasted round trip per slot the
@@ -523,6 +535,59 @@ final class CraneExecution {
                 sounds.onDropped(level, crane, delivered);
                 events.add(CraneEvent.dropResult(delivered, drop.amount() - delivered));
             }
+        }
+    }
+
+    /**
+     * The <b>container exchange</b> half of a drop (M30, issue #21, D1): the head gives up the containers it carries at
+     * {@code target} and takes back the item that target turns them into — a filled container becomes fluid in a fluid
+     * bay's tank and an empty container in the head.
+     * <p>
+     * The item to expect back is not guessed and not configured: it comes from a <b>simulated exchange in this same
+     * tick</b>, which is exactly the contract {@link TransferContext#exchange} documents, and the head then performs
+     * only that swap and refuses anything else. The simulation is wrapped like {@link #simulateInsert} already is,
+     * because a location is foreign code and a {@code RuntimeException} out of it must not reach the state machine; the
+     * head catches both of its own calls itself.
+     * <p>
+     * A refusal — no plan, or a plan the real call did not honour — is reported as a drop that delivered nothing. That
+     * is the truth (nothing moved) and it needs no new failure path: the machine retracts and the existing ladder
+     * reroutes the carry with this target excluded, which is what a full bay, a wrong fluid and a bay with less than one
+     * whole container of room all look like.
+     * <p>
+     * <b>Except on one defensive path, where a refusal did move something.</b> A location that contradicted its own
+     * plan in the same tick has the head give up the containers it can account for and spill what came back
+     * <i>there</i>, rather than hold two item keys ({@code ExchangeDecision.Action#SALVAGE}), and still answers 0. The
+     * head is then empty of the containers while the job still claims them, so the job is made to follow the head in
+     * this very tick — the same answer every other broken contract gets here — instead of spending a reroute and a
+     * capacity reservation on items that no longer exist. Unreachable with this mod's own bay, whose real call and
+     * simulated call are the same arithmetic; a modded container whose two probe drains disagree can reach it.
+     */
+    private void performExchange(Level level, TransportJob<ItemKey, RackPosition> job, TransferContext target,
+            int amount, Deque<CraneEvent<ItemKey, RackPosition>> events) {
+        TransferContext.ContainerExchange planned = simulateExchange(target, job.key(), amount);
+        int exchanged = planned == null ? 0 : crane.head().exchange(target, job.key(), planned.result(), amount);
+        if (exchanged > 0) {
+            sounds.onExchanged(level, crane, exchanged);
+            events.add(CraneEvent.exchanged(planned.result(), exchanged));
+            return;
+        }
+        if (crane.head().count(job.key()) != amount) {
+            // Follow the head, answer nothing, retry in the next tick — exactly as the count guard above the exchange
+            // branch does for an ordinary drop.
+            reconcileHeadWithJob(level);
+            return;
+        }
+        events.add(CraneEvent.dropResult(0, amount));
+    }
+
+    @Nullable
+    private static TransferContext.ContainerExchange simulateExchange(TransferContext target, ItemKey key, int amount) {
+        try {
+            return target.exchange(key, amount, true).orElse(null);
+        } catch (RuntimeException e) {
+            LOGGER.warn("Location at {} failed while simulating an exchange of {} x {}", target.position(), amount, key,
+                    e);
+            return null;
         }
     }
 
@@ -560,6 +625,20 @@ final class CraneExecution {
                 .orElse(true);
         if (!requestOpen)
             detachRequest(delivered.job().id());
+    }
+
+    /**
+     * A container exchange happened (M30, issue #21, D14): the controller is told, and the dock syncs because the job
+     * now carries another key and the head another item.
+     * <p>
+     * <b>Nothing is booked into the throughput window.</b> The window counts items that were <i>delivered</i>, and the
+     * containers are still in the head; they are counted when the reroute really shelves them, which is the one moment
+     * they arrive somewhere. Counting them here as well would count one bucket twice.
+     */
+    private void reportExchanged(CraneEffect.ReportExchanged<ItemKey, RackPosition> exchanged) {
+        crane.linkedControllerEntity().ifPresent(controller -> controller.onCraneExchanged(crane, exchanged.job(),
+                exchanged.target(), exchanged.formerKey(), exchanged.amount()));
+        syncRequested = true;
     }
 
     private void reportRerouted(CraneEffect.ReportRerouted<ItemKey, RackPosition> rerouted) {
@@ -682,6 +761,9 @@ final class CraneExecution {
      * one block away from the aisle, but reached through a port, whose kind is {@link LocationKind#OUTPUT}. Missing it
      * left the crane in {@code PICK} for ever with {@code pauseReason} {@code NONE} whenever the machine's chunk unloaded
      * mid-job, because {@code performPick} deliberately answers nothing while the source is unloaded.
+     * <p>
+     * The kind is not the <b>last</b> word either: a storage location whose inventory is its own block is read where
+     * it stands, so nothing behind it has to be loaded ({@link #readsBehindRack}, M30 review fix).
      */
     private boolean stopChunksLoaded(Level level) {
         CraneState<ItemKey, RackPosition> state = crane.craneState();
@@ -713,8 +795,25 @@ final class CraneExecution {
             }
         }
         BlockPos pos = warehouse.rackPos(stop);
-        return level.isLoaded(pos)
-                && (!reachesBehindRack || level.isLoaded(pos.relative(warehouse.sideDirection(stop))));
+        if (!level.isLoaded(pos))
+            return false;
+        return !reachesBehindRack || !readsBehindRack(level, pos)
+                || level.isLoaded(pos.relative(warehouse.sideDirection(stop)));
+    }
+
+    /**
+     * Whether the stop at {@code pos} really reads the block <b>behind</b> the rack position, i.e. whether its
+     * inventory stands somewhere else (M30 review fix, issue #21).
+     * <p>
+     * Every storage location the crane knew before M30 is a warehouse interface, whose items live in the block it is
+     * attached to, so the kind alone was the whole answer. A <b>fluid bay is its own tank</b>: it holds no items,
+     * offers no item handler and has nothing attached ({@code TransferContexts.resolve}), so requiring the chunk of
+     * the block behind it would pause a crane mid-job for a block it never touches. The question is therefore asked of
+     * the member rather than of the kind, which is what the rule has always meant; the position itself is loaded by
+     * the time this is called, so reading its block entity costs nothing.
+     */
+    private static boolean readsBehindRack(Level level, BlockPos pos) {
+        return !(level.getBlockEntity(pos) instanceof StorageMember storage) || !storage.attachedPos().equals(pos);
     }
 
     /**

@@ -74,6 +74,8 @@ public final class WareworksItemGameTests {
     /** The rack bays' two material tags (M28): any plank for the wooden one, any brass sheet for the brass one. */
     private static final TagKey<Item> BRASS_PLATES = itemTag("c", "plates/brass");
     private static final TagKey<Item> PLANKS = itemTag("minecraft", "planks");
+    /** The copper fluid bay's material (M30): any copper sheet, which in Create is the fluid material. */
+    private static final TagKey<Item> COPPER_PLATES = itemTag("c", "plates/copper");
 
     private static final String ANDESITE_ALLOY = "andesite_alloy";
     private static final String ANDESITE_CASING = "andesite_casing";
@@ -84,6 +86,8 @@ public final class WareworksItemGameTests {
     private static final String BRASS_NUGGET = "brass_nugget";
     private static final String BRASS_SHEET = "brass_sheet";
     private static final String COMPARATOR = "comparator";
+    private static final String COPPER_CASING = "copper_casing";
+    private static final String COPPER_SHEET = "copper_sheet";
     private static final String ELECTRON_TUBE = "electron_tube";
     private static final String INDUSTRIAL_IRON_BLOCK = "industrial_iron_block";
     private static final String IRON_SHEET = "iron_sheet";
@@ -244,6 +248,17 @@ public final class WareworksItemGameTests {
         assertCrafts(helper, recipes, level, woodBay, WareworksBlocks.RACK_BAY_WOOD.asItem(), ONE);
         assertCrafts(helper, recipes, level, andesiteBay, WareworksBlocks.RACK_BAY_ANDESITE.asItem(), ONE);
         assertCrafts(helper, recipes, level, brassBay, WareworksBlocks.RACK_BAY_BRASS.asItem(), ONE);
+        // The two fluid bays (M30): the same vessel, CLOSED, which is what keeps a tank's grid out of a rack's way -
+        // the brass fluid bay differs from the brass rack bay by its filled middle and by a copper casing, not by
+        // arrangement alone. The sheet in the middle is deliberately the shell's own material.
+        ItemStack copperSheet = stack(COPPER_SHEET);
+        ItemStack copperCasing = stack(COPPER_CASING);
+        CraftingInput copperTank = grid(3, 3, copperSheet, copperSheet, copperSheet, copperCasing, copperSheet,
+                copperCasing, copperSheet, copperSheet, copperSheet);
+        CraftingInput brassTank = grid(3, 3, sheet, sheet, sheet, copperCasing, sheet, copperCasing, sheet, sheet,
+                sheet);
+        assertCrafts(helper, recipes, level, copperTank, WareworksBlocks.FLUID_BAY_COPPER.asItem(), ONE);
+        assertCrafts(helper, recipes, level, brassTank, WareworksBlocks.FLUID_BAY_BRASS.asItem(), ONE);
         assertCrafts(helper, recipes, level, production, WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(), ONE);
         assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
         assertCrafts(helper, recipes, level, homePoint, WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(), ONE);
@@ -310,6 +325,9 @@ public final class WareworksItemGameTests {
                 // interface turns somebody else's inventory into a storage location, a bay is one.
                 WareworksBlocks.RACK_BAY_WOOD.asItem(), WareworksBlocks.RACK_BAY_ANDESITE.asItem(),
                 WareworksBlocks.RACK_BAY_BRASS.asItem(),
+                // The two fluid bays follow the item ones, weakest first (M30, issue #21): the same block for the
+                // other kind of goods, and there is deliberately no wooden and no andesite one.
+                WareworksBlocks.FLUID_BAY_COPPER.asItem(), WareworksBlocks.FLUID_BAY_BRASS.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem()),
@@ -361,6 +379,22 @@ public final class WareworksItemGameTests {
                                 IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.of(BRASS_CASING),
                                 IngredientSpec.of(BRASS_CASING), IngredientSpec.ofTag(BRASS_PLATES),
                                 IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES))),
+                // The two fluid bays (M30, issue #21): the same vessel in two materials, and a CLOSED one — a tank has
+                // no open front, which is also what keeps each of these grids out of the rack bays' way. The casing
+                // stays copper in both, because in Create fluids are copper, so the ladder is "the same tank, one
+                // material up" and the copper one is buildable the day a player has a pump.
+                new ExpectedRecipe(WareworksBlocks.FLUID_BAY_COPPER, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofTag(COPPER_PLATES), IngredientSpec.ofTag(COPPER_PLATES),
+                                IngredientSpec.ofTag(COPPER_PLATES), IngredientSpec.of(COPPER_CASING),
+                                IngredientSpec.ofTag(COPPER_PLATES), IngredientSpec.of(COPPER_CASING),
+                                IngredientSpec.ofTag(COPPER_PLATES), IngredientSpec.ofTag(COPPER_PLATES),
+                                IngredientSpec.ofTag(COPPER_PLATES))),
+                new ExpectedRecipe(WareworksBlocks.FLUID_BAY_BRASS, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.of(COPPER_CASING),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.of(COPPER_CASING),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_INPUT, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(ANDESITE_FUNNEL), IngredientSpec.of(ANDESITE_CASING))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_OUTPUT, RecipeType.CRAFTING, ONE,

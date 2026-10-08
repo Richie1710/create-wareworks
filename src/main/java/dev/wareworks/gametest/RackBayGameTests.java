@@ -33,18 +33,21 @@ import dev.wareworks.content.controller.AisleAssignment;
 import dev.wareworks.content.controller.LocationReservationSummary;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.BayColumn;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.RackBayGestures;
 import dev.wareworks.content.storage.RackBayHandler;
 import dev.wareworks.content.storage.StorageFilterBehaviour;
+import dev.wareworks.content.storage.TieredBay;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.CapacityMath;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.ReservationView;
+import dev.wareworks.core.storage.BayFamily;
 import dev.wareworks.core.storage.BayTier;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
@@ -955,7 +958,7 @@ public final class RackBayGameTests {
 
     /**
      * <b>The fill level a player reads off the front follows the contents</b>, in the block state, so a rack wall can
-     * be read by walking past it ({@code RackBayBlock#FILL}, M28 step 9).
+     * be read by walking past it ({@code TieredBay#FILL}, M28 step 9).
      * <p>
      * Three things are claimed, and each of them is a way the look could lie about the goods:
      * <ul>
@@ -1850,6 +1853,95 @@ public final class RackBayGameTests {
     }
 
     /**
+     * The column rule, the joins and the fill level are <b>shared</b> machinery ({@link BayColumn} over
+     * {@link TieredBay}, M30 step 3), and this is the part of that lift the item bay's own tests cannot see: the
+     * shared entry points, the block state contract they read a neighbour by, and the <b>family</b> gate that is the
+     * one thing the lift added.
+     * <p>
+     * Four claims, each of which is a way the shared shape could be wrong while every M28 and M29 test stayed green:
+     * <ul>
+     * <li><b>A bay of the other family ends a column exactly as air does.</b> That is the whole reason a fluid bay's
+     * tier is a second ladder rather than two more constants on {@link BayTier}: "is a copper tank stronger than an
+     * andesite rack" is a question nobody can answer, so it is never asked. It is proved here on the one primitive
+     * every walk and the closure reach a neighbour through ({@link BayColumn#sameFamilyBay}) rather than with a
+     * second block, because the fluid bay does not exist yet — and because going through that one call is what makes
+     * "carrying is within a family" structural: a bay of another family never reaches {@link TieredBay#mayCarry} at
+     * all, so it can only end a column and can never refuse one.</li>
+     * <li><b>The pair rule is still the pure layer's.</b> {@link TieredBay#mayCarry} is asked of all nine tier pairs
+     * and must agree with {@link BayTier#mayCarry} for every one of them, so a lift that re-expressed "strength never
+     * rises upwards" as its own comparison would fail here rather than in a column three blocks high.</li>
+     * <li><b>Every shared property is really on the block.</b> {@link BayColumn} reads {@code FACING},
+     * {@link TieredBay#OVERLOADED}, {@link TieredBay#FILL}, {@link TieredBay#LEFT} and {@link TieredBay#RIGHT} off a
+     * neighbour's state without knowing which bay it is looking at, so a bay that failed to declare one of them would
+     * crash a wall rather than look wrong.</li>
+     * <li><b>The fill arithmetic keeps both of its edges</b>, including the one no contents can produce: a capacity of
+     * zero reads as full rather than dividing by it.</li>
+     * </ul>
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void bayColumnIsSharedAndFamilyAware(GameTestHelper helper) {
+        placeBay(helper, LONE_BAY, WareworksBlocks.RACK_BAY_WOOD.getDefaultState(), Direction.NORTH);
+        ServerLevel level = helper.getLevel();
+        BlockPos absolute = helper.absolutePos(LONE_BAY);
+        BlockState state = level.getBlockState(absolute);
+        RackBayBlock block = WareworksBlocks.RACK_BAY_WOOD.get();
+
+        // "Which bay is this" is one question with one answer, asked of a state and never of a block id.
+        helper.assertValueEqual(BayColumn.bayAt(state), (TieredBay) block, "the bay a rack bay's state is");
+        helper.assertTrue(BayColumn.bayAt(Blocks.STONE.defaultBlockState()) == null, "stone is no bay");
+        helper.assertTrue(BayColumn.bayAt(Blocks.AIR.defaultBlockState()) == null, "and neither is air");
+
+        // The family gate: an item bay answers for the item ladder and for no other.
+        helper.assertValueEqual(block.bayFamily(), BayFamily.ITEM, "a rack bay is on the item ladder");
+        helper.assertValueEqual(BayColumn.sameFamilyBay(state, BayFamily.ITEM), (TieredBay) block,
+                "an item bay is found when an item bay's column asks");
+        helper.assertTrue(BayColumn.sameFamilyBay(state, BayFamily.FLUID) == null,
+                "and a fluid bay's column finds nothing here, so a rack bay ends it exactly as air does");
+        helper.assertTrue(BayColumn.sameFamilyBay(Blocks.STONE.defaultBlockState(), BayFamily.ITEM) == null,
+                "while a block that is no bay at all ends either column");
+
+        // The pair rule is BayTier's, asked through the interface for all nine pairs.
+        List<RackBayBlock> blocks = List.of(WareworksBlocks.RACK_BAY_WOOD.get(),
+                WareworksBlocks.RACK_BAY_ANDESITE.get(), WareworksBlocks.RACK_BAY_BRASS.get());
+        for (RackBayBlock below : blocks) {
+            for (RackBayBlock above : blocks) {
+                helper.assertValueEqual(below.mayCarry(above), below.tier().mayCarry(above.tier()),
+                        below.tier() + " carrying " + above.tier());
+            }
+        }
+
+        // The block state contract the shared code reads a neighbour by.
+        helper.assertTrue(state.hasProperty(RackBayBlock.FACING), "a bay carries FACING");
+        helper.assertTrue(state.hasProperty(TieredBay.OVERLOADED), "a bay carries OVERLOADED");
+        helper.assertTrue(state.hasProperty(TieredBay.FILL), "a bay carries FILL");
+        helper.assertTrue(state.hasProperty(TieredBay.LEFT) && state.hasProperty(TieredBay.RIGHT),
+                "a bay carries both join flags");
+        helper.assertValueEqual(BayColumn.isOverloaded(state), state.getValue(TieredBay.OVERLOADED),
+                "the shared overload read is the block state's own value");
+        helper.assertFalse(BayColumn.isOverloaded(Blocks.STONE.defaultBlockState()),
+                "and a block with no such property answers no rather than throwing");
+
+        // The fill level comes from the contents, and falls back to the state where there is nothing to ask.
+        capabilityAt(helper, LONE_BAY).insertItem(0, COBBLESTONE.toStack(1), false);
+        helper.assertValueEqual(block.fillStepAt(level, absolute, level.getBlockState(absolute)), 1,
+                "a single item already shows");
+        BlockPos nowhere = helper.absolutePos(SECOND_BAY);
+        helper.assertTrue(level.getBlockState(nowhere).isAir(), "the fallback is read where no bay stands");
+        helper.assertValueEqual(block.fillStepAt(level, nowhere,
+                WareworksBlocks.RACK_BAY_WOOD.getDefaultState().setValue(TieredBay.FILL, 3)), 3,
+                "and with no block entity to ask, a bay keeps the look its state carries");
+
+        // Both edges of the arithmetic, including the capacity no contents can produce.
+        helper.assertValueEqual(BayColumn.fillStep(0, 100), 0, "an empty bay shows nothing");
+        helper.assertValueEqual(BayColumn.fillStep(1, 1_000_000), 1, "and one unit rounds up to the first step");
+        helper.assertValueEqual(BayColumn.fillStep(100, 100), TieredBay.FILL_LEVELS, "a full bay shows the last step");
+        helper.assertValueEqual(BayColumn.fillStep(1, 0), TieredBay.FILL_LEVELS,
+                "a bay with no capacity at all is full rather than a division by zero");
+        removeBay(helper, LONE_BAY);
+        helper.succeed();
+    }
+
+    /**
      * What an overloaded bay means for a <b>running warehouse</b>, which is the half no block-state assertion can
      * reach: it is not offered store jobs, for a reason no filter could express, and it <b>stays retrievable</b> —
      * because a store rule never restricts retrieval (ADR-021) and a player must always be able to get their
@@ -1958,14 +2050,21 @@ public final class RackBayGameTests {
         assertPassesThrough(helper, bay, player, AllBlocks.MECHANICAL_ARM.asStack(),
                 "the Mechanical Arm item, which places an arm");
         // The item whose own click this block exists for: a wall grows by clicking the side of a bay that is standing
-        // (RackBayBlock#placementFacing). An empty, unfiltered bay is the state every freshly placed bay is in and it
+        // (BayColumn#placementFacing). An empty, unfiltered bay is the state every freshly placed bay is in and it
         // accepts anything exactly once, so without this pass-through the next bay was stored instead of placed and a
         // free-standing wall's second row could not be started at all (M28 review).
+        //
+        // The two FLUID bays are in this list since M30, and they are not decoration: joining is across families
+        // (ADR-050), so a fluid bay clicked against a rack bay's side takes that bay's facing and shares its upright
+        // - and until the pass-through was widened, a rack bay STORED the tank a player held out at it, which made a
+        // mixed wall unbuildable by hand.
         for (BlockState tier : List.of(WareworksBlocks.RACK_BAY_WOOD.getDefaultState(),
                 WareworksBlocks.RACK_BAY_ANDESITE.getDefaultState(),
-                WareworksBlocks.RACK_BAY_BRASS.getDefaultState()))
+                WareworksBlocks.RACK_BAY_BRASS.getDefaultState(),
+                WareworksBlocks.FLUID_BAY_COPPER.getDefaultState(),
+                WareworksBlocks.FLUID_BAY_BRASS.getDefaultState()))
             assertPassesThrough(helper, bay, player, new ItemStack(tier.getBlock()),
-                    "a " + tier.getBlock() + ", which builds the rack wall");
+                    "a " + tier.getBlock() + ", which builds the wall");
 
         // The aisle naming a player learned on a warehouse interface: answered in one line, and the renamed item they
         // were holding out at the bay stays in their hand instead of disappearing into it.
@@ -2048,7 +2147,8 @@ public final class RackBayGameTests {
                 "an empty hand too, because anything in the offhand would otherwise swallow the click");
         for (ItemStack passing : List.of(AllItems.WRENCH.asStack(), AllBlocks.CLIPBOARD.asStack(),
                 AllBlocks.MECHANICAL_ARM.asStack(), WareworksBlocks.RACK_BAY_WOOD.asStack(),
-                WareworksBlocks.RACK_BAY_BRASS.asStack(), NamingClick.renamed(Items.COBBLESTONE, "Ores"))) {
+                WareworksBlocks.RACK_BAY_BRASS.asStack(), WareworksBlocks.FLUID_BAY_COPPER.asStack(),
+                NamingClick.renamed(Items.COBBLESTONE, "Ores"))) {
             player.setItemInHand(InteractionHand.MAIN_HAND, passing);
             helper.assertFalse(forcesUse(helper, player, LONE_BAY, true),
                     "a sneaking click keeps its own meaning for " + passing.getItem());

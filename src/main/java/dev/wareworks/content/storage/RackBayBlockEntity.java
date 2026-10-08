@@ -309,7 +309,7 @@ public class RackBayBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * <b>No</b> while this bay carries something stronger above it in its column ({@link RackBayBlock#OVERLOADED},
+     * <b>No</b> while this bay carries something stronger above it in its column ({@link TieredBay#OVERLOADED},
      * ADR-044): the warehouse plans no store job towards it, for a reason no filter could express, while everything
      * already inside stays retrievable and nothing is moved, dropped or destroyed. A bay that is not overloaded answers
      * the inherited "yes".
@@ -329,12 +329,12 @@ public class RackBayBlockEntity extends SmartBlockEntity
 
     /**
      * How full this bay should <b>look</b>: {@code 0} for an empty one up to {@code RackBayBlock.FILL_LEVELS} for a
-     * full one ({@link RackBayBlock#fillStep}). It is derived from the contents and the configured capacity on every
+     * full one ({@link BayColumn#fillStep}). It is derived from the contents and the configured capacity on every
      * call rather than stored, so a modpack that moves the capacity curve moves the look with it; the block state
-     * carries it only so that the chunk mesh can draw it ({@link RackBayBlock#FILL}).
+     * carries it only so that the chunk mesh can draw it ({@link TieredBay#FILL}).
      */
     public int fillStep() {
-        return storedKey().map(key -> RackBayBlock.fillStep(storedCount(), capacityFor(key))).orElse(0);
+        return storedKey().map(key -> BayColumn.fillStep(storedCount(), capacityFor(key))).orElse(0);
     }
 
     /** A copy of the filter stack that decides what may be stored here; empty means "accepts everything". */
@@ -423,9 +423,9 @@ public class RackBayBlockEntity extends SmartBlockEntity
         if (!(level instanceof ServerLevel) || isRemoved())
             return;
         // What a player reads off the front without goggles, in the block state so that it costs nothing to draw at
-        // any distance (M28 step 9, RackBayBlock#FILL). It writes only when the step really changed, which is at most
+        // any distance (M28 step 9, TieredBay#FILL). It writes only when the step really changed, which is at most
         // four times over a whole bay's worth of goods.
-        RackBayBlock.contentsChanged(level, worldPosition);
+        BayColumn.contentsChanged(level, worldPosition);
         sendData();
         WarehouseRegistry.contentChanged(level, worldPosition);
     }
@@ -536,7 +536,7 @@ public class RackBayBlockEntity extends SmartBlockEntity
 
     /**
      * On the server, also brings a <b>stale fill level</b> back in line, through a scheduled tick rather than a write
-     * from here ({@link RackBayBlock#tick}): {@code onLoad} runs while the chunk is being assembled, and a block state
+     * from here ({@link BayColumn#publishState}): {@code onLoad} runs while the chunk is being assembled, and a block state
      * written at that moment would race the chunk's own. One tick later there is no such window, and nothing is
      * scheduled at all when the level already agrees — which is every bay of every ordinary load.
      * <p>
@@ -566,7 +566,7 @@ public class RackBayBlockEntity extends SmartBlockEntity
      * <ul>
      * <li><b>facing</b> (a wrench, a structure): aligned and misaligned swap, so the rack position has to be probed
      * again — {@code memberChanged};</li>
-     * <li><b>{@link RackBayBlock#OVERLOADED}</b> (a command broke or repaired the column above): the location is the
+     * <li><b>{@link TieredBay#OVERLOADED}</b> (a command broke or repaired the column above): the location is the
      * same one, only its answer to "may I store here" flipped, which is exactly what a store filter change is —
      * {@code filterChanged}, a synchronous re-read of this one location's store settings. Without it the controller's
      * cached verdict would stay stale until the next {@code refreshLocation}, which can be a round robin away, and the
@@ -696,7 +696,7 @@ public class RackBayBlockEntity extends SmartBlockEntity
             // A save read into a bay that already stands in a level is a command or a schematic print and never a
             // world load, which reads before the level is set (BlockEntity.loadStatic). Such a tag brings a block
             // state of its own, whose FILL may disagree with what is really in the bay, so the repair is scheduled
-            // exactly as RackBayBlock#onPlace schedules it for OVERLOADED - from here rather than with a write, for
+            // exactly as BayColumn#onPlace schedules it for OVERLOADED - from here rather than with a write, for
             // the same reason: the caller writes its own state into this block entity afterwards. onLoad() cannot
             // stand in for it: it runs once, on the tick after the block entity became fresh (Level#tickBlockEntities),
             // and a bay a schematic is printed over has stood there for minutes.

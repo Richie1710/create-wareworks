@@ -15,6 +15,7 @@ import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.port.PackagerSignAddress;
+import dev.wareworks.core.storage.FluidBayTier;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.NetworkStop;
 import net.createmod.catnip.lang.LangBuilder;
@@ -175,6 +176,37 @@ public final class WareworksLang {
     public static final String GOGGLES_ITEM_TYPES = "gui.goggles.item_types";
     /** {@code "Items stored: %1$s"}. */
     public static final String GOGGLES_ITEMS_STORED = "gui.goggles.items_stored";
+    /**
+     * {@code "Fluid types: %1$s"}: distinct fluids a warehouse's fluid bays hold (M30, issue #21, D10).
+     * <p>
+     * A line of its own beside {@link #GOGGLES_ITEM_TYPES} and never folded into it: the two numbers come from two
+     * indexes, and the issue's own answer to "what does the warehouse hold" is {@code lava: 64 buckets} <b>and</b>
+     * {@code bucket: 17}, with neither pretending to be the other. Shown only while the warehouse really holds fluid.
+     * <p>
+     * Deliberately <b>not</b> under {@code gui.goggles.fluid_bay}: that prefix is the fluid bay's own row family, and
+     * {@code LangConsistencyTest} sweeps it to prove every row of that block is measured. A controller line carrying
+     * the prefix would join a list it does not belong to.
+     */
+    public static final String GOGGLES_FLUID_TYPES = "gui.goggles.fluid_types";
+    /**
+     * {@code "Fluid stored: %1$s buckets"}: what a warehouse holds as fluid over all its bays, in <b>buckets</b>
+     * (M30, issue #21, D9).
+     * <p>
+     * Counted in millibuckets everywhere inside the mod, because a bottle is 250 mB and buckets cannot express it, and
+     * shown in buckets here, because a wall of brass bays is millions of millibuckets and nobody reads that. The unit
+     * is the one the bay beside it already uses ({@link #GOGGLES_FLUID_BAY_CONTENTS}), so a player meets one unit on
+     * both surfaces.
+     */
+    public static final String GOGGLES_FLUID_STORED = "gui.goggles.fluid_stored";
+    /**
+     * {@code "Fluid stored: %1$s mB"}: the same row for a warehouse holding less than one hundredth of a bucket in
+     * all, which a bucket figure with two fraction digits would round to {@code 0}.
+     * <p>
+     * The fluid bay's own pair of rows, for the same reason ({@link #GOGGLES_FLUID_BAY_CONTENTS_SMALL}): a warehouse
+     * that holds something must never say it holds nothing, and a Create pipe network moves as little as 1 mB a tick,
+     * so a bay being drained passes through this range every time. {@code mB} is Create's own unit in both languages.
+     */
+    public static final String GOGGLES_FLUID_STORED_SMALL = "gui.goggles.fluid_stored_small";
     /** {@code "Aisle"}: label of the controller's value box. */
     public static final String CONTROLLER_AISLE_LETTER = "controller.aisle_letter";
     /** {@code "Letter"}: row label of the controller's hold-to-edit board. */
@@ -247,6 +279,13 @@ public final class WareworksLang {
      */
     public static final String BAY_COLUMN_REFUSED = "message.bay_column_refused";
     /**
+     * Action bar text for a <b>fluid</b> bay placement the column rule refuses (M30, issue #21): the same rule as
+     * {@link #BAY_COLUMN_REFUSED} and its own sentence, because "a rack bay may carry nothing stronger above it" is
+     * the wrong thing to show a player holding a tank. The two ladders are separate — a fluid bay carries fluid bays
+     * and a rack bay carries rack bays — so one message naming both would be false as well as longer.
+     */
+    public static final String FLUID_BAY_COLUMN_REFUSED = "message.fluid_bay_column_refused";
+    /**
      * Action bar text for a naming click on a rack bay (M28, issue #20): a bay does <b>not</b> name an aisle, and a
      * player who learned the gesture on a warehouse interface will try it here.
      * <p>
@@ -255,6 +294,22 @@ public final class WareworksLang {
      * holding out at it. The sentence says where the gesture does work instead of only saying no.
      */
     public static final String BAY_NO_NAMING = "message.bay_no_naming";
+    /**
+     * Action bar text on the <b>first punch</b> at a fluid bay that holds something (M30, issue #21, D7): breaking it
+     * loses the fluid, said at the one moment a player is about to find out.
+     * <p>
+     * It is the last of the three places that say so — the item description is read before the block is ever placed,
+     * the goggle line while looking at it, and this one in the two ticks before the pickaxe gets through. It names the
+     * fluid and <b>not</b> the amount, deliberately: the amount is on the goggles, and a sentence carrying a number
+     * and a fluid name cannot be written in German without choosing an article for a fluid whose gender no mod
+     * declares.
+     * <p>
+     * It warns, it never refuses: {@code canSurvive}-style refusals were rejected for bays outright (M28's D8), and a
+     * block that cannot be broken is worse than one that tells you what breaking it costs. A <b>creative</b> break
+     * never reaches it, because the vanilla creative break destroys the block without calling {@code attack} at all —
+     * which is why this is the third place and not the only one.
+     */
+    public static final String FLUID_BAY_BREAK_LOSES = "message.fluid_bay_break_loses";
     /**
      * {@code "%1$s:"}: goggle header of a rack bay (M28, issue #20), whose one argument is the <b>block's own
      * name</b> — "Brass Rack Bay:".
@@ -314,6 +369,107 @@ public final class WareworksLang {
      * that is right for an interface is not enough here.
      */
     public static final String GOGGLES_BAY_NO_WAREHOUSE = "gui.goggles.bay_no_warehouse";
+    /**
+     * {@code "%1$s:"}: goggle header of a <b>fluid</b> bay (M30, issue #21), whose one argument is the block's own
+     * name — "Copper Fluid Bay:".
+     * <p>
+     * A key of its own rather than {@link #GOGGLES_RACK_BAY} with the same text, although both are {@code "%1$s:"}:
+     * the two blocks' goggle rows are two sets measured by two width gates, and the gate that sweeps a bay's rows
+     * finds them by their key names ({@code LangConsistencyTest}). A shared header would belong to neither set.
+     */
+    public static final String GOGGLES_FLUID_BAY = "gui.goggles.fluid_bay";
+    /**
+     * {@code "%1$s %2$s / %3$s buckets"}: what a fluid bay holds and how full it is — "Lava 37.25 / 64 buckets".
+     * <p>
+     * Shown in <b>buckets</b> although the contents are counted in millibuckets, because nobody reads 256 000; the
+     * exception is {@link #GOGGLES_FLUID_BAY_CONTENTS_SMALL}, for the amounts a bucket figure would round to zero.
+     */
+    public static final String GOGGLES_FLUID_BAY_CONTENTS = "gui.goggles.fluid_bay_contents";
+    /**
+     * {@code "%1$s %2$s mB of %3$s buckets"}: the same row for a bay holding <b>less than one hundredth</b> of a
+     * bucket — "Lava 7 mB of 64 buckets".
+     * <p>
+     * It exists because the number format of a goggle line carries two fraction digits, so 7 mB of a 64 000 mB bay
+     * would read "Lava 0 / 64 buckets" — a bay that holds something telling a player it holds nothing. It is reachable
+     * in ordinary play: a Create pipe network transfers as little as 1 mB per tick, so every bay being filled passes
+     * through this row. {@code "mB"} is Create's own unit and is the same word in both languages
+     * ({@code create.generic.unit.millibuckets}), so nothing is invented by writing it here.
+     */
+    public static final String GOGGLES_FLUID_BAY_CONTENTS_SMALL = "gui.goggles.fluid_bay_contents_small";
+    /** {@code "Capacity: %1$s buckets"}: a fluid bay's capacity in buckets, which is what its material decides (M30). */
+    public static final String GOGGLES_FLUID_BAY_CAPACITY = "gui.goggles.fluid_bay_capacity";
+    /**
+     * {@code "Holds: %1$s"}: the <b>fluid</b> a fluid bay's filter names (M30, issue #21), never the container that
+     * named it.
+     * <p>
+     * Deliberately not {@link #GOGGLES_STORAGE_FILTER} ("Filter: Lava Bucket"): the slot holds a container and what is
+     * read from it is the fluid inside, so a line saying "Filter" beside an item's name would describe the one reading
+     * this block never makes (§3.9).
+     */
+    public static final String GOGGLES_FLUID_BAY_FILTER = "gui.goggles.fluid_bay_filter";
+    /**
+     * {@code "Holds %1$s until it has drained"}: an <b>unfiltered</b> fluid bay that has learned its fluid from what
+     * landed in it (M30), the fluid twin of {@link #GOGGLES_BAY_LEARNED}. It goes away with the last millibucket,
+     * which is how a player tells the fluid the bay decided from one they set.
+     */
+    public static final String GOGGLES_FLUID_BAY_LEARNED = "gui.goggles.fluid_bay_learned";
+    /** {@code "Takes the first fluid that arrives"}: an <b>empty, unfiltered</b> fluid bay (M30). */
+    public static final String GOGGLES_FLUID_BAY_ACCEPTS_FIRST = "gui.goggles.fluid_bay_accepts_first";
+    /**
+     * The gold line of a fluid bay whose filter slot holds something that names <b>no fluid</b> (M30, issue #21): a
+     * Create list or attribute filter, or an empty container.
+     * <p>
+     * Such a bay is unfiltered, which is a perfectly good state and a bad surprise for the player who thought they had
+     * dedicated it — so the next row still says what the bay really does, and this one says why the slot is not doing
+     * it.
+     */
+    public static final String GOGGLES_FLUID_BAY_FILTER_NO_FLUID = "gui.goggles.fluid_bay_filter_no_fluid";
+    /**
+     * The gold warning of a fluid bay the column rule has taken out of service (M30, ADR-044), worded for the closure
+     * exactly as {@link #GOGGLES_BAY_OVERLOADED} is and saying <b>tank</b> rather than rack, because the two ladders
+     * are separate and a player reading this one is looking at a tank wall.
+     */
+    public static final String GOGGLES_FLUID_BAY_OVERLOADED = "gui.goggles.fluid_bay_overloaded";
+    /**
+     * The gold line a fluid bay shows <b>while it holds anything</b> (M30, issue #21, D7): breaking it loses what is
+     * in it.
+     * <p>
+     * This is one of the three places that say so before a player can hit it — the item description and the warning on
+     * the first punch are the other two. It is shown only for a bay that has something to lose, so an empty tank wall
+     * says nothing, and it stands directly under the contents row it is about.
+     */
+    public static final String GOGGLES_FLUID_BAY_BREAK_LOSES = "gui.goggles.fluid_bay_break_loses";
+    /**
+     * The gold line of a fluid bay that still has room on paper and takes <b>nothing</b> (M30, issue #21, D5): less
+     * than one whole bucket is free, and a container is emptied whole or refused.
+     * <p>
+     * It exists because this is the one refusal of this block nothing else explains. A bay holding 63 001 mB of 64 000
+     * draws "Lava 63.00 / 64 buckets" — a bucket of apparent room — and then refuses a bucket, which reads exactly like
+     * a lost bucket rather than like a refusal. The all-or-nothing rule is in the item description already; this is the
+     * line that says it <b>while it is true</b>, in the one place a player is already looking.
+     * <p>
+     * The condition is the gate's own arithmetic ({@code FluidBayTier#wholeContainers}), not a second copy of it, so
+     * the line cannot disagree with the refusal it explains. A bay that is genuinely <b>full</b> gets no line: its
+     * contents row already says 64 of 64.
+     */
+    public static final String GOGGLES_FLUID_BAY_NO_BUCKET_ROOM = "gui.goggles.fluid_bay_no_bucket_room";
+    /**
+     * {@code "Pipes may draw from the back"}: a fluid bay whose {@code storage.fluidBayPipeExtraction} is on (M30, D4).
+     * <p>
+     * One of the two lines is shown <b>always</b>, whichever way the config stands, because a rule about where fluid
+     * may leave a warehouse must never be invisible — and because the two answers are indistinguishable from the
+     * outside until a pipe is already draining the wall.
+     */
+    public static final String GOGGLES_FLUID_BAY_PIPES_DRAW = "gui.goggles.fluid_bay_pipes_draw";
+    /** {@code "Pipes may only fill from the back"}: the other half of {@link #GOGGLES_FLUID_BAY_PIPES_DRAW}. */
+    public static final String GOGGLES_FLUID_BAY_PIPES_FILL = "gui.goggles.fluid_bay_pipes_fill";
+    /**
+     * The dark-grey line under {@link #GOGGLES_NO_AISLE} on a <b>fluid</b> bay (M30), {@link #GOGGLES_BAY_NO_WAREHOUSE}'s
+     * twin and for its reason: a tank that no warehouse serves is <b>working as intended</b>. A fluid bay is a tank
+     * before it is a warehouse part — pipes fill it and a bucket empties it with no controller anywhere — so "Not part
+     * of an aisle" is a plain fact here where it is a defect for every other member.
+     */
+    public static final String GOGGLES_FLUID_BAY_NO_WAREHOUSE = "gui.goggles.fluid_bay_no_warehouse";
     /** {@code "Open requests: %1$s"}: open retrieval requests of a controller. */
     public static final String GOGGLES_OPEN_REQUESTS = "gui.goggles.open_requests";
     /** {@code "Warehouse Input:"}: goggle header of a warehouse input. */
@@ -955,6 +1111,15 @@ public final class WareworksLang {
      * instead, so that the family of the board's rows reads as one block in both lang files.
      */
     public static final String DISPLAY_SOURCE_CRANE_THROUGHPUT = "display_source.crane_throughput";
+    /**
+     * Name of the fluid stock display source (M30, issue #21, D10). Its tail is the registry path
+     * {@code fluid_stock}, by the rule above.
+     * <p>
+     * A source of its <b>own</b> and never a second kind of row inside the stock list: that list renders one
+     * {@code IntAttached} column, so a shared source would print {@code 64} next to {@code 64000} in one column and
+     * the two would be read as one scale.
+     */
+    public static final String DISPLAY_SOURCE_FLUID_STOCK = "display_source.fluid_stock";
     /** {@code "Aisle %1$s: %2$s"}: aisle letter and short status on a display. */
     public static final String DISPLAY_AISLE_LINE_AISLE = "display_source.aisle.line_aisle";
     /**
@@ -1000,6 +1165,22 @@ public final class WareworksLang {
     public static final String DISPLAY_AISLE_LINE_PORTS_COLLECTING = "display_source.aisle.line_ports_collecting";
     /** {@code "Chunks: %1$s held"}: the aisle is holding its own chunks loaded (M19, issue #10). */
     public static final String DISPLAY_AISLE_LINE_CHUNKS = "display_source.aisle.line_chunks";
+    /**
+     * {@code "Fluids: %1$s · %2$s"}: how many fluids the warehouse holds and how much in all, as
+     * {@code "Fluids: 2 · 60.0 B"} (M30, issue #21, D10). Left out entirely while the warehouse holds no fluid,
+     * which is every warehouse without a fluid bay.
+     * <p>
+     * The amount is pre-formatted by Create's own {@code FluidFormatter}, so the <b>unit travels with the number</b>
+     * rather than being written into this text: Create's {@code generic.unit.buckets} is {@code "B"} and
+     * {@code generic.unit.millibuckets} is {@code "mB"} in every language it ships. A unit spelled out here would
+     * invent a German word. It is always the <b>shortened</b> form, because a board row is short and this source has
+     * no "shortened / full number" switch to offer — that widget belongs to Create's {@code ValueListDisplaySource},
+     * which this one is not.
+     * <p>
+     * One line and not two, because a board has few rows; the breakdown per fluid is the "Fluid Stock" source
+     * ({@link #DISPLAY_SOURCE_FLUID_STOCK}), and the controller's goggles have the room for both numbers in full.
+     */
+    public static final String DISPLAY_AISLE_LINE_FLUIDS = "display_source.aisle.line_fluids";
     /** {@code "Aisles: %1$s"}: the letters of a warehouse that bends (M21, issue #1). */
     public static final String DISPLAY_AISLE_LINE_AISLES = "display_source.aisle.line_aisles";
     /**
@@ -1601,4 +1782,78 @@ public final class WareworksLang {
         return translate(GOGGLES_BAY_LEARNED, builder().add(item.getDescription().copy()))
                 .style(ChatFormatting.DARK_GRAY);
     }
+
+    /**
+     * "Copper Fluid Bay:" — the goggle header of a fluid bay, which names the material for the rack bay's own reason
+     * ({@link #GOGGLES_FLUID_BAY}).
+     *
+     * @param blockName the bay block's own name, so the two tiers need no lang keys of their own
+     */
+    public static LangBuilder fluidBay(Component blockName) {
+        return translate(GOGGLES_FLUID_BAY, builder().add(blockName.copy())).style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Lava 37.25 / 64 buckets" — what a fluid bay holds, how much of it in <b>buckets</b>, and how much it holds in
+     * all ({@link #GOGGLES_FLUID_BAY_CONTENTS}).
+     * <p>
+     * Below {@value #SMALLEST_SHOWN_BUCKET_HUNDREDTHS} hundredths of a bucket it switches to
+     * {@link #GOGGLES_FLUID_BAY_CONTENTS_SMALL} and states the millibuckets instead, because the number format of a
+     * goggle line carries two fraction digits and a bay holding 7 mB would otherwise read "Lava 0 / 64 buckets" — the
+     * one thing this row must never say about a bay that holds something. That is not a corner case: a Create pipe
+     * network moves as little as 1 mB per tick, so a bay being filled passes through it every time.
+     * <p>
+     * The fluid's own name, which is a {@code FluidType} description and therefore translated where it is drawn, and
+     * never a custom one: a bay syncs its contents as a registry id, so the client has no component data to draw from
+     * and must not pretend otherwise ({@code FluidBayHandler#writeClientPacket}).
+     *
+     * @param millibuckets what is in the bay, above 0
+     * @param buckets      what the bay holds in all, as its tier and the configuration give it
+     */
+    public static LangBuilder fluidBayContents(Component fluidName, int millibuckets, int buckets) {
+        LangBuilder fluid = builder().add(fluidName.copy()).style(ChatFormatting.WHITE);
+        if (millibuckets < SMALLEST_SHOWN_BUCKET_HUNDREDTHS)
+            return translate(GOGGLES_FLUID_BAY_CONTENTS_SMALL, fluid,
+                    number(millibuckets).style(ChatFormatting.GOLD), number(buckets)).style(ChatFormatting.GRAY);
+        return translate(GOGGLES_FLUID_BAY_CONTENTS, fluid,
+                number(millibuckets / (double) FluidBayTier.MILLIBUCKETS_PER_BUCKET).style(ChatFormatting.GOLD),
+                number(buckets)).style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Fluid stored: 37.25 buckets" — what a whole warehouse holds as fluid, on the controller's goggles (M30, issue
+     * #21, D9).
+     * <p>
+     * The fluid bay's own two rules, so that the block and the controller never disagree about the unit: buckets with
+     * two fraction digits, and {@link #GOGGLES_FLUID_STORED_SMALL} with the millibuckets instead below
+     * {@value #SMALLEST_SHOWN_BUCKET_HUNDREDTHS} of them, because a warehouse that holds 7 mB must not report 0.
+     *
+     * @param millibuckets what every fluid bay of the warehouse holds together, above 0
+     */
+    public static LangBuilder fluidStored(long millibuckets) {
+        if (millibuckets < SMALLEST_SHOWN_BUCKET_HUNDREDTHS)
+            return countLine(GOGGLES_FLUID_STORED_SMALL, millibuckets);
+        return translate(GOGGLES_FLUID_STORED,
+                number(millibuckets / (double) FluidBayTier.MILLIBUCKETS_PER_BUCKET).style(ChatFormatting.GOLD))
+                .style(ChatFormatting.GRAY);
+    }
+
+    /** "Holds: Lava" — the fluid a bay's filter names, with the fluid highlighted ({@link #GOGGLES_FLUID_BAY_FILTER}). */
+    public static LangBuilder fluidBayFilter(Component fluidName) {
+        return translate(GOGGLES_FLUID_BAY_FILTER, builder().add(fluidName.copy()).style(ChatFormatting.WHITE))
+                .style(ChatFormatting.GRAY);
+    }
+
+    /** "Holds Lava until it has drained" — an unfiltered fluid bay committed to what landed in it (dark grey). */
+    public static LangBuilder fluidBayLearned(Component fluidName) {
+        return translate(GOGGLES_FLUID_BAY_LEARNED, builder().add(fluidName.copy()))
+                .style(ChatFormatting.DARK_GRAY);
+    }
+
+    /**
+     * Millibuckets below which {@link #fluidBayContents} states millibuckets rather than buckets: one hundredth of a
+     * bucket, which is the smallest fraction a goggle line's number format can show
+     * ({@code LangNumberFormat}: two fraction digits).
+     */
+    private static final int SMALLEST_SHOWN_BUCKET_HUNDREDTHS = FluidBayTier.MILLIBUCKETS_PER_BUCKET / 100;
 }

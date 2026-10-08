@@ -1,5 +1,7 @@
 package dev.wareworks.registry;
 
+import java.util.List;
+
 import com.simibubi.create.api.behaviour.display.DisplaySource;
 import com.simibubi.create.api.registry.CreateRegistries;
 import com.simibubi.create.foundation.data.CreateRegistrate;
@@ -12,6 +14,7 @@ import dev.wareworks.content.display.AisleSummaryDisplaySource;
 import dev.wareworks.content.display.CraneStatusDisplaySource;
 import dev.wareworks.content.display.CraneThroughputDisplaySource;
 import dev.wareworks.content.display.FilteredStockDisplaySource;
+import dev.wareworks.content.display.FluidStockDisplaySource;
 import dev.wareworks.content.display.StockListDisplaySource;
 import net.minecraft.world.level.block.Block;
 
@@ -48,6 +51,14 @@ public final class WareworksDisplaySources {
     public static final RegistryEntry<DisplaySource, StockListDisplaySource> STOCK_LIST =
             REGISTRATE.displaySource("stock_list", StockListDisplaySource::new).register();
 
+    /**
+     * The fluids the warehouse holds in its fluid bays, with the amount of each (M30, issue #21). A source of its own
+     * beside {@link #STOCK_LIST}, because that list renders one number column and 64 iron ingots must not stand in it
+     * next to 64 000 millibuckets of lava.
+     */
+    public static final RegistryEntry<DisplaySource, FluidStockDisplaySource> FLUID_STOCK =
+            REGISTRATE.displaySource("fluid_stock", FluidStockDisplaySource::new).register();
+
     /** How many of the item in the source block's filter slot the aisle holds. */
     public static final RegistryEntry<DisplaySource, FilteredStockDisplaySource> FILTERED_STOCK =
             REGISTRATE.displaySource("filtered_stock", FilteredStockDisplaySource::new).register();
@@ -64,15 +75,21 @@ public final class WareworksDisplaySources {
     }
 
     /**
-     * Registrate transformer that offers <b>two</b> sources on one block, in this order. Use it instead of two
-     * {@code .transform(DisplaySource.displaySource(...))} calls; see the class comment.
+     * Registrate transformer that offers <b>several</b> sources on one block, in this order. Use it instead of one
+     * {@code .transform(DisplaySource.displaySource(...))} call per source; see the class comment.
+     * <p>
+     * Varargs since M30, where the controller and the terminal gained a third source. The reason it exists is the
+     * order, and that reason only gets stronger with a third entry: every source added in a separate
+     * {@code onRegisterAfter} callback rides a {@code HashMultimap} whose iteration order is not reproducible, so the
+     * source a Display Link screen preselects could change between launches.
      */
+    @SafeVarargs
     public static <B extends Block, P> NonNullUnaryOperator<BlockBuilder<B, P>> bind(
-            RegistryEntry<DisplaySource, ? extends DisplaySource> first,
-            RegistryEntry<DisplaySource, ? extends DisplaySource> second) {
+            RegistryEntry<DisplaySource, ? extends DisplaySource>... sources) {
+        List<RegistryEntry<DisplaySource, ? extends DisplaySource>> ordered = List.of(sources);
         return builder -> builder.onRegisterAfter(CreateRegistries.DISPLAY_SOURCE, block -> {
-            DisplaySource.BY_BLOCK.add(block, first.get());
-            DisplaySource.BY_BLOCK.add(block, second.get());
+            for (RegistryEntry<DisplaySource, ? extends DisplaySource> source : ordered)
+                DisplaySource.BY_BLOCK.add(block, source.get());
         });
     }
 

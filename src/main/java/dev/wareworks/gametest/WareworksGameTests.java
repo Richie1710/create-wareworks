@@ -4,10 +4,14 @@ import java.util.Optional;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.fluid.FluidContainers;
+import dev.wareworks.content.fluid.FluidKey;
+import dev.wareworks.content.fluid.FluidTypeSummaries;
 import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.inventory.CapacityMath;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.storage.FluidBayTier;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -24,7 +28,12 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.material.Fluids;
 import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.fluids.FluidType;
+import net.neoforged.neoforge.fluids.capability.IFluidHandler.FluidAction;
+import net.neoforged.neoforge.fluids.capability.IFluidHandlerItem;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import net.neoforged.neoforge.items.IItemHandler;
@@ -96,6 +105,17 @@ public final class WareworksGameTests {
      * running at it. Only the bays of running jobs ever reach it.
      */
     public static final int MAX_RESERVED_RACK_BAY_SYNC_BYTES = 4096;
+    /**
+     * Bound of a <b>fluid bay</b>'s update tag in NBT size accounting ({@code Tag#sizeInBytes}) in the state every bay
+     * of a tank wall is in: one fluid id and one amount of millibuckets (M30, issue #21,
+     * {@code warehouse-system.md} §3.9).
+     * <p>
+     * It is the rack bay's bound for the rack bay's reason — a bay syncs its contents on every change and without any
+     * throttle, because its level <b>is</b> the readout and has to be right for a player walking past with no goggles
+     * on — and it is affordable exactly as long as the tag stays an id and an int. A {@code FluidKey} here would put a
+     * named potion fluid's whole component patch into every chunk packet of a tank wall.
+     */
+    public static final int MAX_FLUID_BAY_SYNC_BYTES = 1024;
 
     private static final int CHEST_SLOTS = 27;
     private static final int INSERTED_IRON = 100;
@@ -243,6 +263,237 @@ public final class WareworksGameTests {
         unknown.putString("id", Wareworks.ID + ":does_not_exist");
         helper.assertTrue(ItemKey.load(registries, unknown).isEmpty(), "unknown item id");
 
+        helper.succeed();
+    }
+
+    /**
+     * The fluid foundation of M30 (issue #21), in the one place a Minecraft constant can be read at all: the pure
+     * {@link FluidBayTier#MILLIBUCKETS_PER_BUCKET} really is {@code FluidType.BUCKET_VOLUME}, and the configured
+     * capacities really come out as the issue's table. This is {@link #stackSizeCeiling}'s argument for fluids — the
+     * {@code core} layer cannot import a NeoForge class, so the mirror is asserted here rather than remembered.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void fluidBayFoundation(GameTestHelper helper) {
+        helper.assertValueEqual(FluidBayTier.MILLIBUCKETS_PER_BUCKET, FluidType.BUCKET_VOLUME,
+                "the core mirror of FluidType.BUCKET_VOLUME");
+
+        helper.assertValueEqual(WareworksConfig.fluidBayBuckets(FluidBayTier.COPPER), 64, "copper fluid bay buckets");
+        helper.assertValueEqual(WareworksConfig.fluidBayBuckets(FluidBayTier.BRASS), 256, "brass fluid bay buckets");
+        helper.assertValueEqual(WareworksConfig.fluidBayCapacity(FluidBayTier.COPPER), 64L * FluidType.BUCKET_VOLUME,
+                "copper fluid bay capacity in mB");
+        helper.assertValueEqual(WareworksConfig.fluidBayCapacity(FluidBayTier.BRASS), 256L * FluidType.BUCKET_VOLUME,
+                "brass fluid bay capacity in mB");
+        helper.assertTrue(WareworksConfig.fluidBayPipeExtraction(), "pipes may draw off a fluid bay by default");
+
+        // A bay with less than a whole bucket of room takes nothing from a bucket - the issue's one corrected claim.
+        helper.assertValueEqual(FluidBayTier.wholeContainers(FluidType.BUCKET_VOLUME, FluidType.BUCKET_VOLUME - 1), 0,
+                "999 mB of room takes no bucket");
+        helper.assertValueEqual(
+                FluidBayTier.wholeContainers(FluidType.BUCKET_VOLUME,
+                        WareworksConfig.fluidBayCapacity(FluidBayTier.COPPER)),
+                64, "an empty copper bay takes 64 buckets");
+
+        // The registry id round trip the bay's update tag is built on, and the two ids that must never read back.
+        helper.assertValueEqual(FluidTypeSummaries.fluidId(Fluids.LAVA), "minecraft:lava", "fluid id");
+        helper.assertValueEqual(FluidTypeSummaries.fluidById("minecraft:lava"), Optional.of(Fluids.LAVA),
+                "fluid by id");
+        helper.assertTrue(FluidTypeSummaries.fluidById("minecraft:empty").isEmpty(), "the empty fluid is no fluid");
+        helper.assertTrue(FluidTypeSummaries.fluidById("not a resource location").isEmpty(), "unparsable id");
+        helper.assertTrue(FluidTypeSummaries.fluidById(Wareworks.ID + ":does_not_exist").isEmpty(), "unknown fluid id");
+        helper.succeed();
+    }
+
+    /**
+     * {@link FluidKey} equality ignores the amount but not the components, a mutated source stack cannot change a key
+     * that was built from it, and persistence round-trips without ever throwing — including the trap this class exists
+     * for, that {@code FluidStack.save} throws on an empty stack.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void fluidKeyPersistence(GameTestHelper helper) {
+        HolderLookup.Provider registries = helper.getLevel().registryAccess();
+
+        FluidKey lava = FluidKey.of(Fluids.LAVA);
+        FluidStack namedStack = new FluidStack(Fluids.WATER, FluidType.BUCKET_VOLUME);
+        namedStack.set(DataComponents.CUSTOM_NAME, Component.literal("Holy Water"));
+        FluidKey named = FluidKey.of(namedStack);
+
+        helper.assertFalse(named.equals(FluidKey.of(Fluids.WATER)), "components must be part of the key");
+        helper.assertValueEqual(FluidKey.of(new FluidStack(Fluids.LAVA, PROBE_AMOUNT)), lava, "amount-less equality");
+        helper.assertValueEqual(FluidKey.of(new FluidStack(Fluids.LAVA, PROBE_AMOUNT)).hashCode(), lava.hashCode(),
+                "amount-less hash");
+        helper.assertTrue(FluidKey.fromStack(FluidStack.EMPTY).isEmpty(), "empty stack has no key");
+        helper.assertTrue(FluidKey.fromStack(null).isEmpty(), "no stack, no key");
+        helper.assertTrue(lava.matches(new FluidStack(Fluids.LAVA, 1)), "key matches its fluid at any amount");
+        helper.assertFalse(lava.matches(named.toStack()), "key does not match another fluid");
+        helper.assertFalse(named.matches(new FluidStack(Fluids.WATER, 1)), "key does not match other components");
+
+        // A FluidStack is mutable and handlers hand out live ones: a key built from one must not follow it.
+        FluidStack live = new FluidStack(Fluids.LAVA, FluidType.BUCKET_VOLUME);
+        FluidKey fromLive = FluidKey.of(live);
+        live.setAmount(7);
+        live.set(DataComponents.CUSTOM_NAME, Component.literal("mutated"));
+        helper.assertValueEqual(fromLive, lava, "mutating the source must not change the key");
+        helper.assertValueEqual(fromLive.hashCode(), lava.hashCode(), "nor its hash");
+        helper.assertFalse(fromLive.matches(live), "the mutated stack is no longer this key");
+
+        // toStack hands out independent copies at any amount, and nothing it hands out can reach back in.
+        FluidStack copy = lava.toStack(PROBE_AMOUNT);
+        helper.assertValueEqual(copy.getAmount(), PROBE_AMOUNT, "toStack amount");
+        copy.set(DataComponents.CUSTOM_NAME, Component.literal("mutated"));
+        helper.assertFalse(lava.matches(copy), "mutating a copy must not change the key");
+        helper.assertTrue(lava.matches(lava.toStack()), "key unchanged after mutating a copy");
+        helper.assertTrue(lava.toStack(0).isEmpty(), "toStack(0) is empty");
+        helper.assertTrue(lava.toStack(-1).isEmpty(), "toStack of a negative amount is empty");
+        helper.assertValueEqual(lava.toStack().getAmount(), 1, "the key's own stack holds 1 mB");
+
+        // The trap: the obvious persistence call throws, which is why FluidKey has its own and can never be empty.
+        boolean threw = false;
+        try {
+            FluidStack.EMPTY.save(registries);
+        } catch (IllegalStateException expected) {
+            threw = true;
+        }
+        helper.assertTrue(threw, "FluidStack.save must throw on an empty stack");
+
+        Tag saved = named.save(registries);
+        helper.assertValueEqual(FluidKey.load(registries, saved), Optional.of(named), "round trip with components");
+        helper.assertValueEqual(FluidKey.load(registries, lava.save(registries)), Optional.of(lava),
+                "round trip without components");
+
+        CompoundTag parent = new CompoundTag();
+        lava.saveTo(parent, "Fluid", registries);
+        helper.assertValueEqual(FluidKey.loadFrom(parent, "Fluid", registries), Optional.of(lava), "saveTo/loadFrom");
+        helper.assertTrue(FluidKey.loadFrom(parent, "Missing", registries).isEmpty(), "missing entry");
+
+        // Invalid input never throws
+        helper.assertTrue(FluidKey.load(registries, null).isEmpty(), "null tag");
+        helper.assertTrue(FluidKey.load(registries, new CompoundTag()).isEmpty(), "empty tag");
+        helper.assertTrue(FluidKey.load(registries, StringTag.valueOf("garbage")).isEmpty(), "wrong tag type");
+        CompoundTag unknown = new CompoundTag();
+        unknown.putString("id", Wareworks.ID + ":does_not_exist");
+        helper.assertTrue(FluidKey.load(registries, unknown).isEmpty(), "unknown fluid id");
+        CompoundTag emptyFluid = new CompoundTag();
+        emptyFluid.putString("id", "minecraft:empty");
+        helper.assertTrue(FluidKey.load(registries, emptyFluid).isEmpty(), "the empty fluid is refused on load");
+
+        // ORDER depends only on values, so it is the same after a restart - two fresh keys sort the same way twice.
+        helper.assertTrue(FluidKey.ORDER.compare(lava, FluidKey.of(Fluids.WATER)) < 0, "lava sorts before water");
+        helper.assertTrue(FluidKey.ORDER.compare(FluidKey.of(Fluids.WATER), named) < 0,
+                "a plain key sorts before the same fluid carrying components");
+        helper.assertValueEqual(FluidKey.ORDER.compare(lava, FluidKey.of(Fluids.LAVA)), 0, "equal keys tie");
+        helper.assertValueEqual(FluidKey.ORDER.compare(FluidKey.of(namedStack), named), 0,
+                "two constructions of one key tie, whatever the JVM identity hash of the fluid is");
+        helper.succeed();
+    }
+
+    /**
+     * {@link FluidContainers}: the capability is the only authority, a container is drained to empty or refused and
+     * filled to full or refused, and every one of the four traps the class doc names is really there in the game.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void fluidContainerRules(GameTestHelper helper) {
+        ItemKey filledBucket = ItemKey.of(Items.LAVA_BUCKET);
+        ItemKey emptyBucket = ItemKey.of(Items.BUCKET);
+        FluidKey lava = FluidKey.of(Fluids.LAVA);
+        FluidKey water = FluidKey.of(Fluids.WATER);
+        int bucket = FluidType.BUCKET_VOLUME;
+
+        // What carries fluid, and what only looks as if it did.
+        helper.assertValueEqual(FluidContainers.contents(filledBucket),
+                Optional.of(new FluidContainers.Contents(lava, bucket)), "a lava bucket carries a bucket of lava");
+        helper.assertTrue(FluidContainers.carriesFluid(filledBucket), "a lava bucket is a filled container");
+        helper.assertTrue(FluidContainers.contents(emptyBucket).isEmpty(), "an empty bucket carries nothing");
+        helper.assertTrue(FluidContainers.isEmptyContainer(emptyBucket), "an empty bucket is an empty container");
+        helper.assertFalse(FluidContainers.isEmptyContainer(filledBucket), "a filled bucket is not an empty one");
+        helper.assertFalse(FluidContainers.isEmptyContainer(ItemKey.of(Items.COBBLESTONE)),
+                "cobblestone is no container at all");
+        helper.assertFalse(FluidContainers.carriesFluid(ItemKey.of(Items.COBBLESTONE)), "nor does it carry fluid");
+
+        // The documented consequence of "the capability is the only authority": a bottle is not a container.
+        helper.assertFalse(FluidContainers.isEmptyContainer(ItemKey.of(Items.GLASS_BOTTLE)),
+                "a glass bottle has no fluid capability, so it is no container");
+        helper.assertTrue(FluidContainers.contents(ItemKey.of(Items.POTION)).isEmpty(),
+                "neither has a water bottle");
+
+        // Trap 1: every operation needs a stack of exactly one, and a census must read per item rather than per stack.
+        ItemStack sixteen = new ItemStack(Items.LAVA_BUCKET, 16);
+        IFluidHandlerItem raw = sixteen.getCapability(Capabilities.FluidHandler.ITEM);
+        if (raw == null)
+            helper.fail("a lava bucket must answer the item fluid capability");
+        helper.assertTrue(raw.drain(Integer.MAX_VALUE, FluidAction.SIMULATE).isEmpty(),
+                "a handler answers nothing at all for a stack of 16 - the trap this class absorbs");
+        helper.assertValueEqual(FluidContainers.contentsOf(sixteen),
+                Optional.of(new FluidContainers.Contents(lava, bucket)), "one item of the stack, never the stack");
+        helper.assertValueEqual(sixteen.getCount(), 16, "reading a stack must not change it");
+        helper.assertTrue(FluidContainers.contentsOf(ItemStack.EMPTY).isEmpty(), "an empty stack carries nothing");
+        helper.assertTrue(FluidContainers.contentsOf(null).isEmpty(), "no stack, no fluid");
+
+        // Trap 3 and 4: a real drain is the only way to learn the emptied container, and it is a different item.
+        Optional<FluidContainers.Drained> maybeDrained = FluidContainers.drained(filledBucket);
+        if (maybeDrained.isEmpty())
+            helper.fail("a lava bucket must be drainable");
+        FluidContainers.Drained drained = maybeDrained.orElseThrow();
+        helper.assertValueEqual(drained.fluid(), lava, "the fluid that came out");
+        helper.assertValueEqual(drained.millibuckets(), bucket, "the whole contents, in one go");
+        helper.assertValueEqual(drained.emptied(), emptyBucket, "the bucket that is left");
+        helper.assertValueEqual(FluidContainers.contents(filledBucket),
+                Optional.of(new FluidContainers.Contents(lava, bucket)), "the probe was ours, so nothing moved");
+        helper.assertTrue(FluidContainers.drained(emptyBucket).isEmpty(), "an empty bucket yields no drain");
+        helper.assertTrue(FluidContainers.drained(ItemKey.of(Items.COBBLESTONE)).isEmpty(), "nor does cobblestone");
+
+        // The simulated drain really does lie about the container, which is why the real one is run.
+        ItemStack probe = filledBucket.toStack();
+        IFluidHandlerItem simulated = probe.getCapability(Capabilities.FluidHandler.ITEM);
+        if (simulated == null)
+            helper.fail("a lava bucket must answer the item fluid capability");
+        simulated.drain(Integer.MAX_VALUE, FluidAction.SIMULATE);
+        helper.assertTrue(filledBucket.matches(simulated.getContainer()),
+                "after a simulated drain getContainer() is still the FILLED bucket");
+
+        // Filled to full or refused, with the capacity measured rather than looked up.
+        Optional<FluidContainers.Filled> maybeFilled = FluidContainers.filled(emptyBucket, lava);
+        if (maybeFilled.isEmpty())
+            helper.fail("an empty bucket must take lava");
+        FluidContainers.Filled filled = maybeFilled.orElseThrow();
+        helper.assertValueEqual(filled.filled(), filledBucket, "a bucket of lava");
+        helper.assertValueEqual(filled.millibuckets(), bucket, "a measured bucket, not a constant");
+        helper.assertValueEqual(FluidContainers.filled(emptyBucket, water).map(FluidContainers.Filled::filled),
+                Optional.of(ItemKey.of(Items.WATER_BUCKET)), "and a bucket of water");
+        helper.assertTrue(FluidContainers.filled(filledBucket, lava).isEmpty(), "only empty containers are filled");
+        helper.assertTrue(FluidContainers.filled(ItemKey.of(Items.COBBLESTONE), lava).isEmpty(),
+                "cobblestone takes no lava");
+        helper.assertTrue(FluidContainers.filled(emptyBucket, FluidKey.of(Fluids.FLOWING_LAVA)).isEmpty(),
+                "a container that hands back a different fluid key than it took is refused");
+
+        // The refusals no vanilla container produces, stated through the rule itself.
+        helper.assertTrue(
+                FluidContainers.judgeDrain(lava, bucket, lava.toStack(bucket), ItemStack.EMPTY).isEmpty(),
+                "a consumable container, whose empty form is nothing, is refused");
+        helper.assertTrue(FluidContainers.judgeDrain(lava, bucket, lava.toStack(bucket), null).isEmpty(),
+                "and so is a handler that answers no container at all");
+        helper.assertTrue(
+                FluidContainers.judgeDrain(lava, bucket, lava.toStack(bucket), emptyBucket.toStack(2)).isEmpty(),
+                "one container in, one container out");
+        helper.assertTrue(
+                FluidContainers.judgeDrain(lava, 5 * bucket, lava.toStack(bucket), emptyBucket.toStack()).isEmpty(),
+                "a per-call cap that gives back less than the whole contents is refused, never a partial drain");
+        helper.assertTrue(
+                FluidContainers.judgeDrain(lava, bucket, water.toStack(bucket), emptyBucket.toStack()).isEmpty(),
+                "a drain answering with another fluid is refused");
+        helper.assertTrue(FluidContainers.judgeDrain(lava, bucket, lava.toStack(bucket), filledBucket.toStack())
+                .isEmpty(), "a container that is not empty afterwards is refused");
+        helper.assertValueEqual(
+                FluidContainers.judgeDrain(lava, bucket, lava.toStack(bucket), emptyBucket.toStack()),
+                Optional.of(new FluidContainers.Drained(lava, bucket, emptyBucket)), "and this is the accepted shape");
+
+        helper.assertTrue(FluidContainers.judgeFill(lava, bucket, bucket - 1, filledBucket.toStack()).isEmpty(),
+                "a fill that took less than the whole capacity is refused, never a partial fill");
+        helper.assertTrue(FluidContainers.judgeFill(lava, bucket, bucket, ItemStack.EMPTY).isEmpty(),
+                "a fill that leaves no container is refused");
+        helper.assertTrue(FluidContainers.judgeFill(lava, bucket, bucket, emptyBucket.toStack()).isEmpty(),
+                "a container that is still empty afterwards is refused");
+        helper.assertValueEqual(FluidContainers.judgeFill(lava, bucket, bucket, filledBucket.toStack()),
+                Optional.of(new FluidContainers.Filled(filledBucket, bucket)), "and this is the accepted shape");
         helper.succeed();
     }
 

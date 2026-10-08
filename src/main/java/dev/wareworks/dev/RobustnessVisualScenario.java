@@ -26,6 +26,10 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
+import dev.wareworks.content.fluid.FluidKey;
+import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.FluidBayBlock;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.RackBayBlockEntity;
@@ -51,8 +55,10 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.fluids.FluidType;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 
@@ -73,12 +79,18 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *       dock itself, which drops the handling head at the dock.</li>
  * </ol>
  * After every step it counts <b>every item of the scene</b> ({@link SceneItemCensus}: inventories, station buffers,
- * handling head, dropped item entities, Create packages and pallets) and logs one {@code robustness PASS} or
- * {@code robustness FAIL} line. A FAIL throws, so the harness writes a crash report and the Gradle task
+ * handling head, dropped item entities, Create packages and pallets) <b>and every millibucket of it</b>
+ * ({@link SceneFluidCensus}: tanks and the fluid inside container items), and logs one {@code robustness PASS} or
+ * {@code robustness FAIL} line. The two are asserted <b>together</b>, because they do not conserve separately: a
+ * container exchange moves fluid out of an item and into a tank, so only the joint assertion can tell a real transfer
+ * from a lost bucket. A FAIL throws, so the harness writes a crash report and the Gradle task
  * {@code runRobustnessTest} exits non-zero. Screenshots are incidental here; the logs are the evidence.
  * <p>
  * One of the ten storage locations is a <b>rack bay</b> rather than a chest behind an interface, filled before the
- * warehouse is ready, so every phase above carries a bay through it as well as a foreign inventory.
+ * warehouse is ready, so every phase above carries a bay through it as well as a foreign inventory. Another is a
+ * <b>fluid bay</b> with lava in it, and the crane performs one real <b>container exchange</b> into it before the
+ * phases above begin (M30, issue #21) — so a tank, a filled container and the one move that legitimately turns one
+ * item into another all ride the chunk unload, the world reload, the chunk hold and the broken blocks.
  */
 public final class RobustnessVisualScenario implements VisualScenario {
     public static final String NAME = "robustness";
@@ -141,6 +153,18 @@ public final class RobustnessVisualScenario implements VisualScenario {
      * count is unchanged — no chest and no interface stand at this position.
      */
     private static final RackPosition BAY = RackPosition.of(RAILS, 0, Side.LEFT);
+    /**
+     * A <b>fluid</b> bay among the storage locations (M30, issue #21), on the other side than the rack bay so the two
+     * share no upright and neither phase can be read as the other's doing. It replaces an interface rather than being
+     * added, so the storage count of {@link #sceneReady} is unchanged.
+     */
+    private static final RackPosition FLUID_BAY = RackPosition.of(4, 0, Side.RIGHT);
+    /** What the fluid bay holds before anything moves, so the fluid baseline already has a tank in it. */
+    private static final int FLUID_BAY_PREFILL_MB = FluidType.BUCKET_VOLUME;
+    /** The container the crane exchanges into the bay, and what comes back. */
+    private static final ItemKey FILLED_BUCKET = ItemKey.of(Items.LAVA_BUCKET);
+    private static final ItemKey EMPTY_BUCKET = ItemKey.of(Items.BUCKET);
+    private static final FluidKey BAY_FLUID = FluidKey.of(Fluids.LAVA);
     /** What the bay holds, and what the broken-bay phase feeds in so the crane consolidates into the bay. */
     private static final Item BAY_ITEM = Items.DIAMOND;
     /** The bay's load before the warehouse exists: more than one {@code ItemStack} could ever carry. */
@@ -202,6 +226,9 @@ public final class RobustnessVisualScenario implements VisualScenario {
      */
     private volatile int bayBroken;
 
+    /** The fluid census every step is asserted against, in millibuckets per fluid ({@link SceneFluidCensus}). */
+    private volatile Map<FluidKey, Long> expectedFluid = Map.of();
+
     @Override
     public String name() {
         return NAME;
@@ -223,7 +250,13 @@ public final class RobustnessVisualScenario implements VisualScenario {
                 .server("robustness: power the crane", this::powerOn)
                 .serverUntil("robustness: wait until the crane carries items", this::craneCarries, JOB_TIMEOUT_TICKS);
 
-        // The bay goes first on purpose: the pallet it leaves then rides the chunk round trip, the save, quit and
+        // The container exchange goes first, for the reason the broken bay goes second: what it leaves behind - lava
+        // in a tank and an empty bucket as ordinary stock - then rides every phase below and is counted by every
+        // census after it. It also leaves the crane idle, which costs nothing: every phase below starts with a fill
+        // of its own.
+        containerExchange(script);
+
+        // The bay goes next on purpose: the pallet it leaves then rides the chunk round trip, the save, quit and
         // rejoin and the chunk hold, and is counted by every census after it. "Persists across save, reload and chunk
         // unload" is thereby proved by a real unload and a real world reload rather than only by a save-data round
         // trip in a GameTest.
@@ -255,6 +288,39 @@ public final class RobustnessVisualScenario implements VisualScenario {
     }
 
     // --- phases ------------------------------------------------------------------------------------------------------
+
+    /**
+     * <b>The crane's container exchange, with both censuses around it</b> (M30, issue #21): a filled bucket arrives at
+     * the input, the crane carries it to the fluid bay, the bay drains it, and the empty bucket is shelved as ordinary
+     * stock.
+     * <p>
+     * This is the one move in the mod under which an item legitimately becomes a different item, and it is the reason
+     * the two censuses are asserted jointly: the <b>fluid</b> expectation does not change at all across it — 1 000 mB
+     * inside a bucket and 1 000 mB in a tank are the same millibuckets — while the item expectation changes by exactly
+     * one swap, declared through {@link SceneItemCensus#exchanged}, which verifies it against the game's own emptying
+     * routine so a scenario cannot declare a swap the game would not make.
+     * <p>
+     * The <b>plan</b> is the real one: no job is handed over here. The store gate sends a container of a bay's fluid
+     * to that bay, so dropping a lava bucket into the input is the whole instruction — which is what makes this a test
+     * of the loop a player drives rather than of the primitive alone.
+     */
+    private void containerExchange(VisualScript script) {
+        script.serverUntil("robustness: wait until the first fill is stored", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census before the container exchange",
+                        (server, context) -> census(server, "the first fill was stored"))
+                .server("robustness: put a filled bucket into the input", this::feedFilledBucket)
+                .serverUntil("robustness: wait until the bay drained the bucket the crane brought it",
+                        this::bayHoldsTheExchange, JOB_TIMEOUT_TICKS)
+                .server("robustness: census right after the container exchange", (server, context) -> {
+                    expected = SceneItemCensus.exchanged(expected, FILLED_BUCKET, EMPTY_BUCKET, 1);
+                    census(server, "a filled bucket became fluid in a bay and an empty container in the head");
+                })
+                .serverUntil("robustness: wait until the empty container is shelved", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census after the empty container was shelved",
+                        (server, context) -> census(server, "the empty container was shelved as ordinary stock"));
+    }
 
     /** A running job survives the chunks of its aisle unloading and loading again. */
     private void chunkRoundTrip(VisualScript script) {
@@ -434,6 +500,14 @@ public final class RobustnessVisualScenario implements VisualScenario {
             for (int x = STORAGE_FIRST_POSITION; x <= RAILS; x++) {
                 RackPosition rack = RackPosition.of(x, 0, side);
                 BlockPos pos = layout.rackPos(rack);
+                if (rack.equals(FLUID_BAY)) {
+                    // A fluid bay IS the location too, and it holds no items at all: the fluid half of the census has
+                    // a tank to watch from the baseline on, and the store gate has somewhere to send a container.
+                    level.setBlockAndUpdate(pos, WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                            .setValue(FluidBayBlock.FACING, outward));
+                    fillFluidBay(level, pos);
+                    continue;
+                }
                 if (rack.equals(BAY)) {
                     // A rack bay IS the storage location: no chest behind it and no interface in front of it, which is
                     // why the storage count below is unchanged. It is filled before the warehouse is ready, exactly as
@@ -489,8 +563,10 @@ public final class RobustnessVisualScenario implements VisualScenario {
         ServerLevel level = server.overworld();
         fillInput(level, context, firstFill());
         expected = SceneItemCensus.take(level, censusBox);
+        expectedFluid = SceneFluidCensus.take(level, censusBox, expected);
         lastStep = "baseline";
-        LOGGER.info(PREFIX + "robustness: baseline census {} in {}", SceneItemCensus.describe(expected), censusBox);
+        LOGGER.info(PREFIX + "robustness: baseline census {}, fluid {} mB in {}", SceneItemCensus.describe(expected),
+                SceneFluidCensus.describe(expectedFluid), censusBox);
     }
 
     private void refill(MinecraftServer server, VisualContext context, List<ItemStack> stacks) {
@@ -511,9 +587,43 @@ public final class RobustnessVisualScenario implements VisualScenario {
         }
     }
 
+    /**
+     * Pre-fills the fluid bay at {@code pos} and dedicates it to its own fluid, so where a filled bucket belongs is
+     * decided by the bay's <b>filter</b> rather than by which fluid happened to arrive first.
+     */
+    private static void fillFluidBay(ServerLevel level, BlockPos pos) {
+        FluidBayBlockEntity bay = WareworksBlockEntityTypes.FLUID_BAY.getNullable(level, pos);
+        if (bay == null)
+            throw new VisualTestException("the fluid bay at " + pos + " has no block entity");
+        if (!bay.setStoreFilter(FILLED_BUCKET.toStack(1)))
+            throw new VisualTestException("the fluid bay at " + pos + " refused its own filter");
+        if (bay.fill(BAY_FLUID.toStack(FLUID_BAY_PREFILL_MB), false) != FLUID_BAY_PREFILL_MB)
+            throw new VisualTestException("the fluid bay at " + pos + " refused its pre-fill");
+    }
+
+    /**
+     * A filled container arrives at the input, counted in <b>both</b> expectations: the item census gains the bucket,
+     * and the fluid census gains the lava inside it, because a container is a carrier and not a place of its own. The
+     * standing expectation is asserted <b>first</b>, so this never re-baselines over a loss from an earlier phase.
+     */
+    private void feedFilledBucket(MinecraftServer server, VisualContext context) {
+        census(server, "before the filled bucket arrives");
+        List<ItemStack> arriving = List.of(FILLED_BUCKET.toStack(1));
+        expected = SceneItemCensus.plusAll(expected, arriving);
+        expectedFluid = SceneFluidCensus.plus(expectedFluid, BAY_FLUID, FluidType.BUCKET_VOLUME);
+        fillInput(server.overworld(), context, arriving.stream().map(ItemStack::copy).toList());
+    }
+
+    /** Whether the fluid bay has really drained the bucket the crane brought it. */
+    private boolean bayHoldsTheExchange(MinecraftServer server, VisualContext context) {
+        FluidBayBlockEntity bay = WareworksBlockEntityTypes.FLUID_BAY.getNullable(server.overworld(),
+                layout(context.origin()).rackPos(FLUID_BAY));
+        return bay != null && bay.millibuckets() >= FLUID_BAY_PREFILL_MB + FluidType.BUCKET_VOLUME;
+    }
+
     private void census(MinecraftServer server, String step) {
         lastStep = step;
-        SceneItemCensus.assertEquals(server.overworld(), censusBox, expected, step);
+        SceneFluidCensus.assertConserved(server.overworld(), censusBox, expected, expectedFluid, step);
     }
 
     // --- observations and breaking ---------------------------------------------------------------------------------

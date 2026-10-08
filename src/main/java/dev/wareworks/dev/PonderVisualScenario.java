@@ -86,7 +86,9 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 5),
             // M20 (issue #4) adds the chain, which both of these blocks show: the plan is made by a click at a
             // terminal and run at the stations.
-            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 3),
+            // M30 (issue #21) adds the fluid bay scene to the terminal as well: a player holding a stocked
+            // warehouse looks for a fluid row and finds buckets, and that scene is where the answer is.
+            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 4),
             new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 3),
             new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3),
             // M28 (issue #20): all three tiers carry the same three scenes, and all three are toured rather than only
@@ -94,7 +96,11 @@ public final class PonderVisualScenario implements VisualScenario {
             // is also the only check that each tier's own Ponder entry opens at all.
             new Subject("bay-wood", WareworksBlocks.RACK_BAY_WOOD, 3),
             new Subject("bay-andesite", WareworksBlocks.RACK_BAY_ANDESITE, 3),
-            new Subject("bay-brass", WareworksBlocks.RACK_BAY_BRASS, 3));
+            new Subject("bay-brass", WareworksBlocks.RACK_BAY_BRASS, 3),
+            // M30 (issue #21): one scene for both fluid bays, and both are toured for the rack bays' own reason — the
+            // tier is the block, so two registrations can be lost independently.
+            new Subject("tank-copper", WareworksBlocks.FLUID_BAY_COPPER, 1),
+            new Subject("tank-brass", WareworksBlocks.FLUID_BAY_BRASS, 1));
 
     @Override
     public String name() {

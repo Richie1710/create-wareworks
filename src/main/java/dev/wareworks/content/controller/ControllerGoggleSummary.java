@@ -38,6 +38,17 @@ import net.minecraft.nbt.Tag;
  * @param misaligned        members at rack positions with the wrong facing
  * @param itemTypes         distinct item keys in stock
  * @param totalItems        stored items over all locations
+ * @param fluidTypes        distinct fluids the warehouse's fluid bays hold (M30, issue #21, D10). <b>Two new fields
+ *                          and never a change to {@link #itemTypes} or {@link #totalItems}</b>: those two come from
+ *                          the item stock index and feed the lines a player has read since M5, and summing
+ *                          millibuckets into an item count would corrupt both. Left out of the synced tag while it is
+ *                          0, which is every warehouse without a fluid bay and therefore every warehouse built
+ *                          before M30, so an item-only controller's tooltip and packet are exactly what they were
+ * @param fluidMillibuckets fluid stored over all fluid bays, in <b>millibuckets</b>, which is the unit everything
+ *                          inside the mod counts in (a bottle is 250 mB). It is shown in <b>buckets</b> wherever a
+ *                          player reads it (D9), with the conversion at the edge, because nobody reads 256 000. A
+ *                          {@code long} for the reason {@link #totalItems} is one: one brass bay is 256 000 mB. Absent
+ *                          from the synced tag together with {@link #fluidTypes}
  * @param openRequests      open retrieval requests
  * @param productionOrders  open production orders (M11, ADR-024)
  * @param stockRules        rules of the aisle's warehouse stock keepers that really govern an item (M15, issue #3); a
@@ -76,7 +87,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                                       int filteredLocations, int prioritisedLocations, int inputs, int outputs,
                                       int acceptingPorts, int collectingPorts,
                                       int productionStations,
-                                      int misaligned, int itemTypes, long totalItems, int openRequests,
+                                      int misaligned, int itemTypes, long totalItems,
+                                      int fluidTypes, long fluidMillibuckets, int openRequests,
                                       int productionOrders, int stockRules, int rulesBelowMinimum, int rulesAtMaximum,
                                       int rulesPaused, ChunkKeepReason chunkKeepReason, int chunkKeepChunks,
                                       Optional<String> aisleName,
@@ -108,6 +120,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
     private static final String AISLE_NAME = "AisleName";
     private static final String ITEM_TYPES = "ItemTypes";
     private static final String TOTAL_ITEMS = "TotalItems";
+    private static final String FLUID_TYPES = "FluidTypes";
+    private static final String FLUID_MILLIBUCKETS = "FluidMillibuckets";
     private static final String OPEN_REQUESTS = "OpenRequests";
     private static final String NETWORK = "Network";
     private static final String CRANE = "Crane";
@@ -129,6 +143,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         misaligned = Math.max(0, misaligned);
         itemTypes = Math.max(0, itemTypes);
         totalItems = Math.max(0L, totalItems);
+        fluidTypes = Math.max(0, fluidTypes);
+        fluidMillibuckets = Math.max(0L, fluidMillibuckets);
         openRequests = Math.max(0, openRequests);
         productionOrders = Math.max(0, productionOrders);
         stockRules = Math.max(0, stockRules);
@@ -157,6 +173,12 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
      * {@code int} counts, so two constructors differing only in arity let a caller that adds one argument silently
      * shift every count after it — the kind of mistake that compiles and shows only as a wrong goggle line. There is
      * exactly one way to build a summary of counts, and it names every one of them.
+     * <p>
+     * It deliberately does <b>not</b> name the two fluid numbers (M30, issue #21) and passes 0 for both, exactly as it
+     * passes {@link ChunkKeepReason#NONE} for the chunk hold: 0 and 0 is what an <b>item-only</b> warehouse really
+     * reports, which is what every caller of this factory is about, and widening a 20-argument factory to 22 is the
+     * precise mistake the paragraph above warns of. A summary that carries fluid is built through the canonical
+     * constructor, or with {@link #withFluid}.
      */
     public static ControllerGoggleSummary counts(ControllerStatus status, int aisleLength, int mastHeight,
                                                  int storageLocations, int filteredLocations, int prioritisedLocations,
@@ -168,8 +190,21 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes,
-                totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum, rulesPaused,
-                ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
+                totalItems, 0, 0L, openRequests, productionOrders, stockRules, rulesBelowMinimum,
+                rulesAtMaximum, rulesPaused, ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
+    }
+
+    /**
+     * This summary with the two fluid numbers (M30, issue #21, D10), for the tests that assert what a warehouse holding
+     * fluid reports: {@link #counts} builds the item-only case and this adds the fluid to it, so neither of them has to
+     * name the other's twenty arguments.
+     */
+    public ControllerGoggleSummary withFluid(int types, long millibuckets) {
+        return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
+                prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
+                itemTypes, totalItems, types, millibuckets, openRequests, productionOrders, stockRules,
+                rulesBelowMinimum, rulesAtMaximum, rulesPaused, chunkKeepReason, chunkKeepChunks, aisleName, network,
+                crane, lastPlanReason);
     }
 
     /**
@@ -182,8 +217,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
     public ControllerGoggleSummary withoutCrane() {
         return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
-                itemTypes, totalItems, openRequests, productionOrders, stockRules, rulesBelowMinimum, rulesAtMaximum,
-                rulesPaused, chunkKeepReason, chunkKeepChunks, aisleName, network, Optional.empty(), Optional.empty());
+                itemTypes, totalItems, fluidTypes, fluidMillibuckets, openRequests, productionOrders, stockRules,
+                rulesBelowMinimum, rulesAtMaximum, rulesPaused, chunkKeepReason, chunkKeepChunks, aisleName, network, Optional.empty(), Optional.empty());
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -209,6 +244,14 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         tag.putInt(MISALIGNED, misaligned);
         tag.putInt(ITEM_TYPES, itemTypes);
         tag.putLong(TOTAL_ITEMS, totalItems);
+        // Both left out while the warehouse holds no fluid at all, which is every warehouse without a fluid bay and
+        // therefore every warehouse built before M30 (issue #21): this tag is part of every chunk packet, and the two
+        // goggle lines they feed sit behind the same guard, so such a controller's packet and tooltip are unchanged.
+        // A missing key reads back as 0.
+        if (fluidTypes > 0) {
+            tag.putInt(FLUID_TYPES, fluidTypes);
+            tag.putLong(FLUID_MILLIBUCKETS, fluidMillibuckets);
+        }
         tag.putInt(OPEN_REQUESTS, openRequests);
         // The two production numbers are left out while an aisle has no production station at all, which is almost
         // every aisle. This tag is part of every chunk packet (§3.1.1), so a number that is always 0 should not travel
@@ -263,7 +306,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 tag.getInt(COLLECTING_PORTS),
                 tag.getInt(PRODUCTION_STATIONS),
                 tag.getInt(MISALIGNED), tag.getInt(ITEM_TYPES),
-                tag.getLong(TOTAL_ITEMS), tag.getInt(OPEN_REQUESTS), tag.getInt(PRODUCTION_ORDERS),
+                tag.getLong(TOTAL_ITEMS), tag.getInt(FLUID_TYPES), tag.getLong(FLUID_MILLIBUCKETS),
+                tag.getInt(OPEN_REQUESTS), tag.getInt(PRODUCTION_ORDERS),
                 tag.getInt(STOCK_RULES), tag.getInt(RULES_BELOW_MINIMUM), tag.getInt(RULES_AT_MAXIMUM),
                 tag.getInt(RULES_PAUSED), ChunkKeepReason.byName(tag.getString(CHUNK_KEEP)),
                 tag.getInt(CHUNK_KEEP_CHUNKS), Optional.of(tag.getString(AISLE_NAME)), network, crane,

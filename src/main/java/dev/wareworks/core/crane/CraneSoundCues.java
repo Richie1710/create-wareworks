@@ -33,6 +33,8 @@ import dev.wareworks.core.job.CraneSpeeds;
  *   <li>{@link Cue#ARM_EXTEND} / {@link Cue#ARM_RETRACT} when an extend or retract phase starts and the arm really has to
  *       move.</li>
  *   <li>{@link Cue#PICK} / {@link Cue#DROP} only for a transfer that moved at least one item.</li>
+ *   <li>{@link Cue#EXCHANGE} for a container exchange that really happened (M30, issue #21): it replaces the drop cue
+ *       at that stop rather than joining it, because nothing was dropped there — a container was emptied.</li>
  * </ul>
  * One instance per crane, server thread only. The state is not saved: after loading, a travelling crane may play one
  * start cue.
@@ -51,7 +53,9 @@ public final class CraneSoundCues {
         ARM_EXTEND,
         ARM_RETRACT,
         PICK,
-        DROP
+        DROP,
+        /** A container emptied into a fluid bay, the one stop at which the head leaves with another item (M30). */
+        EXCHANGE
     }
 
     /**
@@ -216,6 +220,14 @@ public final class CraneSoundCues {
     /** {@link Cue#DROP} for a drop that delivered {@code amount} items; nothing if the target accepted nothing. */
     public static Optional<Sound> dropped(int amount) {
         return amount > 0 ? Optional.of(new Sound(Cue.DROP, FULL_VOLUME)) : Optional.empty();
+    }
+
+    /**
+     * {@link Cue#EXCHANGE} for a container exchange that moved {@code amount} containers; nothing for a refused one
+     * (M30, issue #21). A refusal moved no fluid and no container, so it is as silent as a drop a full target refused.
+     */
+    public static Optional<Sound> exchanged(int amount) {
+        return amount > 0 ? Optional.of(new Sound(Cue.EXCHANGE, FULL_VOLUME)) : Optional.empty();
     }
 
     /**

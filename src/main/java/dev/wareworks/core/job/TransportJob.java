@@ -20,6 +20,8 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       handling head carries.</li>
  *   <li>{@link #withTarget} reroutes the leftovers (§8); the target kind must be allowed for the type
  *       ({@link JobType#allowsTarget}).</li>
+ *   <li>{@link #exchangedFor(Object)} records a <b>container exchange</b>: the carry continues under another key
+ *       (M30, issue #21).</li>
  *   <li>{@link #withoutRequest()} detaches a retrieve job from a request that no longer exists.</li>
  * </ul>
  * All components are plain values (UUIDs, enums, ints), so the job persists as is. The canonical constructor validates
@@ -176,6 +178,42 @@ public record TransportJob<K, L>(UUID id, JobType type, L source, L target, Loca
     public TransportJob<K, L> withTarget(L newTarget, LocationKind kind) {
         return new TransportJob<>(id, type, source, newTarget, kind, key, plannedAmount, requestId, picked, pickedAmount,
                 deliveredAmount);
+    }
+
+    /**
+     * This job carrying {@code newKey} instead, after a <b>container exchange</b> at its target (M30, issue #21, D1):
+     * the head gave up every item it held there and received that many of {@code newKey} — a filled container went into
+     * a fluid bay's tank and an empty one came back.
+     * <p>
+     * The carry starts again under the new key: {@code plannedAmount == pickedAmount == heldAmount()} with nothing
+     * delivered, so the one invariant every reader of this record relies on — {@code heldAmount()} is what the handling
+     * head really carries ({@code CraneExecution.reconcileHeadWithJob}) — holds across the swap. The id, type, source,
+     * target and target kind are untouched, because it is the same trip: the reroute that follows excludes the target it
+     * just happened at and the job's own history stays traceable.
+     * <p>
+     * <b>No new record component, and therefore no save-format change.</b> A saved job's key may now be the empty
+     * container, which is exactly what makes an interruption right after the exchange survivable: the head and the job
+     * agree on the new key the moment the swap returns, with no tick boundary in between.
+     * <p>
+     * <b>The request is dropped.</b> What the head holds now is not what the request's station was promised, so this
+     * job serves nobody. That also makes {@code CraneExecution.reportRerouted}'s unconditional detach a no-op rather
+     * than a second place the same rule lives.
+     *
+     * @throws IllegalStateException    if the job was not picked, or holds nothing to exchange
+     * @throws IllegalArgumentException if {@code newKey} is the key the job already carries: an exchange is a swap, and
+     *                                  "swapping" a key for itself would silently reset the delivered amount of a job
+     *                                  that is part way through its deliveries
+     */
+    public TransportJob<K, L> exchangedFor(K newKey) {
+        Objects.requireNonNull(newKey, "newKey");
+        if (!picked)
+            throw new IllegalStateException("job " + id + " was not picked");
+        int held = heldAmount();
+        if (held < 1)
+            throw new IllegalStateException("job " + id + " holds nothing to exchange");
+        if (newKey.equals(key))
+            throw new IllegalArgumentException("job " + id + " already carries " + key + ", so that is no exchange");
+        return new TransportJob<>(id, type, source, target, targetKind, newKey, held, Optional.empty(), true, held, 0);
     }
 
     /**

@@ -8,22 +8,25 @@ import java.util.SortedMap;
 import com.simibubi.create.api.behaviour.display.DisplaySource;
 import com.simibubi.create.content.redstone.displayLink.DisplayLinkContext;
 import com.simibubi.create.content.redstone.displayLink.target.DisplayTargetStats;
+import com.simibubi.create.foundation.utility.FluidFormatter;
 
 import dev.wareworks.content.controller.ControllerStatus;
 import dev.wareworks.content.controller.NetworkGoggleInfo;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.util.WareworksLang;
+import net.createmod.catnip.data.Couple;
 import net.minecraft.network.chat.MutableComponent;
 
 /**
  * Display Link source "Warehouse Summary" ({@code docs/warehouse-system.md} §10): the warehouse's letter and status,
  * the counted inventories in use, the item types and its total stock — <b>four lines on every warehouse</b> — and below
- * them, only when there is something to say, the aisles it is made of, its ports, its stock rules, its stopped
- * products, its held chunks and last of all the names a player gave its aisles. Every one of those is below the four,
- * because a four-tube board shows four rows and {@link WarehouseDisplays#limit} drops the tail: an optional line above
+ * them, only when there is something to say, the fluid it holds, the aisles it is made of, its ports, its stock rules,
+ * its stopped products, its held chunks and last of all the names a player gave its aisles. Every one of those is
+ * below the four, because a four-tube board shows four rows and {@link WarehouseDisplays#limit} drops the tail: an optional line above
  * them would cost a player a number they asked for.
  * <p>
  * The order of the optional lines is the order in which a short board may lose them, youngest loss last: the names are
@@ -67,6 +70,33 @@ public class AisleSummaryDisplaySource extends DisplaySource {
                 WareworksLang.number(stock.distinctKeys())));
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEMS,
                 WareworksLang.number(stock.totalItems())));
+        // What the warehouse holds as FLUID (M30, issue #21, D10), only while it really holds some — which no
+        // warehouse without a fluid bay does, so a board that stood on a warehouse built before M30 shows what it
+        // showed.
+        //
+        // The FIRST of the optional lines, above the aisles line, and that is a decision about which row a short board
+        // keeps rather than a place. Everything above it is a stock number a player asked for, and this is the fifth of
+        // them; a board is hung on a warehouse that holds fluid BECAUSE of this row. The rows below it — the shape of
+        // the rails, the ports, the rules, a diagnosis, a label — each sit below the one before them for that same
+        // reason, youngest loss last.
+        //
+        // The amount is pre-formatted by Create's own FluidFormatter, the way its fluid list source formats a tank, so
+        // the unit is Create's "B" / "mB" in every language it ships and no German word is invented. It is asked for
+        // the SHORTENED form always: this source extends DisplaySource and therefore offers no "shortened / full
+        // number" switch at all - that widget and the shortenNumbers() it feeds live on Create's
+        // ValueListDisplaySource - and a board row is short. Shortening is only a question above 1 000 mB anyway:
+        // asComponents falls back to plain millibuckets below that. The breakdown per fluid is the "Fluid Stock"
+        // source; this is the one-row answer to "does this warehouse hold fluid at all, and how much".
+        //
+        // Both numbers come from the controller's parallel fluid index, so a pull stays a handful of map reads
+        // (ADR-026).
+        StockView<FluidKey, RackPosition> fluid = controller.fluidStockIndex();
+        if (fluid.distinctKeys() > 0) {
+            Couple<MutableComponent> amount = FluidFormatter.asComponents(fluid.totalItems(), true);
+            lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_FLUIDS,
+                    WareworksLang.number(fluid.distinctKeys()),
+                    amount.getFirst().append(DisplaySource.WHITESPACE).append(amount.getSecond())));
+        }
         // Which aisles the warehouse is made of (M21, issue #1, ADR-033), for one that really bends or splits: on a
         // straight aisle this line would only repeat the letter the first line already carries. A discovery that
         // stopped short of what a player laid is marked rather than explained — the reason takes a sentence, and the

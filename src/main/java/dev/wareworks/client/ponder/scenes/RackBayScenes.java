@@ -5,10 +5,12 @@ import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 import com.tterrag.registrate.util.entry.BlockEntry;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.BayColumn;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.StorageFilterValueBox;
+import dev.wareworks.content.storage.TieredBay;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
@@ -47,16 +49,16 @@ import net.minecraft.world.phys.Vec3;
  *
  * <h2>Two things a Ponder level does not do for a bay</h2>
  * <ul>
- * <li><b>Neither derived block state follows the world.</b> {@link RackBayBlock#FILL} and
- * {@link RackBayBlock#OVERLOADED} are written by server-only code ({@code RackBayBlockEntity#onContentsChanged} and
- * {@code RackBayBlock#publishState} both return early for a client level), and a {@code PonderLevel} <i>is</i>
+ * <li><b>Neither derived block state follows the world.</b> {@link TieredBay#FILL} and
+ * {@link TieredBay#OVERLOADED} are written by server-only code ({@code RackBayBlockEntity#onContentsChanged} and
+ * {@code BayColumn#publishState} both return early for a client level), and a {@code PonderLevel} <i>is</i>
  * client-side. A scene therefore writes both into the block state itself — the same lesson
  * {@code PonderAisle#placePort} recorded for the port's two halves.</li>
  * <li><b>A pallet cannot be spawned.</b> {@code PalletEntity#spawn} refuses a client level outright, so the break beat
  * builds the entity through {@code createEntity} and gives it its load with the documented display hook
  * {@link PalletEntity#showClientLoad} — the pallet's counterpart of {@code StackerCraneBlockEntity#showClientPose}.</li>
  * <li><b>The goods have to be put in by hand</b> (M29 step 14). Since M29 step 13 a bay draws the item it stores at
- * the mouth of the bay, and a scene that only wrote {@link RackBayBlock#FILL} into the block state showed anonymous
+ * the mouth of the bay, and a scene that only wrote {@link TieredBay#FILL} into the block state showed anonymous
  * cartons while telling a player that a bay keeps the <i>first item type</i> that lands in it. {@link #store} puts one
  * item into the bay's own handler, which needs no hook at all: {@code RackBayBlockEntity#insert} is a plain handler
  * call and the change callback behind it returns at once on anything that is not a {@code ServerLevel}, so nothing is
@@ -134,7 +136,7 @@ public final class RackBayScenes {
      * Puts one {@code item} into the bay at {@code pos}, so the renderer added in M29 step 13 draws the item the scene
      * is talking about rather than leaving the bay anonymous behind its cartons.
      * <p>
-     * <b>One</b> item, deliberately: the renderer draws a single copy whatever the amount, {@link RackBayBlock#FILL}
+     * <b>One</b> item, deliberately: the renderer draws a single copy whatever the amount, {@link TieredBay#FILL}
      * is written by the scene itself (class comment), and a count of one cannot overflow a capacity or disturb a later
      * beat. A bay that already holds another type refuses it, which is the behaviour the "one type at a time" beat of
      * {@link #rackBay} is about — so this is never a way to put two things in one bay.

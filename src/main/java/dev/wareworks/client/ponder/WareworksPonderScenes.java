@@ -5,6 +5,7 @@ import com.tterrag.registrate.util.entry.ItemProviderEntry;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.client.ponder.scenes.CraneScenes;
+import dev.wareworks.client.ponder.scenes.FluidBayScenes;
 import dev.wareworks.client.ponder.scenes.NetworkScenes;
 import dev.wareworks.client.ponder.scenes.PackageScenes;
 import dev.wareworks.client.ponder.scenes.PortScenes;
@@ -45,13 +46,14 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting,
  *       warehouse/port_collecting, warehouse/packages_at_the_door</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting,
- *       warehouse/production_chain</td></tr>
+ *       warehouse/production_chain, warehouse/fluid_bay</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
  *       warehouse/production_chain</td></tr>
  *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
  *       warehouse/port_accepting</td></tr>
  *   <tr><td>rack_bay_wood, rack_bay_andesite, rack_bay_brass</td><td>warehouse/rack_bay, warehouse/rack_wall,
  *       warehouse/bays_in_an_aisle</td></tr>
+ *   <tr><td>fluid_bay_copper, fluid_bay_brass</td><td>warehouse/fluid_bay</td></tr>
  * </table>
  */
 public final class WareworksPonderScenes {
@@ -172,5 +174,14 @@ public final class WareworksPonderScenes {
                         WareworksBlocks.RACK_BAY_BRASS)
                 .addStoryBoard("warehouse/bays_in_an_aisle", RackBayScenes::baysInAnAisle,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // The fluid bay (M30, issue #21, ADR-051..ADR-055). One scene for both tiers, because the tier is the block and
+        // what a player cannot guess is the same for copper and brass: what becomes of the container. Also a scene of
+        // the <b>warehouse terminal</b> — a player holding a stocked warehouse looks for lava in the stock list and
+        // finds buckets, and the closing beats are where the fluid really goes in and out until M31 adds the request.
+        scenes.forComponents(WareworksBlocks.FLUID_BAY_COPPER, WareworksBlocks.FLUID_BAY_BRASS,
+                        WareworksBlocks.WAREHOUSE_TERMINAL)
+                .addStoryBoard("warehouse/fluid_bay", FluidBayScenes::fluidsTravelInContainers,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.FLUIDS);
     }
 }

@@ -31,6 +31,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.CenteredSideValueBox
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.HomePointStatus;
 import dev.wareworks.content.station.ProductionScreenState;
@@ -220,6 +221,32 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     private final AisleMembership membership = new AisleMembership();
     private final StockIndex<ItemKey, RackPosition> stock = new StockIndex<>(RackPosition.ORDER);
+    /**
+     * The <b>parallel</b> fluid stock index: fluid key → storage location → millibuckets (M30, issue #21, D10).
+     * <p>
+     * A second index and never a union key with {@link #stock}, for three reasons that each stand alone.
+     * {@code StockView#totalItems()} and {@code distinctKeys()} feed the {@code ITEM_TYPES} and {@code TOTAL_ITEMS}
+     * goggle lines and the display board's own rows, and summing millibuckets into an item count corrupts every one of
+     * them. {@code countsAt(location)} is part of the controller's <b>save</b> format, so a union key would be a
+     * migration for every existing world. And {@code locationsOf(key)} is {@link ItemKey}-typed end to end through
+     * {@code PlannerInput}.
+     * <p>
+     * <b>Not saved</b>, unlike the item index, and that is a property of where fluid lives rather than an omission: a
+     * fluid bay <b>is</b> its own tank ({@code StorageMember#attachedPos()} is the bay's own position), so its contents
+     * are in its own block entity and cannot be read without it being loaded. There is nothing a save could add that
+     * the first {@link #refreshLocation} of a loaded bay does not bring back, and every bay is read within one
+     * snapshot cycle after a load. The item index is saved for the opposite reason: a chest can stay unloaded while the
+     * interface in front of it is not.
+     * <p>
+     * It is written on exactly one path, {@link #refreshLocation}, and dropped with the location in
+     * {@link #forgetStorageLocation} and {@link #clearAisleState}. A bay reports every change of its contents through
+     * {@code WarehouseRegistry.contentChanged}, so the entry is normally one tick old.
+     * <p>
+     * It holds the warehouse's <b>fluid bays and nothing else</b>: a storage location that holds no fluid is removed
+     * rather than kept with no counts, which is the other way round from {@link #stock}, where every storage location
+     * stays indexed so that {@code occupiedLocations()} can compare the ones in use against the ones counted.
+     */
+    private final StockIndex<FluidKey, RackPosition> fluidStock = new StockIndex<>(RackPosition.ORDER);
     /** Storage locations waiting for a snapshot; not saved (rebuilt from the records on load). */
     private final SnapshotQueue<RackPosition> pendingSnapshots = new SnapshotQueue<>();
     /** Storage locations reading the same inventory; derived from snapshots, not saved. */
@@ -750,10 +777,27 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * Reads the store settings of {@code rack} straight from its member — filter, priority and the two store rules of
-     * M28 — for the one lookup {@link AisleFilters} does per location that was never read into the cache. All of them in
-     * one lookup on purpose: the planner may ask for either first, and a priority the controller has not read must
-     * never be guessed. Empty while the position is not loaded or holds no storage member.
+     * Whether the storage location at {@code rack} takes <b>filled containers</b> rather than items — a fluid bay
+     * (M30 step 9, issue #21, D6). From the same cache and the same one-shot resolve as the store filter and the
+     * priority, so it is one hash map read per candidate ({@link AisleFilters#takesFluidContainers}).
+     * <p>
+     * It is read by {@code CraneDispatch} twice and nowhere else. Once as the <b>insert estimate</b>: a fluid bay's
+     * snapshot has zero slots, so the snapshot estimate answers 0 and the planner's capacity gate would drop the bay
+     * before any live call. That gate must keep dropping a warehouse interface whose chest was taken away, which
+     * reports the <i>same</i> empty snapshot for the opposite reason, so the estimate asks this positive question
+     * instead of reading anything into an empty snapshot. And once as {@code PlannerInput#allOrNothing}, the rule that
+     * keeps a <b>reroute</b> from offering a bay part of a carry it would refuse whole (M30 review fix).
+     */
+    boolean takesFluidContainers(RackPosition rack) {
+        return level != null && filters.takesFluidContainers(rack, storeSettingsResolver);
+    }
+
+    /**
+     * Reads the store settings of {@code rack} straight from its member — filter, priority, the two store rules of M28
+     * and the fluid dedication of M30 ({@link AisleFilters#read}) — for the one lookup {@link AisleFilters} does per
+     * location that was never read into the cache. All of them in one lookup on purpose: the planner may ask for any of
+     * them first, and a setting the controller has not read must never be guessed. Empty while the position is not
+     * loaded or holds no storage member.
      */
     private Optional<AisleFilters.StoreSettings> readStoreSettingsAt(RackPosition rack) {
         if (level == null || level.isClientSide || layout == null)
@@ -764,8 +808,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (!(blockEntity instanceof StorageMember member) || blockEntity.isRemoved())
             return Optional.empty();
-        return Optional.of(new AisleFilters.StoreSettings(member.storeFilter(), member.storePriority(),
-                member.holdsOneTypeOnly(), member.acceptsStoring()));
+        return Optional.of(AisleFilters.read(member));
     }
 
     /**
@@ -836,6 +879,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** Total stored amount of {@code key} over all storage locations. */
     public long countOf(ItemKey key) {
         return stock.count(key);
+    }
+
+    /**
+     * Read-only view of the <b>fluid</b> stock index (fluid key → fluid bay → millibuckets, M30, issue #21, D10):
+     * what the controller's goggles, the "Fluid Stock" display source and the warehouse summary's fluid line read.
+     * <p>
+     * Counted in millibuckets and shown in <b>buckets</b> (D9): a bottle is 250 mB, which buckets cannot express,
+     * and a brass bay holds 256 000 mB, which nobody reads. Every surface converts at the edge, with Create's own
+     * unit keys, so no reader of this view has to know which way round it is.
+     * <p>
+     * Empty for every warehouse without a fluid bay, which is every warehouse built before M30 — and that is what
+     * keeps an item-only warehouse's readouts byte-identical to what they were.
+     */
+    public StockView<FluidKey, RackPosition> fluidStockIndex() {
+        return fluidStock.readOnlyView();
     }
 
     /** Read-only view of the reservations of the crane's job (derived from the job, not saved). */
@@ -983,8 +1041,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (blockEntity instanceof StorageMember member && !blockEntity.isRemoved())
-            filters.set(rack, member.storeFilter(), member.storePriority(), member.holdsOneTypeOnly(),
-                    member.acceptsStoring());
+            filters.set(rack, AisleFilters.read(member));
     }
 
     /**
@@ -1380,8 +1437,29 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // The store settings are refreshed here as well: this is every path on which the controller already resolves the
         // member (join, content hint, round robin, after a transfer, load verification), and they have to be known even
         // when the attached inventory is not loaded (ADR-021, ADR-028, M28).
-        filters.set(rack, member.storeFilter(), member.storePriority(), member.holdsOneTypeOnly(),
-                member.acceptsStoring());
+        filters.set(rack, AisleFilters.read(member));
+        // And the fluid, on the same path and for the same reason (M30 step 10, D10): a fluid bay IS its own tank, so
+        // its contents are readable the moment the member resolves and need none of the checks below, which are about
+        // an inventory that stands somewhere else. Every other storage member answers the empty map, so this line
+        // costs a warehouse without a fluid bay one virtual call per read and changes nothing about it.
+        //
+        // Keyed by the location itself and never by the shared-inventory canonical: a bay answers no item capability
+        // at all (D3), so no two locations can ever count one tank.
+        //
+        // No setChanged() for a change here, deliberately, which is one of the two places this index differs from the
+        // item one: it is not saved (see the field), so there is nothing to write — and a Mechanical Pump filling a
+        // bay reports a change several times a second, so marking the chunk dirty for it would be pure churn.
+        //
+        // The other difference: a location holding no fluid is REMOVED rather than restored with no counts, so the
+        // fluid index holds the warehouse's fluid bays and nothing else. The item index keeps every storage location
+        // on purpose, because occupiedLocations() compares the ones in use against the ones counted; nothing asks the
+        // fluid index how many locations a warehouse has, and an entry per chest would be a map entry per location for
+        // a number nobody reads.
+        Map<FluidKey, Long> carried = member.fluidStock();
+        if (carried.isEmpty())
+            fluidStock.remove(rack);
+        else
+            fluidStock.restore(rack, carried);
         BlockPos attached = member.attachedPos();
         if (!level.isLoaded(attached))
             return false;
@@ -3875,6 +3953,31 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return requestId.map(this::hasOpenJobOwner).orElse(true);
     }
 
+    /**
+     * The crane exchanged {@code amount} containers of {@code formerKey} at {@code target} for the item {@code job} now
+     * carries ({@code onCraneExchanged}, M30, issue #21, D14): a filled container went into a fluid bay's tank and the
+     * crane is carrying the empty container away.
+     * <p>
+     * <b>Two things, and deliberately nothing else.</b> The reservations follow the job, which now holds another key and
+     * no request at all, and the bay is re-read at once — not for its items, of which it has none, but because this is
+     * the path on which a location's store settings are refreshed, and an unfiltered bay that was empty before this
+     * exchange has just learned which fluid it holds.
+     * <p>
+     * What must <b>not</b> happen here is the reason this is a report of its own rather than an
+     * {@link #onCraneDelivered} with a delivered amount: that method credits {@code onResultStored} for every job that
+     * brings items in and delivered into a {@link LocationKind#STORAGE} location, so an exchange routed through it would
+     * credit a restock order with a filled container that was never stored, while the stock index showed none of it and
+     * ADR-027's safety stop fired for no reason. {@code formerKey} and {@code amount} are therefore the report of what
+     * happened and not an instruction to count anything — the same shape {@code onCraneJobAborted}'s reason has.
+     */
+    public void onCraneExchanged(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job,
+            RackPosition target, ItemKey formerKey, int amount) {
+        if (!acceptsReportsFrom(crane))
+            return;
+        dispatch.track(job);
+        refreshLocation(target);
+    }
+
     /** The crane's leftovers have a new target: the reservations move with them. */
     public void onCraneRerouted(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
         if (acceptsReportsFrom(crane))
@@ -4676,6 +4779,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         markChunkKeepDirty(); // M19: no members, so no requests and no orders either
         membership.clear();
         stock.clear();
+        fluidStock.clear();
         pendingSnapshots.clear();
         filters.clear();
         ports.clear();
@@ -4782,6 +4886,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         dispatch.forgetRefusals(rack);
         sharedInventories.remove(rack).ifPresent(promoted -> handOver(rack, promoted));
         stock.remove(rack);
+        // A fluid bay's contents never move to another location: there is no shared-tank case to hand over, because a
+        // bay is its own tank (D3). A broken bay loses its fluid and says so; the index simply forgets it.
+        fluidStock.remove(rack);
     }
 
     /**
@@ -5039,7 +5146,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return new ControllerGoggleSummary(status, length, height, membership.storageCount(), filteredLocationCount(),
                 prioritisedLocationCount(), membership.inputCount(), membership.outputCount(), acceptingPortCount(),
                 collectingPortCount(), membership.productionCount(),
-                membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(), requests.openCount(),
+                membership.misalignedCount(), stock.distinctKeys(), stock.totalItems(),
+                // The fluid numbers come from the parallel index and are 0 for every warehouse without a fluid bay,
+                // which keeps that warehouse's tooltip and its chunk packet exactly what they were (M30, D10).
+                fluidStock.distinctKeys(), fluidStock.totalItems(), requests.openCount(),
                 productionOrders.openCount(), governingRules, rulesBelowMinimum, rulesAtMaximum, stockPauses.size(),
                 chunkKeepReason, chunkKeepChunks, aisleName(aisleLetter()), networkInfo(),
                 // A fresh throughput snapshot on top of the dock's cached record (M25, issue #16, ADR-039). The dock
@@ -5136,6 +5246,22 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                     .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
         WareworksLang.countLine(WareworksLang.GOGGLES_ITEM_TYPES, shown.itemTypes()).forGoggles(tooltip, 1);
         WareworksLang.countLine(WareworksLang.GOGGLES_ITEMS_STORED, shown.totalItems()).forGoggles(tooltip, 1);
+        // What the warehouse holds as FLUID, directly under the two item numbers and never merged into them (M30,
+        // issue #21, D10): the item lines come from the item index, and a warehouse holding "lava: 64 buckets" and
+        // "bucket: 17" has to say both without either pretending to be the other.
+        //
+        // Behind one guard, so a warehouse without a fluid bay — which is every warehouse built before M30 — shows the
+        // tooltip it always showed, down to the byte: the two synced fields are left out of the tag under the same
+        // condition. This tooltip is already 14 lines for an ordinary working warehouse, so two more lines are paid for
+        // by the one build that wanted them.
+        //
+        // Shown in BUCKETS although everything inside is counted in millibuckets (D9), with the bay's own two rules:
+        // two fraction digits, and millibuckets instead for a total a bucket figure would round to 0 — a warehouse
+        // holding 7 mB must not say it holds nothing.
+        if (shown.fluidTypes() > 0) {
+            WareworksLang.countLine(WareworksLang.GOGGLES_FLUID_TYPES, shown.fluidTypes()).forGoggles(tooltip, 1);
+            WareworksLang.fluidStored(shown.fluidMillibuckets()).forGoggles(tooltip, 1);
+        }
         WareworksLang.countLine(WareworksLang.GOGGLES_OPEN_REQUESTS, shown.openRequests()).forGoggles(tooltip, 1);
         if (shown.productionOrders() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_ORDERS, shown.productionOrders())

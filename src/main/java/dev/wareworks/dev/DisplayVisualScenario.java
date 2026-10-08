@@ -4,8 +4,10 @@ import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 import com.simibubi.create.AllBlockEntityTypes;
@@ -25,6 +27,7 @@ import com.simibubi.create.content.trains.display.FlapDisplayLayout;
 import com.simibubi.create.content.trains.display.FlapDisplaySection;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
+import com.simibubi.create.foundation.utility.FluidFormatter;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.content.controller.BranchLayout;
@@ -34,6 +37,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseInputBlock;
@@ -46,16 +50,21 @@ import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.content.storage.FluidBayBlock;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.core.crane.CraneThroughput;
+import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksDisplaySources;
 import dev.wareworks.util.WareworksLang;
+import net.createmod.catnip.data.Couple;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.Item;
@@ -65,17 +74,22 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
+import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.fluids.FluidType;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 /**
- * Scenario "display": the five Display Link sources on real display targets ({@code docs/warehouse-system.md} §10, M14,
- * M25).
+ * Scenario "display": the six Display Link sources on real display targets ({@code docs/warehouse-system.md} §10, M14,
+ * M25, M30).
  * <p>
  * Layout, relative to the dock (the scene origin; the aisle runs east, so a positive x offset is along the aisle and a
  * negative z offset is the left rack side): the usual powered aisle with {@value #RAILS} rails, a controller behind the
- * dock, a terminal at {@code 1/0 L}, an input at {@code 1/0 R}, an output at {@code 2/0 R} and storage locations on both
+ * dock, a terminal at {@code 1/0 L}, an input at {@code 1/0 R}, an output at {@code 2/0 R}, two <b>fluid bays</b> at
+ * {@code 2/0 L} and {@code 3/0 L} holding lava and water (M30, issue #21) and storage locations on both
  * sides at positions {@value #STORAGE_FIRST_POSITION}..{@value #RAILS}. North of it, across a cleared plaza, stands a
  * wall of display boards at {@code z = }{@value #WALL_Z}, each driven by its own creative motor through a cogwheel:
  * <ul>
@@ -88,14 +102,20 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * {@value #SMALL_BOARD_WIDTH}x1 board — the degraded case, which must read "No aisle",</li>
  * <li>"Crane Throughput" on the dock's <b>second</b> face (M25, issue #16): what the machine got done in the minute
  * behind it, on a board of the standard size, because the source writes exactly four rows — or the single word
- * "Measuring" while its window is still short, which is what a freshly built warehouse really shows.</li>
+ * "Measuring" while its window is still short, which is what a freshly built warehouse really shows,</li>
+ * <li>"Fluid Stock" on the controller's <b>second</b> face (M30, issue #21): one row per fluid the warehouse's bays
+ * hold, with the amount and <b>its unit</b> in front of the fluid's name. It is the one board whose rows carry a unit
+ * at all, which is why it is worth looking at: the number is millibuckets inside the mod and the row has to read in
+ * buckets, and the unit comes from Create's own {@code fluid_units} flap cycle rather than from a word this mod
+ * invented.</li>
  * </ul>
  * "Stock of the Filtered Item" sits on the output, whose request filter names {@link #FILTERED_ITEM}, and writes to a row
  * of {@value #NIXIE_TUBES} nixie tube blocks on a pedestal south of the aisle, where that output stands.
  * <p>
  * Tour per pass: the whole wall, an overview of warehouse and wall, then one close-up per board and one of the nixie row.
- * Then the aisle changes — the first pass powers the crane on, the second refills the input — and the same displays are
- * read and shot again, so a screenshot pair shows that the text follows the warehouse. The first pass then feeds the
+ * Then the aisle changes — the first pass powers the crane on, the second refills the input, and both top up a fluid
+ * bay as a pump would — and the same displays are read and shot again, so a screenshot pair shows that the text
+ * follows the warehouse in items <b>and</b> in fluid. The first pass then feeds the
  * warehouse once more and takes the whole wall again <b>in German</b>, which is the only gate on whether a translated
  * row fits the flaps of a real board. Every shot is preceded by an
  * assertion of what the displays really carry: the lines are compared against the controller's own numbers (letter,
@@ -161,8 +181,10 @@ public final class DisplayVisualScenario implements VisualScenario {
     private static final Board NO_AISLE_BOARD = new Board("noaisle", 24, SMALL_BOARD_WIDTH, 1);
     /** "Crane Throughput" on the dock, the second source that block offers (M25, issue #16). */
     private static final Board THROUGHPUT_BOARD = new Board("throughput", 28, BOARD_WIDTH, BOARD_HEIGHT);
+    /** "Fluid Stock" on the controller, the third source that block offers (M30, issue #21). */
+    private static final Board FLUID_BOARD = new Board("fluid", 36, BOARD_WIDTH, BOARD_HEIGHT);
     private static final List<Board> BOARDS =
-            List.of(CRANE_BOARD, AISLE_BOARD, STOCK_BOARD, NO_AISLE_BOARD, THROUGHPUT_BOARD);
+            List.of(CRANE_BOARD, AISLE_BOARD, STOCK_BOARD, NO_AISLE_BOARD, THROUGHPUT_BOARD, FLUID_BOARD);
     /** West end of the backing wall: one column before the westmost board, so no board ends at a bare edge. */
     private static final int WALL_WEST = -2;
     /** East end of the backing wall and of the cleared plaza: one column past the easternmost board. */
@@ -195,6 +217,24 @@ public final class DisplayVisualScenario implements VisualScenario {
      */
     private static final String AISLE_NAME = "Ores";
 
+    /**
+     * The two fluid bays of the aisle and what is in them (M30, issue #21): unfiltered copper bays, filled through
+     * their own handler the way a Mechanical Pump or a player's bucket fills them.
+     * <p>
+     * Two of them, with <b>different</b> amounts, so the fluid stock board has rows to put in order and a total to add
+     * up; and the lava is deliberately the larger, so the first row of that board is decided by the amount and not by
+     * the index's iteration order.
+     */
+    private static final List<FluidBay> FLUID_BAYS = List.of(
+            new FluidBay(RackPosition.of(2, 0, Side.LEFT), Fluids.LAVA, 48 * FluidType.BUCKET_VOLUME),
+            new FluidBay(RackPosition.of(3, 0, Side.LEFT), Fluids.WATER, 12 * FluidType.BUCKET_VOLUME));
+    /**
+     * What a pump adds to the first bay between the two readings of a pass, so the fluid rows and the warehouse
+     * summary's fluid line really move between the "resting" and the "updated" shots. Small enough that two passes
+     * and a copper bay's 64 buckets leave room.
+     */
+    private static final int BAY_TOP_UP = 4 * FluidType.BUCKET_VOLUME;
+
     /** The item the output's request filter names, so the nixie row has something to count. */
     private static final Item FILTERED_ITEM = Items.IRON_INGOT;
     /**
@@ -221,6 +261,12 @@ public final class DisplayVisualScenario implements VisualScenario {
 
     private static final int CLEAR_MARGIN = 4;
     private static final int CLEAR_HEIGHT = 8;
+    /**
+     * How far south of the nixie row the plaza is cleared as well: the camera that shows the whole wall stands there,
+     * and the wall grew six columns with the fluid board (M30), so that camera had to step back to keep all of it in
+     * frame. A camera inside a block photographs the inside of a block.
+     */
+    private static final int CAMERA_CLEAR_Z = NIXIE_CLEAR_Z + 8;
 
     /** Five boards, two passes and a German chapter with a resource reload in it: far above the default four minutes. */
     private static final long RUN_TIMEOUT_MILLIS = 12L * 60L * 1000L;
@@ -251,12 +297,13 @@ public final class DisplayVisualScenario implements VisualScenario {
     /**
      * The whole wall from the south, high enough that the racks between camera and wall stay below the sight line.
      * Centred on the wall and far enough back for all of it: the fifth board (M25) put six more columns on the east
-     * end, and a camera that kept the old framing would have left the newest board out of the one shot that claims to
-     * show the wall.
+     * end and the fluid board (M30) six more, and a camera that kept the old framing would have left the newest board
+     * out of the one shot that claims to show the wall. The plaza is cleared further south than the nixie row for it
+     * ({@link #CAMERA_CLEAR_Z}), because a camera inside a block photographs the inside of a block.
      */
-    private static final CameraView WALL = CameraView.of("wall", WALL_CENTRE, 5.4, 7.5, WALL_CENTRE, 2.4, WALL_Z);
+    private static final CameraView WALL = CameraView.of("wall", WALL_CENTRE, 6.1, 11.0, WALL_CENTRE, 2.4, WALL_Z);
     /** Warehouse and wall together, from above the west end of the aisle. */
-    private static final CameraView OVERVIEW = CameraView.of("overview", -2.0, 7.5, 7.5, 12.0, 2.5, -5.0);
+    private static final CameraView OVERVIEW = CameraView.of("overview", -4.0, 9.0, 10.0, 16.0, 2.5, -5.0);
     /**
      * Close in front of the nixie row of the output, read from the south like a player standing at the output. A nixie
      * block carries two tubes, so the row is half as wide as it has characters, and it shows them in the upper half of
@@ -280,6 +327,8 @@ public final class DisplayVisualScenario implements VisualScenario {
     private volatile Expectation expectation = Expectation.EMPTY;
     /** The total stock of the previous reading, so the second half of a pass can prove that the displays moved. */
     private volatile long previousItems = -1L;
+    /** The same for the fluid, so the fluid board's pair of shots has to differ too (M30, issue #21). */
+    private volatile long previousFluid = -1L;
     /** Polls of a wait step, so a step that hangs says why instead of only timing out. */
     private int unreadyPolls;
 
@@ -332,7 +381,11 @@ public final class DisplayVisualScenario implements VisualScenario {
         } else {
             script.server("display: refill the warehouse input", DisplayVisualScenario::refillInput);
         }
-        script.serverUntil("display: wait until the crane stored everything", DisplayVisualScenario::allStored,
+        // And the fluid moves too, so the "updated" shots of the fluid board and of the summary's fluid line show
+        // something the "resting" ones did not (M30, issue #21). A pipe is what would do this in a real warehouse;
+        // the bay's own handler is the same call with no plumbing to build.
+        script.server("display: a pump tops up the lava bay", DisplayVisualScenario::topUpFirstBay)
+                .serverUntil("display: wait until the crane stored everything", DisplayVisualScenario::allStored,
                         ALL_STORED_TIMEOUT_TICKS)
                 // The "resting" moment above read the throughput board while its window was still short, which is the
                 // honest "Measuring" case. The numbers are what the source is for, so the run waits for them before
@@ -343,7 +396,8 @@ public final class DisplayVisualScenario implements VisualScenario {
         readAndCheck(script, UPDATED);
         script.client("display: check that the displays followed the warehouse", this::checkChanged)
                 .shotFrom(WALL, UPDATED).shotFrom(AISLE_BOARD.view(), UPDATED).shotFrom(STOCK_BOARD.view(), UPDATED)
-                .shotFrom(THROUGHPUT_BOARD.view(), UPDATED).shotFrom(NIXIE, UPDATED);
+                .shotFrom(THROUGHPUT_BOARD.view(), UPDATED).shotFrom(FLUID_BOARD.view(), UPDATED)
+                .shotFrom(NIXIE, UPDATED);
         if (pass == VisualPass.FLYWHEEL)
             germanChapter(script);
     }
@@ -352,9 +406,11 @@ public final class DisplayVisualScenario implements VisualScenario {
     public String status(VisualContext context) {
         Expectation expected = expectation;
         String crane = clientCrane(context).map(be -> be.craneState().phase().name()).orElse("missing");
-        return String.format(Locale.ROOT, "crane=%s items=%d types=%d filtered=%s aisle='%s' stock0='%s' crane0='%s'",
-                crane, expected.items(), expected.itemTypes(), expected.filtered(), boardLine(context, AISLE_BOARD, 0),
-                boardLine(context, STOCK_BOARD, 0), boardLine(context, CRANE_BOARD, 0));
+        return String.format(Locale.ROOT,
+                "crane=%s items=%d types=%d fluid=%dmB filtered=%s aisle='%s' stock0='%s' crane0='%s' fluid0='%s'",
+                crane, expected.items(), expected.itemTypes(), expected.fluidMillibuckets(), expected.filtered(),
+                boardLine(context, AISLE_BOARD, 0), boardLine(context, STOCK_BOARD, 0),
+                boardLine(context, CRANE_BOARD, 0), boardLine(context, FLUID_BOARD, 0));
     }
 
     /**
@@ -385,7 +441,8 @@ public final class DisplayVisualScenario implements VisualScenario {
         readAndCheck(script, GERMAN_MOMENT);
         script.shotFrom(WALL, GERMAN_MOMENT).shotFrom(AISLE_BOARD.view(), GERMAN_MOMENT)
                 .shotFrom(THROUGHPUT_BOARD.view(), GERMAN_MOMENT).shotFrom(CRANE_BOARD.view(), GERMAN_MOMENT)
-                .shotFrom(STOCK_BOARD.view(), GERMAN_MOMENT).shotFrom(NO_AISLE_BOARD.view(), GERMAN_MOMENT);
+                .shotFrom(STOCK_BOARD.view(), GERMAN_MOMENT).shotFrom(FLUID_BOARD.view(), GERMAN_MOMENT)
+                .shotFrom(NO_AISLE_BOARD.view(), GERMAN_MOMENT);
         language.switchTo(script, "display: ", ENGLISH);
         script.server("display: pull every link again, so the boards read English for the next pass",
                         DisplayVisualScenario::repullEveryLink)
@@ -410,7 +467,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         BlockPos dock = new BlockPos(DOCK_X, level.getHeight(Heightmap.Types.WORLD_SURFACE, DOCK_X, DOCK_Z), DOCK_Z);
         context.setOrigin(dock);
         for (BlockPos pos : BlockPos.betweenClosed(dock.offset(-CLEAR_MARGIN, 0, WALL_Z - 2),
-                dock.offset(WALL_EAST + CLEAR_MARGIN, CLEAR_HEIGHT, NIXIE_CLEAR_Z)))
+                dock.offset(WALL_EAST + CLEAR_MARGIN, CLEAR_HEIGHT, CAMERA_CLEAR_Z)))
             level.setBlockAndUpdate(pos.immutable(), Blocks.AIR.defaultBlockState());
         level.setBlockAndUpdate(dock.below(),
                 AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.UP));
@@ -435,6 +492,14 @@ public final class DisplayVisualScenario implements VisualScenario {
                 .setValue(WarehouseInputBlock.FACING, layout.sideDirection(INPUT.side()).getOpposite()));
         level.setBlockAndUpdate(layout.rackPos(OUTPUT), WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
                 .setValue(WarehouseOutputBlock.FACING, layout.sideDirection(OUTPUT.side()).getOpposite()));
+        // Two fluid bays, filled through their own handler the way a pump or a bucket fills them (M30, issue #21).
+        // They are storage locations that hold no items, so every item number of this scene is unaffected by them,
+        // which is exactly what the warehouse summary's four core lines have to go on showing.
+        for (FluidBay bay : FLUID_BAYS) {
+            level.setBlockAndUpdate(layout.rackPos(bay.rack()), WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                    .setValue(FluidBayBlock.FACING, layout.sideDirection(bay.rack().side())));
+            fillBay(level, layout.rackPos(bay.rack()), bay.fluid(), bay.millibuckets());
+        }
 
         int next = 0;
         for (Side side : Side.values()) {
@@ -537,6 +602,11 @@ public final class DisplayVisualScenario implements VisualScenario {
                 WareworksDisplaySources.FILTERED_STOCK);
         link(level, strayTerminal(dock), Direction.UP, NO_AISLE_BOARD.controllerPos(dock),
                 WareworksDisplaySources.AISLE_SUMMARY);
+        // The controller's north face, for its third source (M30, issue #21): one block drives two boards here as the
+        // dock does, and "Fluid Stock" is deliberately a source of its own rather than more rows on "Stock List",
+        // because that list renders one number column and 64 iron ingots must not stand in it beside 64 000 mB.
+        link(level, dock.relative(AISLE.getOpposite()), Direction.NORTH, FLUID_BOARD.controllerPos(dock),
+                WareworksDisplaySources.FLUID_STOCK);
     }
 
     private static DisplayLinkBlockEntity linkAt(ServerLevel level, BlockPos pos) {
@@ -573,18 +643,22 @@ public final class DisplayVisualScenario implements VisualScenario {
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
         if (controller == null || crane == null)
             return logUnready("controller=" + controller + " crane=" + crane);
-        int expectedStorage = (RAILS - STORAGE_FIRST_POSITION + 1) * STORAGE_LEVELS * Side.values().length;
+        // The chest-backed interfaces, plus the two fluid bays: a fluid bay is a storage location that holds no items.
+        int expectedStorage = (RAILS - STORAGE_FIRST_POSITION + 1) * STORAGE_LEVELS * Side.values().length
+                + FLUID_BAYS.size();
         // A terminal takes items out of the aisle as well, so it counts as an output station beside the output block.
         boolean ready = controller.status() == ControllerStatus.READY && !controller.isMembershipDirty()
                 && controller.pendingSnapshotCount() == 0 && controller.storageLocationCount() == expectedStorage
                 && controller.inputStations().size() == 1 && controller.outputStations().size() == EXPECTED_OUTPUTS
-                && crane.isControllerLinked() && controller.stockIndex().distinctKeys() == PRESTOCKED.size();
+                && crane.isControllerLinked() && controller.stockIndex().distinctKeys() == PRESTOCKED.size()
+                && controller.fluidStockIndex().distinctKeys() == FLUID_BAYS.size();
         return ready || logUnready(String.format(Locale.ROOT,
                 "status=%s dirty=%s pending=%d storage=%d/%d inputs=%d outputs=%d/%d linked=%s keys=%d/%d",
                 controller.status(), controller.isMembershipDirty(), controller.pendingSnapshotCount(),
                 controller.storageLocationCount(), expectedStorage, controller.inputStations().size(),
                 controller.outputStations().size(), EXPECTED_OUTPUTS, crane.isControllerLinked(),
-                controller.stockIndex().distinctKeys(), PRESTOCKED.size()));
+                controller.stockIndex().distinctKeys(), PRESTOCKED.size())
+                + " fluids=" + controller.fluidStockIndex().distinctKeys() + "/" + FLUID_BAYS.size());
     }
 
     /** Logs why a wait step is still waiting, about once per second, and always answers "not ready". */
@@ -656,6 +730,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         BlockPos dock = context.origin();
         WarehouseControllerBlockEntity controller = controller(level, dock);
         StockView<ItemKey, RackPosition> stock = controller.stockIndex();
+        StockView<FluidKey, RackPosition> fluid = controller.fluidStockIndex();
 
         // The four lines a board of every size shows, and below them the names a player gave the aisles — the one
         // optional line of this source that this warehouse has anything to say on (M25, issue #15). It is last on
@@ -675,9 +750,16 @@ public final class DisplayVisualScenario implements VisualScenario {
                 // Built with the board's own character count, exactly as the source builds it: the row is bounded by
                 // the width of the target as well as by an entry count (M25 review fix), so an expectation that left
                 // the width out would be a second, kinder rule than the one that runs.
+                // The fluid line, the FIRST of this source's optional ones since M30 (issue #21): it is the fifth
+                // stock number, and a board is hung on a warehouse that holds fluid because of it. The names line
+                // keeps the last place, which is the one a short board drops.
+                WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_FLUIDS,
+                        WareworksLang.number(fluid.distinctKeys()),
+                        fluidAmount(fluid.totalItems())).getString(),
                 WareworksLang.aisleNamesLine(controller.namedAisles(), NetworkGoggleInfo.NAMES_LISTED, BOARD_CHARS)
                         .getString());
         List<String> throughputLines = readThroughputLines(level, dock);
+        List<String> fluidLines = readFluidLines(fluid);
 
         ItemKey top = null;
         long topCount = 0L;
@@ -692,9 +774,10 @@ public final class DisplayVisualScenario implements VisualScenario {
                 .getString();
         // Kept before this reading replaces it, so the check after the warehouse changed has something to compare with.
         previousItems = expectation.items();
+        previousFluid = expectation.fluidMillibuckets();
         expectation = new Expectation(aisleLines, stock.distinctKeys(), stock.totalItems(),
                 top == null ? "" : top.getItem().getDescription().getString(), topCount, filtered, "",
-                throughputLines);
+                throughputLines, fluidLines, fluid.totalItems());
         LOGGER.info(PREFIX + "display: the warehouse reads {}", expectation);
     }
 
@@ -734,13 +817,51 @@ public final class DisplayVisualScenario implements VisualScenario {
                         WareworksLang.percent(measured.turnShare())).getString());
     }
 
+    /**
+     * What the fluid stock board must carry: one row per fluid, most first, as the source writes it — the amount, its
+     * unit and then the fluid's name (M30, issue #21).
+     * <p>
+     * Built with Create's own {@code FluidFormatter} rather than written out here, so what is asserted is the
+     * <b>source's</b> choice of unit and not this file's idea of it: {@code create.generic.unit.buckets} is "B" and
+     * {@code millibuckets} is "mB" in every language Create ships, which is the whole reason the unit is not a word
+     * this mod spells. A row written out here would pass while the real one said something else.
+     */
+    private static List<String> readFluidLines(StockView<FluidKey, RackPosition> fluid) {
+        Map<FluidKey, Long> totals = new HashMap<>();
+        for (FluidKey key : fluid.keys())
+            totals.put(key, fluid.count(key));
+        List<String> rows = new ArrayList<>(totals.size());
+        for (KeyCount<FluidKey> entry : KeyCount.largestFirst(totals, totals.size(), FluidKey.ORDER)) {
+            Couple<MutableComponent> amount =
+                    FluidFormatter.asComponents((int) Math.min(Integer.MAX_VALUE, entry.count()), true);
+            rows.add(amount.getFirst().getString() + amount.getSecond().getString() + " "
+                    + entry.key().hoverName().getString());
+        }
+        return rows;
+    }
+
+    /** The warehouse summary's fluid amount: Create's pre-formatted number and unit, as that line carries it. */
+    private static MutableComponent fluidAmount(long millibuckets) {
+        Couple<MutableComponent> amount =
+                FluidFormatter.asComponents((int) Math.min(Integer.MAX_VALUE, millibuckets), true);
+        return amount.getFirst().append(DisplaySource.WHITESPACE).append(amount.getSecond());
+    }
+
+    /** A pump tops up the first fluid bay, so the fluid readouts move between the two readings of a pass. */
+    private static void topUpFirstBay(MinecraftServer server, VisualContext context) {
+        FluidBay bay = FLUID_BAYS.getFirst();
+        fillBay(server.overworld(), layout(context.origin()).rackPos(bay.rack()), bay.fluid(), BAY_TOP_UP);
+    }
+
     /** Pulls every link again, so every board rebuilds the text it draws — e.g. after a language switch. */
     private static void repullEveryLink(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
         BranchLayout layout = layout(dock);
         for (BlockPos source : List.of(dock.relative(Direction.NORTH), dock.relative(Direction.SOUTH),
-                dock.relative(AISLE.getOpposite()).above(), layout.rackPos(TERMINAL).above(),
+                dock.relative(AISLE.getOpposite()).above(),
+                dock.relative(AISLE.getOpposite()).relative(Direction.NORTH),
+                layout.rackPos(TERMINAL).above(),
                 layout.rackPos(OUTPUT).above(), strayTerminal(dock).above()))
             linkAt(level, source).updateGatheredData();
     }
@@ -781,7 +902,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         Expectation previous = expectation;
         expectation = new Expectation(previous.aisleLines(), previous.itemTypes(), previous.items(),
                 previous.topName(), previous.topCount(), previous.filtered(), String.join(" | ", lines),
-                previous.throughputLines());
+                previous.throughputLines(), previous.fluidLines(), previous.fluidMillibuckets());
         LOGGER.info(PREFIX + "display: the crane reports {}", lines);
     }
 
@@ -808,6 +929,11 @@ public final class DisplayVisualScenario implements VisualScenario {
             throw new VisualTestException("the stock list does not start with " + expected.topCount() + " "
                     + expected.topName() + ": '" + stock.getFirst() + "'");
 
+        List<String> fluidRows = boardLines(context, FLUID_BOARD);
+        for (int i = 0; i < fluidRows.size(); i++)
+            assertLine(fluidRows.get(i), i < expected.fluidLines().size() ? expected.fluidLines().get(i) : "",
+                    "fluid stock row " + i);
+
         assertLine(nixieText(context), expected.filtered(), "the nixie row of the output");
         assertLine(boardLines(context, NO_AISLE_BOARD).getFirst(),
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_NO_AISLE).getString(),
@@ -816,8 +942,9 @@ public final class DisplayVisualScenario implements VisualScenario {
 
         for (Board board : BOARDS)
             checkFits(context, board);
-        LOGGER.info(PREFIX + "display: aisle {} | stock {} | crane {} | throughput {} | nixie '{}'", aisle, stock,
-                boardLines(context, CRANE_BOARD), boardLines(context, THROUGHPUT_BOARD), nixieText(context));
+        LOGGER.info(PREFIX + "display: aisle {} | stock {} | crane {} | throughput {} | fluid {} | nixie '{}'", aisle,
+                stock, boardLines(context, CRANE_BOARD), boardLines(context, THROUGHPUT_BOARD), fluidRows,
+                nixieText(context));
     }
 
     /**
@@ -858,7 +985,14 @@ public final class DisplayVisualScenario implements VisualScenario {
         if (now <= before)
             throw new VisualTestException("the aisle holds " + now + " items, so it did not grow past the " + before
                     + " of the first check; the '" + UPDATED + "' shots would show nothing new");
-        LOGGER.info(PREFIX + "display: the aisle grew from {} to {} items and the displays followed", before, now);
+        // And the same for the fluid, or the fluid board's own pair of shots would prove nothing (M30, issue #21).
+        long fluidBefore = previousFluid;
+        long fluidNow = expectation.fluidMillibuckets();
+        if (fluidNow <= fluidBefore)
+            throw new VisualTestException("the warehouse holds " + fluidNow + " mB of fluid, so it did not grow past "
+                    + "the " + fluidBefore + " of the first check; the fluid rows would show nothing new");
+        LOGGER.info(PREFIX + "display: the aisle grew from {} to {} items and from {} to {} mB, and the displays "
+                + "followed", before, now, fluidBefore, fluidNow);
     }
 
     /** Every section must fit its flaps, or the board cuts the line and the shot shows what no source ever produced. */
@@ -993,6 +1127,21 @@ public final class DisplayVisualScenario implements VisualScenario {
         }
     }
 
+    /**
+     * Fills a fluid bay through its own <b>ungated</b> handler, which is the call a Mechanical Pump at its back face
+     * and a player's bucket at its front both end up making. It refuses nothing a bay would not refuse, so a bay that
+     * does not take the whole amount fails the run instead of quietly holding less than the expectation says.
+     */
+    private static void fillBay(ServerLevel level, BlockPos pos, Fluid fluid, int millibuckets) {
+        FluidBayBlockEntity bay = WareworksBlockEntityTypes.FLUID_BAY.getNullable(level, pos);
+        if (bay == null)
+            throw new VisualTestException("the fluid bay at " + pos + " has no block entity");
+        int filled = bay.fill(new FluidStack(fluid, millibuckets), false);
+        if (filled != millibuckets)
+            throw new VisualTestException("the fluid bay at " + pos + " took " + filled + " of " + millibuckets
+                    + " mB");
+    }
+
     private static void fillInput(ServerLevel level, BlockPos input, List<ItemStack> stacks) {
         IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, input, null);
         if (handler == null)
@@ -1054,12 +1203,25 @@ public final class DisplayVisualScenario implements VisualScenario {
     }
 
     /**
-     * What the displays must carry: the aisle summary lines (the four core ones and the names line below them), the
-     * numbers behind them, the first stock list row, the output's filtered total, — while a job runs — the crane
-     * status lines, joined for the log, and the rows of the throughput board.
+     * What the displays must carry: the aisle summary lines (the four core ones, the fluid line and the names line
+     * below them), the numbers behind them, the first stock list row, the output's filtered total, — while a job runs
+     * — the crane status lines, joined for the log, the rows of the throughput board, and the rows of the fluid stock
+     * board with the millibuckets behind them.
      */
     private record Expectation(List<String> aisleLines, int itemTypes, long items, String topName, long topCount,
-            String filtered, String craneLines, List<String> throughputLines) {
-        static final Expectation EMPTY = new Expectation(List.of(), 0, 0L, "", 0L, "", "", List.of());
+            String filtered, String craneLines, List<String> throughputLines, List<String> fluidLines,
+            long fluidMillibuckets) {
+        static final Expectation EMPTY =
+                new Expectation(List.of(), 0, 0L, "", 0L, "", "", List.of(), List.of(), 0L);
+    }
+
+    /**
+     * One fluid bay of the aisle: where it stands and what is put in it (M30, issue #21).
+     *
+     * @param rack         its rack position, which is also its address
+     * @param fluid        the fluid it is filled with; the bays are unfiltered, so the first fluid to arrive decides
+     * @param millibuckets how much of it, below a copper bay's 64 buckets with room left for the top-up of two passes
+     */
+    private record FluidBay(RackPosition rack, Fluid fluid, int millibuckets) {
     }
 }

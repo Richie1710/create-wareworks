@@ -12,6 +12,7 @@ import com.simibubi.create.content.logistics.box.PackageItem;
 
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
@@ -59,6 +60,11 @@ import net.neoforged.neoforge.items.IItemHandler;
  * the world as one {@link PalletEntity}, which is neither an {@code ItemEntity} nor a block with an item capability, so
  * without this branch the whole robustness run would report PASS while a broken brass bay deleted 65 536 items. A
  * pallet is a new <b>carrier</b>, exactly as a package is, and not a fifth place an item can be (§8).
+ * <p>
+ * <b>What a container item holds is not counted here</b> (M30): the fluid inside a bucket is {@link SceneFluidCensus}'s
+ * business, and the two censuses only state something true together ({@link SceneFluidCensus#assertConserved}). The one
+ * place this census has to know about fluid at all is {@link #exchanged}, the declared and verified container
+ * exchange — the only move under which an item in this mod legitimately changes identity.
  * <p>
  * A census reads every block position of the box once, so scenarios keep the box to their own aisle. The box is
  * inflated around that aisle and therefore normally spans several chunks: {@link #take} <b>refuses</b> to count while
@@ -193,6 +199,40 @@ final class SceneItemCensus {
     static Map<ItemKey, Long> plus(Map<ItemKey, Long> counts, ItemKey key, long delta) {
         Map<ItemKey, Long> result = new HashMap<>(counts);
         add(result, key, delta);
+        return result;
+    }
+
+    /**
+     * A copy of {@code counts} with a <b>container exchange</b> applied — {@code containers} fewer of {@code filled}
+     * and that many more of {@code empty} — after verifying against the game that this is really what emptying
+     * {@code filled} does (M30, issue #21).
+     * <p>
+     * An exchange is the one move that changes the item census while the fluid census stands still: the fluid leaves
+     * the container and enters the bay's tank, both of which {@link SceneFluidCensus} counts, so the <b>fluid
+     * expectation is not touched here</b> and a transfer that lost a drop still fails
+     * {@link SceneFluidCensus#assertConserved}. It is also the only move in this mod under which an item legitimately
+     * changes identity, which is why it may not simply be written by hand: a scenario that declared
+     * {@code lava_bucket -> glass_bottle} would make its own census agree with a bug.
+     * <p>
+     * The verification is {@link FluidContainers#drained}, i.e. the <b>same routine the bay uses</b>, run on a
+     * single-item probe that touches nothing in the world. A scenario can therefore declare only the exchange the game
+     * performs, and never a fake one.
+     *
+     * @throws VisualTestException when the game does not perform the declared exchange
+     */
+    static Map<ItemKey, Long> exchanged(Map<ItemKey, Long> counts, ItemKey filled, ItemKey empty, long containers) {
+        if (containers <= 0)
+            throw new VisualTestException("an exchange moves at least one container, not " + containers);
+        FluidContainers.Drained drained = FluidContainers.drained(filled)
+                .orElseThrow(() -> new VisualTestException("declared the exchange " + filled + " -> " + empty
+                        + ", but the game refuses to empty " + filled + " at all, so no bay could perform it"));
+        if (!drained.emptied().equals(empty))
+            throw new VisualTestException("declared the exchange " + filled + " -> " + empty + ", but emptying "
+                    + filled + " really yields " + drained.emptied() + " and " + drained.millibuckets() + " mB of "
+                    + drained.fluid());
+        Map<ItemKey, Long> result = new HashMap<>(counts);
+        add(result, filled, -containers);
+        add(result, empty, containers);
         return result;
     }
 

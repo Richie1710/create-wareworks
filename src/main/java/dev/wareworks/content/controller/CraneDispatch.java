@@ -317,6 +317,10 @@ final class CraneDispatch {
         // question starts by walking the branch pairs for the blocks they share (M21 review fix).
         RouteTable routes = layout.routes();
         unreachableSkipped = false;
+        // How much of an item a storage location is estimated to take, from the index snapshots. Built once per run,
+        // because the planner asks it per storage candidate per key.
+        JobPlanner.InsertEstimate<ItemKey, RackPosition> snapshots =
+                JobPlanner.InsertEstimate.fromSnapshots(controller.stockIndex(), ItemKey::getMaxStackSize);
         return PlannerInput.builder(controller.stockIndex(), ledgerView)
                 .crane(craneBranch, craneX, pose.y())
                 .speeds(dock.currentSpeeds())
@@ -336,7 +340,20 @@ final class CraneDispatch {
                 // A rack on an aisle the crane cannot drive to is skipped exactly like one in an unloaded chunk, so no
                 // job is ever planned towards a place the machine cannot physically reach (ADR-033).
                 .available(rack -> canDriveTo(routes, craneBranch, craneX, rack) && isLoaded(level, layout, rack))
-                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(controller.stockIndex(), ItemKey::getMaxStackSize))
+                // A fluid bay is the one storage location whose room is not an item question at all: it holds no items,
+                // so its snapshot has zero slots and the snapshot estimate answers 0 — which would drop it before any
+                // live call, exactly as it rightly drops a warehouse interface whose chest was taken away. The two
+                // report the same empty snapshot for opposite reasons, so the bay is told apart by what it IS (M30
+                // step 9, D6) and answers "unknown, ask the live inventory"; the live call then measures the container
+                // and the room together, all or nothing (TransferContexts' FluidBayContext#simulateInsert).
+                .insertEstimate((rack, key) -> controller.takesFluidContainers(rack)
+                        ? JobPlanner.UNKNOWN_CAPACITY : snapshots.estimateInsertable(rack, key))
+                // And the other half of what a fluid bay is: it takes a carry WHOLE or not at all, because the
+                // containers are exchanged and a handling head holds one item key (TransferContext#exchange). The
+                // store plan sizes a job by what the bay answers and is unaffected; a REROUTE has a fixed amount in
+                // the head already, so the planner must not offer a bay part of it — the crane would arrive, be
+                // refused and be sent to the next bay, and with two of them that never ends (M30 review fix).
+                .allOrNothing(controller::takesFluidContainers)
                 // Store filters decide before the estimate and before any live call, so a location that may not take the
                 // item costs neither a live simulation nor a remembered refusal (ADR-021).
                 .storeFilter(controller::storeFilterMatch)

@@ -18,8 +18,10 @@ import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.RackBayBlock;
+import dev.wareworks.content.storage.TieredBay;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.neoforged.neoforge.client.model.generators.ConfiguredModel;
@@ -249,23 +251,7 @@ public final class WareworksBlockStateGen {
     public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
             rackBayBlockProvider() {
         return (context, provider) -> {
-            String folder = "block/" + context.getName() + "/";
-            ModelFile shell = provider.models().getExistingFile(provider.modLoc(folder + "block"));
-            ModelFile upright = provider.models().getExistingFile(provider.modLoc(folder + "upright"));
-            ModelFile half = provider.models().getExistingFile(provider.modLoc(folder + "upright_half"));
-            MultiPartBlockStateBuilder builder = provider.getMultipartBuilder(context.getEntry());
-            for (Direction facing : Direction.Plane.HORIZONTAL) {
-                int rotation = rotationOnto(facing);
-                builder.part().modelFile(shell).rotationY(rotation).addModel()
-                        .condition(RackBayBlock.FACING, facing).end();
-                // The left upright is the model as it is authored, the right one is the very same model turned half a
-                // turn, which is what makes an upright frame symmetric about the block's depth a requirement and not
-                // a nicety (CraneModelLayoutTest#aRackBayIsAShellBetweenTwoUprights).
-                upright(builder, upright, rotation, facing, RackBayBlock.LEFT, false);
-                upright(builder, half, rotation, facing, RackBayBlock.LEFT, true);
-                upright(builder, upright, rotation + HALF_TURN, facing, RackBayBlock.RIGHT, false);
-                upright(builder, half, rotation + HALF_TURN, facing, RackBayBlock.RIGHT, true);
-            }
+            MultiPartBlockStateBuilder builder = bayFrame(context, provider);
             loadPart(builder, provider, "load_1", 1);
             loadPart(builder, provider, "load_2", 2);
             loadPart(builder, provider, "load_base", 3, 4);
@@ -273,11 +259,43 @@ public final class WareworksBlockStateGen {
         };
     }
 
-    /** One upright of a rack bay: the whole frame at a wall's end, half of it where the next bay shares it. */
+    /**
+     * The part of a bay's blockstate that every {@link TieredBay} block has: the tier's hand-made {@code block} shell
+     * turned onto {@link HorizontalDirectionalBlock#FACING}, plus the {@code upright} frame at each end of the block,
+     * halved to {@code upright_half} where the bay beside it shares one ({@link TieredBay#LEFT}).
+     * <p>
+     * It is shared by the rack bay and the fluid bay rather than written twice, because <b>joining is across
+     * families</b> (ADR-050): a tank at the end of a rack wall takes over half of that wall's upright, and the two
+     * halves on that seam only make one post if both bays draw their half by the same rule. A second copy of these
+     * twenty parts is a second place that rule could drift.
+     */
+    private static <T extends Block> MultiPartBlockStateBuilder bayFrame(DataGenContext<Block, T> context,
+                                                                        RegistrateBlockstateProvider provider) {
+        String folder = "block/" + context.getName() + "/";
+        ModelFile shell = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+        ModelFile upright = provider.models().getExistingFile(provider.modLoc(folder + "upright"));
+        ModelFile half = provider.models().getExistingFile(provider.modLoc(folder + "upright_half"));
+        MultiPartBlockStateBuilder builder = provider.getMultipartBuilder(context.getEntry());
+        for (Direction facing : Direction.Plane.HORIZONTAL) {
+            int rotation = rotationOnto(facing);
+            builder.part().modelFile(shell).rotationY(rotation).addModel()
+                    .condition(HorizontalDirectionalBlock.FACING, facing).end();
+            // The left upright is the model as it is authored, the right one is the very same model turned half a
+            // turn, which is what makes an upright frame symmetric about the block's depth a requirement and not
+            // a nicety (CraneModelLayoutTest#aRackBayIsAShellBetweenTwoUprights).
+            upright(builder, upright, rotation, facing, TieredBay.LEFT, false);
+            upright(builder, half, rotation, facing, TieredBay.LEFT, true);
+            upright(builder, upright, rotation + HALF_TURN, facing, TieredBay.RIGHT, false);
+            upright(builder, half, rotation + HALF_TURN, facing, TieredBay.RIGHT, true);
+        }
+        return builder;
+    }
+
+    /** One upright of a bay: the whole frame at a wall's end, half of it where the next bay shares it. */
     private static void upright(MultiPartBlockStateBuilder builder, ModelFile model, int rotation, Direction facing,
                                 BooleanProperty side, boolean joined) {
         builder.part().modelFile(model).rotationY(rotation % FULL_TURN).addModel()
-                .condition(RackBayBlock.FACING, facing).condition(side, joined).end();
+                .condition(HorizontalDirectionalBlock.FACING, facing).condition(side, joined).end();
     }
 
     /** One shared load part of a rack bay, shown at the named fill steps ({@link #rackBayBlockProvider()}). */
@@ -285,6 +303,25 @@ public final class WareworksBlockStateGen {
                                  String model, Integer... fillSteps) {
         ModelFile file = provider.models().getExistingFile(provider.modLoc("block/rack_bay/" + model));
         builder.part().modelFile(file).addModel().condition(RackBayBlock.FILL, fillSteps).end();
+    }
+
+    /**
+     * A fluid bay's <b>multipart</b> blockstate ({@code docs/warehouse-system.md} §3.9, M30 step 5, issue #21): the
+     * tier's hand-made tank shell turned onto {@link HorizontalDirectionalBlock#FACING}, plus the same shared uprights
+     * a rack bay stands at each end of the block ({@link #bayFrame}).
+     * <p>
+     * <b>Neither {@link TieredBay#FILL} nor {@link TieredBay#OVERLOADED} is a condition anywhere</b>, so the whole
+     * blockstate is twenty parts and not a hundred. {@code OVERLOADED} is left out for a rack bay's own reason
+     * (ADR-044): it is a warning for the goggles and the job planner, not a look. {@code FILL} is left out for a
+     * reason that is this block's alone — a fluid's look is its own still sprite with its own tint and the set of
+     * fluids is open, so no finite set of baked variants could draw one. A fluid bay's level is therefore the one
+     * thing in this mod that a <b>renderer</b> answers in full ({@code client.render.FluidBayRenderer}), and this
+     * block does not declare {@code FILL} at all: the shared column machinery asks the family whether it publishes
+     * one ({@link TieredBay#publishesFillLevel()}) instead of reading the property off a neighbour unasked.
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            fluidBayBlockProvider() {
+        return WareworksBlockStateGen::bayFrame;
     }
 
     /**

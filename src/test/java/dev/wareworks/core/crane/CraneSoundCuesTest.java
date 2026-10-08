@@ -310,6 +310,10 @@ class CraneSoundCuesTest {
         assertEquals(Optional.empty(), CraneSoundCues.dropped(0));
         assertEquals(Optional.empty(), CraneSoundCues.dropped(-3));
         assertEquals(Optional.of(Cue.DROP), CraneSoundCues.dropped(64).map(Sound::cue));
+        // A refused exchange moved no fluid and no container, so it is as silent as a drop a full target refused.
+        assertEquals(Optional.empty(), CraneSoundCues.exchanged(0));
+        assertEquals(Optional.empty(), CraneSoundCues.exchanged(-1));
+        assertEquals(Optional.of(Cue.EXCHANGE), CraneSoundCues.exchanged(1).map(Sound::cue));
     }
 
     @Test

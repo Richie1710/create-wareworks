@@ -9,6 +9,7 @@ import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.stock.RestockLimits;
 import dev.wareworks.core.storage.BayTier;
+import dev.wareworks.core.storage.FluidBayTier;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
@@ -54,6 +55,18 @@ public final class WareworksConfig {
 
     /** The configured value, or its default while the config is not loaded. Never throws. */
     public static int get(ModConfigSpec.IntValue value) {
+        if (SERVER_SPEC.isLoaded()) {
+            try {
+                return value.get();
+            } catch (IllegalStateException e) {
+                // unloaded between the check and the read (server stopping): fall through to the default
+            }
+        }
+        return value.getDefault();
+    }
+
+    /** The configured value, or its default while the config is not loaded. Never throws. */
+    public static boolean get(ModConfigSpec.BooleanValue value) {
         if (SERVER_SPEC.isLoaded()) {
             try {
                 return value.get();
@@ -266,6 +279,45 @@ public final class WareworksConfig {
         return tier.capacity(bayStacks(tier), maxStackSize);
     }
 
+    /** Buckets one copper fluid bay holds (M30, issue #21). */
+    public static int copperFluidBayBuckets() {
+        return get(SERVER.copperFluidBayBuckets);
+    }
+
+    /** Buckets one brass fluid bay holds (M30, issue #21). */
+    public static int brassFluidBayBuckets() {
+        return get(SERVER.brassFluidBayBuckets);
+    }
+
+    /**
+     * How many <b>buckets</b> one fluid bay of {@code tier} holds, as the configuration sets it and brought into
+     * {@link FluidBayTier}'s range (M30, issue #21).
+     */
+    public static int fluidBayBuckets(FluidBayTier tier) {
+        return FluidBayTier.clampBuckets(switch (tier) {
+            case COPPER -> copperFluidBayBuckets();
+            case BRASS -> brassFluidBayBuckets();
+        });
+    }
+
+    /**
+     * How many <b>millibuckets</b> one fluid bay of {@code tier} holds (M30, issue #21): the configured bucket count
+     * times 1 000. Everything a bay stores, accepts and persists is counted in millibuckets, because the smallest
+     * portion a container in the ecosystem carries is 250 mB.
+     */
+    public static long fluidBayCapacity(FluidBayTier tier) {
+        return tier.capacityMillibuckets(fluidBayBuckets(tier));
+    }
+
+    /**
+     * Whether Create's pipes may <b>draw fluid off</b> a fluid bay at its back and side faces, not only fill it (M30,
+     * issue #21). Filling is always allowed; a player's own bucket click is never gated by this, and the aisle face
+     * never carries a fluid connection at all.
+     */
+    public static boolean fluidBayPipeExtraction() {
+        return get(SERVER.fluidBayPipeExtraction);
+    }
+
     // --- controller ----------------------------------------------------------------------------------------------
 
     public static int snapshotIntervalTicks() {
@@ -474,6 +526,9 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue woodBayStacks;
         public final ModConfigSpec.IntValue andesiteBayStacks;
         public final ModConfigSpec.IntValue brassBayStacks;
+        public final ModConfigSpec.IntValue copperFluidBayBuckets;
+        public final ModConfigSpec.IntValue brassFluidBayBuckets;
+        public final ModConfigSpec.BooleanValue fluidBayPipeExtraction;
 
         public final ModConfigSpec.IntValue snapshotIntervalTicks;
         public final ModConfigSpec.IntValue snapshotCycleTicks;
@@ -678,7 +733,8 @@ public final class WareworksConfig {
                     .defineInRange("stockKeeperRows", 6, 1, 16);
             builder.pop();
 
-            builder.comment("Rack bays: bulk storage locations that hold one item type each").push("storage");
+            builder.comment("Rack bays and fluid bays: bulk storage locations that hold one item type, or one fluid, "
+                    + "each").push("storage");
             woodBayStacks = builder
                     .comment("Item stacks one WOODEN rack bay holds.",
                             "Counted in STACKS, not items, the way Create counts a vault: a bay holds this many "
@@ -707,6 +763,39 @@ public final class WareworksConfig {
                                     + "from a terminal.")
                     .defineInRange("brassBayStacks", BayTier.BRASS.defaultStacks(), BayTier.MIN_STACKS,
                             BayTier.MAX_STACKS);
+            copperFluidBayBuckets = builder
+                    .comment("Buckets one COPPER fluid bay holds.",
+                            "A fluid bay is a storage location that IS a tank: it holds one fluid, counted in "
+                                    + "BUCKETS here and in millibuckets inside, so one number stands on the block and "
+                                    + "means the same for water as for lava. Measured against what stands beside it, "
+                                    + "a Create Fluid Tank holds 8 buckets per block, so the default copper bay is "
+                                    + "eight tank blocks.",
+                            "Lowering this below what a bay already holds never destroys anything: the bay keeps its "
+                                    + "fluid and accepts nothing more until it has been drained below the new "
+                                    + "capacity.")
+                    .defineInRange("copperFluidBayBuckets", FluidBayTier.COPPER.defaultBuckets(),
+                            FluidBayTier.MIN_BUCKETS, FluidBayTier.MAX_BUCKETS);
+            brassFluidBayBuckets = builder
+                    .comment("Buckets one BRASS fluid bay holds.",
+                            "Four times the copper bay at the defaults, which is more than a 3x3x3 Create tank tower "
+                                    + "(27 blocks x 8 buckets = 216).",
+                            "There is no wooden and no andesite fluid bay, unlike the rack bays above: in Create "
+                                    + "fluids are copper, andesite plays no part in its fluid world, and a wooden "
+                                    + "barrel of lava is an explanation nobody should owe.")
+                    .defineInRange("brassFluidBayBuckets", FluidBayTier.BRASS.defaultBuckets(),
+                            FluidBayTier.MIN_BUCKETS, FluidBayTier.MAX_BUCKETS);
+            fluidBayPipeExtraction = builder
+                    .comment("Whether Create's pipes may DRAW FLUID OFF a fluid bay, not only fill it.",
+                            "A fluid bay offers its fluid connection on every face except the one towards the aisle, "
+                                    + "so a pump fills a bay from a lava lake and, at the default, a second one feeds "
+                                    + "a machine from it. The honest consequence: fluid then leaves a warehouse "
+                                    + "without a crane carrying it - which is already true of ITEMS, since a rack bay "
+                                    + "answers its item capability on every face in both directions and a vanilla "
+                                    + "hopper under one drains it.",
+                            "Set this to false for a one-way tank: pipes fill it and only the warehouse takes "
+                                    + "anything out. A bay's goggle tooltip states which of the two it is, either "
+                                    + "way, and a player's own bucket click is never affected.")
+                    .define("fluidBayPipeExtraction", true);
             builder.pop();
 
             builder.comment("Warehouse controller").push("controller");

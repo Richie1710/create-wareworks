@@ -78,6 +78,23 @@ teleported: every item you put in or take out is carried by the crane, where you
   with its own filter and priority, and what it already held is counted on the spot. A bay may carry **nothing
   stronger above it**, so a wall is upgraded from the bottom up — and breaking a full one **loses nothing**: you get
   the empty bay back and its whole load as a single **pallet** on the floor.
+* **Fluid Bay** (copper, brass): the same idea for **fluids** — a storage location that **is** a tank. One bay holds
+  **one fluid**, **64 buckets** in copper and **256** in brass (both server config), with its own address, filter and
+  priority, so a tank wall is one block per 64 buckets instead of a multiblock; for scale, a Create Fluid Tank holds 8
+  buckets per block. You read it by **looking at it**: the fluid stands in the bay in its own colour, so lava glows and
+  a bay that holds a quarter looks like it. **Create's pipes connect on every face but the one towards the aisle**, so
+  a Mechanical Pump fills a whole bay from a lava lake and a second one feeds a machine from it, and a **bucket in your
+  hand** works in both directions — whole or not at all, never half. Put a filled container in its filter slot and the
+  **fluid inside it** is what belongs there; leave it unfiltered and it keeps the first fluid that arrives. A tank
+  standing beside a rack of the same facing **shares the upright** with it, because a wall is a wall. And the **crane**
+  closes the loop: put a bucket of lava into a warehouse input and the warehouse carries the whole container to a bay
+  that takes lava, the bay **drains it**, and the crane shelves the now-empty bucket as ordinary stock — so the
+  warehouse holds **lava as a fluid** and **a bucket as stock**, both counted and both readable on the controller's
+  goggles and on a display board. Two things are deliberately different from a rack bay, and the game says both before
+  you meet them: a **funnel, a chute, a belt or a hopper cannot fill a fluid bay** (it would keep your empty bucket, so
+  use a pipe, your hand or the crane), and **breaking a full one loses the fluid**, exactly as breaking a Create Fluid
+  Tank does — the item description, the goggles and the first hit on the block all warn you, and the empty bay comes
+  back. Asking a terminal for a fluid is not built yet; fluid leaves through a pipe at the back or your own bucket.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse. Put a **Create Packager** against it and it becomes an **in door** for addressed **Create packages**:
   arriving boxes are opened and their contents stored like anything else.
@@ -183,7 +200,7 @@ The build *is* the configuration; there is no setup screen.
 9. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
-Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Twelve of the thirteen blocks have
+Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Fourteen of the fifteen blocks have
 one — the home point is the exception, it has no scene yet: the crane and the rail share the overview, the controller shows storing
 and retrieving, the interface adds addressing and storage filters, the terminal and the production station have their own
 scenes (placing and requesting, and feeding a machine from the warehouse), the output has three more for its port
@@ -204,7 +221,11 @@ in a Rack Bay** shows one bay standing alone with no warehouse anywhere — both
 learns and forgets, the load growing on its pallet, and the break that resets the bay and leaves its whole load on
 the floor; **Building a Rack Wall** shows the wall, the three materials and the rule that a bay carries nothing
 stronger above it; and **Rack Bays in a Warehouse Aisle** brings the rails to a bay somebody had already filled by
-hand.
+hand. The twenty-first, **Fluids Travel in Containers**, belongs to both **fluid bays** and to the terminal, and
+teaches the one thing about fluids you could not guess: a bucket in the hand and a pipe at the back, then a bucket of
+lava dropped into a warehouse input, the bay draining the whole container, and the **empty bucket coming back as
+ordinary stock** — ending on the two things a fluid bay is deliberately worse at than its item sibling, that a funnel
+cannot fill one and that breaking a full one loses the fluid.
 
 ## Requesting items
 

@@ -4,6 +4,7 @@ import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.tterrag.registrate.util.entry.BlockEntityEntry;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.client.render.FluidBayRenderer;
 import dev.wareworks.client.render.RackBayRenderer;
 import dev.wareworks.client.render.StackerCraneRenderer;
 import dev.wareworks.client.render.WarehouseInterfaceRenderer;
@@ -16,6 +17,7 @@ import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 
@@ -59,6 +61,29 @@ public final class WareworksBlockEntityTypes {
             .validBlocks(WareworksBlocks.RACK_BAY_WOOD, WareworksBlocks.RACK_BAY_ANDESITE,
                     WareworksBlocks.RACK_BAY_BRASS)
             .renderer(() -> RackBayRenderer::new)
+            .register();
+
+    /**
+     * Fluid bay ({@code docs/warehouse-system.md} §3.9, M30, issue #21): <b>one</b> type for both materials, for the
+     * rack bay's reason — {@code .validBlocks(...)} is varargs and the tier is read off the block
+     * ({@code FluidBayBlock#tier}).
+     * <p>
+     * Its capability is a {@code Capabilities.FluidHandler.BLOCK} on every face but the one towards the aisle, and it
+     * exposes <b>no item capability at all</b> ({@link WareworksCapabilities}).
+     * <p>
+     * {@code client.render.FluidBayRenderer} draws the fluid standing in the bay (M30 step 5; the only renderer
+     * registration for this type, and the lambda is only evaluated on the client). Unlike a rack bay, which keeps its
+     * coarse fill level in the chunk mesh and uses its renderer only for <i>which</i> item it holds (ADR-047), a fluid
+     * bay's level is drawn <b>entirely</b> here: a fluid's look is its own still sprite with its own tint, the set of
+     * fluids is open, and no baked variant can name a sprite it has never heard of. For that same reason it is the one
+     * renderer of this mod that keeps the <b>vanilla</b> view distance: the others draw a detail of a block that is
+     * visible without them, and this one draws the whole readout, which a ten-block cap would hide from across the
+     * room (ADR-053).
+     */
+    public static final BlockEntityEntry<FluidBayBlockEntity> FLUID_BAY = REGISTRATE
+            .blockEntity("fluid_bay", FluidBayBlockEntity::new)
+            .validBlocks(WareworksBlocks.FLUID_BAY_COPPER, WareworksBlocks.FLUID_BAY_BRASS)
+            .renderer(() -> FluidBayRenderer::new)
             .register();
 
     /**

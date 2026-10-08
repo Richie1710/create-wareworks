@@ -22,6 +22,7 @@ import dev.wareworks.core.warehouse.CraneRoute;
  * RETRACT_TARGET ── leftovers, output station of the job's request ──▶ WAITING_FOR_TARGET ──(retryTicks)──▶ EXTEND_TARGET
  *                └─ leftovers, any other target ────▶ REROUTE ──(target)──▶ TRAVEL_TO_TARGET
  *                                                            └─(none)───▶ HOLDING ──(holdRetryTicks)──▶ REROUTE
+ * DROP ── container exchange ──▶ RETRACT_TARGET (the job carries the new key, so RETRACT_TARGET reroutes it)
  * </pre>
  * <b>Reroute exclusion.</b> The reroute request right after a target failed names that target, so the planner skips
  * it; a {@code HOLDING} retry names none, so a former target that accepts items again (emptied, or placed again at the
@@ -46,6 +47,15 @@ import dev.wareworks.core.warehouse.CraneRoute;
  * {@link CraneEvent.DropResult}; a job is never dropped while it holds items. Results that contradict the state
  * (more picked than planned, delivered + leftover ≠ held) throw {@link IllegalArgumentException}, because accepting or
  * ignoring them would lose track of real items.
+ * <p>
+ * <b>The container exchange</b> (M30, issue #21, D1) is the one event that changes <i>what</i> is held rather than how
+ * much: {@link CraneEvent.Exchanged} answers a {@link CraneEffect.PerformDrop} at a fluid bay, where the head gave up
+ * its filled containers and received that many empty ones. The amount is unchanged by construction, and the machine
+ * refuses any other amount, so the conservation rule above is not relaxed — it is restated for a second key. The job
+ * continues under the new key ({@link TransportJob#exchangedFor}), which makes the <b>existing</b> ladder do the rest:
+ * the stop's kind is {@code STORAGE} and so no delivery target, {@code RETRACT_TARGET} therefore enters
+ * {@code REROUTE}, and entering {@code REROUTE} from anywhere but {@code HOLDING} names the current target as the one
+ * to skip — which is the bay the exchange just happened at. No new phase, no new reroute rule and no new save name.
  *
  * @param <K> item key type
  * @param <L> location type
@@ -131,6 +141,7 @@ public final class CraneStateMachine<K, L> {
             case CraneEvent.JobAssigned<K, L> assigned -> assign(state, assigned.job(), effects);
             case CraneEvent.PickResult<K, L> result -> picked(state, result.picked(), effects);
             case CraneEvent.DropResult<K, L> result -> dropped(state, result.delivered(), result.leftover(), effects);
+            case CraneEvent.Exchanged<K, L> result -> exchanged(state, result.newKey(), result.amount(), effects);
             case CraneEvent.RerouteResult<K, L> result -> rerouted(state, result, effects);
             case CraneEvent.OutputFull<K, L> ignored -> outputFull(state, effects);
             case CraneEvent.TargetMissing<K, L> ignored -> interrupt(state, CraneInterruption.TARGET_MISSING, effects);
@@ -250,6 +261,29 @@ public final class CraneStateMachine<K, L> {
         TransportJob<K, L> updated = job.plusDelivered(delivered);
         if (delivered > 0)
             effects.add(new CraneEffect.ReportDelivered<>(updated, updated.target(), delivered));
+        return enter(s.withJob(updated), CranePhase.RETRACT_TARGET, effects);
+    }
+
+    /**
+     * A container exchange at the job's target ({@link CraneEvent.Exchanged}): the carry continues under the new key
+     * and the arm retracts, exactly as after a drop.
+     * <p>
+     * The amount must be the whole held amount, because the exchange is all or nothing at every level below this one
+     * ({@code TransferContext#exchange}, {@code InventoryGrabber#exchange}): a partial one would leave two keys in the
+     * head, and the second of them would be spilled at the dock by {@code CraneExecution.reconcileHeadWithJob}. A
+     * result that says otherwise is a broken location or a broken head, and like every other contradicting result it
+     * throws rather than being accepted or ignored — {@code CraneExecution.drain} catches that and answers by re-reading
+     * the real head.
+     */
+    private CraneState<K, L> exchanged(CraneState<K, L> s, K newKey, int amount, List<CraneEffect<K, L>> effects) {
+        if (s.phase() != CranePhase.DROP || !s.awaitingResult() || s.job().isEmpty())
+            return s;
+        TransportJob<K, L> job = s.job().get();
+        if (amount != job.heldAmount())
+            throw new IllegalArgumentException("exchange result " + amount + " does not match the held amount "
+                    + job.heldAmount());
+        TransportJob<K, L> updated = job.exchangedFor(newKey);
+        effects.add(new CraneEffect.ReportExchanged<>(updated, job.key(), updated.target(), amount));
         return enter(s.withJob(updated), CranePhase.RETRACT_TARGET, effects);
     }
 

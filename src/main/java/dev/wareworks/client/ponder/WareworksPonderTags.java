@@ -52,7 +52,18 @@ public final class WareworksPonderTags {
                 // belong in the index beside the interface.
                 .add(WareworksBlocks.RACK_BAY_WOOD)
                 .add(WareworksBlocks.RACK_BAY_ANDESITE)
-                .add(WareworksBlocks.RACK_BAY_BRASS);
+                .add(WareworksBlocks.RACK_BAY_BRASS)
+                // A fluid bay is the same storage location for fluids (M30, issue #21), so both tiers stand in the
+                // index beside the rack bays they share a wall with.
+                .add(WareworksBlocks.FLUID_BAY_COPPER)
+                .add(WareworksBlocks.FLUID_BAY_BRASS);
+
+        // A fluid bay is a tank Create's pipes connect to on every face but the aisle one, so it belongs beside
+        // Create's own fluid components rather than beside its item logistics: it answers no item capability at all,
+        // and a container only ever reaches it through the crane's handling head or a player's hand (ADR-052).
+        entries.addToTag(AllCreatePonderTags.FLUIDS)
+                .add(WareworksBlocks.FLUID_BAY_COPPER)
+                .add(WareworksBlocks.FLUID_BAY_BRASS);
 
         // The dock is a kinetic appliance: it consumes rotational force and its speed depends on the RPM.
         entries.addToTag(AllCreatePonderTags.KINETIC_APPLIANCES)
