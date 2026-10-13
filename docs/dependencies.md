@@ -11,7 +11,7 @@ Update this file whenever a dependency version changes.
 | Component | Version | Source / note |
 |---|---|---|
 | Minecraft | **1.21.1** | fixed target, never change |
-| Mod loader | **NeoForge 21.1.250** | latest 21.1.x on `maven.neoforged.net` at setup time; Create 6.0.10 requires ≥ 21.1.219 |
+| Mod loader | **NeoForge 21.1.256** (build), **≥ 21.1.250** (declared) | built against 21.1.256, the version All of Create 2.5 ships; the declared minimum stays 21.1.250 (`neo_version_range`) because no API newer than that is used and a server not yet moved must not be refused. Create 6.0.10 requires ≥ 21.1.219 |
 | Java | **21** (toolchain) | Temurin 21.0.12 used locally |
 | Gradle | **9.2.1** (wrapper) | taken from the official NeoForge MDK `NeoForgeMDKs/MDK-1.21.1-ModDevGradle` |
 | Build plugin | **ModDevGradle 2.0.147** (`net.neoforged.moddev`) | also taken from the MDK. Create itself builds with MDG 2.0.107. NeoGradle is not used. |

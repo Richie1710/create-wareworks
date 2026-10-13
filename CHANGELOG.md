@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Built against NeoForge 21.1.256**, the version *All of Create* 2.5 ships. The mod still loads on **21.1.250 and
+  newer**, so a server or a pack that has not moved yet keeps working with it
+
 ## [0.9.0-alpha] - 2026-10-08
 
 ### Added
