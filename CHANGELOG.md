@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0-beta] - 2026-10-14
+
 ### Changed
 
 - **Wareworks is now in beta.** The warehouse is complete enough to build on: worlds saved with one beta load in the
@@ -934,7 +936,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.9.2-alpha...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.10.0-beta...HEAD
+[0.10.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.9.2-alpha...v0.10.0-beta
 [0.9.2-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.9.1-alpha...v0.9.2-alpha
 [0.9.1-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.9.0-alpha...v0.9.1-alpha
 [0.9.0-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.8.0-alpha...v0.9.0-alpha
