@@ -120,14 +120,21 @@ public class WarehouseRailBlock extends Block implements IWrenchable, ProperWate
     }
 
     /**
-     * A rail that arrives without connection flags reads them from the world once, so a rail placed by a structure, a
-     * schematic, {@code /setblock} or a test draws itself like any other. Idempotent: the second call finds the flags
-     * it just wrote and changes nothing.
+     * A rail that arrives without connection flags reads them from the world once, so a rail placed by a structure,
+     * {@code /setblock} or a test draws itself like any other. Idempotent: the second call finds the flags it just
+     * wrote and changes nothing.
+     * <p>
+     * A rail that arrives <b>with</b> flags keeps them. A Schematicannon prints a rail with the flags its schematic
+     * holds and without updating its neighbours, one rail at a time; re-reading them from the world here would leave
+     * the last rail printed so far pointing at nothing, unlike its schematic, and a cannon stopped and started again
+     * would then print that rail a second time, overwriting the first and taking another rail from its chest (issue
+     * #23). The flags are only drawn, never read by the rail network, so a rail that points at its next neighbour a
+     * moment before that neighbour lands costs nothing.
      */
     @Override
     protected void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean movedByPiston) {
         super.onPlace(state, level, pos, oldState, movedByPiston);
-        if (level.isClientSide)
+        if (level.isClientSide || hasConnections(state))
             return;
         BlockState connected = withConnections(level, pos, state);
         if (connected != state)
@@ -172,6 +179,14 @@ public class WarehouseRailBlock extends Block implements IWrenchable, ProperWate
             player.displayClientMessage(WareworksLang.translateDirect(
                     closed ? WareworksLang.RAIL_CLOSED : WareworksLang.RAIL_OPENED), true);
         return InteractionResult.SUCCESS;
+    }
+
+    /** Whether any horizontal connection flag of {@code state} is set. */
+    static boolean hasConnections(BlockState state) {
+        for (Direction direction : Direction.Plane.HORIZONTAL)
+            if (state.getValue(connection(direction)))
+                return true;
+        return false;
     }
 
     /** {@code state} with every connection flag read from the world around {@code pos}. */

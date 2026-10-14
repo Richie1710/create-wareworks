@@ -4250,6 +4250,33 @@ reads the size with the window's own `refreshFramebufferSize` when GLFW already 
 *Consequences:* The descriptions are 2 to 9 lines, well inside the budget, which now guards against regrowth rather
 than shaping the texts. A new note has to earn its place against the Ponder scene for the same block. The `tooltips` scenario needs a 5120x1440 monitor and fails with a message on any other.
 
+### ADR-058 — A rail keeps the connection flags it is placed with, so a Schematicannon prints it once ([issue #23](https://github.com/Richie1710/create-wareworks/issues/23))
+
+*Context:* `WarehouseRailBlock#onPlace` re-read a rail's four connection flags from the world after every placement,
+so a rail from a structure or `/setblock` draws itself. Create's Schematicannon prints a rail with the flags its
+schematic holds and with `UPDATE_KNOWN_SHAPE`, one rail at a time, and decides whether a spot still needs printing by
+comparing the block state standing there with the schematic's (`SchematicPrinter#shouldPlaceBlock`). The re-read turned
+the last rail printed so far into an open end; a cannon stopped and started again walks the schematic from the start,
+found that rail "wrong", printed it again with `setBlock` — overwriting the standing rail without a drop — and asked
+its chest for one more rail. Blocks with a block entity are protected from this by the cannon's default ("Replace block
+entities" off); the rail has none. Found by a GameTest that prints a warehouse from exactly its items and stops the
+cannon half way, and seen in play as a cannon asking for rails out of nowhere.
+
+*Decision:* `onPlace` re-reads the flags only when the rail arrives with **none** set, which is what the re-read was
+for. A rail that arrives with flags keeps them; its neighbours' own shape updates still correct them in ordinary play.
+The flags are drawn, never read by the rail network (connectivity is plain adjacency, ADR-033), so a printed rail that
+points at its next neighbour a moment before that neighbour lands costs nothing.
+
+*Verification:* `SchematicannonGameTests` runs the real cannon end to end with a schematic saved the way Schematic and
+Quill saves one: every Wareworks block printed from a chest; a terminal arriving after "Missing Item"; a whole warehouse
+printed from exactly the items Create's `ItemRequirement` asks for, straight through and stopped half way with blocks in
+flight, each ending with an empty chest, every block standing and no item on the floor. With the old `onPlace` the
+stopped run stalls on "Missing Item: Warehouse Rail". A third test pins Create's own stall (a skipped spot keeps a stale
+missing item; stopping and starting clears it), which is what the original report saw.
+
+*Consequences:* A structure or schematic placed with stale flags keeps them until a neighbour changes; that only draws
+a rail end where a straight piece would be, and is the price of a cannon that never prints a rail twice.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).

@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   item now says in one sentence what it is, plus at most one thing the Ponder scenes do not show — like Create's own
   blocks; how a block works in depth is in its Ponder scenes and its goggle lines. A test measures every description
   with the game's real font, so none grows past the screen again
+- **A Schematicannon that is stopped and started again no longer prints a warehouse rail twice.** The last rail it had
+  printed before the stop was redrawn as an open end, so after the restart the cannon took it for a wrong block,
+  printed it again over the one standing there and asked for an extra rail from its chest. A rail now keeps the
+  connections its schematic gives it. Tests print a whole warehouse with a real cannon from exactly the items it
+  needs, once straight through and once stopped half way: the chest ends empty, every block stands, nothing is lost
+  and nothing is used twice
 
 ## [0.9.1-alpha] - 2026-10-13
 
