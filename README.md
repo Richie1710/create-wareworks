@@ -152,6 +152,26 @@ collects on its own does not stop the moment you walk away. It is a **chunk load
 shipped configuration; the **Chunk loading** section below says what it does, what bounds it and how to see every chunk
 the mod holds.
 
+## Status: beta
+
+Wareworks is in **beta**. The warehouse itself is complete: storing and retrieving, the terminal, production chains,
+stock rules, branching rail networks, rack and fluid bays, ports and packages. It is covered by more than 500 in-world
+tests, a robustness run (chunk unloads, save and rejoin, blocks broken mid-job, all with an item count) and a test of
+every change to saved data.
+
+What beta promises:
+
+* **Your worlds keep working.** A world saved with one beta loads in the next; when saved data changes, a tested
+  migration carries it over.
+* **No item is lost or duplicated by the warehouse.** A report of one is treated as the most serious kind of bug.
+* Features may still grow and their screens change before 1.0.
+
+Still to come before 1.0: requesting fluids at the terminal
+([#21](https://github.com/Richie1710/create-wareworks/issues/21)) and ordering packages to a door
+([#18](https://github.com/Richie1710/create-wareworks/issues/18)). Please report problems on the
+[issue tracker](https://github.com/Richie1710/create-wareworks/issues), and keep a backup of your world, as with any
+mod in beta.
+
 ## Requirements
 
 | | |

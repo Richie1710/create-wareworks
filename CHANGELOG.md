@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Wareworks is now in beta.** The warehouse is complete enough to build on: worlds saved with one beta load in the
+  next, every change to saved data comes with a tested migration, and an item lost or duplicated by the warehouse is
+  treated as the most serious kind of bug. Requesting fluids at the terminal and ordering packages to a door are still
+  to come before 1.0. On CurseForge the file is now listed as a beta instead of an alpha
+
 ## [0.9.2-alpha] - 2026-10-14
 
 ### Fixed

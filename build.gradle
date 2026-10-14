@@ -285,7 +285,8 @@ publishMods {
             throw new GradleException("CHANGELOG.md has no section '## [${releaseVersion}]'. Move the entries from '## [Unreleased]' into it before publishing.")
         section.readLines().drop(1).join('\n').replaceAll(/(?m)^\[[^\]]+\]: .*$/, '').trim()
     }
-    type = ALPHA
+    // The release type follows the version's pre-release label: '-alpha' is an alpha, '-beta' a beta, none a release.
+    type = releaseVersion.contains('-alpha') ? ALPHA : releaseVersion.contains('-beta') ? BETA : STABLE
     version = project.mod_version
     displayName = "${project.mod_name} ${project.mod_version}"
     modLoaders.add('neoforge')
