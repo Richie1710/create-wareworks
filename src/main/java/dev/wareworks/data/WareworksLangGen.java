@@ -826,282 +826,74 @@ public final class WareworksLangGen {
         }
 
         tooltip(lang, "block.wareworks.warehouse_interface",
-                "Turns the _inventory_ it faces into an _addressable storage location_ of a warehouse aisle. A _stacker "
-                        + "crane_ stores items there and takes them out again.",
-                "When placed",
-                "The _brass port_ faces the clicked _inventory_, such as a _chest_ or _barrel_. Clicked on the side "
-                        + "of another _warehouse interface_, it copies that direction; otherwise it faces away from you. "
-                        + "Keep the _framed plate_ towards the _aisle_.",
-                "When setting the filter",
-                "Click the _filter slot_ below the arm port with an item to store _only_ that item here. _List_, "
-                        + "_attribute_ and _package filters_ all work, and an _empty_ slot accepts _everything_. A "
-                        + "filter only restricts _storing_: whatever is already inside can always be _retrieved_, and "
-                        + "changing a filter never moves items that are already stored.",
-                "When setting the priority",
-                "_Hold_ the click on the _filter slot_ to set a _priority_ from _0_ to _9_: among the locations that "
-                        + "are _equally suitable_, the crane fills the _highest_ one first, so a rack by the _door_ can "
-                        + "fill before the far end of the aisle. It only decides where _new_ items go — it never moves "
-                        + "what is already stored, and _retrieval_ always takes the _nearest_ source.",
-                "When looked at with Goggles",
-                "Shows its _address_, its _filter_, its _priority_, the _attached inventory_, its _used slots_, the "
-                        + "most stored _items_ and the items _reserved_ for a running crane job.");
+                "Turns a _chest_ or any other _inventory_ into a storage location. _Filter_ and _priority_ at the "
+                        + "filter slot.");
 
-        // The three rack bays (M28, issue #20). They differ in exactly two sentences — how much one holds and what it
-        // may carry above it — so the description is written once and the two numbers are passed in; a player reading
-        // two tiers in JEI has to be able to see at a glance that only those two things changed.
-        rackBayTooltip(lang, "rack_bay_wood", "64 stacks",
-                "a _wooden_ bay carries only wooden bays");
-        rackBayTooltip(lang, "rack_bay_andesite", "256 stacks",
-                "an _andesite_ bay carries wooden and andesite bays, never _brass_");
-        rackBayTooltip(lang, "rack_bay_brass", "1024 stacks",
-                "a _brass_ bay carries every bay there is");
-
-        // The two fluid bays (M30, issue #21). Written once with the two numbers passed in, exactly as the rack bays'
-        // are, and for the same reason: a player reading both tiers in JEI has to see at a glance that only the
-        // capacity and the column rule changed.
-        fluidBayTooltip(lang, "fluid_bay_copper", "64 buckets",
-                "a _copper_ bay carries only copper bays");
-        fluidBayTooltip(lang, "fluid_bay_brass", "256 buckets",
-                "a _brass_ bay carries both copper and brass bays");
+        // The three rack bays (M28, issue #20) and the two fluid bays (M30, issue #21). Each kind is written once
+        // with its two tier differences passed in, so a player reading two tiers in JEI sees at a glance that only
+        // the capacity and the column rule changed.
+        rackBayTooltip(lang, "rack_bay_wood", "64 stacks", "wood carries only wood");
+        rackBayTooltip(lang, "rack_bay_andesite", "256 stacks", "andesite never carries brass");
+        rackBayTooltip(lang, "rack_bay_brass", "1024 stacks", "brass carries any bay");
+        fluidBayTooltip(lang, "fluid_bay_copper", "64 buckets", "copper carries only copper");
+        fluidBayTooltip(lang, "fluid_bay_brass", "256 buckets", "brass carries copper and brass");
 
         tooltip(lang, "block.wareworks.warehouse_input",
-                "A _station_ of a warehouse _aisle_ where items _enter_ the warehouse. It _buffers_ arriving items until "
-                        + "a _stacker crane_ stores them.",
-                "When placed",
-                "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle.",
-                "When items arrive",
-                "Accepts items from _belts_, _funnels_, _chutes_, _hoppers_ and _Mechanical Arms_. The _stacker crane_ "
-                        + "carries them to a free _storage location_; automation can only _insert_, never take items out.",
-                "When looked at with Goggles",
-                "Shows its _address_ and the _buffered items_.");
+                "Where _items_ enter the warehouse. Can be filled by _belts_, _funnels_ and _Mechanical Arms_.");
 
         tooltip(lang, "block.wareworks.warehouse_output",
-                "The _port_ of a warehouse _aisle_: it _requests_ items, or it _accepts_ what the warehouse cannot keep. "
-                        + "_Funnels_, _chutes_, _hoppers_ and _Mechanical Arms_ can pull them out.",
-                "When placed",
-                "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle. A new port "
-                        + "_requests_, exactly as before.",
-                "When setting the filter",
-                "Click the _filter slot_ with the item to request. It sits on the _top_, the _back_ and both _side_ "
-                        + "faces, never in the _aisle opening_, where the crane reaches in. Hold _Right-Click_ on it to "
-                        + "set the _amount_ and _when_ the port acts: on a _pulse_, _while powered_, or _unless "
-                        + "powered_.",
-                "When setting the direction",
-                "Hold _Right-Click_ with the _wrench_ on the port's own box — a small box on the same _top_, _back_ and "
-                        + "_side_ faces, just above the filter slot — to set the _direction_: _Request_, or _Accept_ "
-                        + "with a rank. An _overflow_ ranks after every storage location, a _diversion_ before them, and "
-                        + "the _filter_ then says which items the port takes at all. An accepting port turns _andesite_ "
-                        + "around the aisle opening and on the spout, and shows its rank on the _back_.",
-                "When powered by Redstone",
-                "A _requesting_ port asks the _warehouse controller_ for the filter item: up to the set _amount_, at "
-                        + "most what is _in stock_. An _accepting_ one takes items that arrived at an _input_ and would "
-                        + "otherwise be stored. _On a pulse_ it acts once per signal; _while powered_ it keeps going, "
-                        + "with _one_ open request at a time, so a machine is fed without a _clock_; _unless powered_ "
-                        + "does the same until a _lever_ switches it off. Nothing is ever _destroyed_: a full port lets "
-                        + "the _input_ back up.",
-                "When looked at with Goggles",
-                "Shows its _address_, the _buffered items_ and its _redstone_ setting. A _requesting_ port adds its "
-                        + "_pending request_ with the items _delivered_ so far and why the last one was _refused_; an "
-                        + "_accepting_ one its _rank_, which items it _accepts_ and how many it has _handed over_.");
+                "Hands out _items_ on a _redstone_ signal or takes the warehouse's _overflow_. Works with _funnels_ "
+                        + "and _Mechanical Arms_.");
 
         tooltip(lang, "block.wareworks.warehouse_terminal",
-                "A _station_ of a warehouse _aisle_ with a _screen_: ask for items here and the _stacker crane_ fetches "
-                        + "them. _Funnels_, _chutes_, _hoppers_ and _Mechanical Arms_ can pull them out again.",
-                "When placed",
-                "The _screen_ faces you and the _arm port_ the opposite way: stand where you want to read the "
-                        + "terminal, with the _aisle_ on the far side of the _rack_. The port then moves to whichever "
-                        + "side of the terminal the aisle really is on.",
-                "When turned with a Wrench",
-                "The _wrench_ turns the _screen_ to the next face, never onto the _arm port_: the crane keeps loading "
-                        + "the terminal from the _aisle_ while you put the screen where you stand.",
-                "When requesting items",
-                "The screen lists everything the _warehouse_ holds with the amount that is still _available_. Every "
-                        + "request "
-                        + "is a normal _retrieval job_: the crane brings the items here, just like a request from a "
-                        + "_warehouse output_.",
-                "When ordering something made of something else",
-                "An item your _production stations_ can make is offered even when none is in stock, and one whose "
-                        + "_ingredients_ are missing is ordered as a whole _chain_. The terminal shows it as _one line_ "
-                        + "with the step that is working; a click on that line lists every _step_ with the _address_ of "
-                        + "the machine it runs at, and gives the whole chain up at once.",
-                "When ordering a whole list",
-                "Put a _clipboard_ with a list of items into the slot beside the buffer and press the _list button_: "
-                        + "the warehouse works the list off in _portions_ and _ticks each entry off_ as it delivers "
-                        + "it, so the clipboard is the order and its receipt in one. A _Schematicannon_ writes its "
-                        + "_material checklist_ onto a clipboard, and a hand-written one works just as well. If the "
-                        + "list wants more than the warehouse has, or something would have to be _produced_, it asks "
-                        + "first; a _full_ terminal makes it wait rather than refuse.",
-                "When looked at with Goggles",
-                "Shows its _address_, the _buffered items_, the _pending request_ with the items _delivered_ so far, "
-                        + "and why the last request was _refused_. A _clipboard order_ adds how many of its entries "
-                        + "are done and how much is still to fetch.");
+                "Orders _items_ from the connected _warehouse_. Works with _funnels_ and _Mechanical Arms_.",
+                "With a clipboard",
+                "A filled-in _clipboard_, such as a _Schematicannon's_ material list, orders the whole list at "
+                        + "once.");
 
         tooltip(lang, "block.wareworks.warehouse_production",
-                "A _station_ of a warehouse _aisle_ that feeds your _machines_. Define a _pattern_ here, and the "
-                        + "_stacker crane_ brings its _ingredients_ to this block; your own _funnel_, _chute_, _belt_ or "
-                        + "_Mechanical Arm_ carries them into the machine. Wareworks never crafts anything itself.",
-                "When placed",
-                "The _opening_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle.",
-                "When setting a pattern",
-                "_Right-Click_ with an _empty hand_ to open it. Click a _slot_ with an item to set an _ingredient_ or "
-                        + "the _result_, and _scroll_ on a slot to change its _amount_. Nothing is used up: the "
-                        + "pattern only says what one run of your machine needs and makes.",
-                "When ordering the result",
-                "The _terminal_ marks a pattern's result as _producible_ even when none is in stock. Ordering it "
-                        + "reserves the _ingredients_, the crane delivers them here, and the _product_ returns to the "
-                        + "warehouse through a _warehouse input_ like any other item.",
-                "When an ingredient is missing",
-                "If another _pattern_ of the same warehouse makes that ingredient, the whole _chain_ is planned the "
-                        + "moment "
-                        + "you click: _one order per step_, each at the station holding its pattern, and every "
-                        + "_intermediate_ travels through a real _storage location_. A step that is waiting for an "
-                        + "earlier one is handed _nothing_ at all. If something is really missing, the click is "
-                        + "_refused_ and names the item.",
+                "Supplies your _machines_ with ingredients from a _pattern_. Works with _funnels_ and a _Mechanical "
+                        + "Arm_.",
                 "When a batch is lost",
-                "If your machine takes the _ingredients_ and nothing comes back, the warehouse _stops making that "
-                        + "item_ and the _ring_ of this block turns into a red _lamp_: nothing takes items back out of "
-                        + "a machine, so it never quietly tries again. Look at the machine, then _Sneak-Right-Click_ "
-                        + "this block or click the red row in its _screen_ to make the item again — you are told how "
-                        + "many _ingredients_ were delivered and never came back.",
-                "When looked at with Goggles",
-                "Shows its _address_, its _patterns_, the running _production orders_ with their _state_ and the "
-                        + "_buffered items_. While the warehouse has _stopped_ making something this station makes, it "
-                        + "says how many products are held and what they cost.");
+                "The ring turns _red_; _Sneak-Right-Click_ restarts it.");
 
         tooltip(lang, "block.wareworks.warehouse_stock_keeper",
-                "Holds the _stock rules_ of a whole _warehouse_: one _item_ per row plus a _minimum_, a _maximum_ and "
-                        + "a _reserve_. The three numbers govern three different directions, and a warehouse may hold "
-                        + "several keepers.",
-                "When placed",
-                "The _panel_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle, like every "
-                        + "other station.",
-                "When setting a rule",
-                "_Right-Click_ with an _empty hand_ to open it. Click a _row_ with an item to set what it governs, and "
-                        + "_scroll_ on one of its three numbers to change it (_Shift_ for whole stacks, _Right-Click_ "
-                        + "to switch it off). Nothing is used up: a row's item is only a name.",
-                "Minimum: what comes in",
-                "The warehouse _tries to keep_ this many. While it holds fewer, the comparator on this block calls for "
-                        + "the item, so a _farm_ or a hand-built line runs exactly as long as it is needed.",
-                "Minimum: the warehouse restocks",
-                "If a _warehouse production_ of the same warehouse has a _pattern_ for the item, the warehouse _orders "
-                        + "it "
-                        + "by itself_ while it is below the minimum — never spending what a _reserve_ protects. If a "
-                        + "machine _swallows_ a batch and nothing comes back, that rule _stops ordering_ and waits for "
-                        + "you: open it and click the rule's _mark_, or _Sneak-Right-Click_ the _warehouse production_ "
-                        + "that makes the item, to let it try again.",
-                "Maximum: what may be stored",
-                "The warehouse stores _no more_ than this. Above it the _stacker crane_ stops accepting the item and "
-                        + "a _warehouse input_ holding it _backs up on purpose_ — that is the rule working, not a jam.",
-                "Reserve: what may go out",
-                "The last items are kept from the warehouse's own _automation_: a _redstone request_ at a _warehouse "
-                        + "output_ stops at them. _You_ are not stopped — a request at a _terminal_ is served down to "
-                        + "the last item.",
-                "When looked at with Goggles",
-                "Shows its _address_, how many _rules_ it holds and how many of them are _below their minimum_, _at "
-                        + "their maximum_, _down to their reserve_ or _paused_ after a lost batch.");
+                "Sets a _minimum_, a _maximum_ and a _reserve_ of the warehouse for each item.");
 
         tooltip(lang, "block.wareworks.warehouse_home_point",
-                "Marks where the _stacker crane_ waits when it has nothing to do. Put it beside the _rails_ where the "
-                        + "next job usually starts — next to your _terminal_, next to an _input_ — and the machine "
-                        + "comes back here instead of standing wherever its last job ended.",
-                "When placed",
-                "The _plate_ faces you: stand in the _aisle_ and place it into a _rack_ beside the aisle, like every "
-                        + "other station. It holds _no items_ and the crane never stops here for one.",
-                "When the crane has nothing to do",
-                "After a short wait the crane drives back and waits in front of this block. The trip is _interrupted_ "
-                        + "by the next job the moment there is one, even in the middle of a _corner_, so it never "
-                        + "costs you anything — and it holds _no chunks_ loaded.",
-                "When the warehouse is one straight aisle",
-                "Nothing happens: on a single aisle the crane stays exactly where it is, which is what it always did. "
-                        + "A home point earns its keep the moment your warehouse _bends_.",
+                "Where the crane waits when it has nothing to do.",
                 "When there is more than one",
-                "A warehouse has _one crane_, so it has _one home_. Any further home point lights up _red_ and says "
-                        + "so; the same happens to one the crane cannot _drive to_, for instance because a rail "
-                        + "between them is broken or _closed_. Break the home point and the _dock_ is home again.",
-                "When looked at with Goggles",
-                "Shows its _address_ and whether the crane really waits here — and if it does not, _why_ not.");
+                "A warehouse has only _one_; any further one lights up _red_.");
 
         tooltip(lang, "block.wareworks.warehouse_controller",
-                "Manages one _warehouse_: it gives every _aisle_ of it a _letter_, finds its _storage locations_ and "
-                        + "_stations_, keeps _count_ of the stored items and _plans_ the _stacker crane's_ jobs. It never "
-                        + "moves items itself.",
-                "When placed",
-                "Place it directly _behind_ a _stacker crane_ while looking at the crane; the _display_ faces you.",
-                "When using the value panel",
-                "Hold _Right-Click_ on the _value panel_ to set the letter of the _first aisle_, used in addresses such "
-                        + "as _A-03-07R_; every further aisle takes the _next free_ letter.",
-                "When looked at with Goggles",
-                "Shows the _status_, the _size_ of the warehouse and its _aisles_, where the rails _stop_ and why, the "
-                        + "number of _storage locations_, _stations_ and _misaligned_ blocks, the _stored items_, the "
-                        + "_crane's job_ and the last _planning result_.");
+                "Runs a _warehouse_. Goes directly _behind_ the _stacker crane_.");
 
         tooltip(lang, "block.wareworks.stacker_crane",
-                "The _dock_ of a _stacker crane_. The crane travels the _warehouse rails_ in front of it — around "
-                        + "_corners_ and through _junctions_ as well — and _stores_ and _retrieves_ items for the "
-                        + "_warehouse controller_ behind it.",
-                "When placed",
-                "The _first aisle_ runs in the direction you look. Connect a _shaft_ to the _bottom_; shafts and cogs at "
-                        + "the sides do not connect. A _wrench_ turns it only while the crane is _idle_ and _empty_.",
-                "When powered by rotation",
-                "Carries out the controller's _jobs_. On a _corner_ or a _junction_ the whole machine swings a "
-                        + "_quarter turn_ and drives on, and where the rails offer more than one way it takes the "
-                        + "_cheapest_ one. Faster _rotation_ moves the crane faster; without rotation or when "
-                        + "_overstressed_ it _pauses_ where it is and continues later.",
+                "The _dock_ of the stacker crane. Needs _rotation_ through a _shaft_ from _below_; nothing connects "
+                        + "at the sides.",
                 "When using the value panel",
-                "Hold _Right-Click_ on the _value panel_ to set the _mast height_: how many _levels_ the crane reaches.",
-                "When looked at with Goggles",
-                "Shows the _size_ of the warehouse, the _mast height_, which _aisle_ the machine is on, whether a "
-                        + "_controller_ is linked, the current _job_ and the _held items_.");
+                "Hold _Right-Click_ to set the _mast height_.");
 
         tooltip(lang, "block.wareworks.warehouse_rail",
-                "Lays out the _aisles_ of a _stacker crane_. Rails that _touch_ connect, so all the rails in front of "
-                        + "the crane's _dock_ are its warehouse: it may _bend_ round corners, _split_ into side aisles "
-                        + "and even close into a _ring_, and the crane drives all of it.",
-                "When placed",
-                "Runs in the direction you look. A _gap_ or another block ends the rails; the _picture_ of a corner or "
-                        + "a junction follows the rails around it. Every straight _run_ of rails is one _aisle_ and "
-                        + "keeps _one letter_, however many corners and junctions it passes through; a rail that "
-                        + "leaves a run sideways starts the _next_ aisle, counted outwards from its _junction_.",
+                "Lays out the _aisles_ the crane drives on.",
                 "When using a Wrench",
-                "_Closes_ the rail and opens it again. A _closed_ rail belongs to no warehouse, which keeps two "
-                        + "warehouses whose rails touch apart and sends a _stray_ rail away again.");
+                "_Closes_ the rail, keeping two warehouses that touch apart.");
     }
 
     /**
      * Create item description of one rack bay ({@code docs/warehouse-system.md} §3.8). The three tiers share every
-     * word but {@code stacks} and {@code carries}, which is the point: the material decides how much a bay holds and
-     * what it may carry above it, and nothing else about the block changes with it.
+     * word but {@code stacks} and {@code carries}: the material decides how much a bay holds and what it may carry
+     * above it, and nothing else about the block changes with it. Like every description it says what the block is
+     * and the one thing the Ponder scenes do not show (issue #22); the goggles and the scenes carry the rest.
      *
      * @param stacks   how much one bay of this tier holds, as it is written in the summary
-     * @param carries  the column rule for this tier, as a clause inside the placement sentence
+     * @param carries  the column rule for this tier, as it is written after "Nothing stronger on top:"
      */
     private static void rackBayTooltip(BiConsumer<String, String> lang, String block, String stacks, String carries) {
         tooltip(lang, "block.wareworks." + block,
-                "A _storage location_ that is the block itself: it holds _one item type_ and " + stacks + " of it, "
-                        + "shows _how full_ it is on the front, and needs _no warehouse interface_. It works _by hand_ "
-                        + "with no warehouse at all, and becomes an _addressable_ storage location as soon as a "
-                        + "crane's aisle reaches it.",
+                "A storage location for _one item type_, " + stacks + ". Works _by hand_ too, with no crane at all.",
                 "When placed",
-                "Set bays _beside_ and _above_ each other to build a rack wall; clicking the _side_ of another bay "
-                        + "copies its direction, so a row grows however you stand. Keep the _open front_ towards the "
-                        + "_aisle_. A bay may carry _nothing stronger_ above it — " + carries + " — so a wall is "
-                        + "rebuilt from the _bottom_ up when you upgrade it.",
-                "When filling it by hand",
-                "_Right-Click_ with an item puts _one_ in, _Shift_ puts in a whole _stack_; with an _empty hand_ you "
-                        + "take _one_ out, _Shift_ a _stack_. There is deliberately no _take everything_ — emptying a "
-                        + "bay in one go is what _breaking_ it is for. _Funnels_, _chutes_, _belts_ and _hoppers_ "
-                        + "fill a bay directly as well.",
-                "When setting the filter",
-                "Click the _filter slot_ low in the bay's face to say what belongs here; _hold_ the click to set a "
-                        + "_priority_ from _0_ to _9_. A bay with _no_ filter takes the _first_ item that arrives and "
-                        + "holds that type until it is _empty_ again, so you can put up a wall and let it fill.",
-                "When broken",
-                "A bay _resets_: you get the _empty bay_ back and its whole load as _one pallet_ on the floor, "
-                        + "however much was inside. Nothing is lost and nothing is duplicated — you refill by hand, a "
-                        + "stack at a time, or let a _hopper_ drain the pallet.",
-                "When looked at with Goggles",
-                "Shows its _material_, its _address_, its _filter_, its _priority_, what is _in_ it, how _full_ it is "
-                        + "and the items _reserved_ for a running crane job.");
+                "Nothing _stronger_ on top: " + carries + ".");
     }
 
     /**
@@ -1110,52 +902,18 @@ public final class WareworksLangGen {
      * <p>
      * It is the <b>first of the three places that say breaking a bay loses the fluid</b> (D7) — the goggle line and
      * the warning on the first punch are the other two — and it is the only one of the three a player reads <i>before
-     * the block is ever placed</i>, which is why the sentence is there rather than only in a release note. The other
-     * thing it has to say and the rack bay's does not is the asymmetry: a funnel, a chute, a belt and a hopper
-     * <b>cannot</b> fill this bay, and the pipe at the back is what stands in for them.
+     * the block is ever placed</i>, so the "When broken" pair stays however short the rest gets.
      *
      * @param buckets how much one bay of this tier holds, as it is written in the summary
-     * @param carries the column rule for this tier, as a clause inside the placement sentence
+     * @param carries the column rule for this tier, as it is written after "Nothing stronger on top:"
      */
-    private static void fluidBayTooltip(BiConsumer<String, String> lang, String block, String buckets,
-                                        String carries) {
+    private static void fluidBayTooltip(BiConsumer<String, String> lang, String block, String buckets, String carries) {
         tooltip(lang, "block.wareworks." + block,
-                "A _storage location_ that is the block itself, for _fluids_: it holds _one fluid_ and " + buckets
-                        + " of it, and the _level_ you read off the front is the whole readout. _Pipes_ connect at the "
-                        + "back; it works _by hand_ with no warehouse at all, and becomes an _addressable_ storage "
-                        + "location as soon as a crane's aisle reaches it.",
+                "A storage location for _one fluid_, " + buckets + ". _Pipes_ connect at the back.",
                 "When placed",
-                "Set bays _beside_ and _above_ each other to build a tank wall; clicking the _side_ of another bay "
-                        + "copies its direction, so a row grows however you stand. Keep the _open front_ towards the "
-                        + "_aisle_. A bay may carry _nothing stronger_ above it — " + carries + " — so a wall is "
-                        + "rebuilt from the _bottom_ up when you upgrade it. A _rack bay_ and a fluid bay _share the "
-                        + "upright_ between them where they stand side by side, and neither carries the other.",
-                "When filling it by hand",
-                "_Right-Click_ with a _filled_ bucket and it empties into the bay; with an _empty_ one it fills from "
-                        + "the bay. A container is always moved _whole_ — emptied completely or refused, never half — "
-                        + "so a bay with less than a bucket of room left takes nothing. _Funnels_, _chutes_, _belts_ "
-                        + "and _hoppers_ _cannot_ fill a fluid bay: a funnel would keep your empty bucket. Use a "
-                        + "_pipe_ at the back or your own hand.",
-                "When piping fluid in and out",
-                "Create's _pipes_ connect on every face _except_ the one towards the _aisle_, so one _Mechanical "
-                        + "Pump_ fills a whole bay from a lake and a second one feeds a machine from it. Whether pipes "
-                        + "may also _draw fluid off_ a bay is a server setting (_fluidBayPipeExtraction_, on by "
-                        + "default); the goggles always say which way it stands, and your own hand is never affected "
-                        + "by it.",
-                "When setting the filter",
-                "Click the _filter slot_ low in the bay's face with a _filled container_: the _fluid_ inside it is what "
-                        + "belongs here, never the container. _Hold_ the click to set a _priority_ from _0_ to _9_. A "
-                        + "bay with _no_ filter takes the _first_ fluid that arrives and keeps it until it has "
-                        + "_drained_, so you can put up a wall and let it fill.",
+                "Nothing _stronger_ on top: " + carries + ".",
                 "When broken",
-                "A fluid bay _loses what is in it_, exactly as a _Fluid Tank_ does: a fluid has no form it could drop "
-                        + "as, so there is nothing to put the contents into. _Empty it first_ — pipe it out, or take "
-                        + "it out by the bucket. You get the empty bay back, and while there is anything in it both "
-                        + "the _goggles_ and the _first hit_ on the block warn you.",
-                "When looked at with Goggles",
-                "Shows its _material_, its _address_, which _fluid_ belongs here, what is _in_ it in buckets, its "
-                        + "_capacity_, whether pipes may _draw_ from the back, and that breaking it would lose the "
-                        + "contents.");
+                "_The fluid is lost._");
     }
 
     /** Create item description: summary plus condition/behaviour pairs ({@code .tooltip.conditionN/behaviourN}). */

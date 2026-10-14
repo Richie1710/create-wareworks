@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Shift descriptions fit the screen again.** They had grown to as much as 86 lines, and on a 1440 px screen
+  (2560x1440 or an ultrawide 5120x1440, where the automatic GUI scale is 6) the top of a long one was cut off. Every
+  item now says in one sentence what it is, plus at most one thing the Ponder scenes do not show — like Create's own
+  blocks; how a block works in depth is in its Ponder scenes and its goggle lines. A test measures every description
+  with the game's real font, so none grows past the screen again
+
 ## [0.9.1-alpha] - 2026-10-13
 
 ### Changed

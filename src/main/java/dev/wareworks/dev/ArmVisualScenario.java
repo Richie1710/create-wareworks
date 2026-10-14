@@ -860,9 +860,9 @@ public final class ArmVisualScenario implements VisualScenario {
         switchLanguage(script, "de_de");
         script.client("arm: CHECK 91 German Shift tooltips", context -> checkTooltips(context, List.of(
                 new TooltipExpectation(WareworksBlocks.WAREHOUSE_INPUT.asStack(), "Mechanischen Armen"),
-                new TooltipExpectation(WareworksBlocks.WAREHOUSE_OUTPUT.asStack(), "Mechanische Arme"),
-                new TooltipExpectation(WareworksBlocks.WAREHOUSE_TERMINAL.asStack(), "Mechanische Arme"),
-                new TooltipExpectation(WareworksBlocks.WAREHOUSE_PRODUCTION.asStack(), "Mechanischer Arm")),
+                new TooltipExpectation(WareworksBlocks.WAREHOUSE_OUTPUT.asStack(), "Mechanischen Armen"),
+                new TooltipExpectation(WareworksBlocks.WAREHOUSE_TERMINAL.asStack(), "Mechanischen Armen"),
+                new TooltipExpectation(WareworksBlocks.WAREHOUSE_PRODUCTION.asStack(), "Mechanischen Arm")),
                 GERMAN_HOLD_SHIFT));
         // Item stacks are made inside the steps: the registries are not bound yet while the run is planned.
         for (TooltipShot shot : List.of(new TooltipShot("input", WareworksBlocks.WAREHOUSE_INPUT),
@@ -942,7 +942,7 @@ public final class ArmVisualScenario implements VisualScenario {
     }
 
     /** The tooltip a player sees while holding Shift (see {@link #checkTooltips}). */
-    private static List<Component> shiftTooltip(VisualContext context, ItemStack stack) {
+    static List<Component> shiftTooltip(VisualContext context, ItemStack stack) {
         List<Component> real = new ArrayList<>(Screen.getTooltipFromItem(context.minecraft(), stack));
         ItemDescription description = ItemDescription.create(stack.getItem(), FontHelper.Palette.STANDARD_CREATE);
         if (description == null)

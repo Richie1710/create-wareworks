@@ -4210,6 +4210,46 @@ containers instead of fluids. **Refusing at the bay instead of in the plan**, wh
 crane trip whose only outcome is a trip back.
 
 
+### ADR-057 — Item descriptions are short enough for the Shift view of a 1440 px screen, and two tests keep them so ([issue #22](https://github.com/Richie1710/create-wareworks/issues/22))
+
+*Context:* Create wraps an item description at a fixed 200 GUI px per line (`TooltipHelper.MAX_WIDTH_PER_LINE`), so a
+long description grows downwards, and vanilla's `DefaultTooltipPositioner` only pushes a tooltip up from the bottom
+edge: one taller than the screen loses its top. The automatic GUI scale is the largest that leaves 320 x 240, so a
+1440 px screen — 2560x1440 as well as an ultrawide 5120x1440 — runs at scale 6 with **240** GUI px, less than 1080 px at
+scale 4 (270). Wareworks' descriptions had grown to 25–86 wrapped lines (median around 50); Create's own longest, the
+Linked Controller, is 19 in English and 21 in German. Nothing measured them.
+
+*Decision:* Every description says **what the block is** in one sentence and adds **at most one note the Ponder
+scenes do not show** — or one that would surprise a player: the crane's power comes from below, a bay's column rule,
+a terminal takes a Schematicannon's clipboard, a lost batch is restarted with a sneak-click, a fluid bay loses its
+fluid when broken (the first of the three places that say so, ADR-054). What the mod does anyway ("the crane brings
+it") is not repeated, and placement, filters, priorities and directions are the Ponder scenes' job. The stations name
+the automation they work with (funnels, belts, Mechanical Arms), which CHECK 91 of the `arm` scenario reads. A first
+pass that only trimmed the old texts to two to four pairs each fitted the budget but read like a telegram; the owner
+rejected it, and this rule is what the second pass followed. Scrolling or paging tooltips (a tooltip component of our
+own and input handling while hovering) and a second key for the long text were rejected: both make long text
+reachable instead of short, and both look unlike every other item in a Create pack.
+
+The budget is **18 lines of description** (15 for the stacker crane): 240 px hold 23 lines of 10 px with the 3 px the
+positioner keeps below and the 4 px of border above, and five lines are not the description — the name, Create's "Hold
+[Shift]" line and the blank line under it, Ponder's "Hold [W] to Ponder" and the mod name JEI adds in a real pack. The
+crane's kinetic stats take three more.
+
+*Verification:* `data.ItemTooltipLengthTest` (JUnit) wraps every description of both lang files exactly as Create does —
+the same line break iterator, highlight underscores measured as nothing, a hard wrap past 200 px — with the advance of
+every glyph of Minecraft 1.21.1's default font, read once from the client jar by `scripts/gen_glyph_advances.py` into
+`src/test/resources/font/default_advances.json` (`--verify` fails on a stale table; a character the table does not know
+fails the test rather than measuring as nothing). It reproduces three widths the client reported in visual runs to the
+pixel. The visual scenario `tooltips` (`dev.TooltipsVisualScenario`) checks the result on the real client: it goes
+fullscreen on a 5120x1440 monitor (a window that size does not fit beside the title and task bar), asserts the
+automatic scale 6 and 240 GUI px, measures every Wareworks item's Shift tooltip in English and German with one line to
+spare for JEI, and photographs the tallest one drawn where vanilla draws it for an item at the bottom of the screen.
+A window switched into or out of fullscreen without the focus misses GLFW's framebuffer callback, so the scenario
+reads the size with the window's own `refreshFramebufferSize` when GLFW already reports it.
+
+*Consequences:* The descriptions are 2 to 9 lines, well inside the budget, which now guards against regrowth rather
+than shaping the texts. A new note has to earn its place against the Ponder scene for the same block. The `tooltips` scenario needs a 5120x1440 monitor and fails with a message on any other.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).

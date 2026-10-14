@@ -18,9 +18,12 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
    there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **fifteen** items shows a Create-style description; the stacker crane additionally
-   shows its stress impact. A rack bay's summary says it **shows how full it is on the front** — not what is in it,
-   which only the goggles say until M29 draws the real item.
+3. Holding Shift on each of the **fifteen** items shows a short Create-style description (issue #22): one sentence
+   what the block is, at most one note the Ponder scenes do not show; the stacker crane additionally shows its stress
+   impact. At
+   **2560x1440 or 5120x1440 with the automatic GUI scale**, in English and in German, hover each bay, the terminal,
+   the output and the crane in the **bottom row of your inventory**: the item name at the top of the Shift tooltip is
+   on screen. **Does each one tell you what the block is for without reading like a telegram?**
 4. JEI/EMI shows **thirteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
    terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass
@@ -907,10 +910,9 @@ went where it went.
 
 115. **German (`de_de`).** Switch the language and walk the same surfaces: the board's title ("Lagerpriorität") and its
     row ("Priorität"), the hover tip ("Halten, um die Priorität zu setzen"), the interface's goggle line
-    ("Priorität: 5"), the controller's "Priorisierte Lagerplätze: N", and the interface's Shift tooltip, which now has
-    a **fourth** section, "Beim Einstellen der Priorität". Nothing may show a raw key, run out of its box or be cut off
-    — German is the longer language and the screenshot runs only ever render English, so this is the only place
-    clipping shows up. The longest line to watch is the new tooltip paragraph.
+    ("Priorität: 5"), the controller's "Priorisierte Lagerplätze: N", and the interface's Shift tooltip, which names
+    the priority in its one sentence (since issue #22 the descriptions are short and the Ponder scenes carry the
+    detail). Nothing may show a raw key, run out of its box or be cut off.
 
     **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
     nothing about how they look.
@@ -1029,8 +1031,7 @@ settings, **read** the result and **believe** what the warehouse did.
     ("Anschluss: Überlauf (-1)", "Nimmt auf: Jeden Gegenstand", "Abgegeben: 24", "Aktiv", "Wartet auf ein Signal"), the
     controller's "Aufnehmende Anschlüsse: 2", the aisle display's "Anschlüsse: 2 aufnehmend", the crane's "Gibt ab", the
     planning reason "ein aufnehmender Anschluss war der letzte mögliche Platz ..." and the output's Shift tooltip, which
-    now has a **fifth** section, "Beim Einstellen der Richtung" — which must not read like the terminal's rotation
-    section, because it is about holding the click on a box. Nothing may show a raw key, run out of its box
+    names the overflow in its one sentence (since issue #22; the direction box is the Ponder scene's job). Nothing may show a raw key, run out of its box
     or be cut off — German is the longer language and the screenshot runs only ever render English, so this is the only
     place clipping shows up. The longest lines to watch are the new tooltip paragraphs and the planning reason.
 
@@ -1378,7 +1379,7 @@ below.
     again: the chain line and its badge, the step panel with its two buttons and its cost lines, all eight refusal
     sentences, "wartet auf einen früheren Schritt", the station's stopped row and its tooltip, the resume message with and
     without a loss, the goggle lines on station and controller, the display board line, the Shift tooltips of the
-    production station (now six sections, the longest in the mod) and of the terminal, and the new Ponder scene
+    production station (its one note is the lost batch, since issue #22) and of the terminal, and the new Ponder scene
     (`/ponder wareworks:warehouse_production`, paged to its third scene, then the same on the terminal). Nothing may show
     a raw key, run out of its box or be cut off, at **GUI scale 1 and 4**.
 
@@ -2259,9 +2260,10 @@ you get tired of waiting, and put it back before judging check 160.
     pallet and the arm slot?** They are turned to their front for that reason, unlike every other block of this mod,
     so also check the opposite: **does that look out of place in the row?**
 216. **The item descriptions.** Hover each bay and read its Create-style description, then do it again on a `de_de`
-    client. Three things have to be right in both languages: the **capacity** (64 / 256 / 1024 stacks), the sentence
-    about what each tier may carry **above** it, and that breaking one gives you an **empty bay and a pallet**.
-    **Would a player who read only this know not to break a full bay expecting to carry it away?**
+    client. Two things have to be right in both languages: the **capacity** (64 / 256 / 1024 stacks) and the sentence
+    about what each tier may carry **above** it. Since issue #22 the pallet on breaking is the Ponder scene's to show:
+    **would a player who read the tooltip and watched the scene know not to break a full bay expecting to carry it
+    away?**
 217. **The arm goes in through the slot.** Build a bay into a real aisle and watch the crane store something in it.
     **Does the arm go in through the dark slot above the load, or does it appear to pass through the woodwork?** And
     when it reaches all the way in, **does anything of the grabber stick out of the back of the bay?**
