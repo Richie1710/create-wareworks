@@ -782,13 +782,22 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
      * <p>
      * Nothing happens while a save is being loaded, which is what {@code onPortSettingsChanged} guards against: a block
      * entity read from a chunk has no level yet, and that path is covered by the controller marking its ports unread.
+     * <p>
+     * The pulse token and the two counters are read only from a full save ({@link #isFullSave}, issue #25, ADR-061).
+     * They are written only while they are set, and a schematic print over a standing port — the block most often
+     * printed over, with three block-state flags that change at runtime — carries none of them: reading it like a save
+     * disarmed a port a pulse had armed, so the export it promised was lost, and zeroed its goggle counters. The
+     * settings such a print does carry still reach the controller here, and a printed rank that makes the port a
+     * requesting one still drops the token.
      */
     @Override
     protected void readStationData(CompoundTag tag, HolderLookup.Provider registries) {
         super.readStationData(tag, registries);
-        armed = tag.getBoolean(ARMED_TAG);
-        exported = Math.max(0L, tag.getLong(EXPORTED_TAG));
-        collected = Math.max(0L, tag.getLong(COLLECTED_TAG));
+        if (isFullSave(tag)) {
+            armed = tag.getBoolean(ARMED_TAG);
+            exported = Math.max(0L, tag.getLong(EXPORTED_TAG));
+            collected = Math.max(0L, tag.getLong(COLLECTED_TAG));
+        }
         onPortSettingsChanged();
     }
 

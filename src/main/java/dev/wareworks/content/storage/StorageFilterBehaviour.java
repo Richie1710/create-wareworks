@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.function.IntConsumer;
 
 import com.simibubi.create.AllBlocks;
+import com.simibubi.create.content.logistics.filter.FilterItem;
 import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueBoxTransform;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsBoard;
@@ -55,20 +56,23 @@ import net.neoforged.neoforge.common.util.FakePlayer;
  * migration. The value is clamped <b>on read</b>, like the crane's mast height, so a future lower maximum never rewrites
  * a player's number.
  * <p>
- * <b>An empty filter writes nothing into client packets.</b> Create's {@code write} emits {@code Filter},
- * {@code FilterAmount} and {@code UpTo} unconditionally, which costs roughly 215 bytes of NBT size accounting in
- * <b>every</b> interface's update tag — and that tag is part of every chunk packet, read by clients with a 2 MB quota
- * (§3.1.1). Almost every interface of a warehouse carries no filter at all, so for those Create's whole block is skipped;
- * Create's {@code read} builds an empty {@code FilterItemStack} from a missing tag, so an absent entry reads back
- * exactly as "accepts everything". A priority is one int under a 13-character key (~66 accounting bytes) and is written
- * <b>only while it is not 0</b>, so an unprioritised, unfiltered interface still syncs nothing at all, and a prioritised
- * but unfiltered one pays for the number alone. The client needs the number because {@code addToGoggleTooltip} and the
+ * <b>An empty filter writes nothing.</b> Create's {@code write} emits {@code Filter}, {@code FilterAmount} and
+ * {@code UpTo} unconditionally, which costs roughly 215 bytes of NBT size accounting in <b>every</b> interface's update
+ * tag — and that tag is part of every chunk packet, read by clients with a 2 MB quota (§3.1.1). Here only the filter is
+ * a setting, so {@link #write} writes the {@code Filter} entry alone and only while a filter is set; Create's
+ * {@code read} builds an empty {@code FilterItemStack} from a missing tag, so an absent entry reads back exactly as
+ * "accepts everything". A priority is one int under a 13-character key (~66 accounting bytes) and is written <b>only
+ * while it is not 0</b>, so an unprioritised, unfiltered location writes nothing at all, and a prioritised but
+ * unfiltered one pays for the number alone. The client needs the number because {@code addToGoggleTooltip} and the
  * block renderer both run client-side.
  * <p>
- * <b>Saves and schematics.</b> Saves are untouched ({@code clientPacket == false}), so filter and priority persist;
- * {@code isSafeNBT()} is {@code true} and {@code BlockEntityBehaviour#writeSafe} defaults to {@code write(tag, .., false)},
- * so both travel in a schematic, and a number costs no {@code getRequiredItems()}. A pre-M16 world has no
- * {@value #PRIORITY_TAG} key and reads back 0, so nothing migrates and loading can never throw.
+ * <b>Saves and schematics.</b> A save writes the same two settings, so filter and priority persist. {@code isSafeNBT()}
+ * is {@code true} and {@code BlockEntityBehaviour#writeSafe} defaults to {@code write(tag, .., false)}, so both travel
+ * in a schematic, a number costs no {@code getRequiredItems()}, and a location at its defaults adds nothing to a
+ * schematic at all (issue #25, ADR-061). The filter is stored and written as a <b>sample of one</b> ({@link #sampleOf}).
+ * A pre-M16 world has no {@value #PRIORITY_TAG} key and reads back 0, and an older save (before issue #25) carries
+ * Create's {@code FilterAmount} and {@code UpTo}, which read exactly as before; nothing migrates and loading can never
+ * throw.
  * <p>
  * <b>Clipboard.</b> The key stays Create's {@code "Filtering"}, so copying a funnel's filter onto an interface keeps
  * working, but Create's generic {@code Value}/{@code Row} pair must not carry the priority, or a funnel's <i>extracted
@@ -103,6 +107,8 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
      * a priority the way it clears a filter.
      */
     public static final String PRIORITY_TAG = "StorePriority";
+    /** Create's key of the filter stack, in saves, packets, schematics and clipboard data alike. */
+    public static final String FILTER_TAG = "Filter";
     /** The board has one row, so every setting arrives on row 0. */
     private static final int PRIORITY_ROW = 0;
     /** Create's generic value-settings keys in clipboard data; deliberately not used to carry the priority. */
@@ -265,16 +271,52 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
 
     // --- persistence, sync and clipboard -------------------------------------------------------------------------
 
+    /**
+     * Deliberately not {@code super.write}, on every path — save, client packet and schematic ({@code writeSafe} falls
+     * back to this with {@code clientPacket == false}): Create writes {@code Filter}, {@code FilterAmount} and
+     * {@code UpTo} unconditionally, and here only the filter is a setting. The amount is never read (the board carries
+     * the priority, {@link #getCountLabelForValueBox()} is empty) and {@code upTo} never changes, and Create's
+     * {@code read} turns both missing keys into its own defaults ({@code count == 0} takes its migration branch). So
+     * an unfiltered, unprioritised location writes <b>nothing at all</b>, which keeps it out of the chunk packets and
+     * out of a schematic (issue #25, ADR-061). {@code BlockEntityBehaviour#write} itself is empty, so nothing is lost.
+     */
     @Override
     public void write(CompoundTag nbt, HolderLookup.Provider registries, boolean clientPacket) {
-        // A missing tag reads back as an empty filter and priority 0, so an unfiltered, unprioritised interface needs
-        // to sync nothing at all — and a prioritised one still skips Create's ~215-byte filter block.
-        if (clientPacket && getFilter().isEmpty()) {
-            writePriority(nbt);
-            return;
-        }
-        super.write(nbt, registries, clientPacket);
+        writeSample(this, nbt, registries);
         writePriority(nbt);
+    }
+
+    /**
+     * Writes Create's {@code Filter} entry only while a filter is set, and the filter as a <b>sample of one</b>
+     * ({@link #sampleOf}): a missing entry reads back as an empty filter, exactly as Create's own empty
+     * {@code ItemStack.saveOptional} does.
+     */
+    public static void writeSample(FilteringBehaviour behaviour, CompoundTag nbt, HolderLookup.Provider registries) {
+        ItemStack filter = behaviour.getFilter();
+        if (!filter.isEmpty())
+            nbt.put(FILTER_TAG, sampleOf(filter).saveOptional(registries));
+    }
+
+    /**
+     * A filter as the <b>sample</b> it is: one item, whatever the player held when they set it.
+     * <p>
+     * Create's {@code onShortInteract} copies the whole held stack into the slot and cuts only a Create filter item to
+     * one, so a click with 64 cobblestone used to keep "64 cobblestone" in the slot — in the save, in every chunk packet
+     * and in every schematic, where a checker reading the file sees 64 items that do not exist. The count of a ghost
+     * means nothing (a filter matches by item and components), and it can never be taken out: {@code destroy()} drops
+     * only a filter item. A Create filter item is left exactly as it is, because that one <b>is</b> a real item, paid
+     * for at the Schematicannon ({@code FilteringBehaviour#getRequiredItems}) and dropped when the block breaks.
+     */
+    public static ItemStack sampleOf(ItemStack filter) {
+        if (filter.isEmpty() || filter.getCount() == 1 || filter.getItem() instanceof FilterItem)
+            return filter;
+        return filter.copyWithCount(1);
+    }
+
+    /** A click, a clipboard and the block entity API all store a sample of one ({@link #sampleOf}). */
+    @Override
+    public boolean setFilter(ItemStack stack) {
+        return super.setFilter(sampleOf(stack));
     }
 
     /**

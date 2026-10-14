@@ -10,6 +10,7 @@ import org.lwjgl.glfw.GLFW;
 import com.simibubi.create.foundation.gui.widget.IconButton;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
+import dev.wareworks.client.gui.TerminalCraftPanel;
 import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.client.gui.WarehouseStockKeeperScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
@@ -67,6 +68,9 @@ final class ScreenInput {
             RequestConfirmation.class);
     private static final Method TERMINAL_LIST_CONFIRM_LINES = method(WarehouseTerminalScreen.class,
             "listConfirmationLines", ListOrderConfirmation.class);
+    /** The toggle that folds the crafting panel out and in, and the panel's Clear button (M32, issue #24). */
+    private static final Field TERMINAL_CRAFT_TOGGLE = field(WarehouseTerminalScreen.class, "craftToggle");
+    private static final Field TERMINAL_CRAFT_CLEAR = field(WarehouseTerminalScreen.class, "craftClear");
     private static final Field PRODUCTION_LAYOUT = field(WarehouseProductionScreen.class, "layout");
     private static final Method PRODUCTION_CELL_AT = method(WarehouseProductionScreen.class, "cellAt", double.class,
             double.class);
@@ -252,6 +256,79 @@ final class ScreenInput {
         if (!button.isMouseOver(point.x(), point.y()))
             throw new VisualTestException("the " + name + " button's own hit test does not put " + point + " on it");
         return point;
+    }
+
+    // --- the terminal's crafting panel (M32, issue #24) --------------------------------------------------------------
+
+    /**
+     * The centre of the toggle that folds the terminal's crafting panel out and in, checked with the widget's own hit
+     * test. The screen takes this click itself, before its widgets get theirs ({@code WarehouseTerminalScreen
+     * #mouseClicked}), so a click here runs exactly the branch a player's does.
+     */
+    static Point terminalCraftToggle(WarehouseTerminalScreen screen) {
+        return terminalButton(screen, TERMINAL_CRAFT_TOGGLE, "crafting toggle");
+    }
+
+    /** The lines the crafting toggle's tooltip draws, so a run can measure them in every language. */
+    static List<Component> terminalCraftToggleTooltip(WarehouseTerminalScreen screen) {
+        IconButton button = (IconButton) get(TERMINAL_CRAFT_TOGGLE, screen);
+        if (button == null)
+            throw new VisualTestException("the terminal screen has no crafting toggle yet (not laid out)");
+        return List.copyOf(button.getToolTip());
+    }
+
+    /**
+     * The centre of the crafting panel's Clear button, checked with the widget's own hit test. The button exists only
+     * while the panel is folded out and is greyed out while the grid is empty, and a click on it then does nothing — so
+     * both are failures here rather than a click that silently changes nothing.
+     */
+    static Point terminalCraftClear(WarehouseTerminalScreen screen) {
+        IconButton button = (IconButton) get(TERMINAL_CRAFT_CLEAR, screen);
+        if (button == null)
+            throw new VisualTestException("the crafting panel is folded in, so it has no Clear button");
+        if (!button.active)
+            throw new VisualTestException("the crafting panel's Clear button is greyed out: the grid is empty");
+        return terminalButton(screen, TERMINAL_CRAFT_CLEAR, "Clear");
+    }
+
+    /**
+     * The centre of cell {@code cell} of the terminal's crafting grid, checked with the panel's own hit test — and
+     * checked to be <b>nothing else</b>: neither a stock cell nor a menu slot claims the point, so a click there can
+     * only ever be the panel's.
+     */
+    static Point terminalCraftCell(WarehouseTerminalScreen screen, int cell) {
+        TerminalMenuLayout layout = (TerminalMenuLayout) get(TERMINAL_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + layout.craftCellX(cell) + TerminalMenuLayout.SLOT / 2.0,
+                screen.getGuiTop() + layout.craftCellY(cell) + TerminalMenuLayout.SLOT / 2.0);
+        int hit = screen.craftPanel().cellAt(point.x(), point.y());
+        if (hit != cell)
+            throw new VisualTestException("the crafting panel's hit test puts " + point + " on cell " + hit + ", not "
+                    + cell + (screen.isCraftPanelOpen() ? "" : " (the panel is folded in)"));
+        requireOnlyCraftPanel(screen, point, "crafting cell " + cell);
+        return point;
+    }
+
+    /** The centre of the crafting panel's result cell, checked with the panel's own hit test like a grid cell. */
+    static Point terminalCraftResult(WarehouseTerminalScreen screen) {
+        TerminalMenuLayout layout = (TerminalMenuLayout) get(TERMINAL_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + layout.craftResultX() + TerminalMenuLayout.SLOT / 2.0,
+                screen.getGuiTop() + layout.craftResultY() + TerminalMenuLayout.SLOT / 2.0);
+        TerminalCraftPanel panel = screen.craftPanel();
+        if (!panel.resultAt(point.x(), point.y()) || panel.cellAt(point.x(), point.y()) >= 0)
+            throw new VisualTestException("the crafting panel's hit test does not put " + point + " on its result cell"
+                    + (screen.isCraftPanelOpen() ? "" : " (the panel is folded in)"));
+        requireOnlyCraftPanel(screen, point, "the crafting result");
+        return point;
+    }
+
+    /** Fails when a stock cell or a menu slot also claims {@code point}, which would make the click ambiguous. */
+    private static void requireOnlyCraftPanel(WarehouseTerminalScreen screen, Point point, String what) {
+        int stock = (Integer) invoke(TERMINAL_CELL_AT, screen, point.x(), point.y());
+        if (stock >= 0)
+            throw new VisualTestException("the terminal's stock grid claims " + point + " (cell " + stock
+                    + ") as well as " + what);
+        if (invoke(FIND_SLOT, screen, point.x(), point.y()) != null)
+            throw new VisualTestException("a menu slot lies under " + what + " at " + point);
     }
 
     /** The icon the terminal's sort button currently draws, so a run can prove the three orders look different. */

@@ -393,7 +393,10 @@ public final class StorageFilterGameTests {
         helper.assertTrue(be.storeFilter().isEmpty(), "and its filter stack is empty");
 
         // A pre-M8 save has none of Create's three filter keys, not just a missing stack: its `read` takes a migration
-        // branch when the count is absent, so removing only `Filter` would exercise the post-M8 path instead.
+        // branch when the count is absent. Since issue #25 an unfiltered location writes none of them either, so the
+        // removals only spell that shape out. The format every version from M8 until issue #25 wrote (a whole stack,
+        // `FilterAmount` and `UpTo`) is loaded by
+        // SchematicSafetyGameTests#storageLocationsLoadTheFilterFormatOfEarlierVersions.
         CompoundTag legacyTag = be.saveWithFullMetadata(registries);
         legacyTag.remove(FILTER_TAG);
         legacyTag.remove(FILTER_AMOUNT_TAG);

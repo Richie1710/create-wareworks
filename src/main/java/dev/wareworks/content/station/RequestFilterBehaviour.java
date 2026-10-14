@@ -13,6 +13,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsBoard;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsFormatter;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
+import dev.wareworks.content.storage.StorageFilterBehaviour;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
@@ -76,6 +77,8 @@ import net.minecraft.world.phys.BlockHitResult;
 public class RequestFilterBehaviour extends FilteringBehaviour {
     /** Key of the filter stack in Create's clipboard data ({@code FilteringBehaviour#writeToClipboard}). */
     public static final String CLIPBOARD_FILTER_TAG = "Filter";
+    /** Create's key of the requested amount in saves, packets and schematics. */
+    public static final String FILTER_AMOUNT_TAG = "FilterAmount";
     /** Save, client-packet and clipboard key of the port's redstone behaviour. */
     public static final String REDSTONE_MODE_TAG = "RedstoneMode";
     /** The same key inside clipboard data, where it is written even for the default mode. */
@@ -291,12 +294,35 @@ public class RequestFilterBehaviour extends FilteringBehaviour {
 
     // --- persistence, sync and clipboard -------------------------------------------------------------------------
 
-    /** The mode is written only while it is not the default, so a pre-M17 output's tag stays byte for byte its own. */
+    /**
+     * Every setting is written only while it differs from what a missing key reads back as, on every path — save,
+     * client packet and schematic ({@code writeSafe} falls back to this): so a plain output writes nothing at all, and
+     * an unconfigured one adds nothing to a schematic (issue #25, ADR-061).
+     * <ul>
+     * <li>{@code Filter} only while a filter is set, and as a sample of one
+     * ({@code StorageFilterBehaviour#sampleOf}): the requested amount is {@code FilterAmount}, never the count of the
+     * filter stack, so the 64 a player happened to hold were never a setting;</li>
+     * <li>{@code FilterAmount} only while it is not one stack of the filter item: Create's {@code read} turns a missing
+     * amount into exactly {@code getMaxStackSize()} of the filter it has just read;</li>
+     * <li>{@code UpTo} never: {@link #read} forces {@code true} whatever the tag says;</li>
+     * <li>the redstone mode only while it is not the default, so a pre-M17 output's tag stays its own.</li>
+     * </ul>
+     * Deliberately not {@code super.write}, the same as {@code PortRankBehaviour#write}: Create's writes all three of
+     * its keys unconditionally, and {@code BlockEntityBehaviour#write} itself is empty, so nothing is lost.
+     */
     @Override
     public void write(CompoundTag nbt, HolderLookup.Provider registries, boolean clientPacket) {
-        super.write(nbt, registries, clientPacket);
+        StorageFilterBehaviour.writeSample(this, nbt, registries);
+        if (count != getMaxStackSize())
+            nbt.putInt(FILTER_AMOUNT_TAG, count);
         if (redstone != PortRedstone.DEFAULT)
             nbt.putString(REDSTONE_MODE_TAG, redstone.name());
+    }
+
+    /** A filter is stored as a sample of one, whatever the player held ({@code StorageFilterBehaviour#sampleOf}). */
+    @Override
+    public boolean setFilter(ItemStack stack) {
+        return super.setFilter(StorageFilterBehaviour.sampleOf(stack));
     }
 
     /** Any row (e.g. "Exactly" from an old save) is stored as "up to"; a missing mode reads as "on a pulse". */

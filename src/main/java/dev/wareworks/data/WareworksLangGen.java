@@ -7,6 +7,7 @@ import dev.wareworks.content.controller.ChunkKeepReason;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.content.station.HomePointStatus;
+import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
@@ -600,6 +601,43 @@ public final class WareworksLangGen {
                 case NOT_RUNNING -> "No list is being worked off here";
                 case NO_AISLE -> "This terminal is not part of a warehouse";
                 case OUT_OF_REACH -> "You are too far away";
+            });
+        }
+        // Crafting at the terminal (M32, issue #24, ADR-059). The panel is 54 px wide, so it holds numbers and the one
+        // title word; every sentence is a tooltip line or the status row and fits its 216 px in English and German
+        // (TerminalCraftTextWidthTest). "Available" and not "in stock": the number is what a click could be granted,
+        // the stock tooltip's own "Available" (TerminalCraftViewPayload.KeyView#available).
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_TITLE), "Crafting");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_TOGGLE), "Crafting grid");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_TOGGLE_HINT),
+                "Craft by hand from what was delivered");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CLEAR), "Clear the grid");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_PER_CRAFT), "%1$s per craft, %2$s here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_AVAILABLE), "%1$s available");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_SHORT), "Only %1$s available, %2$s needed");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_MISSING), "None available");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CELL_EMPTY),
+                "Right-click a listed item, then click here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CELL_EMPTY_SHIFT),
+                "Shift + right-click: into the next free cell");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CELL_CLEAR), "Right-click to clear");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_STOCK_HINT), "Right-click: into the crafting grid");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_READY), "Ready to craft: x%1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_ONCE), "Click: craft once");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_ALL), "Shift-click: craft all");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_PARTIAL), "Crafted %1$s x%2$s. %3$s");
+        // One sentence per way a craft click can end. The ones that name an item take it as %1$s; "crafted" takes the
+        // result and the number of items made. A refusal that stops a Shift-click after some crafts stands after
+        // TERMINAL_CRAFT_PARTIAL, so each is a whole sentence of its own.
+        for (TerminalCraftResult result : TerminalCraftResult.values()) {
+            lang.accept(WareworksLang.key(result.langKey()), switch (result) {
+                case CRAFTED -> "Crafted %1$s x%2$s";
+                case NO_RECIPE -> "The grid makes nothing";
+                case NOT_IN_BUFFER -> "Not enough %1$s here";
+                case NO_ROOM -> "No room for %1$s";
+                case LOCKED -> "You have not unlocked this recipe";
+                case OUT_OF_REACH -> "You are too far away";
+                case GRID_EMPTY -> "Lay a recipe first";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_PATTERNS), "Patterns");

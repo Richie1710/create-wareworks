@@ -35,6 +35,7 @@ import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.production.ProductionOrderState;
@@ -116,6 +117,10 @@ public final class WarehouseTerminalMenuGameTests {
     private static final int PRODUCIBLE_PLANKS = LOGS_IN_STOCK / LOG_PER_RUN * PLANKS_PER_RUN;
 
     private static final int PLAYER_SLOTS = 36;
+    /** Rows of the player inventory above the hotbar. */
+    private static final int INVENTORY_ROWS = 3;
+    /** The buffer size the server config ships with ({@code terminalBufferSlots}); its layout is pinned in numbers. */
+    private static final int SHIPPED_BUFFER_SLOTS = 9;
     private static final int DIAMONDS_IN_STOCK = 20;
     private static final int DELIVERED_GOLD = 24;
     private static final int FAR_AWAY_BLOCKS = 40;
@@ -141,7 +146,9 @@ public final class WarehouseTerminalMenuGameTests {
 
     /**
      * The menu's slots: the terminal's buffer (take out only) plus the player inventory, at the positions both sides
-     * compute from {@link TerminalMenuLayout}, inside the window size vanilla guarantees at every GUI scale.
+     * compute from {@link TerminalMenuLayout}, inside the window size vanilla guarantees at every GUI scale. The whole
+     * list is pinned slot by slot, before and after a grid is laid in the crafting panel (M32, issue #24), which must
+     * not add or move a single slot ({@link #assertSlotListPinned}).
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void terminalMenuSlots(GameTestHelper helper) {
@@ -209,6 +216,13 @@ public final class WarehouseTerminalMenuGameTests {
                     "the player inventory follows the list slot");
             helper.assertValueEqual(firstPlayerSlot.x, layout.playerSlotsX(), "first player slot x");
             helper.assertValueEqual(firstPlayerSlot.y, layout.playerSlotsY(), "first player slot y");
+            // The whole list, slot by slot (M32, issue #24): the crafting grid is ghost cells, not slots, so it moved
+            // none of them — and a grid laid in the panel adds none either.
+            assertSlotListPinned(helper, menu, player);
+            menu.previewCraft(player, CraftGrid.of(PLANK, PLANK, PLANK, PLANK, null, PLANK, PLANK, PLANK, PLANK),
+                    Optional.empty());
+            helper.assertTrue(menu.craftPreview().recipe().isPresent(), "the laid grid makes something");
+            assertSlotListPinned(helper, menu, player);
 
             // The crane delivers, the player takes out: a shift-click empties the buffer into the inventory.
             helper.assertTrue(terminal.insert(GOLD.toStack(DELIVERED_GOLD), false).isEmpty(), "delivery fits");
@@ -733,6 +747,68 @@ public final class WarehouseTerminalMenuGameTests {
                 player.getInventory(), terminal);
         player.containerMenu = menu;
         return menu;
+    }
+
+    /**
+     * Pins the menu's whole slot list (M32, issue #24): how many slots there are, their order, the class of each, the
+     * container slot behind it and its position. The crafting panel's grid is ghost cells rather than slots
+     * ({@code docs/warehouse-system.md} §3.4.5) precisely so that none of this moves: {@code listSlotIndex()},
+     * {@code firstPlayerSlot()}, the shift-click routing and the dev harness's screen input all read these indices,
+     * and a slot position is final once the menu is built.
+     * <p>
+     * The positions are checked against the layout, and the layout's anchors for the shipped buffer of
+     * {@value #SHIPPED_BUFFER_SLOTS} slots are pinned as numbers, so a change that moved every slot together fails too.
+     */
+    private static void assertSlotListPinned(GameTestHelper helper, WarehouseTerminalMenu menu, Player player) {
+        TerminalMenuLayout layout = menu.layout();
+        int buffer = menu.bufferSlots();
+        helper.assertValueEqual(menu.slots.size(), buffer + WarehouseTerminalMenu.LIST_SLOTS + PLAYER_SLOTS,
+                "slot count");
+        for (int index = 0; index < menu.slots.size(); index++) {
+            Slot slot = menu.slots.get(index);
+            String type;
+            int containerSlot;
+            int x;
+            int y;
+            if (index < buffer) {
+                type = "TerminalBufferSlot";
+                containerSlot = index;
+                x = layout.bufferSlotX(index);
+                y = layout.bufferSlotY(index);
+            } else if (index == menu.listSlotIndex()) {
+                type = "TerminalListSlot";
+                containerSlot = WarehouseTerminalBlockEntity.LIST_SLOT;
+                x = layout.listSlotX();
+                y = layout.listSlotY();
+            } else {
+                // MenuBase#addPlayerSlots: the three inventory rows (container slots 9-35), then the hotbar (0-8).
+                int inPlayer = index - menu.firstPlayerSlot();
+                int column = inPlayer % TerminalMenuLayout.PLAYER_COLUMNS;
+                boolean hotbar = inPlayer >= INVENTORY_ROWS * TerminalMenuLayout.PLAYER_COLUMNS;
+                type = "Slot";
+                containerSlot = hotbar ? column : inPlayer + TerminalMenuLayout.PLAYER_COLUMNS;
+                x = layout.playerSlotsX() + column * TerminalMenuLayout.SLOT;
+                y = layout.playerSlotsY() + (hotbar ? TerminalMenuLayout.HOTBAR_OFFSET
+                        : inPlayer / TerminalMenuLayout.PLAYER_COLUMNS * TerminalMenuLayout.SLOT);
+                helper.assertTrue(slot.container == player.getInventory(),
+                        "slot " + index + " is a slot of the player's own inventory");
+            }
+            String name = "slot " + index;
+            helper.assertValueEqual(slot.index, index, name + " knows its place in the list");
+            helper.assertValueEqual(slot.getClass().getSimpleName(), type, name + " class");
+            helper.assertValueEqual(slot.getContainerSlot(), containerSlot, name + " container slot");
+            helper.assertValueEqual(slot.x, x, name + " x");
+            helper.assertValueEqual(slot.y, y, name + " y");
+        }
+        TerminalMenuLayout shipped = new TerminalMenuLayout(SHIPPED_BUFFER_SLOTS);
+        helper.assertValueEqual(shipped.bufferSlotX(0), 7, "first buffer slot x of the shipped buffer");
+        helper.assertValueEqual(shipped.bufferSlotY(0), 78, "first buffer slot y of the shipped buffer");
+        helper.assertValueEqual(shipped.bufferSlotX(SHIPPED_BUFFER_SLOTS - 1), 151, "last buffer slot x");
+        helper.assertValueEqual(shipped.listSlotX(), 205, "list slot x");
+        helper.assertValueEqual(shipped.listSlotY(), 78, "list slot y");
+        helper.assertValueEqual(shipped.playerSlotsX(), 34, "first player slot x");
+        helper.assertValueEqual(shipped.playerSlotsY(), 153, "first player slot y");
+        helper.assertValueEqual(TerminalMenuLayout.HOTBAR_OFFSET, 58, "the hotbar's distance below the first row");
     }
 
     /** Sends a request through the payload entry point and returns why it was refused (or empty when accepted). */

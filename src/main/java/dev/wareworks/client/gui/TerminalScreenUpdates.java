@@ -3,6 +3,8 @@ package dev.wareworks.client.gui;
 import java.util.Optional;
 
 import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalCraftAnswerPayload;
+import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
@@ -76,6 +78,22 @@ public final class TerminalScreenUpdates {
      */
     public static void onListAnswer(TerminalListAnswerPayload payload) {
         screen(payload.containerId()).ifPresent(screen -> screen.onListAnswer(payload));
+    }
+
+    /**
+     * What the open screen's crafting grid makes and what the aisle says about its items (M32, issue #24). A view that
+     * arrives after the screen was closed is dropped like every other late payload; the next screen asks again.
+     */
+    public static void onCraftView(TerminalCraftViewPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onCraftView(payload));
+    }
+
+    /**
+     * The answer to a craft click of the open screen (M32, issue #24). The crafted items arrive through the menu's
+     * slots either way, so dropping a late answer loses only its sentence.
+     */
+    public static void onCraftAnswer(TerminalCraftAnswerPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onCraftAnswer(payload));
     }
 
     /** The open terminal screen of the menu {@code containerId}, if that is what the player is looking at. */

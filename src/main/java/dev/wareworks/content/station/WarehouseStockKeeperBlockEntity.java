@@ -34,6 +34,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -617,11 +618,19 @@ public class WarehouseStockKeeperBlockEntity extends SmartBlockEntity
      * printed somewhere else must not start out calling for items nothing is missing (M15 review fix). A wrench pickup
      * or a broken block does not come through here at all — it drops through the loot table, so it keeps no rules, the
      * same as a production station's patterns and a warehouse interface's store filter.
+     * <p>
+     * A keeper without a single rule writes nothing here, so an unconfigured keeper adds nothing to a schematic (issue
+     * #25, ADR-061). A save keeps writing the list always, and {@link #read} loads rules only from a tag that carries
+     * the list: a keeper printed fresh from a schematic without rules has none, and a print without them over a
+     * standing keeper leaves that keeper's rules alone. That is also what an ordinary Schematic and Quill save brings:
+     * it is taken on the client, which is never sent a keeper's rules, so its keepers carry none.
      */
     @Override
     public void writeSafe(CompoundTag tag, HolderLookup.Provider registries) {
         super.writeSafe(tag, registries);
-        writeRules(tag, registries);
+        ListTag saved = rules.save(registries);
+        if (!saved.isEmpty())
+            tag.put(StockKeeperRules.RULES_TAG, saved);
     }
 
     private void writeRules(CompoundTag tag, HolderLookup.Provider registries) {
@@ -635,7 +644,13 @@ public class WarehouseStockKeeperBlockEntity extends SmartBlockEntity
             summary = StockKeeperGoggleSummary.read(tag.getCompound(SUMMARY_TAG));
             return;
         }
-        rules.load(tag.getList(StockKeeperRules.RULES_TAG, Tag.TAG_COMPOUND), registries);
+        // Every save writes the list, even an empty one, and a /data merge merges into a save. A tag without it is a
+        // schematic print landing on a keeper that is already standing (BlockHelper.placeSchematicBlock, issue #25,
+        // ADR-061), from a schematic that carries no rules — a keeper without rules writes none into it, and an ordinary
+        // Schematic and Quill save is taken on the client, which never holds them. It says nothing about the rules and
+        // must not wipe the ones a player wrote.
+        if (tag.contains(StockKeeperRules.RULES_TAG, Tag.TAG_LIST))
+            rules.load(tag.getList(StockKeeperRules.RULES_TAG, Tag.TAG_COMPOUND), registries);
         if (level instanceof ServerLevel && !isRemoved())
             notifyRulesChanged(); // data changed on a live block entity (e.g. /data merge): keep the copy in step
     }

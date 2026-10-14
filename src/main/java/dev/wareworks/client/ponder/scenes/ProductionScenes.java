@@ -217,8 +217,8 @@ public final class ProductionScenes {
 
         scene.overlay().showOutline(PonderPalette.GREEN, "order", util.select().position(terminal), TEXT_TICKS);
         // Above the terminal, so the icon covers neither its screen nor the text box beside it. Right-click, because
-        // that is what a player does to a terminal block: WarehouseTerminalBlock only implements useItemOn, and in
-        // Create's own scenes a left-click icon on a block means punching it.
+        // that is what a player does to a terminal block: WarehouseTerminalBlock opens its screen on a right-click and
+        // has no left-click use, and in Create's own scenes a left-click icon on a block means punching it.
         scene.overlay().showControls(util.vector().blockSurface(terminal, Direction.UP), Pointing.DOWN, CONTROL_TICKS)
                 .rightClick();
         scene.idle(7);

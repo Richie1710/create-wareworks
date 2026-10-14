@@ -1,5 +1,6 @@
 package dev.wareworks;
 
+import dev.wareworks.client.gui.WarehouseTerminalScreen;
 import dev.wareworks.client.ponder.WareworksPonderLang;
 import dev.wareworks.client.ponder.WareworksPonderPlugin;
 import dev.wareworks.client.render.WareworksPartialModels;
@@ -11,6 +12,8 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.loading.FMLLoader;
+import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
+import net.neoforged.neoforge.common.NeoForge;
 
 /**
  * Client-only entry point. This class is never loaded on a dedicated server,
@@ -26,6 +29,10 @@ public final class WareworksClient {
         // the LANG generator there instead. HIGHEST priority, because Registrate refuses new data generators once its
         // own normal-priority listener has built the root provider. GatherDataEvent only fires during runData.
         modEventBus.addListener(EventPriority.HIGHEST, WareworksPonderLang::gatherDataHighPriority);
+        // The crafting grids a player laid at terminals (M32, issue #24) belong to the connection they were laid under:
+        // leaving the world or server forgets them, so none comes back in another world or reaches a connection whose
+        // registries cannot write its item keys.
+        NeoForge.EVENT_BUS.addListener(WareworksClient::onLoggingOut);
         // Dev tooling (ADR-014): the visual smoke test runs only in a development environment and only when the system
         // property names a scenario (Gradle runVisualTest). Release jars do not contain the harness (build.gradle).
         // VisualTestHarness.PROPERTY is a compile-time constant, so reading it does not load the harness.
@@ -42,6 +49,10 @@ public final class WareworksClient {
     /** Separate method: the harness classes are resolved only when this runs, i.e. only in a dev run with the property. */
     private static void startVisualTest(String scenario) {
         VisualTestHarness.install(scenario);
+    }
+
+    private static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
+        WarehouseTerminalScreen.forgetRememberedGrids();
     }
 
     private static void onClientSetup(FMLClientSetupEvent event) {

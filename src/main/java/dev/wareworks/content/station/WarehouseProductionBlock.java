@@ -8,6 +8,7 @@ import dev.wareworks.registry.WareworksBlockEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -30,9 +31,9 @@ import net.minecraft.world.phys.BlockHitResult;
  * warehouse input. Its item capability is therefore extract-only, exactly like a warehouse output's.
  * <p>
  * Like the other stations it faces the aisle ({@link #FACING}, {@link WarehouseStationBlock#placementFacing}), has no
- * ticker and no redstone behaviour: the patterns are edited in its screen, which a right-click with an empty hand
- * opens, and <b>sneaking</b> with an empty hand lets the warehouse make this station's products again after the safety
- * stop held them (M20).
+ * ticker and no redstone behaviour: the patterns are edited in its screen, which a right-click opens whatever is in the
+ * hand (issue #26), and <b>sneaking</b> with an empty hand lets the warehouse make this station's products again after
+ * the safety stop held them (M20).
  */
 public class WarehouseProductionBlock extends WarehouseStationBlock<WarehouseProductionBlockEntity> {
     public static final MapCodec<WarehouseProductionBlock> CODEC = simpleCodec(WarehouseProductionBlock::new);
@@ -74,35 +75,44 @@ public class WarehouseProductionBlock extends WarehouseStationBlock<WarehousePro
     }
 
     /**
-     * Right-clicking with an <b>empty hand</b> opens the pattern screen ({@code docs/warehouse-system.md} §3.5), and
-     * <b>sneaking</b> with an empty hand lets the warehouse make this station's products again after the safety stop
-     * held them ({@link WarehouseProductionBlockEntity#resumeStoppedProducts()}, M20).
-     * <p>
-     * Anything held passes the interaction on, so the wrench still rotates the block and a clipboard or a future item
-     * keeps working — the same rule the warehouse terminal follows. The station registers no behaviours, so no value
-     * box can swallow the click either.
-     * <p>
-     * A sneaking player only reaches this method at all because {@link ProductionStationHooks} asks for it: vanilla drops
-     * a sneaking interaction before the block whenever <i>either</i> hand holds something that does not bypass the sneak,
-     * so a shield or a torch in the offhand would otherwise swallow the resume without a word. {@code useWithoutItem}
-     * would not help — it sits inside the same guard.
+     * A right-click opens the pattern screen <b>whatever is in the hand</b>, and a sneaking one places the block or
+     * uses the item, as at a chest ({@code docs/warehouse-system.md} §3.5, issue #26) — the same rule the warehouse
+     * terminal and the stock keeper follow. This method only lets the items that act on the station keep their click —
+     * the wrench turns it, the Mechanical Arm item selects it, a clipboard opens its editor
+     * ({@link StationScreenClick#actsOnTheBlock}); the screen and the resume are in {@link #useWithoutItem}.
      */
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
             Player player, InteractionHand hand, BlockHitResult hit) {
-        if (!stack.isEmpty())
-            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
-        if (level.isClientSide)
-            return ItemInteractionResult.SUCCESS;
-        if (!(level.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station))
-            return ItemInteractionResult.SUCCESS;
-        if (player.isSecondaryUseActive()) {
-            resume(player, station);
-            return ItemInteractionResult.SUCCESS;
+        return StationScreenClick.useItemOn(stack, player);
+    }
+
+    /**
+     * The main hand's click once {@link #useItemOn} passed: it opens the pattern screen, and <b>sneaking</b> with an
+     * empty main hand lets the warehouse make this station's products again after the safety stop held them
+     * ({@link WarehouseProductionBlockEntity#resumeStoppedProducts()}, M20). A sneaking click with something in the
+     * main hand that still gets here — an item that bypasses the sneak, such as Create's Extendo Grip — is that item's
+     * own and passed on. Both answers are consumed on both sides even without a block entity, so the client never goes
+     * on to place or use the held item ({@link StationScreenClick}). The station registers no behaviours, so no value
+     * box can swallow the click either.
+     * <p>
+     * A sneaking player with something in the <b>offhand</b> only reaches this method at all because
+     * {@link ProductionStationHooks} asks for it: vanilla drops a sneaking interaction before the block whenever
+     * <i>either</i> hand holds something that does not bypass the sneak, so a shield or a torch in the offhand would
+     * otherwise swallow the resume without a word. This method sits inside the same guard as {@code useItemOn}.
+     */
+    @Override
+    protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
+            BlockHitResult hit) {
+        if (player.isSecondaryUseActive() && !player.getMainHandItem().isEmpty())
+            return InteractionResult.PASS;
+        if (!level.isClientSide && level.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station) {
+            if (player.isSecondaryUseActive())
+                resume(player, station);
+            else if (player instanceof ServerPlayer serverPlayer)
+                station.openScreen(serverPlayer);
         }
-        if (player instanceof ServerPlayer serverPlayer)
-            station.openScreen(serverPlayer);
-        return ItemInteractionResult.SUCCESS;
+        return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
     /**

@@ -996,6 +996,45 @@ public final class WareworksLang {
     public static final String TERMINAL_BUFFER = "gui.terminal.buffer";
     /** {@code "+%1$s not shown"}: item types the aisle holds beyond {@code maxTerminalStockEntries}. */
     public static final String TERMINAL_NOT_SHOWN = "gui.terminal.not_shown";
+    // --- crafting at the terminal (M32, issue #24, ADR-059) ---------------------------------------------------------
+    // The panel itself holds numbers and one title word only; every sentence goes to a tooltip or to the status row,
+    // and each of them fits that row's 216 px in both languages (TerminalCraftTextWidthTest). What a click ends in is
+    // TerminalCraftResult#langKey, one sentence per result.
+    /** {@code "Crafting"}: the crafting panel's title, one word of at most 54 px in every language. */
+    public static final String TERMINAL_CRAFT_TITLE = "gui.terminal.craft.title";
+    /** {@code "Crafting grid"}: the tooltip title of the toggle that folds the panel out. */
+    public static final String TERMINAL_CRAFT_TOGGLE = "gui.terminal.craft.toggle";
+    /** The toggle's second tooltip line: what the panel is for. */
+    public static final String TERMINAL_CRAFT_TOGGLE_HINT = "gui.terminal.craft.toggle_hint";
+    /** {@code "Clear the grid"}: the tooltip of the panel's Clear button. */
+    public static final String TERMINAL_CRAFT_CLEAR = "gui.terminal.craft.clear";
+    /** {@code "%1$s per craft, %2$s here"}: what one craft takes of a grid item, and what the buffer holds of it. */
+    public static final String TERMINAL_CRAFT_PER_CRAFT = "gui.terminal.craft.per_craft";
+    /** {@code "%1$s available"}: a grid item the buffer lacks, but a click in the list could be granted. */
+    public static final String TERMINAL_CRAFT_AVAILABLE = "gui.terminal.craft.available";
+    /** {@code "Only %1$s available, %2$s needed"}: a grid item the warehouse has too few of for the next craft. */
+    public static final String TERMINAL_CRAFT_SHORT = "gui.terminal.craft.short";
+    /** {@code "None available"}: a grid item that is neither here nor to be had from the warehouse. */
+    public static final String TERMINAL_CRAFT_MISSING = "gui.terminal.craft.missing";
+    /** How an empty grid cell is filled (its tooltip). */
+    public static final String TERMINAL_CRAFT_CELL_EMPTY = "gui.terminal.craft.cell_empty";
+    /** The second gesture of an empty cell's tooltip: Shift + right-click in the list fills the next free cell. */
+    public static final String TERMINAL_CRAFT_CELL_EMPTY_SHIFT = "gui.terminal.craft.cell_empty_shift";
+    /** {@code "Right-click to clear"}: the hint under a filled grid cell's tooltip. */
+    public static final String TERMINAL_CRAFT_CELL_CLEAR = "gui.terminal.craft.cell_clear";
+    /** The one line a stock cell's tooltip gains while the panel is folded out. */
+    public static final String TERMINAL_CRAFT_STOCK_HINT = "gui.terminal.craft.stock_hint";
+    /** {@code "Ready to craft: x%1$s"}: the crafts the buffer holds right now, in the result's tooltip. */
+    public static final String TERMINAL_CRAFT_READY = "gui.terminal.craft.ready";
+    /** {@code "Click: craft once"}: the result cell's first hint. */
+    public static final String TERMINAL_CRAFT_ONCE = "gui.terminal.craft.once";
+    /** {@code "Shift-click: craft all"}: the result cell's second hint. */
+    public static final String TERMINAL_CRAFT_ALL = "gui.terminal.craft.all";
+    /**
+     * {@code "Crafted %1$s x%2$s. %3$s"}: a Shift-click that crafted some and then stopped, with the sentence of the
+     * refusal it stopped at as the third argument ({@code TerminalCraftResult#langKey}).
+     */
+    public static final String TERMINAL_CRAFT_PARTIAL = "gui.terminal.craft.partial";
     /** {@code "Patterns"}: label above the pattern list of a production station's screen. */
     public static final String PRODUCTION_PATTERNS = "gui.production.patterns";
     /** {@code "Delivered here"}: label above a production station's own buffer slots. */

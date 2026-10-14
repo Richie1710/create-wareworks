@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Craft at the warehouse terminal.** A new button beside your inventory in the terminal's screen folds out a
+  crafting grid. Lay a recipe in it and craft it **by hand from what the crane delivered** into the terminal, without
+  carrying everything to a crafting table first. Click the result to craft once, **Shift**-click to craft as many as
+  the delivered items allow. The result goes into your inventory, or into the terminal when your inventory is full,
+  and leftovers like a cake's empty buckets stay in the terminal. Any crafting recipe works, including the special ones
+  such as fireworks and dyeing, and with the `doLimitedCrafting` game rule on, a recipe you have not unlocked stays
+  locked. Wareworks still never crafts on its own: a recipe runs only when you click it
+- **The grid holds ghosts, not items.** Right-click an item in the stock list to pick it up as a ghost, then
+  left-click grid cells to stamp it in — one pick fills a whole ring of cells, and **Esc** puts it down.
+  Shift + right-click drops an item straight into the next free cell. Laying a recipe orders nothing and moves
+  nothing; a plain left click in the list still requests, exactly as before. The result appears under the grid with
+  the number of crafts the delivered items allow, cells you already have are drawn solid, and a cell's tooltip says
+  how many of that item the warehouse has. Each player has their own grid, and the last 16 terminals you used keep
+  theirs until you leave the world or server
+- **Nothing is ever half-crafted.** If an ingredient is missing from the terminal, or there is no room for the result
+  or for what the recipe leaves behind, nothing is used up, and the status line names the item. Two players crafting
+  from one terminal at the same moment never share an ingredient: the second one is told it is gone. Fetching the
+  ingredients for a laid recipe with one button is still to come
+- **A note for servers running Create: Schematic Checker.** In mod-whitelist mode the checker removes Wareworks blocks
+  that carry block data from uploaded schematics — every rack bay, in the report — so they show in the hologram but
+  are missing from the Schematicannon's checklist and from the print. Whitelist mode is the checker's default. The
+  README now has the line that fixes it (`"wareworks"` appended to `WhiteListModList` in `config/CSC/config.toml`,
+  keeping every entry already there) and why that is safe: Create prints a Wareworks block with its settings and never
+  with what it holds. Tests save and print every Wareworks block, configured and stocked, through Create's own
+  schematic code to keep it that way
+
+### Changed
+
+- **A Wareworks block at its default settings adds nothing to a schematic.** An unfiltered rack bay, fluid bay or
+  warehouse interface, a plain warehouse port, a controller on aisle A, a dock at the default mast height and a stock
+  keeper without rules no longer hand a Schematicannon any block data of their own, and saves and chunk packets carry
+  a little less. Worlds and schematics from earlier versions load unchanged
+- **A filter slot stores a single item as its sample.** Setting the filter of a storage location or a port with a
+  whole stack in hand used to store the whole stack as the sample, so a schematic of the block named items that do not
+  exist. Nothing is taken from you either way, the filter works exactly as before, and a Create filter item is kept as
+  it is
+
+### Fixed
+
+- **The terminal, the production station and the stock keeper open with anything in your hand**, like a chest.
+  Right-clicking one while holding a block used to place the block against it, and food was eaten in front of it;
+  now the screen opens and the item stays where it is. To place a block against one of them (a chute, a hopper, a
+  sign) or to use the item you hold, sneak while you click. The items that work on these blocks keep doing so: the
+  wrench turns them (in adventure mode, where it cannot, it opens the screen), the Mechanical Arm selects the terminal
+  and the production station, the clipboard opens its own editor, the Display Link selects its source, goggles are put
+  on, and sneaking with an empty hand on a production station still restarts what the safety stop held. Funnels and
+  Deployers place against them as before
+- **A creative instant print no longer duplicates a pallet.** A Schematic and Quill saves every entity in its area,
+  and a pallet — the load of a broken rack bay — went into the schematic with its whole load; printing it in creative
+  then added a second pallet beside the first. Create now leaves pallets out of every print except an operator's
+  creative print, which keeps every saved entity
+- **A schematic printed over a standing crane, terminal, production station, port or stock keeper no longer deletes
+  what it holds.** A print lands on a standing block when one of its block states differs (a dock turned another way,
+  a terminal's screen on another side, a port that is powered now): in creative, and at a Schematicannon with *Replace
+  Block Entities* on. It used to empty the crane's handling head without dropping anything, take the clipboard out of
+  a terminal's list slot and cancel its order, wipe a production station's patterns, disarm a port a redstone pulse
+  had armed (losing the export it promised) and zero its counters and its last refusal, and wipe a stock keeper's
+  rules when the schematic carried none, which is every ordinary Schematic and Quill save, because it is taken on the
+  client. They now stay, as a rack bay's goods and a station's buffer already did
+
 ## [0.10.0-beta] - 2026-10-14
 
 ### Changed

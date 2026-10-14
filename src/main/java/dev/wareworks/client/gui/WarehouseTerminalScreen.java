@@ -1,9 +1,12 @@
 package dev.wareworks.client.gui;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -19,11 +22,14 @@ import com.simibubi.create.foundation.gui.widget.ScrollInput;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalListState;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalScreenStatus;
+import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
@@ -46,6 +52,8 @@ import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.core.terminal.TerminalUsageCounts;
 import dev.wareworks.network.ProductionCancelPayload;
 import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalCraftAnswerPayload;
+import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
@@ -62,13 +70,19 @@ import net.createmod.catnip.gui.element.GuiGameElement;
 import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.renderer.Rect2i;
+import net.minecraft.core.GlobalPos;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
@@ -95,6 +109,13 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * {@link TerminalMenuLayout#height()} says for the terminal's buffer, which always fits the 320 ×
  * {@value TerminalMenuLayout#MAX_HEIGHT} pixels vanilla guarantees at every GUI scale: a bigger buffer takes its rows
  * from the stock grid, which scrolls anyway ({@link TerminalMenuLayout}).
+ * <p>
+ * <b>Crafting</b> (M32, issue #24). A toggle right of the player inventory folds a crafting panel out to the right,
+ * which widens the window to {@value TerminalMenuLayout#FOLDED_WIDTH} pixels and moves no slot. The player lays a
+ * recipe of ghosts there — a right-click on a stock cell picks an item, left clicks stamp it into cells — and crafts it
+ * from what the crane delivered into the buffer with a click on the result. The panel's own work is
+ * {@link TerminalCraftPanel}'s; this screen folds it, frames it and offers it each click in its turn
+ * ({@link #mouseClicked}).
  */
 public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<WarehouseTerminalMenu> {
     /** How long the answer to a request stays in the status line. */
@@ -106,8 +127,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int TEXT_INSET = 4;
     private static final int TEXT_ROW_INSET = 5;
     private static final int ITEM_INSET = 1;
-    /** Amounts are drawn at three quarters of the normal size, so four characters fit into an 18 pixel cell. */
-    private static final float COUNT_SCALE = 0.75F;
+    /**
+     * Amounts are drawn at three quarters of the normal size, so four characters fit into an 18 pixel cell. The
+     * crafting panel's ready count uses it too ({@link TerminalCraftPanel}).
+     */
+    static final float COUNT_SCALE = 0.75F;
     /** Width of the edit box's blinking cursor, which the empty-box hint starts behind. */
     private static final int CURSOR_WIDTH = 5;
     private static final int SCROLLBAR_WIDTH = 3;
@@ -121,15 +145,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** One vanilla stack: how far one shift-scroll step moves the amount input (clamped to the configured maximum). */
     private static final int AMOUNT_SHIFT_STEP = 64;
 
-    private static final int COLOR_HEADER = 0xFFFBDC7D;
+    // The colours the crafting panel shares with the window are package-private, so the two cannot drift apart.
+    static final int COLOR_HEADER = 0xFFFBDC7D;
     private static final int COLOR_TEXT = 0xFFEEEEEE;
-    private static final int COLOR_DIM = 0xFFA0A0A0;
-    private static final int COLOR_SUCCESS = 0xFF89F189;
+    static final int COLOR_DIM = 0xFFA0A0A0;
+    static final int COLOR_SUCCESS = 0xFF89F189;
     private static final int COLOR_ERROR = 0xFFFF8080;
     private static final int COLOR_PANEL_INSET = 0xFF1B1710;
     private static final int COLOR_SCROLLBAR_TRACK = 0x40000000;
     private static final int COLOR_SCROLLBAR_KNOB = 0xFF9A7B4F;
-    private static final int COLOR_CELL_HOVER = 0x60FFFFFF;
+    static final int COLOR_CELL_HOVER = 0x60FFFFFF;
     /** An item that is not in stock but can be produced here (M11, ADR-024). */
     private static final int COLOR_PRODUCIBLE = 0xFF89C7F1;
     /** Background of such a cell: the same blue, faint enough to leave the item itself readable. */
@@ -207,6 +232,33 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static String rememberedQuery = "";
     private static boolean rememberedInStockOnly;
     private static int rememberedAmount = TerminalAmounts.MIN_AMOUNT;
+    /** Whether the crafting panel is folded out (M32, issue #24): the same kind of view setting as the search. */
+    private static boolean rememberedCraftPanel;
+    /** Terminals whose crafting grid {@link #rememberedGrids} keeps at most; the least recently opened one goes. */
+    private static final int MAX_REMEMBERED_GRIDS = 16;
+    /**
+     * The crafting grid this player last laid at each terminal (M32, issue #24), until they leave the world or server:
+     * keyed by dimension and position, at most {@value #MAX_REMEMBERED_GRIDS} terminals, least recently used out first.
+     * <p>
+     * The grid belongs to the player's client and to nothing else. It is not saved and never synced: the server only
+     * sees it in a payload, and a second player at the same terminal lays a grid of their own. An emptied grid is
+     * forgotten rather than kept.
+     * <p>
+     * <b>It does not outlive the connection</b> ({@link #forgetRememberedGrids}, {@link #keepGridsOfThisConnection}).
+     * A position means nothing in another world, and a grid's keys hold registry entries of the connection that decoded
+     * them — an enchantment, a banner pattern — which no later connection can write into a packet: the preview that
+     * announces a remembered grid would end that connection.
+     */
+    private static final Map<GlobalPos, CraftGrid<ItemKey>> rememberedGrids =
+            new LinkedHashMap<>(MAX_REMEMBERED_GRIDS, 0.75F, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<GlobalPos, CraftGrid<ItemKey>> eldest) {
+                    return size() > MAX_REMEMBERED_GRIDS;
+                }
+            };
+    /** The registries of the connection {@link #rememberedGrids} were laid under; {@code null} while there are none. */
+    @Nullable
+    private static RegistryAccess rememberedGridRegistries;
 
     private final StockListModel<ItemKey> model = new StockListModel<>();
     private TerminalScreenStatus status = TerminalScreenStatus.NONE;
@@ -312,6 +364,19 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** How far the clipboard order has got, as the server last pushed it (M23). */
     private TerminalListState listState = TerminalListState.NONE;
     /**
+     * The crafting panel (M32, issue #24): its grid, the ghost on the cursor, the server's view and everything drawn
+     * and hit-tested inside it. It outlives every re-layout of this screen, because a fold or a resize is not an edit.
+     */
+    private final TerminalCraftPanel craftPanel;
+    /** Where this terminal's grid is remembered ({@link #rememberedGrids}); {@code null} without a block entity. */
+    @Nullable
+    private final GlobalPos craftGridKey;
+    /** Whether the crafting panel is folded out, making the window {@value TerminalMenuLayout#FOLDED_WIDTH} px wide. */
+    private boolean craftOpen = rememberedCraftPanel;
+    /** The server's answer to the last craft click, or {@code null} before the first one (M32, issue #24). */
+    @Nullable
+    private TerminalCraftAnswerPayload craftAnswer;
+    /**
      * The wrapped text and the geometry of {@link #confirming}, built once and dropped whenever anything it is built
      * from changes: the question itself, {@link #costChanged}, and the window layout ({@link #init()}).
      */
@@ -328,6 +393,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private IconButton listButton;
     private ScrollInput amountInput;
     private Label amountLabel;
+    /** The toggle that folds the crafting panel out and in, in the free column right of the inventory (M32). */
+    private IconButton craftToggle;
+    /** The panel's Clear button; {@code null} while the panel is folded in. */
+    @Nullable
+    private IconButton craftClear;
 
     public WarehouseTerminalScreen(WarehouseTerminalMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
@@ -335,12 +405,21 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // before that page (stockReceived), so a player never sees a list in an order they did not choose.
         model.setInStockOnly(rememberedInStockOnly);
         model.setQuery(rememberedQuery);
+        keepGridsOfThisConnection();
+        craftGridKey = craftGridKey(menu.terminal());
+        CraftGrid<ItemKey> remembered = craftGridKey == null ? null : rememberedGrids.get(craftGridKey);
+        craftPanel = new TerminalCraftPanel(this, menu, remembered == null ? CraftGrid.empty() : remembered,
+                this::rememberGrid);
     }
 
     @Override
     protected void init() {
         layout = menu.layout();
-        setWindowSize(TerminalMenuLayout.WIDTH, layout.height());
+        // The crafting panel widens the window to the right (M32, issue #24), and the offset takes back the jump that
+        // centring the wider window would make, as far as the screen allows (TerminalMenuLayout#foldOffset). Both must
+        // be set before super.init(), which centres the window and adds the offset (AbstractSimiContainerScreen).
+        setWindowSize(craftOpen ? TerminalMenuLayout.FOLDED_WIDTH : TerminalMenuLayout.WIDTH, layout.height());
+        setWindowOffset(craftOpen ? TerminalMenuLayout.foldOffset(width) : 0, 0);
         super.init();
         clearWidgets();
         // Both panels' rectangles are absolute and built from leftPos/topPos, which super.init() has just recomputed: a
@@ -405,6 +484,26 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
         });
         addRenderableWidget(listButton);
+
+        // The crafting panel's toggle (M32, issue #24). Its click is taken in mouseClicked before the widgets get
+        // theirs (toggleCraftPanel), because folding lays the whole screen out again, this button included.
+        craftToggle = new IconButton(leftPos + layout.craftToggleX(), topPos + layout.craftToggleY(), AllIcons.I_3x3);
+        craftToggle.green = craftOpen;
+        craftToggle.getToolTip().add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_TOGGLE));
+        craftToggle.getToolTip().add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_TOGGLE_HINT)
+                .withStyle(ChatFormatting.GRAY));
+        addRenderableWidget(craftToggle);
+        craftClear = null;
+        if (craftOpen) {
+            // Only the Clear place of the panel's button row is taken in slice 1; Fetch's stays free until it comes.
+            craftClear = new IconButton(leftPos + layout.craftButtonX(TerminalMenuLayout.CLEAR_BUTTON),
+                    topPos + layout.craftButtonY(), AllIcons.I_TRASH);
+            craftClear.setToolTip(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CLEAR));
+            craftClear.withCallback(craftPanel::clear);
+            addRenderableWidget(craftClear);
+        }
+        updateCraftClear();
+        craftPanel.opened();
 
         updateOptionButtons();
         if (menu.terminal() == null && minecraft != null && minecraft.player != null)
@@ -967,6 +1066,208 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return listConfirming;
     }
 
+    // --- crafting panel (M32, issue #24) ---------------------------------------------------------------------------
+
+    /**
+     * The server's reading of the grid this screen laid: the recipe, the result and what the aisle says about each
+     * item (M32, issue #24). The panel draws from it.
+     */
+    public void onCraftView(TerminalCraftViewPayload payload) {
+        craftPanel.onView(payload);
+    }
+
+    /**
+     * The server answered a craft click (M32, issue #24): the sentence goes into the status row for a few seconds,
+     * like every other answer. The crafted items themselves arrive through the menu's slots either way.
+     * <p>
+     * Green for a click that did everything it asked for; gold for a Shift-click that crafted some and then stopped,
+     * because something <i>was</i> made — the trade an accepted request with a refused chain makes ({@link #onResult});
+     * red for a click that made nothing.
+     */
+    public void onCraftAnswer(TerminalCraftAnswerPayload payload) {
+        craftAnswer = payload;
+        boolean made = payload.crafted() > 0;
+        feedback = craftAnswerLine(payload);
+        feedbackColor = payload.result().isSuccess() ? COLOR_SUCCESS : made ? COLOR_LOST : COLOR_ERROR;
+        feedbackTicks = FEEDBACK_TICKS;
+        playUiSound(made ? SoundEvents.NOTE_BLOCK_BELL.value() : SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F,
+                made ? 1.6F : 0.8F);
+    }
+
+    /** The crafting view as last pushed; the empty view until the server sent one. */
+    public TerminalCraftViewPayload craftView() {
+        return craftPanel.view();
+    }
+
+    /** The answer to the last craft click, or {@code null} before the first one. */
+    @Nullable
+    public TerminalCraftAnswerPayload craftAnswer() {
+        return craftAnswer;
+    }
+
+    /** The crafting panel (the dev harness and the tests of the client side). */
+    public TerminalCraftPanel craftPanel() {
+        return craftPanel;
+    }
+
+    /** Whether the crafting panel is folded out. */
+    public boolean isCraftPanelOpen() {
+        return craftOpen;
+    }
+
+    /**
+     * Folds the crafting panel out or in: the toggle's click. The window changes width, so the whole screen is laid out
+     * again ({@code Screen#rebuildWidgets}, which also tells JEI about the new area); the panel itself — grid, ghost,
+     * view — outlives it. Folding in drops a ghost, which has nowhere to go without the grid. The choice is remembered
+     * for the client session, like the search.
+     */
+    public void toggleCraftPanel() {
+        craftOpen = !craftOpen;
+        rememberedCraftPanel = craftOpen;
+        if (!craftOpen)
+            craftPanel.dropGhost();
+        rebuildWidgets();
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
+    }
+
+    /**
+     * The crafting panel's rectangle while it is folded out, for JEI to keep clear of. It lies inside the window's own
+     * width, which JEI may already avoid, but nothing in this repository proves that, so the area is named anyway;
+     * Create hands it on for every {@link AbstractSimiContainerScreen} ({@code SlotMover}).
+     */
+    @Override
+    public List<Rect2i> getExtraAreas() {
+        if (!craftOpen || layout == null)
+            return List.of();
+        return List.of(new Rect2i(leftPos + TerminalMenuLayout.PANEL_X, topPos, TerminalMenuLayout.PANEL_WIDTH,
+                layout.panelHeight()));
+    }
+
+    /** {@link #playUiSound} for the crafting panel, which shares this screen's sounds. */
+    void uiSound(SoundEvent sound, float volume, float pitch) {
+        playUiSound(sound, volume, pitch);
+    }
+
+    /** Keeps {@code grid} as the one this player laid at this terminal, or forgets an empty one. */
+    private void rememberGrid(CraftGrid<ItemKey> grid) {
+        if (craftGridKey != null) {
+            if (grid.isEmpty())
+                rememberedGrids.remove(craftGridKey);
+            else
+                rememberedGrids.put(craftGridKey, grid);
+        }
+        updateCraftClear();
+    }
+
+    /** Clear is greyed out while there is nothing to clear. */
+    private void updateCraftClear() {
+        if (craftClear != null)
+            craftClear.active = !craftPanel.grid().isEmpty();
+    }
+
+    /**
+     * Forgets every remembered crafting grid: the player left the world or the server ({@code WareworksClient} calls
+     * it on {@code ClientPlayerNetworkEvent.LoggingOut}). Client thread.
+     */
+    public static void forgetRememberedGrids() {
+        rememberedGrids.clear();
+        rememberedGridRegistries = null;
+    }
+
+    /**
+     * Forgets the remembered grids when this screen's connection is not the one they were laid under. Leaving a world
+     * or server forgets them anyway ({@link #forgetRememberedGrids}); this covers a server that sends the client back
+     * into configuration without a disconnect ({@code ClientPacketListener#handleConfigurationStart}, which a proxy
+     * uses to move a player to another server), because that builds new registries as well. So no grid ever reaches a
+     * connection whose registries cannot write its keys.
+     */
+    private static void keepGridsOfThisConnection() {
+        ClientPacketListener connection = Minecraft.getInstance().getConnection();
+        RegistryAccess registries = connection == null ? null : connection.registryAccess();
+        if (registries != rememberedGridRegistries) {
+            rememberedGrids.clear();
+            rememberedGridRegistries = registries;
+        }
+    }
+
+    /** Where the grid of {@code terminal} is remembered; {@code null} for a block entity the client does not have. */
+    @Nullable
+    private static GlobalPos craftGridKey(@Nullable WarehouseTerminalBlockEntity terminal) {
+        if (terminal == null || terminal.getLevel() == null)
+            return null;
+        return GlobalPos.of(terminal.getLevel().dimension(), terminal.getBlockPos());
+    }
+
+    /**
+     * The status row's sentence for a craft answer: {@code "Crafted Chest x3"}, a refusal that names its item, or, for
+     * a Shift-click that stopped after some crafts, both. If it is wider than the row, the <b>names</b> give way,
+     * widest first, exactly as in an accepted request's line ({@link #acceptedLine}): the count and the reason are what
+     * the answer is about.
+     * <p>
+     * A crafted answer names its result itself; a partial one names the item it stopped at, so the result's name comes
+     * from the panel's view, and without one the reason stands alone rather than after a gap.
+     */
+    private Component craftAnswerLine(TerminalCraftAnswerPayload answer) {
+        TerminalCraftResult result = answer.result();
+        Component about = answer.about().map(key -> key.toStack().getHoverName()).orElse(Component.empty());
+        ItemStack made = craftPanel.shownResult();
+        if (result.isSuccess()) {
+            Component name = answer.about().isPresent() || made.isEmpty() ? about : made.getHoverName();
+            return fitNames(names -> craftAnswerText(result, answer.crafted(), names.get(0), Component.empty()),
+                    name);
+        }
+        if (answer.crafted() <= 0 || made.isEmpty())
+            return fitNames(names -> craftAnswerText(result, 0, Component.empty(), names.get(0)), about);
+        return fitNames(names -> craftAnswerText(result, answer.crafted(), names.get(0), names.get(1)),
+                made.getHoverName(), about);
+    }
+
+    /**
+     * {@code "Crafted Chest x3"}, {@code "No room for Glass Bottle"} or, for a Shift-click that crafted some before it
+     * stopped, {@code "Crafted Sugar x12. No room for Glass Bottle"} — uncut. Public because the visual run measures
+     * the status row's whole vocabulary through it.
+     *
+     * @param crafted how many items the click made; a refusal after more than 0 is the partial form
+     * @param made    the result's name
+     * @param about   the name of the item the refusal is about, if it names one
+     */
+    public static Component craftAnswerText(TerminalCraftResult result, int crafted, Component made,
+            Component about) {
+        String count = LangNumberFormat.format(crafted);
+        if (result.isSuccess())
+            return WareworksLang.translateDirect(result.langKey(), made, count);
+        Component reason = WareworksLang.translateDirect(result.langKey(), about);
+        return crafted > 0 ? WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_PARTIAL, made, count, reason)
+                : reason;
+    }
+
+    /**
+     * The line {@code build} makes of {@code names}, with the widest name cut until the line fits the status row, one
+     * name per pass. A name that is already empty gives nothing, and what is still too wide afterwards is cut as a
+     * whole by {@link #fitToRow}, the backstop every status line passes through.
+     */
+    private Component fitNames(Function<List<Component>, Component> build, Component... names) {
+        List<Component> fitted = new ArrayList<>(List.of(names));
+        Component line = build.apply(fitted);
+        for (int pass = 0; pass < fitted.size(); pass++) {
+            int over = font.width(line) - ROW_WIDTH;
+            if (over <= 0)
+                break;
+            int widest = 0;
+            for (int i = 1; i < fitted.size(); i++) {
+                if (font.width(fitted.get(i)) > font.width(fitted.get(widest)))
+                    widest = i;
+            }
+            int width = font.width(fitted.get(widest));
+            if (width <= 0)
+                break;
+            fitted.set(widest, shorten(fitted.get(widest).getString(),
+                    width - over - font.width(CommonComponents.ELLIPSIS)));
+            line = build.apply(fitted);
+        }
+        return line;
+    }
+
     /** Carries the Fetch out with the numbers the player was shown; the server measures them again. */
     private void confirmListFetch() {
         ListOrderConfirmation<ItemKey> question = listConfirming;
@@ -1104,6 +1405,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         super.containerTick();
         if (feedbackTicks > 0 && --feedbackTicks == 0)
             feedback = null;
+        craftPanel.tick();
     }
 
     @Override
@@ -1126,13 +1428,18 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 closeStepPanel();
             return true;
         }
+        int cell = cellAt(mouseX, mouseY);
+        // The crafting panel comes next (M32, issue #24): while a ghost is on the cursor every click is its own — a
+        // click on a stock cell picks that item instead of requesting it — and otherwise it takes the clicks on its
+        // cells and on the result. Only while it is folded out; folded in, it has nothing on the screen to be clicked.
+        if (craftOpen && craftPanel.mouseClicked(mouseX, mouseY, button, hasShiftDown(), stockKey(cell)))
+            return true;
         if (button == 1 && searchBox.isMouseOver(mouseX, mouseY)) {
             searchBox.setValue("");
             searchBox.setFocused(true);
             setFocused(searchBox);
             return true;
         }
-        int cell = cellAt(mouseX, mouseY);
         if (cell >= 0 && button == 0) {
             TerminalAmounts.Click click = hasShiftDown() ? TerminalAmounts.Click.STACK
                     : hasControlDown() ? TerminalAmounts.Click.ALL : TerminalAmounts.Click.SELECTED;
@@ -1140,10 +1447,35 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             if (requestVisible(cell, click, hasAltDown()))
                 return true;
         }
+        // A right-click on a stock cell lays the item into the crafting grid (M32): it picks a ghost, or with Shift
+        // writes the item into the next free cell. A left click keeps requesting, exactly as before, and a right-click
+        // with a real item on the cursor still falls through to vanilla, as every right-click on the grid used to.
+        ItemKey stockKey = stockKey(cell);
+        if (stockKey != null && button == 1 && craftOpen && menu.getCarried().isEmpty()) {
+            if (hasShiftDown())
+                craftPanel.fillNextFree(stockKey);
+            else
+                craftPanel.pickGhost(stockKey);
+            return true;
+        }
         int order = orderAt(mouseX, mouseY);
         if (order >= 0 && button == 0 && clickOrderLine(order, mouseX))
             return true;
+        // Taken here and not through the button's own callback: folding lays the screen out again, and a widget that
+        // rebuilt its own screen from inside the widget loop would be handed the keyboard focus afterwards, taking it
+        // from the search box.
+        if (button == 0 && craftToggle != null && craftToggle.isMouseOver(mouseX, mouseY)) {
+            toggleCraftPanel();
+            return true;
+        }
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    /** The item of the visible stock cell {@code cell}, or {@code null} for -1 and for a cell that shows nothing. */
+    @Nullable
+    private ItemKey stockKey(int cell) {
+        List<StockLine<ItemKey>> visible = visibleEntries();
+        return cell >= 0 && cell < visible.size() ? visible.get(cell).key() : null;
     }
 
     /**
@@ -1172,6 +1504,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 closeStepPanel();
             return true;
         }
+        // Escape drops a ghost on the cursor before it can close the screen (M32); the next one closes it as always.
+        if (keyCode == InputConstants.KEY_ESCAPE && craftPanel.dropGhost())
+            return true;
         if (hoveredSlot != null && minecraft != null && getFocused() == searchBox && isSlotHotkey(keyCode, scanCode)) {
             searchBox.setFocused(false);
             setFocused(null);
@@ -1225,6 +1560,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         UIRenderHelper.drawStretched(graphics, x + 3, y + 3, TerminalMenuLayout.WIDTH - 6, panelHeight - 6, 0,
                 AllGuiTextures.VALUE_SETTINGS_OUTER_BG);
         renderBrassFrame(graphics, x, y, TerminalMenuLayout.WIDTH, panelHeight);
+        // The crafting panel has a frame of its own beside the window's (M32, issue #24): it folds out and in, and the
+        // window's own frame and everything centred on it stay exactly where they are when it does.
+        if (craftOpen) {
+            int panelX = x + TerminalMenuLayout.PANEL_X;
+            UIRenderHelper.drawStretched(graphics, panelX + 3, y + 3, TerminalMenuLayout.PANEL_WIDTH - 6,
+                    layout.panelHeight() - 6, 0, AllGuiTextures.VALUE_SETTINGS_OUTER_BG);
+            renderBrassFrame(graphics, panelX, y, TerminalMenuLayout.PANEL_WIDTH, layout.panelHeight());
+            craftPanel.render(graphics, font, mouseX, mouseY);
+        }
 
         // Search field and amount input sit in inset boxes, so their text reads as input and not as a label.
         int rowY = y + layout.searchY();
@@ -1748,6 +2092,23 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return WareworksLang.translateDirect(WareworksLang.TERMINAL_PLAN_FRONTIER, name);
     }
 
+    /** Vanilla's tooltip of the slot under the mouse, while {@link #slotTooltipShown()} says it is drawn. */
+    @Override
+    protected void renderTooltip(GuiGraphics graphics, int x, int y) {
+        if (slotTooltipShown())
+            super.renderTooltip(graphics, x, y);
+    }
+
+    /**
+     * Whether vanilla's tooltip of the slot under the mouse is drawn this frame: the slot holds a stack and nothing is
+     * on the cursor — neither a carried stack, vanilla's own rule, nor a ghost (M32), which hides it exactly the same
+     * way. Public, because a tooltip is drawn only while a mouse rests on a slot and the visual harness reads it
+     * instead of photographing it; the slot is the one vanilla found under the mouse in the last frame.
+     */
+    public boolean slotTooltipShown() {
+        return !craftPanel.hasGhost() && menu.getCarried().isEmpty() && hoveredSlot != null && hoveredSlot.hasItem();
+    }
+
     @Override
     protected void renderForeground(GuiGraphics graphics, int mouseX, int mouseY, float partialTicks) {
         super.renderForeground(graphics, mouseX, mouseY, partialTicks);
@@ -1759,25 +2120,45 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             renderStepPanel(graphics, mouseX, mouseY);
             return; // likewise: while the chain is on screen, nothing behind it is being pointed at
         }
+        // A ghost on the cursor is drawn like a carried stack (M32); nothing while there is none.
+        craftPanel.renderGhostCursor(graphics, font, mouseX, mouseY);
+        List<Component> tooltip = tooltipAt(mouseX, mouseY);
+        if (!tooltip.isEmpty())
+            graphics.renderComponentTooltip(font, tooltip, mouseX, mouseY);
+    }
+
+    /**
+     * The tooltip this screen draws of its own for a mouse at {@code mouseX}/{@code mouseY}, in this order: the
+     * crafting panel's, the list slot's, a stock cell's or an order line's; an empty list when there is none.
+     * Vanilla's tooltip of an ordinary slot is apart from it ({@link #slotTooltipShown()}).
+     * <p>
+     * Nothing at all while a question or the step panel is up, because what is behind them is not what the player is
+     * pointing at, and nothing while a ghost is on the cursor (M32): like a carried stack, it hides every tooltip under
+     * it. Public, because a tooltip is drawn only while a mouse rests somewhere and the visual harness reads it instead
+     * of photographing it.
+     */
+    public List<Component> tooltipAt(int mouseX, int mouseY) {
+        if (isAskingSomething() || openPlan != null || craftPanel.hasGhost())
+            return List.of();
+        List<Component> craftTooltip = craftPanel.tooltipAt(mouseX, mouseY);
+        if (!craftTooltip.isEmpty())
+            return craftTooltip;
         // The list slot says what it is for while it is empty, which is the one place the whole feature is explained
         // (M23, issue #19); a clipboard in it keeps its own tooltip, with what the order has got to under it.
         if (hoveredSlot != null && hoveredSlot == menu.slots.get(menu.listSlotIndex())) {
             List<Component> tooltip = listSlotTooltip(hoveredSlot.getItem());
-            if (!tooltip.isEmpty()) {
-                graphics.renderComponentTooltip(font, tooltip, mouseX, mouseY);
-                return;
-            }
+            if (!tooltip.isEmpty())
+                return tooltip;
         }
         int cell = cellAt(mouseX, mouseY);
         List<StockLine<ItemKey>> visible = visibleEntries();
-        if (cell >= 0 && cell < visible.size()) {
-            graphics.renderComponentTooltip(font, itemTooltip(visible.get(cell)), mouseX, mouseY);
-            return;
-        }
+        if (cell >= 0 && cell < visible.size())
+            return itemTooltip(visible.get(cell));
         int order = orderAt(mouseX, mouseY);
         List<PlanLine> shownLines = visibleOrderLines();
         if (order >= 0 && order < shownLines.size())
-            graphics.renderComponentTooltip(font, orderTooltip(shownLines.get(order)), mouseX, mouseY);
+            return orderTooltip(shownLines.get(order));
+        return List.of();
     }
 
     // --- the confirmation panel (M15 part 2, issue #3) -------------------------------------------------------------
@@ -2149,6 +2530,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         }
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_AMOUNT_HINT).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        // While the crafting panel is out a right-click lays the item into its grid (M32), which nothing else shows.
+        if (craftOpen)
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_STOCK_HINT).copy()
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return tooltip;
     }
 

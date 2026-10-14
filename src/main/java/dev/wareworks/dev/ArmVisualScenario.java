@@ -67,6 +67,7 @@ import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
+import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
@@ -111,6 +112,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
@@ -126,8 +128,9 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 /**
  * Scenario "arm": Create mechanical arms at the warehouse stations (M12, {@code docs/warehouse-system.md} §3.2.2), driven
- * like a player in a real client. It covers manual checks 87 to 91 of {@code docs/manual-test-checklist.md} section P and
- * the integrated-server half of check 92.
+ * like a player in a real client. It covers manual checks 87 to 91 of {@code docs/manual-test-checklist.md} section P,
+ * the integrated-server half of check 92, and the client half of check 257 in section AT (a right-click on the terminal
+ * with a block or food in hand opens its screen, issue #26).
  * <p>
  * <b>Real clicks.</b> The player is a creative player with the vanilla reach, flying so the camera views hold. A click is
  * exactly what the mouse handler does for a button press ({@code MouseHandler#onPress} calls {@link KeyMapping#click}):
@@ -236,8 +239,16 @@ public final class ArmVisualScenario implements VisualScenario {
 
     // --- hotbar --------------------------------------------------------------------------------------------------------
     private static final int SLOT_ARM = 0;
+    /** Cobblestone, for the right-click on the terminal with a block in hand (check 257). */
+    private static final int SLOT_BLOCK = 1;
+    /** Bread, for the right-click on the terminal with food in hand (check 257). */
+    private static final int SLOT_FOOD = 2;
     /** Never filled: selecting it gives the player an empty hand (to open screens, and for the hint control). */
     private static final int SLOT_EMPTY = 8;
+    private static final int HELD_BLOCKS = 16;
+    private static final int HELD_BREAD = 4;
+    /** What the client plays when it places cobblestone, also a ghost block it predicts on its own. */
+    private static final String STONE_PLACE_SOUND = SoundType.STONE.getPlaceSound().getLocation().toString();
 
     // --- timing --------------------------------------------------------------------------------------------------------
     private static final int SCENE_READY_TIMEOUT_TICKS = 900;
@@ -345,6 +356,10 @@ public final class ArmVisualScenario implements VisualScenario {
     /** Client thread: the action bar component shown before the last click, to recognise a new message. */
     @Nullable
     private Component overlayBeforeClick;
+    /** Client thread, check 257: stone placement sounds heard before the click, and what was seen after it. */
+    private int placeSoundsBeforeClick;
+    @Nullable
+    private String seenAfterClick;
     @Nullable
     private CompletableFuture<Void> languageReload;
     /** Server thread: the production order whose states the tick listener records. */
@@ -397,14 +412,15 @@ public final class ArmVisualScenario implements VisualScenario {
 
         nonTargets(script);
         selectAndPlaceArms(script);
+        heldItemsOpenTheTerminal(script);
         armDeliversToInput(script);
         armsEmptyOutputAndTerminal(script);
         crafterLoop(script);
         saveQuitAndRejoin(script);
         german(script);
 
-        script.client("arm: every check passed",
-                context -> LOGGER.info(PREFIX + "arm: ALL CHECKS PASSED (87, 88, 89, 90, 91, 92 integrated half)"));
+        script.client("arm: every check passed", context -> LOGGER.info(PREFIX
+                + "arm: ALL CHECKS PASSED (87, 88, 89, 90, 91, 92 integrated half, 257 client half)"));
     }
 
     @Override
@@ -528,6 +544,7 @@ public final class ArmVisualScenario implements VisualScenario {
             expectSelected(script, CLICK_TERMINAL, Mode.TAKE, DeliveryStationArmPoint.class, TAKE_FROM_TERMINAL, 1,
                     "88");
         }
+        expectNoScreen(script, CLICK_TERMINAL, "88");
         script.shotWithGui("select-terminal-click3");
         leftClick(script, CLICK_TERMINAL);
         script.client("arm: CHECK 88 a left-click removed the terminal from the selection", context -> {
@@ -562,6 +579,7 @@ public final class ArmVisualScenario implements VisualScenario {
             expectSelected(script, CLICK_PRODUCTION, Mode.TAKE, DeliveryStationArmPoint.class, TAKE_FROM_PRODUCTION, 1,
                     "88");
         }
+        expectNoScreen(script, CLICK_PRODUCTION, "88");
         script.shotWithGui("select-production-click3");
         rightClick(script, CLICK_CRAFTER, true);
         rightClick(script, CLICK_CRAFTER, false);
@@ -657,6 +675,101 @@ public final class ArmVisualScenario implements VisualScenario {
         }, HELD_ITEM_TIMEOUT_TICKS, context -> "the player holds " + context.minecraft().player.getMainHandItem()
                 + " in slot " + context.minecraft().player.getInventory().selected);
         script.waitTicks(SETTLE_TICKS);
+    }
+
+    // --- 257, client half: a block or food in hand opens the terminal --------------------------------------------------
+
+    /**
+     * The client half of manual check 257 (issue #26, ADR-060), which {@code StationClickGameTests} cannot see: a plain
+     * right-click on the terminal with cobblestone, and then with bread, in the main hand opens the terminal screen, and
+     * the client neither places nor uses the item. Arm C's selection is no longer needed here, so switching the hand
+     * away from the arm item costs nothing. The world is creative: stack counts never change there, but bread can
+     * always be eaten, so a click that reached the bread would start eating.
+     */
+    private void heldItemsOpenTheTerminal(VisualScript script) {
+        script.server("arm: put cobblestone and bread into the hotbar", (server, context) -> {
+            ServerPlayer player = context.serverPlayer(server);
+            player.getInventory().setItem(SLOT_BLOCK, new ItemStack(Items.COBBLESTONE, HELD_BLOCKS));
+            player.getInventory().setItem(SLOT_FOOD, new ItemStack(Items.BREAD, HELD_BREAD));
+            player.inventoryMenu.broadcastChanges();
+        });
+        plainClickOpensTerminal(script, SLOT_BLOCK, "cobblestone", stack -> stack.is(Items.COBBLESTONE));
+        plainClickOpensTerminal(script, SLOT_FOOD, "bread", stack -> stack.is(Items.BREAD));
+        script.server("arm: take the cobblestone and the bread out of the hotbar again", (server, context) -> {
+            ServerPlayer player = context.serverPlayer(server);
+            player.getInventory().setItem(SLOT_BLOCK, ItemStack.EMPTY);
+            player.getInventory().setItem(SLOT_FOOD, ItemStack.EMPTY);
+            player.inventoryMenu.broadcastChanges();
+        });
+        selectHotbar(script, SLOT_ARM, "the Mechanical Arm", AllBlocks.MECHANICAL_ARM::isIn);
+    }
+
+    /**
+     * One plain right-click on the terminal with the item in {@code slot}. A ghost block or a first bite the client
+     * predicted on its own would last only until the server corrects it, a tick or two, so the condition that waits for
+     * the screen also looks at the client on every tick from the one that handles the click ({@link #watchAfterClick}):
+     * no block above the terminal, the item not in use, and no stone placement sound since the click. The server half
+     * is checked once the screen is open.
+     */
+    private void plainClickOpensTerminal(VisualScript script, int slot, String what, Predicate<ItemStack> held) {
+        selectHotbar(script, slot, what, held);
+        aim(script, CLICK_TERMINAL, true);
+        script.client("arm: CHECK 257 right-click the terminal holding " + what, context -> {
+            placeSoundsBeforeClick = context.soundCount(STONE_PLACE_SOUND);
+            seenAfterClick = null;
+            KeyMapping.click(context.minecraft().options.keyUse.getKey());
+        });
+        untilOrFail(script, "arm: CHECK 257 the terminal screen opens for the right-click holding " + what, context -> {
+            watchAfterClick(context, what);
+            return clickCount(context.minecraft().options.keyUse) == 0
+                    && context.minecraft().screen instanceof WarehouseTerminalScreen;
+        }, SCREEN_TIMEOUT_TICKS, context -> "the screen is " + context.minecraft().screen
+                + (seenAfterClick == null ? "" : "; " + seenAfterClick));
+        script.waitTicks(SETTLE_TICKS)
+                .client("arm: CHECK 257 the client neither placed nor used the " + what, context -> {
+                    watchAfterClick(context, what);
+                    if (seenAfterClick != null)
+                        throw new VisualTestException(seenAfterClick);
+                    if (!(context.minecraft().screen instanceof WarehouseTerminalScreen))
+                        throw new VisualTestException("the terminal screen closed again: " + context.minecraft().screen);
+                    LOGGER.info(PREFIX + "arm: CHECK 257 PASS (client half): a right-click on the terminal holding {} "
+                            + "opened its screen; on every tick since the click no block above the terminal, the item "
+                            + "not in use, no '{}' sound, and the hand still holds {}", what, STONE_PLACE_SOUND,
+                            context.minecraft().player.getMainHandItem());
+                })
+                .server("arm: CHECK 257 the server neither placed nor used the " + what, (server, context) -> {
+                    ServerPlayer player = context.serverPlayer(server);
+                    if (!(player.containerMenu instanceof WarehouseTerminalMenu))
+                        throw new VisualTestException("the server has no terminal menu open for the click holding "
+                                + what + ": " + player.containerMenu);
+                    if (player.isUsingItem())
+                        throw new VisualTestException("the server player is using the " + what);
+                    BlockState above = server.overworld().getBlockState(at(context, TERMINAL.above()));
+                    if (!above.isAir())
+                        throw new VisualTestException("the server placed " + above + " above the terminal");
+                    LOGGER.info(PREFIX + "arm: CHECK 257 PASS: the server opened the terminal menu for the click "
+                            + "holding {}, placed nothing above the terminal and is not using the item", what);
+                });
+        closeScreen(script);
+    }
+
+    /** Check 257: remembers the first sign since the click that the client placed or used the held item. */
+    private void watchAfterClick(VisualContext context, String what) {
+        if (seenAfterClick != null)
+            return;
+        LocalPlayer player = context.minecraft().player;
+        ClientLevel level = context.minecraft().level;
+        if (player == null || level == null)
+            return;
+        BlockState above = level.getBlockState(at(context, TERMINAL.above()));
+        int sounds = context.soundCount(STONE_PLACE_SOUND) - placeSoundsBeforeClick;
+        if (!above.isAir())
+            seenAfterClick = "the client showed " + above + " above the terminal after the click holding " + what;
+        else if (player.isUsingItem())
+            seenAfterClick = "the client started using " + player.getUseItem() + " after the click holding " + what;
+        else if (sounds > 0)
+            seenAfterClick = "the client played '" + STONE_PLACE_SOUND + "' " + sounds + " times after the click holding "
+                    + what;
     }
 
     // --- 89: arm A fills the input, with and without a block on top ----------------------------------------------------
@@ -1041,6 +1154,31 @@ public final class ArmVisualScenario implements VisualScenario {
                     String.format(Locale.ROOT, "%06X", colour), mode == Mode.DEPOSIT ? "yellow" : "light blue",
                     overlay(context).getString(), selectionSummary());
         });
+    }
+
+    /**
+     * After clicks with the arm item on a station that has a screen: no screen is open on either side (issue #26). The
+     * station opens its screen whatever a player holds, except for the items that act on it, and Create cancels the
+     * selection click on the client only — the server still runs the station's own click with the arm in hand, so this
+     * is the check that the arm item keeps its click there. A screen the server opened would reach the client a tick or
+     * two after the click, hence the wait.
+     */
+    private void expectNoScreen(VisualScript script, Click click, String check) {
+        script.waitTicks(SETTLE_TICKS)
+                .server("arm: CHECK " + check + " the server opened nothing for the arm clicks on the " + click.label(),
+                        (server, context) -> {
+                            ServerPlayer player = context.serverPlayer(server);
+                            if (player.containerMenu != player.inventoryMenu)
+                                throw new VisualTestException("the arm click on the " + click.label()
+                                        + " opened a menu on the server: " + player.containerMenu);
+                        })
+                .client("arm: CHECK " + check + " no screen after the arm clicks on the " + click.label(), context -> {
+                    if (context.minecraft().screen != null)
+                        throw new VisualTestException("the arm click on the " + click.label() + " opened a screen: "
+                                + context.minecraft().screen);
+                    LOGGER.info(PREFIX + "arm: CHECK {} PASS: the arm clicks on the {} selected it and opened no "
+                            + "screen on either side", check, click.label());
+                });
     }
 
     /** Places an arm with a real click on the ground and checks what the server arm resolved from the placement packet. */

@@ -2,6 +2,7 @@ package dev.wareworks.content.station;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -12,14 +13,19 @@ import com.simibubi.create.foundation.gui.menu.MenuBase;
 
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
+import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockDiff;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalCraftPayload;
+import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
@@ -29,6 +35,7 @@ import dev.wareworks.network.TerminalUsagePayload;
 import dev.wareworks.registry.WareworksMenuTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -38,6 +45,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import net.neoforged.neoforge.common.util.FakePlayer;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.items.SlotItemHandler;
@@ -68,6 +76,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * terminal's <b>question</b> instead of being made ({@link TerminalRequestOutcome}, {@code warehouse-system.md}
  * §3.6.6); asking costs one click of the same per-tick budget, so a crafted flood cannot make the server measure more
  * often than a clicking player could.
+ * <p>
+ * <b>Crafting</b> (M32, issue #24, ADR-059) arrives as {@code TerminalCraftPayload} through {@link #submitCraft}, under
+ * the same rules and the same budget. The grid is the player's client's and is <b>not</b> a set of menu slots, so the
+ * slot list above is unchanged; the menu keeps only the last grid it was sent and the server's reading of it, and
+ * pushes that reading with everything else. The craft itself is the terminal's ({@link TerminalCrafting}).
  * <p>
  * <b>Slot count.</b> The number of buffer slots is the one the server announced in the menu's extra data, on both
  * sides. The handler behind them is wrapped in a {@link FixedSlotsItemHandler} of exactly that size, because a
@@ -122,6 +135,19 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      * state: the list button's <b>Answer</b> ({@link #resendListQuestion()}, M23 review fix).
      */
     private boolean listQuestionPending;
+    /**
+     * The crafting panel's grid as this player's screen last sent it, the recipe hint that came with it, and the
+     * server's reading of the two (M32, issue #24, {@code docs/warehouse-system.md} §3.4.5). <b>Transient</b> per-menu
+     * state: never saved, and gone when the menu closes. The grid itself belongs to the player's client; the server
+     * keeps only what it needs to answer the panel.
+     */
+    private CraftGrid<ItemKey> craftCells;
+    private Optional<ResourceLocation> craftHint;
+    private TerminalCrafting.Preview craftPreview;
+    /** The crafting view as last pushed, so a panel whose grid and aisle did not change costs no packet (M32). */
+    private TerminalCraftViewPayload lastCraftView;
+    /** How often this menu has resolved a recipe for its preview: one per changed grid, for the GameTests. */
+    private int craftPreviewLookups;
 
     /** Client: Registrate's menu factory, with the extra data the server wrote when the screen was opened. */
     public WarehouseTerminalMenu(MenuType<?> type, int id, Inventory inv, RegistryFriendlyByteBuf extraData) {
@@ -171,6 +197,12 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         fullSyncPending = true;
         lastUsage = null;
         listQuestionPending = false;
+        craftCells = CraftGrid.empty();
+        craftHint = Optional.empty();
+        craftPreview = TerminalCrafting.Preview.NONE;
+        // An empty grid is what the screen starts from, so a player who never opens the panel costs no packet for it.
+        lastCraftView = TerminalCraftViewPayload.none(containerId);
+        craftPreviewLookups = 0;
         lastPushGameTime = NEVER;
         pushPending = true;
         requestBudgetGameTime = NEVER;
@@ -416,6 +448,128 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         return cancelled;
     }
 
+    // --- crafting (M32, issue #24, ADR-059) ------------------------------------------------------------------------
+
+    /**
+     * Server: a {@code TerminalCraftPayload}, resolved against the menu {@code player} really has open (M32, issue
+     * #24, {@code docs/warehouse-system.md} §3.4.5).
+     * <p>
+     * Checked in this order, and empty (with nothing done) at the first that fails: the player has a terminal menu open
+     * whose id matches; the player is not a {@link FakePlayer}; this menu has not answered
+     * {@value #MAX_REQUESTS_PER_TICK} actions in the current tick. A preview and a craft are clicks like a request and
+     * share that budget — one action whatever the number of crafts — so a crafted flood cannot make the server look up
+     * recipes or plan crafts more often than a clicking player could.
+     * <p>
+     * <b>The fake player is refused here and only here</b>, as defence in depth: a craft is a player's own hand at a
+     * screen, and no automation that drives a fake player has one. The method behind it ({@link #craft}) does not
+     * refuse one, so a GameTest can still exercise the server-player path (limited crafting, the recipe award).
+     *
+     * @return the outcome of a craft; empty for a preview, which the next push answers, and for everything dropped
+     */
+    public static Optional<TerminalCraftOutcome> submitCraft(@Nullable Player player, int containerId,
+            TerminalCraftPayload.Action action, CraftGrid<ItemKey> cells, Optional<ResourceLocation> hint) {
+        if (player == null || player.level() == null || player.level().isClientSide || action == null
+                || action == TerminalCraftPayload.Action.NONE || cells == null || hint == null)
+            return Optional.empty();
+        if (!(player.containerMenu instanceof WarehouseTerminalMenu menu) || menu.containerId != containerId)
+            return Optional.empty();
+        if (player instanceof FakePlayer)
+            return Optional.empty();
+        if (!menu.takeRequestBudget())
+            return Optional.empty();
+        return switch (action) {
+            case PREVIEW -> {
+                menu.previewCraft(player, cells, hint);
+                yield Optional.empty();
+            }
+            case CRAFT -> Optional.of(menu.craft(player, cells, hint, false));
+            case CRAFT_ALL -> Optional.of(menu.craft(player, cells, hint, true));
+            case NONE -> Optional.empty();
+        };
+    }
+
+    /**
+     * Server: the grid {@code player}'s screen shows now, and the server's reading of it for the next push.
+     * <p>
+     * The recipe is looked up <b>only when the grid or the hint changed</b> — and a hint that names the very recipe the
+     * last lookup found is no change, because looking it up again could only find that recipe. The lookup never runs
+     * inside {@link #broadcastChanges()}: the push only reads what was resolved here.
+     */
+    public void previewCraft(Player player, CraftGrid<ItemKey> cells, Optional<ResourceLocation> hint) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(cells, "cells");
+        Objects.requireNonNull(hint, "hint");
+        boolean sameHint = hint.equals(craftHint) || hint.isPresent() && hint.equals(craftPreview.recipe());
+        if (cells.equals(craftCells) && sameHint)
+            return;
+        craftCells = cells;
+        craftHint = hint;
+        resolveCraftPreview(player);
+    }
+
+    /**
+     * Server: crafts {@code cells} from this menu's terminal buffer for {@code player}, once or with {@code all} as
+     * often as the delivered ingredients allow; every check happens in the terminal
+     * ({@link WarehouseTerminalBlockEntity#craftFromBuffer}). No aisle is needed: a misaligned terminal still crafts
+     * from its own buffer.
+     * <p>
+     * The grid the click was made on is the one the panel shows from now on ({@link #previewCraft}), and a craft that
+     * tells something new about the recipe — refused as locked, or crafted although the preview said locked — has the
+     * preview resolved again, so the panel's lock mark cannot outlive what the recipe book really says.
+     */
+    public TerminalCraftOutcome craft(Player player, CraftGrid<ItemKey> cells, Optional<ResourceLocation> hint,
+            boolean all) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(cells, "cells");
+        Objects.requireNonNull(hint, "hint");
+        if (contentHolder == null || contentHolder.isRemoved())
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        previewCraft(player, cells, hint);
+        TerminalCraftOutcome outcome = contentHolder.craftFromBuffer(player, this, cells, hint, all);
+        boolean lockedNow = outcome.result() == TerminalCraftResult.LOCKED;
+        if ((lockedNow || outcome.crafted() > 0) && lockedNow != craftPreview.locked())
+            resolveCraftPreview(player);
+        return outcome;
+    }
+
+    /** The server's reading of the grid as last resolved; {@link TerminalCrafting.Preview#NONE} for an empty grid. */
+    public TerminalCrafting.Preview craftPreview() {
+        return craftPreview;
+    }
+
+    /** The grid this menu last received from its screen; empty until the panel was used. */
+    public CraftGrid<ItemKey> craftCells() {
+        return craftCells;
+    }
+
+    /**
+     * Server: the crafting panel's view exactly as the next push would build it, without sending it (the GameTests
+     * read it here, because a test player has no connection to receive it on). It reads only what
+     * {@link #previewCraft} resolved, so asking for it never looks a recipe up.
+     */
+    public TerminalCraftViewPayload craftView() {
+        if (contentHolder == null || contentHolder.isRemoved())
+            return TerminalCraftViewPayload.none(containerId);
+        return craftView(contentHolder.producibleKeys());
+    }
+
+    /** How often this menu has looked a recipe up for its preview (the GameTests: at most one per change). */
+    public int craftPreviewLookups() {
+        return craftPreviewLookups;
+    }
+
+    /** Resolves the preview for the current grid and hint, and pushes it with the next tick. */
+    private void resolveCraftPreview(Player player) {
+        Level level = contentHolder == null ? null : contentHolder.getLevel();
+        if (level == null || craftCells.isEmpty()) {
+            craftPreview = TerminalCrafting.Preview.NONE;
+        } else {
+            craftPreview = TerminalCrafting.preview(level, player, craftCells, craftHint);
+            craftPreviewLookups++;
+        }
+        markDirty();
+    }
+
     /**
      * Server: send the changed stock and status with the next tick instead of at the end of the interval. Still at most
      * one push per tick ({@link #broadcastChanges()}).
@@ -522,6 +676,38 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             contentHolder.listQuestion().ifPresent(question -> PacketDistributor.sendToPlayer(target,
                     new TerminalConfirmPayload(containerId, question, RequestScope.LIST)));
         }
+
+        // What the crafting panel's grid makes and what the aisle says about each of its items (M32, issue #24).
+        // Compared by value like everything above; the recipe was resolved when the grid changed, never here.
+        TerminalCraftViewPayload view = craftView(producible);
+        if (!view.equals(lastCraftView)) {
+            lastCraftView = view;
+            PacketDistributor.sendToPlayer(target, view);
+        }
+    }
+
+    /**
+     * The crafting panel's view of the current grid (M32, issue #24): the grid itself, so the panel can tell it from
+     * a view of an earlier one, the resolved recipe, and per distinct grid item what a click could be granted of it,
+     * whether the aisle can make it and whether the safety stop holds it.
+     * <p>
+     * At most {@value CraftGrid#SIZE} lookups of a few map reads each, with the producible keys the push already
+     * resolved, and nothing at all while the grid is empty — so the panel adds no scan of anything. Without an aisle
+     * every item reads as unavailable and the view says so; crafting from the buffer needs no aisle.
+     */
+    private TerminalCraftViewPayload craftView(Set<ItemKey> producible) {
+        if (craftCells.isEmpty())
+            return TerminalCraftViewPayload.none(containerId);
+        Optional<WarehouseControllerBlockEntity> controller = contentHolder.controller();
+        List<TerminalCraftViewPayload.KeyView> keys = new ArrayList<>(CraftGrid.SIZE);
+        for (ItemKey key : craftCells.perCraft().keySet()) {
+            keys.add(controller.map(found -> new TerminalCraftViewPayload.KeyView(key,
+                    found.availableTo(StockAccess.PLAYER, key), producible.contains(key),
+                    found.stockRulePause(key).isPresent()))
+                    .orElseGet(() -> new TerminalCraftViewPayload.KeyView(key, 0L, false, false)));
+        }
+        return new TerminalCraftViewPayload(containerId, craftCells, craftPreview.recipe(), craftPreview.result(),
+                craftPreview.locked(), controller.isEmpty(), keys);
     }
 
     /**

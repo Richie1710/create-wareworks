@@ -24,10 +24,11 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
  * lifted.
  * <p>
  * The supported way past that guard is the interaction event itself: {@code setUseBlock(TRUE)} makes the block's own
- * {@code useItemOn} run regardless. It is asked <b>only</b> for this block, only for the main hand, only while sneaking
- * and only with an empty main hand — exactly the shape {@link WarehouseProductionBlock#useItemOn} handles, so nothing
- * else a player does with a held item changes. The event fires on both sides, and the listener answers the same way on
- * both, so the client's own prediction matches what the server does instead of flickering.
+ * {@code useItemOn} run regardless, and with it {@code useWithoutItem}, which an empty hand is passed on to. It is asked
+ * <b>only</b> for this block, only for the main hand, only while sneaking and only with an empty main hand — exactly
+ * the shape {@link WarehouseProductionBlock#useWithoutItem} resumes on, so nothing else a player does with a held item
+ * changes: sneaking with an item still places or uses it (issue #26). The event fires on both sides, and the listener
+ * answers the same way on both, so the client's own prediction matches what the server does instead of flickering.
  * <p>
  * Registered once from {@code Wareworks} on the game bus; safe on both dists.
  */

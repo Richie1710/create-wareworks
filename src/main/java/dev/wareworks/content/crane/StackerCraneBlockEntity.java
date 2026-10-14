@@ -248,7 +248,18 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         super.addBehaviours(behaviours);
         // The value box sits on the top face of the low rail bed, the only face of the block that is large enough.
         mastHeight = new ScrollValueBehaviour(WareworksLang.translateDirect(WareworksLang.CRANE_MAST_HEIGHT), this,
-                new MastHeightValueBox());
+                new MastHeightValueBox()) {
+            /**
+             * A schematic carries the height only while it is not the default (issue #25, ADR-061): the dock's read
+             * turns a missing {@code ScrollValue} into exactly that default, so a dock nobody adjusted adds nothing to
+             * a schematic. Saves and client packets keep Create's unconditional key.
+             */
+            @Override
+            public void writeSafe(CompoundTag nbt, HolderLookup.Provider registries) {
+                if (value != Mth.clamp(DEFAULT_MAST_HEIGHT, MIN_MAST_HEIGHT, maxMastHeight()))
+                    super.writeSafe(nbt, registries);
+            }
+        };
         int max = maxMastHeight();
         mastHeight.between(MIN_MAST_HEIGHT, max);
         // Default by direct field write: setValue would run the callback while level == null.
@@ -1109,6 +1120,13 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         else if (mastHeight.getValue() > AisleGeometry.MAX_HEIGHT)
             mastHeight.value = AisleGeometry.MAX_HEIGHT;
         if (!clientPacket) {
+            // A tag carrying neither the crane nor its head is no save of this dock: it is a schematic print landing on
+            // a dock that is already standing (BlockHelper.placeSchematicBlock loads the printer's settings-only tag
+            // into the block entity that survived the new state, issue #25, ADR-061). It says nothing about the job or
+            // the items in the head, so it must not reset the one or delete the other: a world load reads into a fresh
+            // dock, where leaving them alone and resetting them are the same thing.
+            if (!tag.contains(CranePersistence.STATE_TAG) && !tag.contains(CranePersistence.HEAD_TAG))
+                return;
             craneState = CranePersistence.readState(tag, registries, restingYaw());
             head.load(tag.getCompound(CranePersistence.HEAD_TAG), registries);
             // Made consistent with the head and resumed on the first server tick.

@@ -282,8 +282,8 @@ Classes: `content.storage.WarehouseInterfaceBlock`, `WarehouseInterfaceBlockEnti
   * **No count.** The slot has no `showCount()`: a storage location has no amount, so a filter *amount* is never set or synced. Until M16 that also meant `acceptsValueSettings()` was false and no hold-to-edit board opened at all; since M16 the board exists and carries the storage **priority** instead of an amount (below), so a short click sets or clears the filter and holding the click opens the board.
   * **Face (binding, ADR-021):** the **aisle face only**, centred at x 8 px, y 5 px, i.e. the lower half of the framed plate and clear of the arm port at y 9..13 px (`stacker-crane.md` §7.1). Create's `ValueSettingsInputHandler` **cancels a right-click that hits a value box with `SUCCESS`**, so a value box pre-empts block placement on its face: the lateral faces carry the row-building placement rule (above), top and bottom carry the wrench, and the `FACING` side is covered by the attached inventory. The box is hit-tested within half its scale (4 px), so it reaches neither the arm port nor the rest of the face, which still places blocks normally.
   * **No ticker needed**: `FilteringBehaviour` overrides neither `tick()` nor `initialize()`, and Create drives its value box and hover rendering from client events, so the "no ticker" rule above still holds unchanged. The filter item is drawn in the world by a `SmartBlockEntityRenderer`, now registered for the interface's block entity type as it already was for the output (since the M8 review the small subclass `client.render.WarehouseInterfaceRenderer`, see "Renderer view distance" below).
-  * **Persistence** is Create's: `Filter` / `FilterAmount` / `UpTo` in the block entity's own tag (`isSafeNBT`, so a schematic keeps it). A save without those keys — every world from before M8 — reads back as an empty filter, i.e. unchanged behaviour. Create writes all three keys together and its `read` takes a migration branch when the **count** is missing, so a test for this path must remove all three, not just `Filter` (M8 review fix in `filterpersistenceroundtrip`, which removed only `Filter` and therefore exercised the post-M8 path).
-  * **Bounded sync (important):** Create writes those three keys into **every** client packet, which costs about 215 accounting bytes in the update tag of every interface — and that tag is part of every chunk packet (the budget above). `StorageFilterBehaviour#write` therefore skips the block entirely for client packets while the filter is empty, and Create's `read` reads a missing tag back as "no filter". Only interfaces a player actually filtered carry their filter stack, which is the same exposure every Create filter block and the warehouse output already have (§3.2.1). Found by `interfacesummarysyncisbounded`, which now also asserts that an unfiltered interface writes no filter at all.
+  * **Persistence** uses Create's key: `Filter` in the block entity's own tag (`isSafeNBT`, so a schematic keeps it). Since issue #25 (ADR-061) `StorageFilterBehaviour#write` writes **only** that key, **only while a filter is set**, and the filter as a **sample of one** (`StorageFilterBehaviour#sampleOf`: a click with a whole stack in hand no longer keeps "64 cobblestone" in the slot; a Create filter item is left as it is, because it is a real item). Create's `FilterAmount` and `UpTo` are never written: the slot has no amount, and Create's `read` turns both missing keys into its own defaults through its migration branch (`count == 0`). A save without those keys — every world from before M8 — reads back as an empty filter, i.e. unchanged behaviour, and a save from before issue #25 still carries all three (`Filter` as the whole stack the player held) and reads exactly as before; its next save writes the sample of one without the other two (GameTest `storagelocationsloadthefilterformatofearlierversions`). A test for the pre-M8 path must remove all three keys, not just `Filter` (M8 review fix in `filterpersistenceroundtrip`, which removed only `Filter` and therefore exercised the post-M8 path).
+  * **Bounded sync (important):** Create writes those three keys into **every** client packet, which costs about 215 accounting bytes in the update tag of every interface — and that tag is part of every chunk packet (the budget above). `StorageFilterBehaviour#write` therefore skips them while the filter is empty (since issue #25 on every path, not only for client packets), and Create's `read` reads a missing tag back as "no filter". Only interfaces a player actually filtered carry their filter stack, which is the same exposure every Create filter block and the warehouse output already have (§3.2.1). Found by `interfacesummarysyncisbounded`, which now also asserts that an unfiltered interface writes no filter at all.
   * **Controller cache.** The planner asks about every storage candidate of every run (up to 2·(L+1)·H, every `dispatchIntervalTicks`), so the filters live in `AisleFilters` (rack position → `FilterItemStack`): one map lookup per candidate instead of one block entity lookup. It is filled where the controller already resolves a location (`refreshLocation`: joins, content hints, the round robin, after every transfer, load verification) and by `WarehouseRegistry.filterChanged`, which an interface fires from its filter callback so the next planning run already honours a change. Nothing is persisted here — the filter itself lives in the interface. A filter that throws while being evaluated counts as *rejected*, not as "accepts everything", so a broken filter never quietly fills a chest a player set aside; the failure is logged at most once per `util.LogThrottle` interval.
     * **"Not read yet" is a third state, not "no filter" (M8 review fix, binding).** Because nothing is persisted, the cache is **empty** after every world or chunk load while the restored locations are still queued for their background snapshots, which drain at only `maxSnapshotsPerTick` (default 4) per tick — and `CraneDispatch` plans on the very first tick. A plain cache miss answered `UNFILTERED`, so for about ceil(n/4) ticks (≈ 264 at the default caps of 1056 locations) every not-yet-read location looked like general storage and the crane stored into chests the player had dedicated. Because a filter change never re-shuffles anything, that misplacement is **permanent**. Restored records (`read`) and joining locations (`processMembership`) are therefore marked **unread**, and the first `match` for such a rack resolves its interface once (`WarehouseControllerBlockEntity#readStoreFilterAt`: one `getBlockEntity` plus `storeFilter()`, no inventory read) and caches the answer — one block entity lookup per location *ever*, which the performance rules allow. A rack that cannot be resolved at that moment counts as **rejected**, never as unfiltered: the planner has other candidates, and storing into a location whose rule cannot be checked is exactly what this prevents. GameTest `filtercoldcacheafterreload`.
     * **An unchanged filter is not rebuilt** (M8 review fix): `refreshLocation` runs on every refresh path, while a filter only changes when a player clicks it, and resolving a Create list filter allocates an 18-slot handler plus a nested wrapper per entry. The cache keeps the **untrimmed** source stack next to the wrapper and compares with `ItemStack.isSameItemSameComponents` before rebuilding — untrimmed, because `FilterItemStack.of` removes enchantments and attribute modifiers *in place* and a removal is recorded in the component patch, so the wrapper's own stack never compares equal to what the behaviour hands out.
@@ -754,7 +754,18 @@ This is the crux of the feature and the reason it needed #3 first. A `Candidate`
 
 So **an unconfigured port writes none of the four**, a pre-M17 output's tag stays byte for byte its own, a missing key
 reads as the default, and no migration exists. `writeSafe` carries the settings into schematics at no
-`getRequiredItems()` cost.
+`getRequiredItems()` cost. Since issue #25 (ADR-061) Create's own filter keys follow the same rule, on every path:
+`Filter` only while a filter is set (and as a sample of one), `FilterAmount` only while it is not one stack of the
+filter item, `UpTo` never, because `RequestFilterBehaviour#read` forces it. So a plain port writes nothing at all,
+and an unconfigured one adds nothing to a schematic.
+
+Because `PortArmed`, `PortExported`, `PortCollected` and the station's `LastRejection` are written only while they are
+set, a missing key cannot tell "back to the default" from "says nothing about it". `readStationData` therefore reads
+them only from a **full save** (`WarehouseStationBlockEntity#isFullSave`, a tag with `Buffer`, which every save writes
+and no schematic print does): a print over a standing port — a port is the block most often printed over, because
+`POWERED`, `ACCEPTING` and `COLLECTING` change at runtime — keeps its pulse token, its counters and its last refusal,
+and a full save without the keys still resets them. The settings the print carries still reach the controller's port
+cache (issue #25, ADR-061, GameTest `aprintoverastandingportkeepsitspulseanditscounters`).
 
 What reaches the **client**: `PortRank` and `RedstoneMode` travel in the block entity's client packet, because the
 renderer and the goggles read them. The other two do not — `writeStationData` is skipped for a client packet — so the
@@ -1818,6 +1829,10 @@ The player-facing request station of an aisle: a screen instead of a filter slot
   clipboard, and the warehouse works its entries off in portions, ticking each one off on the clipboard as it delivers
   it. A list order is a stream of **ordinary** requests with one owner, so everything in this section — batching,
   reserves, maxima, filters, priorities, chains and the safety stop — applies to it unchanged.
+* **Since M32 a player can craft at it** (§3.4.5, ADR-059, issue #24): a crafting panel folds out of the screen, the
+  player lays a recipe with ghost items, and a click on the result crafts by hand from what the crane delivered into
+  the buffer. This is the one place in the mod where a recipe runs, and only a player's click runs it; nothing the
+  warehouse does by itself reaches it.
 * **In-game teaching (M13):** two Ponder scenes in `client.ponder.scenes.TerminalScenes`, both registered for the
   terminal item. `warehouse/terminal` ("Placing a Warehouse Terminal") covers §3.4.3: the screen is placed facing the
   player, a terminal placed **from beside the rack** has its port turned onto the aisle by the controller, and a wrench
@@ -1952,17 +1967,50 @@ search, sort, paging, amount and delta logic in `core.terminal`. Registered as
 `WareworksMenuTypes.WAREHOUSE_TERMINAL` (Registrate `.menu(...)`, which registers the screen on the client only).
 Networking decision and reasons: **ADR-019**.
 
-* **Opening.** Right-clicking the terminal with an **empty hand** opens the screen
-  (`WarehouseTerminalBlock#useItemOn` → `WarehouseTerminalBlockEntity#openScreen`, which is a plain
-  `ServerPlayer#openMenu` with the block position and the buffer slot count as extra data). Anything held passes the
-  interaction on (`PASS_TO_DEFAULT_BLOCK_INTERACTION`), so the wrench still rotates the block and a future item can
-  still be used on it; the terminal registers no behaviours, so unlike the warehouse output it has no value box that
-  could swallow the click. Goggles are worn, not held, and are unaffected.
+* **Opening** (issue #26, ADR-060). A right-click opens the screen **whatever is in the hand**, and a sneaking one
+  places the block or uses the item — the vanilla container convention, shared by the production station (§3.5) and
+  the stock keeper (§3.6) through `content.station.StationScreenClick`. The split is vanilla's own (`ChestBlock`,
+  `LecternBlock`): `WarehouseTerminalBlock#useItemOn` only decides whether the held item keeps its own click, and
+  `#useWithoutItem` opens the screen (`WarehouseTerminalBlockEntity#openScreen`, which is a plain
+  `ServerPlayer#openMenu` with the block position and the buffer slot count as extra data).
+  * `useWithoutItem` answers `sidedSuccess` — `SUCCESS` on the client, `CONSUME` on the server — so the client
+    returns before `stack.useOn` and sends no use packet: no ghost block, no placement sound, no bite of food. It is
+    reached for the **main hand only**, as at a chest. The answer depends on the held stack, on whether the player is
+    a fake one and on whether the player may build (synced with the abilities), never on block entity state, so the
+    client predicts exactly what the server does.
+  * **Sneaking** with something in either hand never reaches the block (vanilla's sneak guard), so sneak + right-click
+    places the block or uses the item without any code. A sneaking click that does arrive — both hands empty, or an
+    item that bypasses the sneak such as Create's Extendo Grip — is passed on, as before.
+  * **Items that keep their own click** (`StationScreenClick#actsOnTheBlock`; `useItemOn` answers
+    `SKIP_DEFAULT_BLOCK_INTERACTION`, which goes straight to `stack.useOn` — `PASS_TO_DEFAULT` would run
+    `useWithoutItem` first and let the screen swallow them): a **wrench** (`c:tools/wrench` and Create's own) turns the
+    screen where the player may build (in adventure mode it could turn nothing and the click would run on to the
+    offhand item, so there it opens the screen like any other item); the **Mechanical Arm** item selects the terminal —
+    Create cancels that click on the client only, and the server still runs the block with the arm in hand; Create's
+    **clipboard** opens its own editor and is hung on the face with Shift (a filled-in list goes into the terminal
+    through its list slot, §3.4.4); **goggles** are put on.
+  * **Handled before the block is asked**, so nothing is needed: the Display Link (it selects the terminal as its
+    source), funnels and super glue set `useBlock` to `FALSE` in Create's own `RightClickBlock` listeners.
+  * A **fake player** holding something — a Deployer — keeps its item's click too, so a Deployer still places a
+    block against the terminal; `FakePlayer#openMenu` opens nothing, and consuming its click would only stop the
+    machine.
+  * Everything else opens the screen as it would open a chest: every block item (also hoppers, chutes and Create's
+    logistics blocks), tools, food, filters, the Linked Controller and the Wand of Symmetry; with Shift each does its
+    own thing. The terminal registers no behaviours, so unlike the warehouse output it has no value box that could
+    swallow the click.
+  * GameTests `StationClickGameTests` drive all of this through `ServerPlayerGameMode#useItemOn` with a real
+    `ServerPlayer` at all three stations, also the wrench in adventure mode; the `arm` visual scenario checks that the
+    arm clicks open no screen on either side (CHECK 88), and that a real right-click on the terminal with cobblestone
+    and then with bread opens the screen while the client shows no block, plays no placement sound and uses nothing on
+    any tick in between (CHECK 257).
 * **Window** (`TerminalMenuLayout`, shared by both sides because `Slot#x`/`Slot#y` are final and a screen can never
-  move a slot): one brass-framed panel of 230 × 220 pixels holding the title row, the search row, a 12 × 3 stock grid,
-  the terminal's buffer slots with the label "Delivered here", one status line and the player inventory. Vanilla clamps
-  the GUI scale so that the scaled screen is at least 320 × 240 pixels (`Window#calculateScale`), so the window fits at
-  **every** GUI scale on a 1280 × 720 window.
+  move a slot): one brass-framed panel of 230 × 234 pixels (238 with 23–27 buffer slots) holding the title row, the
+  search row, the stock grid (two rows with the default buffer since M11), the terminal's buffer slots with the label
+  "Delivered here", one status line, the production section and the player inventory. Since M32 the crafting panel
+  folds out to its right and makes the window 298 pixels wide (§3.4.5). Vanilla clamps the GUI scale so that the
+  scaled screen is at least 320 × 240 pixels (`Window#calculateScale`), so the window fits at **every** GUI scale on a
+  1280 × 720 window, folded out as well. (Until M32 this bullet still gave the M6 window, 230 × 220 with a 12 × 3
+  grid.)
   * A bigger buffer adds a slot row per twelve slots, and (M6 review) **the stock grid gives those rows back**
     (`gridRows()`, 3 down to 1): the grid scrolls anyway, while a buffer slot that is not drawn could not be reached by
     hand. Every buffer size `terminalBufferSlots` allows (1–27) therefore still fits — a 27-slot buffer used to make the
@@ -2469,7 +2517,10 @@ clipboard lies, and the screen can say how far the list has got.
   into the empty list slot; a shift-click in the list slot takes it back. Everything else in the player inventory still
   does nothing.
 * It is persisted with the station data (`ListSlot`), dropped by `destroy()` with the buffer — a receipt is never
-  deleted — and emptied by `clearContent()` with it.
+  deleted — and emptied by `clearContent()` with it. It never travels in a schematic, and a tag that is no full save
+  (`WarehouseStationBlockEntity#isFullSave`: no `Buffer`) — a schematic print landing on the standing terminal —
+  leaves the slot and the order alone, while a full save without `ListSlot` still empties the slot (issue #25,
+  ADR-061).
 
 **One order, made of ordinary requests.** `WarehouseTerminalBlockEntity#tickListOrder` is one *top-up pass*, and every
 portion of it goes through the very call a click goes through:
@@ -2723,6 +2774,268 @@ plus one appended field put the network `VERSION` at `7`.
   its `ItemKey` changes and no fixed census expectation could hold. Clipboard conservation is asserted explicitly
   instead — still in the slot after every test, the same item handed back when it is pulled out, dropped by
   `destroy()`.
+
+#### 3.4.5 Craft at the terminal (issue #24)
+
+> Status: **binding design**; slice 1 shipped in M32: the crafting panel, the ghost grid, the server preview and
+> crafting from the terminal's buffer. **Fetching the ingredients** for a laid recipe (slice 2) and **offering to make
+> a missing ingredient first** (slice 3) follow, and JEI's recipe transfer after them (slice 4); until then the
+> ingredients arrive the way everything at a terminal does, by clicks in the list or a clipboard order. Decision,
+> alternatives and the boundary: **ADR-059**, which corrects one sentence of ADR-024. Design study:
+> `run/i24-design-synthesis.md`.
+
+A crafting panel folds out to the right of the terminal's window. The player lays a recipe in its 3 × 3 grid with
+**ghost** items, the server answers with what the grid makes, and a click on the result crafts it **by hand** from what
+the crane delivered into the terminal's buffer ("Delivered here"). Nothing is crafted without that click: this is the
+one place in the mod where a recipe runs, and no tick, order, rule, port or pattern reaches it.
+
+**The flow, click by click** (three chests, then a cake):
+
+1. **Fold the panel out** with the button in the free column right of the player inventory (`AllIcons.I_3x3`, tooltip
+   "Crafting grid" / "Craft by hand from what was delivered"). It turns green while the panel is out, and the fold
+   state is remembered for the client session, like the search text.
+2. **Lay the recipe.** None of these gestures orders anything:
+   * **Right-click** Oak Planks in the stock list: a ghost Oak Planks follows the cursor.
+   * **Left-click** grid cells: the ghost is stamped into each and stays on the cursor, so one pick paints the ring.
+     A left click on another stock cell while a ghost is held picks that item instead, and **never requests it**.
+   * **Shift + right-click** on a stock cell writes the item into the next free cell (row-major) without a ghost.
+   * A real item on the cursor clicked onto a cell writes that item's key; the item stays on the cursor.
+   * A **right-click** on a cell, or a left click on it with an empty hand, clears it; **Clear** (`AllIcons.I_TRASH`,
+     greyed out while the grid is empty) clears the whole grid. **Escape** drops the ghost before it can close the
+     screen, and any click the panel has no use for drops it too.
+   * A **left click** on a stock cell without a ghost requests the item, exactly as before.
+3. **The grid answers** five client ticks after the last edit: the result cell shows a Chest, every cell is tinted for
+   the next craft, and "x0" under the result is the number of crafts the buffer holds right now.
+4. **Bring the ingredients** — in slice 1 by an ordinary request: 24 planks clicked in the list arrive in the buffer,
+   the cells turn solid and the count goes to "x3".
+5. **Craft.** A click on the result crafts once, into the inventory (into the buffer when the inventory is full), and
+   the status row says "Crafted Chest x1". **Shift**-click crafts as often as the delivered ingredients allow. A cake
+   leaves its three buckets in the buffer. A click right after an edit, before the server's answer for the new grid
+   is in, crafts nothing: it asks for that answer at once and sounds the refusal, and the next click crafts what the
+   panel then shows.
+6. **Leftovers stay in the buffer** until the player takes them, like any delivery.
+
+**Geometry** (`TerminalMenuLayout`, relative to `leftPos`/`topPos`; the panel is a vertical strip because the window
+has no vertical room left, and no `Slot#x`/`Slot#y` moved):
+
+| Element | x | y | Size |
+|---|---|---|---|
+| Panel frame, its own brass frame | 230 | 0 | 68 × 234 (238 with 23–27 buffer slots) |
+| Title (one word, at most 54 px, measured in English and German) | 237 | 2 | text |
+| Grid cell (c, r) | 237 + 18c | 30 + 18r (level with the stock grid) | 18 × 18, `AllGuiTextures.STOCK_KEEPER_REQUEST_SLOT` |
+| Down arrow (`craftArrowX()` is the middle column, 255; the arrow's tip is in its column 13, counted from 0, so it is drawn at 251 to point at the result's centre, 264) | 251 | 86 | `AllGuiTextures.JEI_DOWN_ARROW`, 18 × 14 |
+| Result cell, with the vanilla count | 255 | 102 | 18 × 18 |
+| Ready count "xN", 0.75 scale, green at 1 or more, grey at 0 | centred on 264 | 122 | one label row |
+| Button places 0, 1, 2 (0 is kept for Fetch, 1 is free, 2 is Clear) | 237, 255, 273 | 132 | `IconButton`, 18 × 18 |
+| Progress bar and progress text (kept for the craft fetch) | 237 | 154, 158 | 54 × 2 |
+| Fold toggle, inside the 230 px window | 201 | `playerSlotsY() - 1` (152; 156 with 23–27 slots) | 18 × 18 |
+
+* **Window size.** The screen calls `setWindowSize(folded out ? 298 : 230, height)` and `setWindowOffset(folded out ?
+  foldOffset(width) : 0, 0)` before `super.init()`; Create adds the offset to vanilla's centred `leftPos`.
+  `foldOffset(W) = clamp((W − 298) / 2 − 4, 0, 34)` keeps a 4 px margin to the screen's edge and takes the whole jump
+  back from 374 GUI px on, so on most screens the main window does not move when the panel folds out. At the 320 × 240
+  floor (1280 × 960 at scale 4, 1920 × 1440 at scale 6) `leftPos` is 45 folded in and 18 folded out; at 427 (2560 ×
+  1440 at scale 6), 480 (1920 × 1080 at scale 4), 534 (the harness) and 854 (5120 × 1440 at scale 6) it does not move.
+* **Everything that is not a number goes elsewhere.** The panel holds only numbers and the one title word. Sentences go
+  to the 216 px status row or to tooltips (each line at most 216 px), so a long German item name never has to fit
+  54 px. `TerminalCraftTextWidthTest` measures every `gui.terminal.craft.*` text with the game's font
+  in both languages, and the `terminal` scenario measures the craft answers on the real client.
+* **JEI.** `getExtraAreas()` returns the panel's rectangle while it is folded out, and Create hands it to JEI for every
+  `AbstractSimiContainerScreen`. Because the panel lies inside `imageWidth`, a click on its empty part with an item on
+  the cursor is not "outside the window", so the item is never thrown.
+
+**Drawing and tooltips.** A cell's look is worked out for the **next** craft: the buffer's items cover the cells of
+their key in grid order, and the warehouse's available items the cells after those.
+
+| Cell state | Look | Tooltip line under "N per craft, M here" |
+|---|---|---|
+| **Here**: the buffer covers this cell | solid item | — |
+| **Available**: the warehouse could grant it to a click | item under vanilla's ghost overlay (`0x30FFFFFF`, `RenderType.guiGhostRecipeOverlay()`) | "120 available" |
+| **Short**: some, but too few for the next craft | ghost on a faint gold | "Only 6 available, 12 needed" |
+| **Missing**: none to give, or the terminal belongs to no warehouse | ghost on the recipe book's red (`0x30FF0000`) | "None available", or "Not part of a warehouse" |
+| **Unknown**: the server has not described the item yet | ghost | — |
+
+* "Available" is `availableTo(StockAccess.PLAYER, key)`, the number the stock tooltip already calls Available; a
+  player is never held back by a reserve. The tints for an item a station could make, and for one the safety stop
+  holds, are slice 3; until then a producible item with no stock shows as missing.
+* The **result** is solid while at least one craft is ready and ghosted otherwise; a recipe `doLimitedCrafting` keeps
+  this player from gets a red overlay and the line "You have not unlocked this recipe". Its tooltip adds "Ready to
+  craft: xN" and the two clicks. An empty cell's tooltip explains the right-click and the Shift + right-click.
+* The **ghost on the cursor** is drawn with the same overlay at the mouse, where vanilla draws a carried stack, and
+  hides every tooltip while it is held. While the panel is out, a stock cell's tooltip gains one line: "Right-click:
+  into the crafting grid".
+* "Here" and the ready count (`CraftGrid#craftsFrom`) are counted **on the client** from the synced buffer slots, so
+  they react the moment an item arrives or is taken out. The server stays authoritative at the craft.
+
+**The grid is the player's own** (`core.crafting.CraftGrid<ItemKey>`): nine cells, each an exact `ItemKey` (item plus
+components) or empty, never an item and never a menu slot. The screen remembers one grid per terminal (dimension and
+position) for as long as the player stays connected, at most 16 terminals, least recently opened out first; an emptied
+grid is forgotten. Leaving the world or server forgets every grid (`ClientPlayerNetworkEvent.LoggingOut`), and so does
+a connection whose registries are not the ones the grids were laid under (a server that sends the client back into
+configuration builds new ones): a grid's item keys hold registry entries of the connection that decoded them, an
+enchantment or a banner pattern, which a later connection cannot write into the preview that announces the grid.
+It is not saved and not synced, two players at one terminal each have their own, and no slot index of the menu moved
+(`terminalmenuslots` pins every slot's index, class, position and owner, before and after a grid is laid).
+
+**The server preview.** The client never runs recipe code: vanilla matches a crafting grid only on the server.
+
+* The client sends `TerminalCraftPayload(containerId, PREVIEW, cells, hint)` five client ticks after the last edit, and
+  once when the screen opens with a remembered grid that is not empty. A craft click carries the grid too, so a preview
+  still waiting is not sent on top of it. The hint is the recipe id of the last view, sent only while that view
+  describes the grid on screen.
+* `WarehouseTerminalMenu#submitCraft` checks the `containerId` against the player's open menu, drops a `FakePlayer` and
+  takes one of the menu's eight actions per tick. The menu keeps the cells and the hint as **transient** state, never
+  saved and gone when the menu closes, and looks the recipe up only when the cells changed or the hint names something
+  new: the same grid with the same hint, or with the hint the last lookup itself found, costs nothing.
+* `TerminalCrafting#preview` resolves `RecipeType.CRAFTING` through `RecipeManager#getRecipeFor(type, input, level,
+  hint)`, which looks the hint up in the **current** manager and tries it first, so the answer neither flips between
+  two matching recipes nor survives a `/reload` that removed one. The input is the grid trimmed the way a crafting
+  table trims it (`CraftingInput.ofPositioned(3, 3, …).input()`), the result is `assemble`d exactly as vanilla fills
+  its result slot (empty for an item this world has disabled), and `locked` is whether a fresh `ResultContainer`
+  refuses the recipe for this `ServerPlayer`. An empty grid costs no lookup at all.
+* The view travels in the menu's ordinary push, value-compared like everything else there:
+  `TerminalCraftViewPayload` with the nine cells it was resolved for, the recipe id, the result, `locked`, `noAisle`
+  and at most nine `KeyView(key, available, producible, paused)`, one per distinct grid item. The push only reads the
+  resolved preview; it never looks a recipe up, and a player who never laid a grid is sent nothing. Because the view
+  carries its cells, every changed grid gets a view that differs and is pushed. The panel uses a view only while it
+  was resolved for exactly the grid on screen, cell by cell; a view of an earlier grid — also one of the same items
+  moved (two planks side by side are a pressure plate, one above the other sticks) or one more of them — shows no
+  result, sends no hint, and a click on the result then crafts nothing but sends the preview at once.
+* **Special recipes** (fireworks, dyeing, map and book cloning, repair) work, because the grid holds concrete keys and
+  the recipe sees only the grid. A tag is never resolved behind the player's back: the recipe's own ingredient test
+  decides whether the exact keys match, and a craft consumes exactly those keys. The **vanilla recipe book** cannot be
+  used here: the server accepts its place-recipe packet only for a `RecipeBookMenu`, and the terminal's menu is
+  Create's `MenuBase`.
+
+**One craft is a transaction that refuses before anything moves** (`content.station.TerminalCrafting`, the only class
+of the mod that runs a recipe; ADR-059). The click sends `TerminalCraftPayload(containerId, CRAFT | CRAFT_ALL, cells,
+hint)`; after `submitCraft`'s checks, `WarehouseTerminalBlockEntity#craftFromBuffer` checks that the menu belongs to
+this terminal, that it is the one the player has open and that the player is in reach (`OUT_OF_REACH` otherwise). No
+aisle is needed. The recipe is resolved once per click (`GRID_EMPTY`, `NO_RECIPE`), and then, per craft:
+
+1. **Limited crafting.** For a `ServerPlayer`, one fresh `ResultContainer` per craft must accept the recipe
+   (`setRecipeUsed`), otherwise `LOCKED`. The same container awards the recipe in step 6; one per craft because the
+   award reads it and resets it.
+2. **The result**, assembled from a fresh input, otherwise `NO_RECIPE`.
+3. **The remainders**, from the **resolved** recipe with the crafting player set (`CommonHooks.setCraftingPlayer`,
+   reset in a `finally`). `RecipeManager#getRemainingItemsFor` is not used: it looks the recipe up again without the
+   hint, and when nothing matches it hands the inputs back as "remainders".
+4. **The plan** (`core.crafting.SlotPlan`), over read-only views of the buffer slots the menu shows and the player's 36
+   main inventory slots (armour and the offhand are never touched), recording only the slots it would change. Room in
+   a slot is `min(slot limit, max stack size) − count`.
+   1. Take one item of the exact key per occupied cell **from the buffer only**, smallest stacks first so the take frees
+      as many slots as it can; a shortfall is `NOT_IN_BUFFER`, naming the item. An item in the player's own inventory
+      is never taken.
+   2. Put the remainders into the **buffer** (stacking first, then empty slots), what is left into the inventory.
+   3. Put the result into the **inventory**, what is left into the buffer.
+   4. Anything left over is `NO_ROOM`, naming the item. **Nothing has moved, no event has fired and no statistic has
+      been awarded.**
+5. **Commit** the takes and the remainders with plain slot writes: `Inventory#setItem`, then every buffer slot at
+   once (`StationBuffer#setStacks`). No third-party code runs between the plan and the last write: the buffer's
+   change notification, which reaches the neighbouring blocks (`BlockEntity#setChanged` →
+   `Level#updateNeighbourForOutputSignal`), fires once, after it, so a neighbour that takes from the buffer can never
+   have its take written over, and the plan is what happens. The commit is the first statement inside the `try` of
+   step 7's `finally`, so code that throws in that notification cannot take the result with it either.
+6. **Vanilla's side effects, in vanilla's order, on the real result** before it is placed: `ItemStack#onCraftedBy` (the
+   statistic, a map's post-processing), `EventHooks.firePlayerCraftingEvent` with a `TransientCraftingContainer` of
+   copies over a private menu that ignores every change, then `awardUsedRecipes` (the unlock and its advancement
+   trigger).
+7. **Place the result as it is now** — a listener may have changed it — planned again on the live slots, inventory
+   first, then the buffer. A result nobody changed always fits, because step 4 checked it. The one way left for an
+   item to reach the world is a drop at the player's feet logged at WARN, reachable only when a listener changed the
+   result or the inventory in step 6; "dropped in the world" is one of the four places the item-conservation invariant
+   allows. The placement sits in a `finally`, so a listener that throws cannot take the result with it.
+
+Not used anywhere: `PlayerMainInvWrapper` (its insert broadcasts the open menu from inside the craft),
+`ItemHandlerHelper#giveItemToPlayer` (drops what does not fit), vanilla's `ResultSlot#onTake` (drops remainders) and a
+menu's shift-click.
+
+**Shift-click** (`CRAFT_ALL`) first fixes `n`, the crafts the buffer holds for the grid at the click
+(`CraftGrid#craftsFrom`), then runs at most `n` transactions and stops at the first refusal. `n` is bounded by the
+buffer's slot count times a stack, so no other cap is needed, and because it is fixed before the first craft the loop
+ends even for a recipe that gives an ingredient back (map and book cloning), which simply crafts a little less per
+click. A buffer that holds not even one craft still gets one attempt, so the answer names the missing ingredient.
+
+**Remainders and room.** Room for the remainders is planned **after** the ingredients leave: three milk buckets (max
+stack 1) free three slots and the three empty buckets need one. A honey bottle taken from a stack of sixteen frees
+nothing, so with a full buffer and a full inventory the sugar craft is refused about the Glass Bottle rather than
+dropped.
+This covers buckets, bottles, NeoForge's stack-aware remainder hook and the original book that book cloning hands back.
+
+**Conservation and the no-teleport rule.** Per craft, buffer and inventory together afterwards hold what they held
+before, minus one item per occupied cell, plus the result and the remainders: vanilla's own definition of a craft
+(unless a crafting listener changed the result or the inventory, the one case step 7 drops what fits nowhere at the
+player's feet).
+Items reach the buffer otherwise only by crane drops of ordinary `RETRIEVE` requests; the craft adds the **one** write
+without the crane that ADR-059 records — the player's own result when their inventory is full, and the recipe's
+remainders, made from that buffer's items in the same call. `TerminalBufferSlot#mayPlace` stays false and the item
+capability stays extract-only. Nothing moves between warehouse locations, storage is never touched, and nothing a craft
+makes enters the stock index or completes an order.
+
+**Several players at one terminal.** Each has their own grid and their own menu, so each has their own preview. The
+buffer is shared. Payload handlers run on the server thread, so two crafts in one tick are served one after the other:
+the first is `CRAFTED`, the second, if the first took what it needed, `NOT_IN_BUFFER` naming the item. Both screens
+see the buffer change through vanilla's container sync.
+
+**What a click answers.** `TerminalCraftAnswerPayload(result, crafted, about)` goes to the acting player only; the
+buffer and the inventory reach every screen through container sync. `crafted` counts **items**, not crafts (two logs
+crafted into planks answer 8). The sentence takes the existing status row, green for `CRAFTED`, gold when items were
+made before a refusal, red otherwise.
+
+| Result | When | What moved | Status row |
+|---|---|---|---|
+| `CRAFTED` | every requested craft was made | the craft | "Crafted Chest x1" |
+| a refusal with `crafted` > 0 | a Shift-click stopped early (`NO_ROOM`, `NOT_IN_BUFFER` or `NO_RECIPE`) | the crafts made before it | "Crafted Chest x5. No room for Chest" |
+| `NOT_IN_BUFFER` | the buffer lacks an ingredient for one craft (named) | nothing | "Not enough Oak Planks here" |
+| `NO_ROOM` | a remainder or the result fits neither the buffer nor the inventory (named) | nothing | "No room for Glass Bottle" |
+| `NO_RECIPE` | the grid matches no crafting recipe, or makes an item this world has disabled | nothing | "The grid makes nothing" |
+| `LOCKED` | `doLimitedCrafting` is on and the player has not unlocked the recipe | nothing | "You have not unlocked this recipe" |
+| `GRID_EMPTY` | the grid is empty | nothing | "Lay a recipe first" |
+| `OUT_OF_REACH` | the menu is not this terminal's, not the one the player has open, or the player walked away | nothing | "You are too far away" |
+
+A payload that is not a click of this player's open screen gets **no answer at all** and does nothing: a wrong
+`containerId`, a player without a terminal menu, a `FakePlayer`, an action past the eight per tick, and a malformed
+payload (a cell count other than nine, or an action name this build does not know, decodes as `NONE`; at most nine
+cells are ever read; an invalid hint id reads as no hint).
+
+**Persistence and sync.** Nothing is saved: not the client grid, not the ghost, not the menu's cells, hint or preview.
+`WareworksNetwork.VERSION` is `"9"` for the three payloads.
+
+**Not yet** (slices 2 and 3 of the issue, ADR-059's consequences): the **Fetch** button at button place 0 with its
+progress row, which turns grid × N into a second order on the terminal beside the clipboard order and asks once when
+fewer than N crafts fit; and the **chain offer**, which tints an ingredient a station can make and offers to make it
+first. JEI's "+" (slice 4) lays a recipe into the grid from JEI. Out of scope for the issue: recipe by result,
+cycling between alternative recipes, an EMI plugin.
+
+**Tests.**
+* **JUnit:** `core.crafting.CraftGridTest` (17: merge order, `toFetch` bounds up to 9 × 65 536, `craftsFrom`, a key
+  the recipe gives back), `core.crafting.SlotPlanTest` (23: every plan checked against a census of the vanilla craft
+  delta, stacking first, max stack 1, the bottle that has no room, refusal order, exact keys, all-or-nothing takes,
+  smallest stacks first), `content.station.TerminalMenuLayoutTest` (8: buffers 1–27, the six named screen widths and a
+  sweep from 306 to 4000 px, the 4 px margins, no jump from 374, every panel element inside the panel without overlap,
+  the toggle over no slot and no text row), `RecipeExecutionBoundaryTest` (6, ADR-059's guard: the recipe scan and
+  the scan of the way in, the allowed files still using their calls, and every form the patterns must catch) and
+  `data.TerminalCraftTextWidthTest` (2: every craft text in both languages against the title's 54 px and the row's
+  216 px, and no `gui.terminal.craft.*` key left unmeasured).
+* **GameTests** (`gametest.TerminalCraftGameTests`, 14, with an item census over the test's blocks **and players** on
+  every tick): one craft from the buffer with a diamond on the cursor; Shift crafting 3 and then refusing; a Shift-click
+  that stops after one craft (`NO_ROOM`, 3 sugar made, about the sugar, one craft counted); the cake's buckets and the
+  honey bottles' glass bottles in the buffer; the result into the buffer when the inventory is full; three refusals
+  for no room with both sides equal stack by stack and no statistic awarded, then the same click crafting into a
+  freed slot; exact keys only (renamed planks in the buffer, plain planks in the inventory); two players in one tick;
+  limited crafting in its own batch (`wareworksTerminalCraftLimited`); foreign menus, distance and the eight-per-tick
+  budget; 400 idle ticks in which nothing is crafted; the preview and its lookup count; a view that names its grid
+  (table, door, sticks and pressure plate: the same item, each view describing its own grid only); and the three
+  payloads' codecs against hostile shapes. `WarehouseTerminalMenuGameTests#terminalMenuSlots` pins the slot list.
+* **Visual** (`./gradlew runVisualTest -Pwareworks.visualTest=craft`, 25 shots, English and German): the fold, a ghost
+  picked and stamped, the laid recipe and its tooltips, 24 planks requested and delivered by the crane, one craft and a
+  Shift craft, a cake with its buckets left in the buffer, a ghost hiding a stock cell's and an inventory slot's
+  tooltip (and both shown without it), the crafting table laid via sticks and a pressure plate with the panel checked
+  after each edit for a stale result and a stale click, a refusal for no room, the window at a 320 × 240 GUI
+  (1280 × 960 at scale 4: `leftPos` 18 folded out, 45 folded in) and at 1920 × 1080 at scale 4, and the remembered
+  panel and grid after the screen is opened again. A `SceneItemCensus` brackets every craft. The two Shift gestures
+  are checked against the hit tests and then call the panel's own branch, because the harness cannot hold a modifier;
+  the real keys are manual checks 250 and 251.
 
 ### 3.5 Warehouse Production Station (`content.station`, M11)
 
@@ -2998,8 +3311,10 @@ Classes:
   filter is advisory here for the same reason as on a retrieve reroute — the items already left the warehouse.
 * **The station's block** is a `WarehouseStationBlock` like input and output (no ticker, no redstone conduction, no
   value box, `create:non_movable` + `c:relocation_not_supported`, pickaxe only, buffer dropped in `destroy()`, emptied
-  by `Clearable`). A right-click with an **empty hand** opens the pattern screen; anything held passes the interaction
-  on, so the wrench still rotates it.
+  by `Clearable`). A right-click opens the pattern screen whatever is in the hand, a sneaking one places the block or
+  uses the item, and the wrench, the Mechanical Arm item, the clipboard and goggles keep their own click — the
+  terminal's rule (§3.4.2, `StationScreenClick`, issue #26). Sneaking with an empty main hand resumes what the safety
+  stop held (§3.6.4, `ProductionStationHooks`).
 * **The screen** (`ProductionMenu`, the terminal's conventions): a menu-scoped, throttled push to the one player who
   has it open (`REFRESH_INTERVAL_TICKS` 10, nothing sent while nothing changed), real slots for the buffer (take out
   only), and **bounded payloads** validated entirely on the server. Pattern entries are `ItemKey`s with data
@@ -3014,7 +3329,9 @@ Classes:
     cancellation is refused for an order that does not run at *this* station, so a crafted payload cannot reach into
     another aisle.
 * **Persistence.** Patterns are saved with the station (`Patterns: [{Slot, Entries: [{Entry, Item: ItemKey, Count}]}]`,
-  bounded loading, never throws); orders are saved with the controller
+  bounded loading, never throws; a save always writes the list, and a tag that is no full save — a schematic print
+  landing on the standing station, which carries no patterns — leaves them alone, issue #25, ADR-061); orders are
+  saved with the controller
   (`ProductionOrders: [{Id, Station, Result, ResultAmount, State, Produced, StockSeen, Request?, Lines: [...]}]`,
   at most `MAX_SAVED_ORDERS` (256), invalid entries skipped, deadlines recomputed on load). Since M20 an order may
   additionally carry `Parent?`, the ingredient line of the order it is a step for, written only when there is one
@@ -3124,7 +3441,8 @@ Nothing moves in between. That is the whole point of deciding at the click: the 
 chest the aisle could not have finished, and the answer a player reads is actionable instead of a status line four
 minutes later with the batch already gone.
 
-**Wareworks still crafts nothing** (ADR-024). Every step is an ordinary production order: the crane delivers the
+**Wareworks still crafts nothing** (ADR-024; since M32 the one place a recipe runs is a player's own click at a
+terminal, ADR-059, §3.4.5). Every step is an ordinary production order: the crane delivers the
 ingredients, the player's funnel, chute, belt or Mechanical Arm carries them into the machine, the machine works, and the
 product comes back through an ordinary **warehouse input** — or through an M18 **collecting port** — and is **stored in a
 rack**. The crane then fetches those very items out of that rack for the next step. There is deliberately no
@@ -3559,10 +3877,12 @@ true:
 
 The block holds **no items at all**: no buffer, no item capability, no belt input, no mechanical arm point, and the crane
 never visits it. The rows are ghost items like a production pattern's cells, so editing a rule can never consume,
-duplicate or swallow anything. It is therefore a `LocationKind.KEEPER` and not a station. A right-click with an empty
-hand opens its screen; the comparator on it reads how many of its rules are below their minimum, and its lamp burns
-while any of its rules bites. An aisle may hold **several** keepers, which is why there is no separate one-rule block:
-a keeper with a single rule is the cheap per-item variant.
+duplicate or swallow anything. It is therefore a `LocationKind.KEEPER` and not a station. A right-click opens its
+screen whatever is in the hand and a sneaking one places the block or uses the item, by the terminal's rule (§3.4.2,
+issue #26; the Mechanical Arm item is placed against it as before, because it is no arm target); the comparator on it
+reads how many of its rules are below their minimum, and its lamp burns while any of its rules bites. An aisle may hold
+**several** keepers, which is why there is no separate one-rule block: a keeper with a single rule is the cheap
+per-item variant.
 
 **Off is a value.** Each number is either an amount or unset ("–"). For the maximum `0` is a real setting ("accept none
 of this any more") and unset means "no cap at all"; for the minimum and the reserve `0` and unset behave the same and
@@ -4034,7 +4354,7 @@ matters, the acknowledgement grows the keys.
   `StockRulePause`.
 * `core.terminal` (also pure): `RequestConfirmation` (what a click would cross, and the arithmetic that decides it) and
   `RequestAcknowledgement` (what the player accepted, and whether it covers a question).
-* `content.station`: `WarehouseStockKeeperBlock` (`LIT` and `PAUSED`, the comparator, the empty-hand right-click),
+* `content.station`: `WarehouseStockKeeperBlock` (`LIT` and `PAUSED`, the comparator, the right-click that opens it),
   `WarehouseStockKeeperBlockEntity` (the rules, the summary, the screen state, the two resume paths),
   `StockKeeperRules` (the editable rows and their NBT), `StockKeeperGoggleSummary`, `StockKeeperScreenState`,
   `StockKeeperMenu`, `StockKeeperMenuLayout`; and `TerminalRequestOutcome`, the third ending of a terminal click.
@@ -5673,6 +5993,8 @@ the item census's "no block entity, skip" shortcut loses both cauldrons. GameTes
 | **An unreadable item key or an impossible count on a pallet (M28)** | A key that cannot be decoded (its mod was removed) or a count at or below 0 **discards** the pallet — vanilla's own answer for an item entity whose stack it cannot read, and better than an unremovable husk. A count above `MAX_LOAD` (= `BayTier.MAX_CAPACITY_ITEMS`, the bay's own ceiling) is clamped and logged as the loss it is. GameTest `palletsurvivesanysavedata`. |
 | **A pallet drained by a machine or a hand (M28)** | Real `extractItem` results only, one stack per call, and **extract-only**: nothing can be put into a pallet, because the way into storage is a bay. A hand take is simulated against the player's own inventory first and takes only what fits. A vanilla hopper and a Create Deployer reach it; Create's belts, chutes, funnels, depots and ejectors do not (`ItemHelper.fromItemEntity`), which also means no Create block can delete or teleport one. GameTests `ahopperdrainsapalletandafunneldoesnot`, `pallethandgestures`. |
 | **Refilling a bay from a pallet (M28)** | Two independent real-result transfers through the player's hand. There is deliberately **no** one-move path: the pallet has no item form at all, so goods never move without being touched. GameTest `bayrefilledfromapalletbyhand`. |
+| **A schematic of a stocked warehouse (issue #25)** | Create prints a Wareworks block with its settings only (`BlockHelper#prepareBlockEntityData`, `PartialSafeNBT`): a printed bay, station, terminal or dock is **empty**, whatever the saved file holds, and Create's material list asks for the block alone. A print landing on a **standing** block (a block state differs; at the cannon only with *Replace Block Entities* on) leaves its goods, buffer, clipboard, order, patterns, handling head, a port's pulse token, counters and last refusal and a keeper's rules where they are: a station's runtime state is read only from a full save (`WarehouseStationBlockEntity#isFullSave`), everything else only from a tag that carries it. A keeper printed from an ordinary, client-side Schematic and Quill save has no rules, because the client never holds them; a print from it over a standing keeper keeps that keeper's rules. GameTests `warehouseblocksprinttheirsettingsandnevertheirgoods`, `storagelocationsprinttheirsettingsandnevertheirgoods`, `aprintoverastandingportkeepsitspulseanditscounters` (ADR-061). |
+| **A pallet inside a saved schematic (issue #25)** | Schematic and Quill saves it with its load, as it saves every entity; `PalletEntity#onlyOpCanSetNbt()` is true, so Create drops it from every schematic it loads with block data processed and no print can add a second one. An operator's creative print, which keeps every saved entity (blocks still get only their settings through `prepareBlockEntityData`), is the one exception, as `/place template` is for entities. GameTest `apalletnevertravelsinaschematic` (ADR-061). |
 | **Fluid bay broken with fluid in it (M30)** | The fluid is **lost**, and that is the one deliberate loss in this mod: a fluid has no drop form, so there is nothing a pallet could carry, and every alternative is worse (§3.9, D7). `destroy()` clears the contents **before** anything else can see them, exactly as a rack bay's does, and logs one `WARN` with the fluid, the millibuckets and the position — the only record a server owner gets. **Three places say so beforehand**: the item description, a gold goggle row while there is anything to lose, and an action-bar warning on the first punch; a sneaking **wrench** click gets that same line as the bay goes, which is as early as one click allows (§3.9.1). Nothing is placed in its stead, so the loss is exactly what was in the bay and no more. GameTests `breakingafullfluidbaylosesitsfluidandlogsit`, `breakingafluidbayincreative`. |
 | Needed chunk not loaded | The crane waits in the current phase and retries. **M19:** unchanged, and still the behaviour of every aisle on a default server. Where `chunkLoading` is switched on and the aisle is allowed to hold, this case simply does not arise for the aisle's own chunks while it has work (§11); where it is refused by a cap or has given up, the pause path is what carries it, exactly as before. |
 | Chunk loading on, and the aisle has work (M19) | It holds the chunks of its own footprint — the aisle box plus one block horizontally — with a non-ticking block ticket, so the crane, the controller and the player's own machines in those chunks keep running with nobody nearby. Crops still do not grow and mobs still do not spawn there. It lets go `releaseDelayTicks` after its last work (§11.4). |

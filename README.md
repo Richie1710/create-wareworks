@@ -110,11 +110,13 @@ teleported: every item you put in or take out is carried by the crane, where you
   delivers it into the terminal. Its grid is ordered by what there is most of, by what **you** request most often, or
   by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard — a Schematicannon's material
   checklist, or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks
-  each entry off as it delivers it.
+  each entry off as it delivers it. A **crafting grid** folds out beside the screen: lay a recipe with ghost items,
+  and craft it by hand from what the crane delivered, without walking to a crafting table.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
-  at your own machines. Wareworks never crafts anything itself.
+  at your own machines. Wareworks never crafts on its own; at a terminal you can craft by hand from what the crane
+  delivered.
 * **Warehouse Stock Keeper**: holds the warehouse's stock rules — one item per row plus a **minimum**, a **maximum** and
   a **reserve**. It holds no items itself; a row's item is only a name, and nothing you click into it is used up.
 * **Warehouse Home Point**: says "wait here". Place it beside the rails where your next job usually starts and, on a
@@ -251,7 +253,10 @@ cannot fill one and that breaking a full one loses the fluid.
 
 **Warehouse Terminal.** Place it at a rack position while standing where you want to read it: the screen faces you, and
 the controller turns the crane's intake port towards the aisle by itself. The wrench turns the screen to another side,
-never onto the port. Right-click with an empty hand to open it.
+never onto the port. Right-click it to open it, whatever you are holding, except the items that work on the terminal
+itself: the wrench turns it, the Mechanical Arm selects it, a clipboard opens its own editor (a list goes in through the
+slot in the screen, see **Hand it a list**), goggles are put on and a Display Link links to it. Like a chest, you sneak
+to place a block against it.
 
 * Type to search; `@create` matches a mod id. One button hides everything the warehouse holds none of.
 * One button cycles the **order** of the grid: **most available first**, **most used** or **by name**. Hovering it
@@ -289,6 +294,24 @@ wants more than the warehouse has, or if something on it would have to be **prod
 it starts and tells you the numbers for the whole list. Underneath it is nothing new: every entry becomes an ordinary
 request, so batching, filters, priorities, reserves and maxima all still apply and the crane fetches every single item
 itself.
+
+**Craft at the terminal.** The button with the grid icon beside your inventory folds out a crafting grid. Lay a
+recipe in it with **ghost** items — nothing is ordered and nothing moves while you do:
+
+* **Right-click** an item in the stock list to pick it up as a ghost, then **left-click** grid cells to stamp it in;
+  it stays on the cursor, so one pick fills the whole ring of a chest. **Esc** puts it down.
+  **Shift + right-click** an item to drop it straight into the next free cell. Right-click a cell to clear it, or
+  press **Clear** for the whole grid.
+* The result appears under the grid, with **xN**: how many crafts the items delivered here allow right now. A cell
+  drawn solid is here; a faded one is not, and its tooltip says how many the warehouse has.
+* Get the ingredients the usual way — a click in the list, or a clipboard — and when they have arrived, **click the
+  result** to craft once, or **Shift-click** to craft as many as the delivered items allow. The result goes into your
+  inventory, or into the terminal when your inventory is full; leftovers such as a cake's empty buckets stay in the
+  terminal. If something is missing or there is no room, nothing is used up and the terminal says why.
+
+Your grid is your own — two players at one terminal each lay their own — and the last 16 terminals you used each
+keep the grid you laid there until you leave the world or server. Wareworks never crafts on its own: a recipe runs only when you click the result.
+Fetching the ingredients for a recipe with one button is still to come.
 
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
 path for your factory — and the same block can keep asking by itself, or take items *in*, which is the next section.
@@ -489,9 +512,9 @@ Practical notes:
 ## Stock rules
 
 A **Warehouse Stock Keeper** is where you tell a warehouse how much of something it should hold. Place it into a rack
-like any other station and right-click it with an empty hand: each row takes one item and up to three numbers. Scroll a
-number to change it, Shift-scroll for whole stacks, right-click it to switch it off. The row's item is only a name —
-nothing you click in is used up, and the keeper itself never holds an item.
+like any other station and right-click it: each row takes one item and up to three numbers. Scroll a number to change
+it, Shift-scroll for whole stacks, right-click it to switch it off. The row's item is only a name — nothing you click
+in is used up, and the keeper itself never holds an item.
 
 The three numbers do three different things:
 
@@ -583,6 +606,38 @@ idle aisle with nothing pending unloads and will not see a furnace that finishes
 `chunkLoading.maxCollectHoldAislesPerLevel` keeps a collection that is **already running** alive across the gap between
 one machine output and the next; it cannot start one. It is a cap of its own, and an aisle waiting behind it says so on
 its goggles.
+
+## Compatibility
+
+### Create: Schematic Checker (for server operators)
+
+A server that runs **Create: Schematic Checker** has to list Wareworks in `config/CSC/config.toml`. The checker's
+mod-whitelist mode is on out of the box (`WhiteListModEnable = true` under `[core]`), so unless you switched it off,
+your server is affected. Add `"wareworks"` to `WhiteListModList` and **keep every entry that is already in it: append,
+do not replace the list.** The checker ships with a list of its own — in 2.27.47 `create`, `minecraft`,
+`createaddition`, `railways`, `copycats` and nine more — and every mod a replaced list leaves out loses the block data
+of its blocks in every upload:
+
+```toml
+[core]
+WhiteListModList = [ ...the entries already there..., "wareworks" ]
+```
+
+Without it, the checker removes Wareworks blocks that carry block data from every uploaded schematic — in the report
+that led here ([#25](https://github.com/Richie1710/create-wareworks/issues/25)), every rack bay. The hologram still
+shows them, because it is drawn from your own copy of the file, but the Schematicannon and its material checklist work
+from the server's copy and leave them out.
+
+Listing Wareworks is safe: **Create prints a Wareworks block with its settings and never with its contents.** Only
+settings can travel — a filter (one item of it), a priority, a port's amount, rank and redstone mode, the aisle letter,
+the mast height and a stock keeper's rules. The rules travel only in Schematic and Quill's instant upload: an ordinary
+save is taken on your client, which is never sent them, and a print from it leaves a standing keeper's rules as they
+are. Items, fluids, buffers, the crane's load, clipboards and orders never travel. A printed rack bay, fluid bay,
+station or crane is empty, a print over a standing one leaves what it holds and what it counts where it is, and a
+pallet caught in the saved area is left out of the print (an operator's creative instant print is the exception: it
+keeps every entity as it was saved, so a saved pallet comes along). The schematic file itself can contain a block's
+contents, just as it contains a chest's; Create never places them. In-world tests save and print every Wareworks
+block, configured and stocked, through Create's own schematic code, and fail on any item that travels.
 
 ## Building from source
 

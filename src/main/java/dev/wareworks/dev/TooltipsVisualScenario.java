@@ -167,8 +167,9 @@ public final class TooltipsVisualScenario implements VisualScenario {
      * although GLFW already reports the new one; a minimised window reports none at all. So a minimised window is
      * restored, and a stale size is read with the window's own {@code refreshFramebufferSize} (private, reached by
      * reflection like the input in {@link ScreenInput}) before the client resizes the way the callback would have.
+     * The craft scenario's windowed sizes use it too ({@code CraftVisualScenario}).
      */
-    private static boolean synced(VisualContext context) {
+    static boolean synced(VisualContext context) {
         Window window = context.minecraft().getWindow();
         if (GLFW.glfwGetWindowAttrib(window.getWindow(), GLFW.GLFW_ICONIFIED) == GLFW.GLFW_TRUE) {
             GLFW.glfwRestoreWindow(window.getWindow());
@@ -189,12 +190,12 @@ public final class TooltipsVisualScenario implements VisualScenario {
             throw new VisualTestException("cannot make the window read its framebuffer size: " + e);
         }
         context.minecraft().resizeDisplay();
-        LOGGER.info(PREFIX + "tooltips: the window missed the framebuffer callback and read {}x{} itself",
-                window.getWidth(), window.getHeight());
+        LOGGER.info(PREFIX + "{}: the window missed the framebuffer callback and read {}x{} itself",
+                context.scenarioName(), window.getWidth(), window.getHeight());
         return framebufferIs(window, glfwWidth[0], glfwHeight[0]);
     }
 
-    private static boolean framebufferIs(Window window, int width, int height) {
+    static boolean framebufferIs(Window window, int width, int height) {
         return window.getWidth() == width && window.getHeight() == height;
     }
 

@@ -29,6 +29,7 @@ import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.production.ProductionOrder;
@@ -56,6 +57,7 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
@@ -94,7 +96,8 @@ import net.neoforged.neoforge.items.ItemStackHandler;
  * <li>{@link #stockSnapshot()} — the aisle's stock as a bounded, ordered list of {@link TerminalStockEntry};</li>
  * <li>{@link #bufferedItems()} (inherited) — what already arrived here;</li>
  * <li>{@link #status()} — controller link, totals, this terminal's requests and the crane's state;</li>
- * <li>{@link #requestFromTerminal(Player, ItemKey, int)} — the request itself.</li>
+ * <li>{@link #requestFromTerminal(Player, ItemKey, int)} — the request itself;</li>
+ * <li>{@link #craftFromBuffer} — a player's craft from what was delivered here (M32, issue #24, ADR-059).</li>
  * </ul>
  * A request is validated before it reaches the controller: the player must be allowed to use the block (the vanilla
  * container rule, {@link #canPlayerUse}), the amount must be positive, and the item must be one the <b>server's own</b>
@@ -592,6 +595,46 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         return outcome;
     }
 
+    // --- crafting at the terminal (M32, issue #24, ADR-059) --------------------------------------------------------
+
+    /**
+     * Server: crafts the grid {@code player} laid in the crafting panel of {@code menu}, from the items the crane
+     * delivered into this terminal's buffer ({@code docs/warehouse-system.md} §3.4.5) — once, or with {@code all} as
+     * often as the buffer allows.
+     * <p>
+     * <b>The player's own hand, and nothing else.</b> A craft runs only for a player who has <b>this</b> terminal's
+     * menu open right now and may still use the block ({@link #canPlayerUse}: the block is still here and within their
+     * reach), which is exactly the player who could take the same items out of the buffer by hand. Anything else is
+     * {@link TerminalCraftResult#OUT_OF_REACH} and moves nothing. This is the only entry into {@link TerminalCrafting},
+     * the one class of the mod that runs a recipe (ADR-059), and it is reached only from the menu's payload entry
+     * ({@link WarehouseTerminalMenu#submitCraft}): no tick, order, rule or automation path calls it.
+     * <p>
+     * No aisle is needed: the ingredients are already here, so a misaligned terminal still crafts from its own buffer.
+     * Only the buffer slots the menu shows are used, which is all the player's hand can reach.
+     */
+    public TerminalCraftOutcome craftFromBuffer(Player player, WarehouseTerminalMenu menu, CraftGrid<ItemKey> grid,
+            Optional<ResourceLocation> hint, boolean all) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(menu, "menu");
+        Objects.requireNonNull(grid, "grid");
+        Objects.requireNonNull(hint, "hint");
+        if (level == null || level.isClientSide || isRemoved())
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        if (menu.terminal() != this || player.containerMenu != menu || !canPlayerUse(player))
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        return TerminalCrafting.craft(level, player, buffer, menu.bufferSlots(), grid, hint, all);
+    }
+
+    /**
+     * The controller of this terminal's aisle (server); empty while the terminal is misaligned, outside a warehouse or
+     * its controller is not loaded. Public on a terminal because its menu reads the crafting panel's per-item numbers
+     * from it once per push (M32, issue #24), as the stock keeper's and the home point's screens read theirs.
+     */
+    @Override
+    public Optional<WarehouseControllerBlockEntity> controller() {
+        return super.controller();
+    }
+
     // --- clipboard orders (M23, issue #19, ADR-036) ----------------------------------------------------------------
 
     /**
@@ -1086,6 +1129,12 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     @Override
     protected void readStationData(CompoundTag tag, HolderLookup.Provider registries) {
         super.readStationData(tag, registries);
+        // A tag that is no full save says nothing about the clipboard or the order: it is a schematic print landing on
+        // a terminal that is already standing (isFullSave, issue #25, ADR-061). Clearing the slot here deleted the
+        // player's clipboard without a drop and cancelled its order. Both keys are written only while they are set, so
+        // a full save without them still clears the slot, and a world load reads into a fresh terminal anyway.
+        if (!isFullSave(tag))
+            return;
         listSlot.setStackInSlot(LIST_SLOT, ItemStack.EMPTY);
         if (tag.contains(LIST_SLOT_TAG, Tag.TAG_COMPOUND))
             listSlot.deserializeNBT(registries, tag.getCompound(LIST_SLOT_TAG));

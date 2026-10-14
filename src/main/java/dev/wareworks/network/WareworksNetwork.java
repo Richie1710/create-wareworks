@@ -5,6 +5,7 @@ import java.util.Optional;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.StockKeeperMenu;
+import dev.wareworks.content.station.TerminalCraftOutcome;
 import dev.wareworks.content.station.TerminalListOutcome;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
@@ -90,8 +91,14 @@ public final class WareworksNetwork {
      * ({@link TerminalUsagePayload} server → client, {@link TerminalSortPayload} client → server), which an older
      * client would neither send nor understand. Both carry the chosen order by <b>name</b>, and no existing payload's
      * field order moved, so the bump is for the two new types alone.
+     * <p>
+     * <b>{@code "9"} is M32</b> (crafting at the terminal, issue #24, slice 1, ADR-059): the three crafting payloads
+     * ({@link TerminalCraftPayload} client → server, {@link TerminalCraftViewPayload} and
+     * {@link TerminalCraftAnswerPayload} server → client), which an older client would neither send nor understand.
+     * Their actions and results travel by <b>name</b>, and no existing payload's field order moved, so the bump is for
+     * the three new types alone. Each later slice of the issue that changes the wire bumps it again.
      */
-    public static final String VERSION = "8";
+    public static final String VERSION = "9";
 
     private WareworksNetwork() {
     }
@@ -121,6 +128,12 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalUsage);
         registrar.playToServer(TerminalSortPayload.TYPE, TerminalSortPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalSort);
+        registrar.playToServer(TerminalCraftPayload.TYPE, TerminalCraftPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalCraft);
+        registrar.playToClient(TerminalCraftViewPayload.TYPE, TerminalCraftViewPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalCraftView);
+        registrar.playToClient(TerminalCraftAnswerPayload.TYPE, TerminalCraftAnswerPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalCraftAnswer);
         registrar.playToClient(ProductionScreenPayload.TYPE, ProductionScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionScreen);
         registrar.playToServer(ProductionPatternPayload.TYPE, ProductionPatternPayload.STREAM_CODEC,
@@ -189,6 +202,25 @@ public final class WareworksNetwork {
      */
     private static void onTerminalSort(TerminalSortPayload payload, IPayloadContext context) {
         WarehouseTerminalMenu.submitSort(context.player(), payload.containerId(), payload.sort());
+    }
+
+    /**
+     * A player used the crafting panel of their open terminal screen (M32, issue #24, ADR-059): a changed grid to
+     * preview, or a click on the result to craft.
+     * <p>
+     * The payload is only a hint: the menu the player really has open decides which terminal is meant, the terminal
+     * re-validates reach, and the recipe is resolved on the server for the grid's exact keys. A preview is answered by
+     * the menu's next push ({@link TerminalCraftViewPayload}); a craft is answered here, to the acting player only.
+     * The crafted items need no packet of their own: they are in the menu's slots, which vanilla syncs.
+     */
+    private static void onTerminalCraft(TerminalCraftPayload payload, IPayloadContext context) {
+        Player player = context.player();
+        Optional<TerminalCraftOutcome> outcome = WarehouseTerminalMenu.submitCraft(player, payload.containerId(),
+                payload.action(), payload.cells(), payload.hint());
+        if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
+            return;
+        PacketDistributor.sendToPlayer(serverPlayer, TerminalCraftAnswerPayload.of(payload.containerId(),
+                outcome.get()));
     }
 
     /**
@@ -280,6 +312,18 @@ public final class WareworksNetwork {
     private static void onTerminalUsage(TerminalUsagePayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.TerminalScreenUpdates.onUsage(payload);
+    }
+
+    /** What the open screen's crafting grid makes and what the aisle says about its items (M32, issue #24). */
+    private static void onTerminalCraftView(TerminalCraftViewPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onCraftView(payload);
+    }
+
+    /** The answer to a craft click of the open screen (M32, issue #24). */
+    private static void onTerminalCraftAnswer(TerminalCraftAnswerPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onCraftAnswer(payload);
     }
 
     private static void onProductionScreen(ProductionScreenPayload payload, IPayloadContext context) {

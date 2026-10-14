@@ -2,6 +2,7 @@ package dev.wareworks.content.station;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -90,6 +91,31 @@ public class StationBuffer extends ItemStackHandler {
 
     @Override
     protected void onContentsChanged(int slot) {
+        onChanged.run();
+    }
+
+    /**
+     * Writes every given slot (a copy of each stack), then runs the change callback <b>once</b>, after the last write.
+     * <p>
+     * {@link #setStackInSlot} runs the callback after each slot, and the callback reaches past this buffer: the
+     * station marks itself changed, and {@code BlockEntity#setChanged} tells the neighbouring blocks
+     * ({@code Level#updateNeighbourForOutputSignal}), so other mods' code runs. Writes that were planned together — a
+     * craft at the terminal ({@code TerminalCrafting}) — must not let such code run between two of them, where it could
+     * take from a slot whose planned contents are about to be written over it. Every slot is checked before the first
+     * write, so an index out of range writes nothing. An empty map writes nothing and calls nothing.
+     *
+     * @param writes the stack each slot holds afterwards, by slot index
+     */
+    public void setStacks(Map<Integer, ItemStack> writes) {
+        Objects.requireNonNull(writes, "writes");
+        if (writes.isEmpty())
+            return;
+        for (Map.Entry<Integer, ItemStack> write : writes.entrySet()) {
+            validateSlotIndex(write.getKey());
+            Objects.requireNonNull(write.getValue(), "stack");
+        }
+        for (Map.Entry<Integer, ItemStack> write : writes.entrySet())
+            stacks.set(write.getKey(), write.getValue().copy());
         onChanged.run();
     }
 

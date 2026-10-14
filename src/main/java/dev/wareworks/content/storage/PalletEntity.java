@@ -526,6 +526,21 @@ public class PalletEntity extends Entity {
         setLoad(key.get(), saved);
     }
 
+    /**
+     * <b>True: a pallet never travels in a schematic</b> (issue #25, ADR-061). A Schematic and Quill saves every entity
+     * inside its box, a pallet with its whole load included, and Create keeps an entity in a loaded schematic unless it
+     * answers {@code true} here ({@code SchematicProcessor#processEntity}). The Schematicannon skips a pallet anyway
+     * (it has no item requirement, so it is invalid to print), but Create's creative instant print adds every entity
+     * of the schematic to the world — a second pallet with the same up to 405 504 items, while the first one still lies
+     * where it was. With {@code true} Create drops it from every schematic it loads with block data processed: always
+     * at the Schematicannon, and in the creative print for every player who may not use operator blocks. The other
+     * reader of this flag is vanilla's entity data on a spawn egg, which a pallet does not have.
+     */
+    @Override
+    public boolean onlyOpCanSetNbt() {
+        return true;
+    }
+
     @Override
     public String toString() {
         return "PalletEntity" + contents;

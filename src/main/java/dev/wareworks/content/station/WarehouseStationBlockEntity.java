@@ -261,4 +261,21 @@ public abstract class WarehouseStationBlockEntity extends SmartBlockEntity
     /** Loads subclass state written by {@link #writeStationData}. Must not throw. */
     protected void readStationData(CompoundTag tag, HolderLookup.Provider registries) {
     }
+
+    /**
+     * Whether {@code tag} is a full save of a station, as opposed to what a schematic print hands a station that is
+     * already standing ({@code BlockHelper#placeSchematicBlock} loads the printer's settings-only tag into the block
+     * entity that survived the new state, issue #25, ADR-061).
+     * <p>
+     * Every save writes {@value #BUFFER_TAG}, an empty buffer included, and so does a {@code /data merge block}, which
+     * merges into a full save; a print never does, because it carries the behaviours' settings alone
+     * ({@code SmartBlockEntity#writeSafe}). What a station keeps beyond those settings — the clipboard and its order, the
+     * production patterns, a port's pulse token and counters, the last rejection — is mostly written only while it is
+     * not at its default, so a missing key cannot tell "reset it" from "says nothing about it": all of it is read only
+     * from a tag this answers true for. A print over a standing station then leaves it alone, and a full save still
+     * resets it.
+     */
+    protected static boolean isFullSave(CompoundTag tag) {
+        return tag.contains(BUFFER_TAG, Tag.TAG_COMPOUND);
+    }
 }

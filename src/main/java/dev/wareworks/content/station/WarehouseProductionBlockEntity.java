@@ -451,7 +451,11 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             productionSummary = ProductionGoggleSummary.read(tag.getCompound(PRODUCTION_SUMMARY_TAG));
             return;
         }
-        patterns.load(tag.getList(ProductionPatterns.PATTERNS_TAG, Tag.TAG_COMPOUND), registries);
+        // A tag that is no full save is a schematic print landing on a station that is already standing (isFullSave,
+        // issue #25, ADR-061): patterns do not travel in a schematic, so such a tag says nothing about them and must
+        // not wipe the ones a player wrote. Every save writes the list, even an empty one.
+        if (isFullSave(tag))
+            patterns.load(tag.getList(ProductionPatterns.PATTERNS_TAG, Tag.TAG_COMPOUND), registries);
     }
 
     /**

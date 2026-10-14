@@ -37,6 +37,13 @@
 
 ## Planned
 
+**M32, in progress: craft at the warehouse terminal**
+([issue #24](https://github.com/Richie1710/create-wareworks/issues/24)). The first part is built: a crafting grid
+folds out of the terminal's screen, you lay a recipe in it with ghost items, and you craft it by hand from what the
+crane delivered into the terminal — Wareworks itself still never crafts on its own. Still to come in the same
+milestone: one button that fetches the ingredients for a laid recipe, and an offer to make a missing ingredient
+first. The milestone joins the table above once it is done.
+
 Planned features and ideas are tracked as [GitHub issues](https://github.com/Richie1710/create-wareworks/issues?q=is%3Aissue+label%3Aenhancement):
 
 * [`planned`](https://github.com/Richie1710/create-wareworks/labels/planned): intended for a future version

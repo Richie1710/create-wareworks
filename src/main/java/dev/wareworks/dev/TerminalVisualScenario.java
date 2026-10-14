@@ -35,6 +35,7 @@ import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalPreferences;
@@ -1767,8 +1768,9 @@ public final class TerminalVisualScenario implements VisualScenario {
      * <ul>
      * <li>the terminal's <b>status row</b> ({@link #statusRow}): every {@link CranePhase}, every
      *     {@link CranePauseReason}, the two "no aisle" and "no crane" lines, the waiting line and every refusal with
-     *     the widest amounts they can show, and the whole clipboard vocabulary - the progress line in each of its
-     *     states, the receipt and every answer the list button can produce (M23);</li>
+     *     the widest amounts they can show, the whole clipboard vocabulary - the progress line in each of its
+     *     states, the receipt and every answer the list button can produce (M23) - and every answer a craft click at
+     *     the crafting panel can end in (M32);</li>
      * <li>the <b>state column</b> of the terminal's order lines, for an open order, for a finished one and behind a
      *     chain's step badge ({@link #orderStateColumns});</li>
      * <li>the production station's <b>order line</b> and its <b>stopped row</b> ({@link #stationRows}).</li>
@@ -1849,6 +1851,18 @@ public final class TerminalVisualScenario implements VisualScenario {
         for (RequestRejection rejection : RequestRejection.values())
             row.put("refused." + rejection.name().toLowerCase(Locale.ROOT),
                     terminal.refusedLine(WareworksLang.translateDirect(rejection.langKey())));
+        // Crafting at the terminal (M32, issue #24): every answer a craft click can end in, built by the screen's own
+        // method with the widest count and without the names, which give way in this row first
+        // (WarehouseTerminalScreen#craftAnswerLine). A Shift-click that crafted some and then stopped puts the refusal
+        // after the count; only the refusals that can arise inside the run are measured that way, because the others
+        // (locked, out of reach, empty grid) are decided before the first craft, and the award unlocks a recipe.
+        for (TerminalCraftResult result : TerminalCraftResult.values())
+            row.put("craft.result." + result.name().toLowerCase(Locale.ROOT), WarehouseTerminalScreen.craftAnswerText(
+                    result, result.isSuccess() ? WIDEST_AMOUNT : 0, Component.empty(), Component.empty()));
+        for (TerminalCraftResult result : List.of(TerminalCraftResult.NO_ROOM, TerminalCraftResult.NOT_IN_BUFFER,
+                TerminalCraftResult.NO_RECIPE))
+            row.put("craft.partial." + result.name().toLowerCase(Locale.ROOT), WarehouseTerminalScreen
+                    .craftAnswerText(result, WIDEST_AMOUNT, Component.empty(), Component.empty()));
         return new MeasuredRow("terminal status row", ROW_WIDTH, row,
                 STATUS_ROW_TOO_LONG.getOrDefault(language, Set.of()));
     }

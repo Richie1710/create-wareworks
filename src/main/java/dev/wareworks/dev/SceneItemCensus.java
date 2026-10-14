@@ -23,6 +23,8 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.level.block.ChestBlock;
@@ -66,6 +68,11 @@ import net.neoforged.neoforge.items.IItemHandler;
  * place this census has to know about fluid at all is {@link #exchanged}, the declared and verified container
  * exchange — the only move under which an item in this mod legitimately changes identity.
  * <p>
+ * <b>What a player holds is counted only when the player is named</b> ({@link #take(ServerLevel, AABB, Player...)}):
+ * every slot of the inventory and the stack on the cursor. A craft at a warehouse terminal (M32, issue #24) moves items
+ * between the terminal's buffer and the crafting player's own inventory, so without this term every craft would read as
+ * items vanishing from the buffer. {@code gametest.ItemCensus} has the same term.
+ * <p>
  * A census reads every block position of the box once, so scenarios keep the box to their own aisle. The box is
  * inflated around that aisle and therefore normally spans several chunks: {@link #take} <b>refuses</b> to count while
  * any of them is missing instead of silently reading an unloaded chest as empty, which would report a conservation
@@ -94,11 +101,11 @@ final class SceneItemCensus {
     }
 
     /**
-     * Positive counts per item key inside {@code box}.
+     * Positive counts per item key inside {@code box}, plus everything {@code players} hold ({@link #addPlayer}).
      *
      * @throws VisualTestException when a position of the box is not loaded ({@link #isFullyLoaded})
      */
-    static Map<ItemKey, Long> take(ServerLevel level, AABB box) {
+    static Map<ItemKey, Long> take(ServerLevel level, AABB box, Player... players) {
         Map<ItemKey, Long> counts = new HashMap<>();
         BoundingBox bounds = new BoundingBox(Mth.floor(box.minX), Mth.floor(box.minY), Mth.floor(box.minZ),
                 Mth.ceil(box.maxX) - 1, Mth.ceil(box.maxY) - 1, Mth.ceil(box.maxZ) - 1);
@@ -139,7 +146,23 @@ final class SceneItemCensus {
         // a capability registration being present.
         for (PalletEntity pallet : level.getEntitiesOfClass(PalletEntity.class, box))
             pallet.carriedKey().ifPresent(key -> add(counts, key, pallet.carriedCount()));
+        for (Player player : players)
+            addPlayer(counts, player);
         return counts;
+    }
+
+    /**
+     * What {@code player} holds: every slot of the inventory (main slots, armour, offhand) and the stack on the cursor
+     * of the menu they have open — and of their own inventory menu as well when that is another one, because a cursor
+     * stack belongs to a menu and not to the player.
+     */
+    private static void addPlayer(Map<ItemKey, Long> counts, Player player) {
+        Inventory inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++)
+            add(counts, inventory.getItem(slot));
+        add(counts, player.containerMenu.getCarried());
+        if (player.inventoryMenu != player.containerMenu)
+            add(counts, player.inventoryMenu.getCarried());
     }
 
     /** NBT key of the stack in a Create mechanical arm's claw ({@code ArmBlockEntity#write}). */
@@ -168,13 +191,15 @@ final class SceneItemCensus {
     }
 
     /**
-     * Fails the run unless the census of {@code box} equals {@code expected} exactly, and logs one PASS or FAIL line
-     * naming {@code step}. This is the evidence of the robustness run: the logs, not the screenshots.
+     * Fails the run unless the census of {@code box} and of {@code players} equals {@code expected} exactly, and logs
+     * one PASS or FAIL line naming {@code step}. This is the evidence of the robustness run: the logs, not the
+     * screenshots.
      *
      * @throws VisualTestException when an item was lost, duplicated or changed identity
      */
-    static void assertEquals(ServerLevel level, AABB box, Map<ItemKey, Long> expected, String step) {
-        Map<ItemKey, Long> actual = take(level, box);
+    static void assertEquals(ServerLevel level, AABB box, Map<ItemKey, Long> expected, String step,
+            Player... players) {
+        Map<ItemKey, Long> actual = take(level, box, players);
         if (actual.equals(expected)) {
             VisualTestHarness.LOGGER.info(VisualTestHarness.PREFIX + "robustness PASS: {} (items {})", step,
                     describe(actual));

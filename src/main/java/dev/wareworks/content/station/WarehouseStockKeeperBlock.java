@@ -6,6 +6,7 @@ import dev.wareworks.registry.WareworksBlockEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -39,8 +40,9 @@ import net.minecraft.world.phys.BlockHitResult;
  * second keeper next to it that holds only that rule — which is why the cheap per-item variant needs no second block
  * type.</li>
  * </ul>
- * A right-click with an empty hand opens the rule screen; anything held passes the interaction on, so the wrench still
- * rotates the block. The keeper registers no behaviours, so no value box can swallow that click either.
+ * A right-click opens the rule screen whatever is in the hand, a sneaking one places the block or uses the item, and
+ * the wrench still rotates the block (issue #26). The keeper registers no behaviours, so no value box can swallow that
+ * click either.
  */
 public class WarehouseStockKeeperBlock extends WarehouseStationBlock<WarehouseStockKeeperBlockEntity> {
     public static final MapCodec<WarehouseStockKeeperBlock> CODEC = simpleCodec(WarehouseStockKeeperBlock::new);
@@ -72,21 +74,33 @@ public class WarehouseStockKeeperBlock extends WarehouseStationBlock<WarehouseSt
     }
 
     /**
-     * Right-clicking with an <b>empty hand</b> opens the rule screen, exactly as it does on a production station and a
-     * terminal. Anything held passes the interaction on, so the wrench keeps rotating the block and a clipboard or a
-     * future item keeps working.
+     * A right-click opens the rule screen <b>whatever is in the hand</b>, and a sneaking one places the block or uses
+     * the item, exactly as on a production station and a terminal (issue #26). This method only lets the items that act
+     * on the keeper keep their click — the wrench turns it, a clipboard opens its editor, and the Mechanical Arm item
+     * is placed against it as before, because the keeper is no arm target ({@link StationScreenClick#actsOnTheBlock});
+     * the screen itself opens in {@link #useWithoutItem}.
      */
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
             Player player, InteractionHand hand, BlockHitResult hit) {
-        if (!stack.isEmpty() || player.isSecondaryUseActive())
-            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
-        if (level.isClientSide)
-            return ItemInteractionResult.SUCCESS;
-        if (player instanceof ServerPlayer serverPlayer
+        return StationScreenClick.useItemOn(stack, player);
+    }
+
+    /**
+     * Opens the rule screen: reached for the main hand once {@link #useItemOn} passed, with or without an item in it. A
+     * sneaking click only gets here when both hands are empty (or hold an item that bypasses the sneak) and is passed
+     * on, as before. The answer is consumed on both sides even without a block entity, so the client never goes on to
+     * place or use the held item ({@link StationScreenClick}).
+     */
+    @Override
+    protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
+            BlockHitResult hit) {
+        if (player.isSecondaryUseActive())
+            return InteractionResult.PASS;
+        if (!level.isClientSide && player instanceof ServerPlayer serverPlayer
                 && level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper)
             keeper.openScreen(serverPlayer);
-        return ItemInteractionResult.SUCCESS;
+        return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
     /** A comparator reads how many rules of this keeper call for their item ({@link #getAnalogOutputSignal}). */

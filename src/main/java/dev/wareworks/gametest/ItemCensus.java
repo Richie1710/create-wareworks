@@ -24,6 +24,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.level.block.ChestBlock;
@@ -63,14 +65,22 @@ import net.neoforged.neoforge.items.IItemHandler;
  * place this census has to know about fluid at all is {@link #exchange}, the declared and verified container
  * exchange — the only move under which an item in this mod legitimately changes identity.
  * <p>
+ * <b>Players are counted only when a test names them</b> (M32, issue #24): everything in their inventory (main slots,
+ * armour and offhand) and on their cursor. A GameTest's mock and fake players are no entities of the level, so no
+ * sweep above can see them, and a craft at a warehouse terminal moves items between the terminal's buffer and the
+ * crafting player's own inventory — without this term every craft would read as items vanishing from the buffer.
+ * <p>
  * A census reads every block position of the test bounds once, which is fine for tests (a few thousand lookups).
  */
 final class ItemCensus {
     private ItemCensus() {
     }
 
-    /** Positive counts per item key inside the test bounds. */
-    static Map<ItemKey, Long> take(GameTestHelper helper) {
+    /**
+     * Positive counts per item key inside the test bounds, plus everything {@code players} hold
+     * ({@link #addPlayer}).
+     */
+    static Map<ItemKey, Long> take(GameTestHelper helper, Player... players) {
         ServerLevel level = helper.getLevel();
         AABB bounds = helper.getBounds();
         BoundingBox box = new BoundingBox(Mth.floor(bounds.minX), Mth.floor(bounds.minY), Mth.floor(bounds.minZ),
@@ -116,7 +126,23 @@ final class ItemCensus {
         // depends on a capability registration being present.
         for (PalletEntity pallet : helper.getEntities(WareworksEntityTypes.PALLET.get()))
             pallet.carriedKey().ifPresent(key -> add(counts, key, pallet.carriedCount()));
+        for (Player player : players)
+            addPlayer(counts, player);
         return counts;
+    }
+
+    /**
+     * What {@code player} holds: every slot of the inventory (main slots, armour, offhand) and the stack on the cursor
+     * of the menu they have open — and of their own inventory menu as well when that is another one, because a cursor
+     * stack belongs to a menu and not to the player, so a test that swaps the open menu must not lose it.
+     */
+    private static void addPlayer(Map<ItemKey, Long> counts, Player player) {
+        Inventory inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++)
+            add(counts, inventory.getItem(slot));
+        add(counts, player.containerMenu.getCarried());
+        if (player.inventoryMenu != player.containerMenu)
+            add(counts, player.inventoryMenu.getCarried());
     }
 
     /**
@@ -133,9 +159,12 @@ final class ItemCensus {
         return box.isInside(pos.relative(ChestBlock.getConnectedDirection(state)));
     }
 
-    /** Fails the test unless the census equals {@code expected} exactly (no missing, extra or changed keys). */
-    static void assertEquals(GameTestHelper helper, Map<ItemKey, Long> expected, String context) {
-        Map<ItemKey, Long> actual = take(helper);
+    /**
+     * Fails the test unless the census equals {@code expected} exactly (no missing, extra or changed keys), counting
+     * what {@code players} hold as well.
+     */
+    static void assertEquals(GameTestHelper helper, Map<ItemKey, Long> expected, String context, Player... players) {
+        Map<ItemKey, Long> actual = take(helper, players);
         if (!actual.equals(expected))
             helper.fail("item conservation violated (" + context + "): expected " + describe(expected) + " but found "
                     + describe(actual));

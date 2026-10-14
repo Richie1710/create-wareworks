@@ -218,7 +218,9 @@ that each scene compiles, is registered for the right item and looks right in th
 44c. **"Feeding Machines from a Warehouse".** The three-block tower reads as production station → funnel → Mechanical
     Crafter, and the crafter is recognisable as *your* machine standing next to the station, not as part of Wareworks.
     The sentence "Wareworks delivers and collects; it never crafts anything itself" arrives while the machine is in
-    view. The crane's mast crossing the tower while it delivers is expected; it must not hide the crafter.
+    view. It speaks about the station and stays as it is; the rule in full is that Wareworks never crafts on its own,
+    and that at a terminal you can craft by hand from what the crane delivered (section AR). The crane's mast crossing
+    the tower while it delivers is expected; it must not hide the crafter.
 44d. **"Dedicating Storage Locations".** The filter item is visible **on the block**, in the slot on the aisle face, and
     visibly changes from the iron ingot to the gold ingot when the location is re-dedicated. The crane must be seen
     driving **past** the nearer unfiltered location to reach the dedicated one — that is the beat's whole point.
@@ -306,8 +308,9 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
     (z-fighting), no see-through gap at the corners, inside the screen recess or inside the tray, and the top and the
     bottom stay flush brass. Blocks placed against it are still occluded normally, and it is still a solid full block
     to walk into and to target.
-59. **Right-click it with an empty hand**: the screen opens. With a wrench in hand it rotates instead, and other items do
-    their own thing. Check the window at GUI scale 2, 3 and 4 in a 1280 × 720 window — it must never be cut off.
+59. **Right-click it**: the screen opens, with an empty hand and with a block or food in hand alike (check 257). With
+    a wrench in hand it rotates instead. Check the window at GUI scale 2, 3 and 4 in a 1280 × 720 window — it must
+    never be cut off.
 60. Type in the search box (it has the focus at once): the list narrows as you type, `@create` shows only Create's items,
     the sort button cycles "most available first" / "by name", and the second button hides what is already promised.
 61. Hover an item: the tooltip shows "In stock", "Available" and "Promised to other requests". Click it: the status line
@@ -374,7 +377,8 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
 
 ## N. Warehouse production station (M11)
 
-> The feature in one sentence: **Wareworks never crafts.** It carries the ingredients to your machine and collects the
+> The feature in one sentence: **Wareworks never crafts on its own; at a terminal you can craft by hand from what the
+> crane delivered** (section AR). At a production station it carries the ingredients to your machine and collects the
 > product again. Everything below assumes a working aisle with a terminal, an input and an output.
 
 71. The production station is the **eighth** item of the creative tab, after the terminal. Its icon shows the block, and
@@ -383,8 +387,8 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
 72. Place it in a rack beside the aisle, standing in the aisle: the **opening faces the aisle**, like an input or an
     output, and the goggles show an address. From the aisle it is clearly a different block from the input (andesite),
     the output (brass) and the terminal (screen) — it is the **copper-bodied** one with brass frames.
-73. **Right-click it with an empty hand**: the pattern screen opens. With a wrench in hand it rotates instead. Check the
-    window at GUI scale 2, 3 and 4 in a 1280 × 720 window — it must never be cut off.
+73. **Right-click it**: the pattern screen opens, whatever you hold (check 257). With a wrench in hand it rotates
+    instead. Check the window at GUI scale 2, 3 and 4 in a 1280 × 720 window — it must never be cut off.
 74. The screen shows a **3 × 3 grid**, an arrow, a result cell and a strip of **pattern tabs** on the right. Click a
     grid cell while holding an item: the item appears as a ghost. **Your item is not consumed** — check the count in
     your inventory. Click a filled cell with an empty hand to clear it, and **scroll** on a cell to change its amount
@@ -487,10 +491,12 @@ The two checks below are the M15 scenes of the stock keeper (both open from its 
     each clicked three times and stay "take" (`DeliveryStationArmPoint`, outline `#7FCDE0`, "Take items from Warehouse
     Output", "… Warehouse Terminal", "… Warehouse Production"). The first click on the output lands on its request
     filter slot: it must select the output and leave the filter empty. A left-click removes the terminal from the
-    selection and the terminal stays; the left-click is only tried on the terminal. Right-clicks on the interface,
-    controller, dock and rail select nothing, show no message and place an arm against the block. With the arm item on
-    the filter slot for 25 ticks, Create's outliner holds no value box for the slot and its hint overlay shows nothing;
-    with an empty hand on the same spot both appear, so the check can see them (shots `select-output-filter-slot`,
+    selection and the terminal stays; the left-click is only tried on the terminal. After the clicks on the terminal and
+    on the production station, neither the server nor the client has a screen or menu open (the stations now open with
+    anything in hand, issue #26, ADR-060; the arm item keeps its own click). Right-clicks on the interface, controller,
+    dock and rail select nothing, show no message and place an arm against the block. With the arm item on the filter
+    slot for 25 ticks, Create's outliner holds no value box for the slot and its hint overlay shows nothing; with an
+    empty hand on the same spot both appear, so the check can see them (shots `select-output-filter-slot`,
     `output-filter-slot-empty-hand`). **By eye:** nothing left.
 89. Place the arm with an input selected as its target and a depot with a stack of items as its source, and power it.
     The claw visibly reaches for the **middle of the input's top face** (not into the opening on the aisle side), the
@@ -669,8 +675,8 @@ station** with a machine of your own beside it, and a **warehouse stock keeper**
 numbers of one rule, so keep the keeper's screen open on a second monitor if you can.
 
 99. **The block and its screen.** Stand in the aisle and place the keeper into a rack: its panel faces you. Right-click
-    it with an **empty hand** — the rule screen opens; right-click it with an item in hand and nothing opens, and the
-    wrench still rotates it. Click a row's cell with an item on the cursor: the row takes the item and **nothing is
+    it — the rule screen opens, with an empty hand and with an item in hand alike (check 257) — and the wrench still
+    rotates it. Click a row's cell with an item on the cursor: the row takes the item and **nothing is
     consumed**. Scroll on each of the three numbers (Shift for whole stacks), right-click one to switch it off, and
     left-click an off number to switch it on at 0. Shift-click an item in your own inventory: it fills the first free
     row.
@@ -2527,3 +2533,115 @@ you get tired of waiting, and put it back before judging check 160.
     within ten seconds, or do they conclude the warehouse cannot give lava back?** M31 adds the request, the
     empty-container economy and the refusal that names it; what this answer decides is how loudly that refusal has to
     speak.
+
+## AR. Craft at the terminal (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24), first part)
+
+> Everything measurable about this part is measured: every craft against vanilla's own delta with an item census on
+> every tick, the refusals that move nothing, two players in one tick, limited crafting, 400 idle ticks in which
+> nothing is crafted, and the `craft` scenario's real clicks with the window measured at a 320 × 240 GUI. What no gate
+> can answer is how the ghost **feels** in the hand, the two Shift gestures with a real Shift key (the harness cannot
+> hold one), the German at the one screen where the window is tightest, and what a real server with two real players
+> does. Fetching the ingredients for a recipe is not built yet: bring them with ordinary clicks in the list.
+>
+> Setup: a working one-aisle warehouse with a terminal (nine delivery slots, the default) and about a thousand oak
+> planks, some sticks, milk buckets, sugar, eggs and wheat in its racks. Open the terminal and fold the crafting grid
+> out with the grid button right of your inventory.
+
+250. **Does the ghost feel like a tool rather than a trick?** Right-click Oak Planks in the stock list and paint the
+    ring of a chest with left clicks, then press **Esc**: the ghost goes, the screen stays open. Pick a ghost again and
+    left-click **another** item in the stock list: it becomes the ghost and **nothing is requested** (watch the crane
+    and the status row). With an empty hand, hold a real **Shift** key and right-click Stick twice: the sticks land in
+    the next free cells. Right-click a filled cell to clear it, press **Clear**, and put a real item on the cursor and
+    click a cell with it: the cell takes the item's key and the item stays on your cursor. **Is there a moment where
+    you did not know what a click would do, or where a click you meant as a request picked a ghost?** Hover a stock
+    cell, a grid cell and the result while a ghost is held: no tooltip at all, which is deliberate. **Does that read as
+    calm, or as broken?** Finally, with planks delivered and the result showing, move one plank of the grid and click
+    the result **straight away**: nothing is crafted, a low note sounds, and a moment later the new result shows and
+    the next click crafts it. **Does that read as the panel catching up, or as a click that went missing?**
+251. **Shift-click on the result, with a real Shift key.** Request 64 planks and wait for them, lay the chest, then
+    **Shift-click** the result: eight chests, the planks gone from "Delivered here", the status row green "Crafted Chest
+    x8". Now make it stop half way: request planks until every slot of "Delivered here" is full, put **62 chests** in
+    one slot of your inventory and cobblestone in every other main slot, hotbar included, and Shift-click again. Two
+    chests are made (the stack is then full), the third has nowhere to go, and the row turns gold: "Crafted Chest x2.
+    No room for Chest". **Is it clear that the first part happened and the rest did not?** Exactly 16 planks are gone.
+252. **German at the tightest screen, and the window that must not jump.** On the **5120x1440** monitor in fullscreen
+    with the automatic GUI scale (6, so 854 × 240 GUI px) and the game in German: fold the panel out and in. The window
+    must not move, the title reads **"Werkbank"** inside its frame, and every tooltip of the toggle, the cells, the
+    result and a stock cell fits the screen. Craft once ("Truhe x1 gefertigt") and set up the stop of check 251 ("Kein
+    Platz für Truhe"). **Does "fertigen" read right beside the production station's "herstellen"?** Then on a
+    1920 × 1080 screen at GUI scale 4, and on any screen at the largest GUI scale it offers: the folded-out window
+    stays on screen with a little margin on both sides. If you play with **JEI**, its item list must keep clear of
+    the panel at every one of these sizes.
+253. **A dedicated server round trip.** Start `runServer`, join with a client, and at a terminal craft once,
+    Shift-craft, make a cake (three buckets stay in the terminal) and provoke one refusal. Close the screen and open
+    it again: the panel and the grid you laid are still there and the result shows without a click. Now put an
+    **enchanted book** into a cell (it need not make anything), quit to the title screen and join again without
+    closing the game: the panel is still folded out, the grid is **empty**, and opening the terminal does **not**
+    disconnect you — which is intended: a grid is remembered only while you stay connected, because the enchantment
+    in its key belongs to that connection. Restart the **server**: the
+    delivered items and the buckets are still in the terminal, and nothing was crafted while nobody clicked. Read the
+    server and the client log for errors mentioning `wareworks`.
+254. **Two real players at one terminal.** Two clients open the same terminal. Each lays a **different** recipe: neither
+    sees the other's grid. One player requests planks; both screens show them arrive and both "xN" counts move. Lay the
+    chest on both screens and Shift-click on both at the same moment: between them they make exactly as many chests as
+    the planks allow, and the player who came second reads "Not enough Oak Planks here". **Count the chests and the
+    planks afterwards: nothing duplicated, nothing lost.**
+255. **Survival with limited crafting.** In a survival world, `/gamerule doLimitedCrafting true`, and lay a recipe you
+    have not unlocked (a fresh player has almost none). The result is drawn with a red overlay and its tooltip says
+    "You have not unlocked this recipe"; a click answers the same and moves nothing. Unlock it with
+    `/recipe give @s <recipe id>` and click again: it crafts, and the red overlay is gone. Open **Statistics →
+    Items** and check that the crafted count went up by exactly what you made, and that a refused click added
+    nothing. Then set the rule back.
+
+## AS. Schematics on a server with Create: Schematic Checker ([issue #25](https://github.com/Richie1710/create-wareworks/issues/25))
+
+> What Create prints is automated: `SchematicSafetyGameTests` saves every Wareworks block, configured and stocked, the
+> way Schematic and Quill's instant upload does, prints it with Create's own printer into a fresh copy and over the
+> standing original, and asserts the exact settings that travel, an empty copy, an original that keeps its goods and
+> an unchanged item census. What no test can run is the other mod: *Create: Schematic Checker* is not a dependency, and
+> what it removes was read from its bytecode, not watched (ADR-061). One check, and it needs a dedicated server.
+>
+> Setup: a dedicated server with Create, Wareworks and **Create: Schematic Checker** (2.27.47 is the reported
+> version) with `WhiteListModEnable = true` under `[core]` in `config/CSC/config.toml` (the checker's default), and a
+> client with a **Schematic and Quill**, a **Schematic Table**, a **Schematicannon** and a blank **clipboard**.
+
+256. **Do filtered rack bays survive the checker, without and with the whitelist line?** Build a small warehouse with a
+    few **rack bays** (some with a filter and a priority, one of them stocked, one left unconfigured), a plain
+    **warehouse interface**, a **terminal** and a few **rails**, and save it with the Schematic and Quill. First with
+    the checker's shipped `WhiteListModList`, unchanged and without `wareworks`: upload the schematic at a Schematic
+    Table, deploy it, look at the hologram, then load it into a Schematicannon and write its material checklist onto
+    the clipboard. **Which Wareworks blocks are missing from the checklist and from the print, and which survived?**
+    The hologram should still show every block, because it is drawn from your own file. The report says the bays
+    vanished while interfaces and terminals survived; the checker's bytecode says every block with block data should
+    vanish, which includes those, so note exactly which survived — the README's wording depends on it. Then append
+    `"wareworks"` to the list, keeping every entry already in it, restart the server, upload the same file again and
+    print it: **is every block on the checklist and in the print now, each filtered bay with its filter and priority,
+    and is every printed bay empty — the stocked one included?** Note any line the checker writes into the server log
+    in either run.
+
+## AT. A screen opens with anything in your hand ([issue #26](https://github.com/Richie1710/create-wareworks/issues/26))
+
+> The warehouse terminal, the production station and the stock keeper now open like a chest: a right-click opens the
+> screen whatever you hold, and sneak + right-click places the block or uses the item. `StationClickGameTests` drives
+> every case below through the server's real click handling, also the wrench in adventure mode. The `arm` visual
+> scenario clicks the terminal and the production station with the arm item on a real client and checks that no screen
+> opens (CHECK 88). It also covers the **client** half of check 257 for the terminal (CHECK 257): with cobblestone and
+> then with bread in hand, a real right-click opens the screen, and on every client tick from the click until the
+> screen is open there is no block above the terminal, no stone placement sound and no item in use; the server has
+> the menu open and placed and used nothing. That run is creative and on the integrated server, and it only clicks the
+> terminal. What is left for a person is the production station and the keeper on a client, survival stack counts, a
+> dedicated server with real lag, and how it feels.
+
+257. **Do the three stations open like a chest, and does nothing flicker?** Build one of each in survival, then
+     right-click each one holding, in turn, a stack of cobblestone, a pickaxe, bread (while hungry) and a chute. The
+     screen opens every time; **no block appears against the station even for a frame, no placement sound plays, the
+     stack keeps its count and you do not start eating.** Now **sneak** + right-click with the same items: the
+     cobblestone and the chute are placed against the station, the bread is eaten, and no screen opens. Then hold each
+     of these and right-click without sneaking: the **wrench** turns the block (the terminal's screen face), the
+     **Mechanical Arm** highlights the terminal and the production station as targets and is placed against the keeper,
+     the **clipboard** opens its own editor, a **Display Link** says it selected the block, and **goggles** go on your
+     head — and none of them opens a station's screen. With an empty hand, sneak + right-click on the production station
+     still answers in chat ("Nothing this station makes is stopped", or the items it makes again). In **adventure
+     mode**, right-click a station with the wrench and bread in the offhand: the screen opens (the wrench cannot turn
+     anything there) and the bread is not eaten. Do it once on a **dedicated server** as well: a laggy connection is
+     where a disagreement between client and server would show as a block that appears and vanishes again.

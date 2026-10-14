@@ -138,9 +138,14 @@ public abstract class WarehouseDeliveryStationBlockEntity extends WarehouseStati
             tag.putString(LAST_REJECTION_TAG, lastRejection.name());
     }
 
+    /**
+     * The last rejection is written only while there is one, so only a full save may clear it: a schematic print over a
+     * standing station carries none and says nothing about it (issue #25, ADR-061, {@link #isFullSave}).
+     */
     @Override
     protected void readStationData(CompoundTag tag, HolderLookup.Provider registries) {
-        lastRejection = tag.contains(LAST_REJECTION_TAG, Tag.TAG_STRING)
-                ? RequestRejection.byName(tag.getString(LAST_REJECTION_TAG)).orElse(null) : null;
+        if (isFullSave(tag))
+            lastRejection = tag.contains(LAST_REJECTION_TAG, Tag.TAG_STRING)
+                    ? RequestRejection.byName(tag.getString(LAST_REJECTION_TAG)).orElse(null) : null;
     }
 }

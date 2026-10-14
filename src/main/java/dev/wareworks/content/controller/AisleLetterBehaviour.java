@@ -10,6 +10,8 @@ import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollVa
 
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.util.WareworksLang;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Player;
@@ -59,5 +61,16 @@ public class AisleLetterBehaviour extends ScrollValueBehaviour {
     @Override
     public String getClipboardKey() {
         return CLIPBOARD_KEY;
+    }
+
+    /**
+     * A schematic carries the letter only while it is not {@code A} (issue #25, ADR-061): Create's {@code read} turns a
+     * missing {@code ScrollValue} into 0, which is exactly {@value #FIRST_INDEX}, so a controller at its default adds
+     * nothing to a schematic. Saves and client packets keep Create's unconditional key.
+     */
+    @Override
+    public void writeSafe(CompoundTag nbt, HolderLookup.Provider registries) {
+        if (getValue() != FIRST_INDEX)
+            super.writeSafe(nbt, registries);
     }
 }

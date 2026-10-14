@@ -7,6 +7,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -100,23 +101,34 @@ public class WarehouseTerminalBlock extends WarehouseStationBlock<WarehouseTermi
     }
 
     /**
-     * Right-clicking with an <b>empty hand</b> opens the terminal's screen ({@code docs/warehouse-system.md} §3.4.2).
-     * <p>
-     * Anything held passes the interaction on, so the wrench still rotates the block and a clipboard, a goggle-wearing
-     * player's other tools and future items keep working. The terminal has no value box that could swallow the click
-     * either: unlike the warehouse output it registers no behaviours.
+     * A right-click opens the terminal's screen <b>whatever is in the hand</b>, and a sneaking one places the block or
+     * uses the item, as at a chest ({@code docs/warehouse-system.md} §3.4.2, issue #26). This method only lets the
+     * items that act on the terminal keep their click — the wrench turns the screen, the Mechanical Arm item selects
+     * the terminal, a clipboard opens its editor ({@link StationScreenClick#actsOnTheBlock}); the screen itself opens
+     * in {@link #useWithoutItem}.
      */
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
             Player player, InteractionHand hand, BlockHitResult hit) {
-        if (!stack.isEmpty() || player.isSecondaryUseActive())
-            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
-        if (level.isClientSide)
-            return ItemInteractionResult.SUCCESS;
-        if (player instanceof ServerPlayer serverPlayer
+        return StationScreenClick.useItemOn(stack, player);
+    }
+
+    /**
+     * Opens the screen: reached for the main hand once {@link #useItemOn} passed, with or without an item in it. A
+     * sneaking click only gets here when both hands are empty (or hold an item that bypasses the sneak) and is passed
+     * on, as before. The answer is consumed on both sides even without a block entity, so the client never goes on to
+     * place or use the held item ({@link StationScreenClick}). The terminal has no value box that could swallow the
+     * click either: unlike the warehouse output it registers no behaviours.
+     */
+    @Override
+    protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
+            BlockHitResult hit) {
+        if (player.isSecondaryUseActive())
+            return InteractionResult.PASS;
+        if (!level.isClientSide && player instanceof ServerPlayer serverPlayer
                 && level.getBlockEntity(pos) instanceof WarehouseTerminalBlockEntity terminal)
             terminal.openScreen(serverPlayer);
-        return ItemInteractionResult.SUCCESS;
+        return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
     @Override

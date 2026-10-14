@@ -237,7 +237,7 @@ public final class TerminalScenes {
                 .rightClick();
         scene.idle(7);
         scene.overlay().showText(TEXT_TICKS)
-                .text("Right-click the screen with an empty hand to open the terminal")
+                .text("Right-click the screen to open the terminal; sneak to place a block against it")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(terminal, SCREEN));
