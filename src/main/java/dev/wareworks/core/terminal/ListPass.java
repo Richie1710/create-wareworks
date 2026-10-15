@@ -18,8 +18,8 @@ public enum ListPass {
      * Nothing could be offered, but requests are open: everything that is left is already on its way, or the order
      * already holds as many requests as {@code terminalListOpenRequests} allows it. This is the "nothing fits right
      * now" answer — a full terminal buffer lives here, because a destination that accepts nothing is a planner skip
-     * with a back-off and the request simply stays open ({@code NoJobReason.OUTPUT_FULL}). The order waits; the first
-     * freed slot restarts the trip.
+     * and the request simply stays open ({@code NoJobReason.OUTPUT_FULL}, which arms no back-off). The order waits;
+     * the first freed slot restarts the trip.
      */
     WAITING,
     /**

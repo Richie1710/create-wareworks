@@ -9,6 +9,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+import dev.wareworks.core.inventory.SlotView;
+
 /**
  * The recipe a player lays in a warehouse terminal's crafting panel (issue #24, M32): nine cells, each empty or naming
  * one exact item key.
@@ -156,6 +158,25 @@ public record CraftGrid<K>(List<Optional<K>> cells) {
         for (Optional<K> cell : cells)
             cell.ifPresent(key -> merged.merge(key, 1, Integer::sum));
         return Collections.unmodifiableMap(merged);
+    }
+
+    /**
+     * How many of each of this grid's keys {@code slots} hold, in first-cell order: the buffer counts the other methods
+     * here are handed ({@link #craftsFrom}, {@link #toFetch}), read from the same slot views a plan works on so that
+     * the two can never disagree. A key no slot holds counts 0; an empty grid gives an empty map. Unmodifiable.
+     *
+     * @param slots e.g. the terminal's buffer slots; only slots holding exactly one of the grid's keys count
+     */
+    public Map<K, Long> countsIn(List<SlotView<K>> slots) {
+        Objects.requireNonNull(slots, "slots");
+        Map<K, Long> counts = new LinkedHashMap<>();
+        for (K key : perCraft().keySet())
+            counts.put(key, 0L);
+        for (SlotView<K> slot : slots) {
+            if (!slot.isEmpty() && counts.containsKey(slot.key()))
+                counts.merge(slot.key(), (long) slot.count(), Long::sum);
+        }
+        return Collections.unmodifiableMap(counts);
     }
 
     /**

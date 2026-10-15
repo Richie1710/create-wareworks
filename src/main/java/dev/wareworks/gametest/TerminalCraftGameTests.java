@@ -19,22 +19,35 @@ import org.jetbrains.annotations.Nullable;
 import com.mojang.authlib.GameProfile;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
+import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftOutcome;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalCrafting;
+import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.production.PlanRefusal;
+import dev.wareworks.core.stock.StockRule;
+import dev.wareworks.core.terminal.ListOrderState;
+import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestConfirmation;
+import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.network.TerminalCraftAnswerPayload;
+import dev.wareworks.network.TerminalCraftOrderPayload;
+import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftPayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
+import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.core.BlockPos;
@@ -1022,9 +1035,159 @@ public final class TerminalCraftGameTests {
             buffer.writeUtf("EXPLODED");
             buffer.writeVarInt(2);
             buffer.writeBoolean(false);
+            // The Fetch's fields (slice 2): no plan refusal, no question.
+            buffer.writeUtf("");
+            buffer.writeBoolean(false);
         });
         helper.assertValueEqual(strange.result(), TerminalCraftResult.NO_RECIPE,
                 "an unknown result reads as a plain refusal");
+        helper.succeed();
+    }
+
+    /**
+     * The Fetch's payloads (issue #24, slice 2) through their real codecs: the craft order's actions — a Fetch, an
+     * answer that names the question it answers, "show it again", No, Resume and Cancel — and the same naming in the
+     * clipboard order's answer; the order's state with and without a refusal; a Fetch answer carrying a question with
+     * named lines for each result that carries one. And the hostile shapes: a Fetch of eight cells and an unknown action
+     * (both {@code NONE}), a state naming a rejection this build does not know (no refusal, the stream still in step),
+     * and a question that claims a thousand named lines (five read).
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void terminalCraftOrderPayloadCodecs(GameTestHelper helper) {
+        RequestConfirmation<ItemKey> asked = new RequestConfirmation<>(PLANK, 24L, 16L, 32L, 0L, 0L, StockRule.UNSET,
+                List.of(new RequestConfirmation.ReservedIngredient<>(LOG, 2L, 4L)));
+        for (TerminalCraftOrderPayload payload : List.of(
+                TerminalCraftOrderPayload.fetch(3, CHEST_GRID, Optional.of(CHEST_RECIPE), 4, 16L, true),
+                TerminalCraftOrderPayload.answer(3, asked, new RequestAcknowledgement(false, 2L, 3L, 4L, 5L)),
+                TerminalCraftOrderPayload.answer(3, asked, RequestAcknowledgement.ANY),
+                TerminalCraftOrderPayload.showQuestion(3),
+                TerminalCraftOrderPayload.of(3, TerminalCraftOrderPayload.Action.DECLINE),
+                TerminalCraftOrderPayload.of(3, TerminalCraftOrderPayload.Action.RESUME),
+                TerminalCraftOrderPayload.of(3, TerminalCraftOrderPayload.Action.CANCEL)))
+            helper.assertValueEqual(roundTrip(helper, payload, TerminalCraftOrderPayload.STREAM_CODEC), payload,
+                    "a craft order " + payload.action() + " round trip");
+        for (TerminalListActionPayload payload : List.of(
+                TerminalListActionPayload.answer(3, asked, asked.acknowledgement(RequestScope.LIST)),
+                TerminalListActionPayload.showQuestion(3), TerminalListActionPayload.fetch(3, 1L, 2L, 3L),
+                new TerminalListActionPayload(3, TerminalListActionPayload.Action.CANCEL)))
+            helper.assertValueEqual(roundTrip(helper, payload, TerminalListActionPayload.STREAM_CODEC), payload,
+                    "a clipboard order " + payload.action() + " round trip");
+
+        TerminalCraftOrderPayload eightCells = decodeRaw(helper, TerminalCraftOrderPayload.STREAM_CODEC, buffer -> {
+            buffer.writeVarInt(3);
+            buffer.writeUtf("FETCH");
+            buffer.writeVarInt(CraftGrid.SIZE - 1);
+            for (int i = 0; i < CraftGrid.SIZE - 1; i++)
+                writeCell(buffer, PLANK);
+            buffer.writeUtf("");
+            buffer.writeVarInt(4);
+            buffer.writeVarLong(0L);
+            buffer.writeBoolean(false);
+            buffer.writeBoolean(false);
+            buffer.writeVarInt(0);
+        });
+        helper.assertValueEqual(eightCells.action(), TerminalCraftOrderPayload.Action.NONE,
+                "a Fetch of eight cells reads as NONE, which the server drops");
+        helper.assertTrue(eightCells.cells().isEmpty(), "with no grid at all");
+        TerminalCraftOrderPayload melt = decodeRaw(helper, TerminalCraftOrderPayload.STREAM_CODEC, buffer -> {
+            buffer.writeVarInt(3);
+            buffer.writeUtf("MELT");
+            buffer.writeVarInt(CraftGrid.SIZE);
+            for (int i = 0; i < CraftGrid.SIZE; i++)
+                writeCell(buffer, PLANK);
+            buffer.writeUtf("Not A Valid Id");
+            buffer.writeVarInt(1);
+            buffer.writeVarLong(0L);
+            buffer.writeBoolean(false);
+            buffer.writeBoolean(false);
+            buffer.writeVarInt(0);
+        });
+        helper.assertValueEqual(melt.action(), TerminalCraftOrderPayload.Action.NONE, "an unknown action is NONE");
+        helper.assertTrue(melt.hint().isEmpty(), "and a hint that is no valid id reads as none");
+
+        TerminalPortionRefusal planned = new TerminalPortionRefusal(RequestRejection.NOT_IN_STOCK,
+                Optional.of(PlanRefusal.MISSING_INGREDIENT), LOG);
+        TerminalPortionRefusal plain = new TerminalPortionRefusal(RequestRejection.QUEUE_FULL, Optional.empty(),
+                PLANK);
+        for (TerminalCraftOrderState state : List.of(TerminalCraftOrderState.NONE,
+                new TerminalCraftOrderState(true, ListOrderState.ASKING, CHEST_GRID, 4, 32L, 8L, 8L,
+                        Optional.of(PLANK), Optional.of(planned)),
+                new TerminalCraftOrderState(true, ListOrderState.PARKED, CHEST_GRID, 1, 8L, 0L, 0L,
+                        Optional.empty(), Optional.of(plain)),
+                new TerminalCraftOrderState(true, ListOrderState.DONE, CHEST_GRID, 1, 8L, 8L, 0L, Optional.empty(),
+                        Optional.of(plain)))) {
+            TerminalCraftOrderStatePayload payload = new TerminalCraftOrderStatePayload(3, state);
+            helper.assertValueEqual(roundTrip(helper, payload, TerminalCraftOrderStatePayload.STREAM_CODEC), payload,
+                    "a craft order state round trip: " + state.state());
+        }
+        helper.assertTrue(new TerminalCraftOrderState(true, ListOrderState.DONE, CHEST_GRID, 1, 8L, 8L, 0L,
+                Optional.empty(), Optional.of(plain)).refusal().isEmpty(), "a finished order names no refusal");
+        TerminalCraftOrderStatePayload molten = decodeRaw(helper, TerminalCraftOrderStatePayload.STREAM_CODEC,
+                buffer -> {
+                    buffer.writeVarInt(3);
+                    buffer.writeBoolean(true);
+                    buffer.writeUtf("RUNNING");
+                    buffer.writeVarInt(CraftGrid.SIZE);
+                    for (int i = 0; i < CraftGrid.SIZE; i++)
+                        writeCell(buffer, PLANK);
+                    buffer.writeVarInt(1);
+                    buffer.writeVarLong(9L);
+                    buffer.writeVarLong(0L);
+                    buffer.writeVarLong(0L);
+                    buffer.writeBoolean(false);
+                    buffer.writeBoolean(true);
+                    buffer.writeUtf("MOLTEN");
+                    buffer.writeUtf("");
+                    ItemKey.STREAM_CODEC.encode(buffer, PLANK);
+                });
+        helper.assertTrue(molten.state().isOpen(), "a state naming an unknown rejection is still read");
+        helper.assertTrue(molten.state().refusal().isEmpty(), "with no refusal, and every byte read");
+
+        // A question with named lines, for every result that carries a STOCK question, and the ROOM one.
+        CraftFetchQuestion<ItemKey> stock = new CraftFetchQuestion<>(4, 0, 2, 2, 4, Optional.of(PLANK), 0L,
+                List.of(new CraftFetchQuestion.Line<>(PLANK, 32L, 16L, 0L),
+                        new CraftFetchQuestion.Line<>(GLASS_BOTTLE, 4L, 1L, 3L)));
+        helper.assertValueEqual(stock.bound(), CraftFetchQuestion.Bound.STOCK, "the stock binds");
+        for (TerminalCraftResult result : List.of(TerminalCraftResult.ASKING, TerminalCraftResult.CHANGED,
+                TerminalCraftResult.NOT_ENOUGH)) {
+            TerminalCraftAnswerPayload answer = new TerminalCraftAnswerPayload(3, result, 2, Optional.of(PLANK),
+                    Optional.of(PlanRefusal.MISSING_INGREDIENT), Optional.of(stock));
+            TerminalCraftAnswerPayload decoded = roundTrip(helper, answer, TerminalCraftAnswerPayload.STREAM_CODEC);
+            helper.assertValueEqual(decoded, answer, result + ": an answer with a question round trip");
+            helper.assertValueEqual(decoded.question().orElseThrow().named(), stock.named(),
+                    result + ": with every named line");
+            helper.assertValueEqual(decoded.question().orElseThrow().about(), Optional.of(PLANK),
+                    result + ": and the item it is about");
+        }
+        CraftFetchQuestion<ItemKey> room = new CraftFetchQuestion<>(2, 0, 2, 2, 0, Optional.empty(), 0L, List.of());
+        TerminalCraftAnswerPayload full = new TerminalCraftAnswerPayload(3, TerminalCraftResult.NO_ROOM_FOR_ONE, 0,
+                Optional.empty(), Optional.empty(), Optional.of(room));
+        helper.assertValueEqual(roundTrip(helper, full, TerminalCraftAnswerPayload.STREAM_CODEC), full,
+                "no room for one craft, with the ROOM question");
+        TerminalCraftAnswerPayload claimsMore = decodeRaw(helper, TerminalCraftAnswerPayload.STREAM_CODEC, buffer -> {
+            buffer.writeVarInt(3);
+            buffer.writeUtf("ASKING");
+            buffer.writeVarInt(2);
+            buffer.writeBoolean(false);
+            buffer.writeUtf("");
+            buffer.writeBoolean(true);
+            buffer.writeVarInt(4);
+            buffer.writeVarInt(0);
+            buffer.writeVarInt(2);
+            buffer.writeVarInt(2);
+            buffer.writeVarInt(4);
+            buffer.writeBoolean(false);
+            buffer.writeVarLong(0L);
+            buffer.writeVarInt(1000);
+            for (int i = 0; i < CraftFetchQuestion.MAX_NAMED; i++) {
+                ItemKey.STREAM_CODEC.encode(buffer, PLANK);
+                buffer.writeVarLong(1L);
+                buffer.writeVarLong(1L);
+                buffer.writeVarLong(0L);
+            }
+        });
+        helper.assertValueEqual(claimsMore.question().orElseThrow().named().size(), CraftFetchQuestion.MAX_NAMED,
+                "a question claiming a thousand named lines reads at most five");
         helper.succeed();
     }
 
@@ -1148,12 +1311,12 @@ public final class TerminalCraftGameTests {
         ItemKey.STREAM_CODEC.encode(buffer, key);
     }
 
-    private static <T> T roundTrip(GameTestHelper helper, T payload, StreamCodec<RegistryFriendlyByteBuf, T> codec) {
+    static <T> T roundTrip(GameTestHelper helper, T payload, StreamCodec<RegistryFriendlyByteBuf, T> codec) {
         return decodeRaw(helper, codec, buffer -> codec.encode(buffer, payload));
     }
 
     /** Decodes what {@code writer} put into a fresh buffer, and fails the test unless every byte was read. */
-    private static <T> T decodeRaw(GameTestHelper helper, StreamCodec<RegistryFriendlyByteBuf, T> codec,
+    static <T> T decodeRaw(GameTestHelper helper, StreamCodec<RegistryFriendlyByteBuf, T> codec,
             Consumer<RegistryFriendlyByteBuf> writer) {
         RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(Unpooled.buffer(),
                 helper.getLevel().registryAccess(), ConnectionType.NEOFORGE);

@@ -18,6 +18,7 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.StockKeeperMenuLayout;
 import dev.wareworks.content.station.TerminalMenuLayout;
+import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import net.minecraft.client.Minecraft;
@@ -71,6 +72,11 @@ final class ScreenInput {
     /** The toggle that folds the crafting panel out and in, and the panel's Clear button (M32, issue #24). */
     private static final Field TERMINAL_CRAFT_TOGGLE = field(WarehouseTerminalScreen.class, "craftToggle");
     private static final Field TERMINAL_CRAFT_CLEAR = field(WarehouseTerminalScreen.class, "craftClear");
+    /** The craft order's button: Fetch, Answer, Resume or Cancel (issue #24, slice 2). */
+    private static final Field TERMINAL_CRAFT_FETCH = field(WarehouseTerminalScreen.class, "craftFetch");
+    /** The lines of the Fetch question the confirmation panel draws (issue #24, slice 2). */
+    private static final Method TERMINAL_CRAFT_CONFIRM_LINES = method(WarehouseTerminalScreen.class,
+            "craftFetchConfirmationLines", CraftFetchQuestion.class);
     private static final Field PRODUCTION_LAYOUT = field(WarehouseProductionScreen.class, "layout");
     private static final Method PRODUCTION_CELL_AT = method(WarehouseProductionScreen.class, "cellAt", double.class,
             double.class);
@@ -90,6 +96,11 @@ final class ScreenInput {
     private static final int NO_NUMBER_FIELD = -1;
     /** Middle of a vanilla 16x16 menu slot, measured from {@code Slot#x}/{@code y}. */
     private static final double SLOT_CENTRE = 8.0;
+    /**
+     * How far left of the progress row's right end the cancel mark's centre lies: the mark is one five pixel glyph
+     * centred in the panel's eight pixel target ({@code TerminalCraftPanel#cancelAt} checks the point).
+     */
+    private static final double CANCEL_MARK_INSET = 4.0;
     private static final Method FIND_SLOT = method(AbstractContainerScreen.class, "findSlot", double.class,
             double.class);
 
@@ -292,6 +303,25 @@ final class ScreenInput {
     }
 
     /**
+     * The centre of the crafting panel's order button — Fetch, or the Answer, Resume or Cancel it turns into while the
+     * craft order is open — checked with the widget's own hit test and with the panel's, whose tooltip it shows. The
+     * button exists only while the panel is folded out and is greyed out as Fetch while the grid is empty; both are
+     * failures here rather than a click that silently does nothing.
+     */
+    static Point terminalCraftFetch(WarehouseTerminalScreen screen) {
+        IconButton button = (IconButton) get(TERMINAL_CRAFT_FETCH, screen);
+        if (button == null)
+            throw new VisualTestException("the crafting panel is folded in, so it has no Fetch button");
+        if (!button.active)
+            throw new VisualTestException("the crafting panel's Fetch button is greyed out: the grid is empty");
+        Point point = terminalButton(screen, TERMINAL_CRAFT_FETCH, "Fetch");
+        if (!screen.craftPanel().fetchButtonAt(point.x(), point.y()))
+            throw new VisualTestException("the crafting panel does not put the Fetch button's centre " + point
+                    + " on its own Fetch place");
+        return point;
+    }
+
+    /**
      * The centre of cell {@code cell} of the terminal's crafting grid, checked with the panel's own hit test — and
      * checked to be <b>nothing else</b>: neither a stock cell nor a menu slot claims the point, so a click there can
      * only ever be the panel's.
@@ -319,6 +349,46 @@ final class ScreenInput {
                     + (screen.isCraftPanelOpen() ? "" : " (the panel is folded in)"));
         requireOnlyCraftPanel(screen, point, "the crafting result");
         return point;
+    }
+
+    /**
+     * A point on the cancel mark at the right end of the crafting panel's progress row, which gives the craft order up
+     * (issue #24, slice 2), checked with the panel's own hit test — and checked to be nothing else: no grid cell, not
+     * the result, no stock cell and no menu slot. The row is drawn only while the order is open, so a point the hit
+     * test rejects is a failure rather than a click into the void.
+     */
+    static Point terminalCraftCancelMark(WarehouseTerminalScreen screen) {
+        TerminalMenuLayout layout = (TerminalMenuLayout) get(TERMINAL_LAYOUT, screen);
+        // Half the mark's glyph in from the row's right end, in the middle of the row's text line.
+        Point point = new Point(screen.getGuiLeft() + TerminalMenuLayout.PANEL_CONTENT_X
+                + TerminalMenuLayout.PANEL_CONTENT_WIDTH - CANCEL_MARK_INSET,
+                screen.getGuiTop() + layout.craftProgressTextY() + TerminalMenuLayout.LABEL_HEIGHT / 2.0);
+        TerminalCraftPanel panel = screen.craftPanel();
+        if (!panel.cancelAt(point.x(), point.y()))
+            throw new VisualTestException("the crafting panel's hit test does not put " + point + " on the progress "
+                    + "row's cancel mark (order open: " + screen.craftOrderState().isOpen() + ", panel folded "
+                    + (screen.isCraftPanelOpen() ? "out" : "in") + ")");
+        if (panel.cellAt(point.x(), point.y()) >= 0 || panel.resultAt(point.x(), point.y())
+                || panel.fetchButtonAt(point.x(), point.y()))
+            throw new VisualTestException("the crafting panel puts the cancel mark's point " + point
+                    + " on a grid cell, the result or the Fetch button as well");
+        requireOnlyCraftPanel(screen, point, "the progress row's cancel mark");
+        return point;
+    }
+
+    /**
+     * Every line of the confirmation panel while the crafting panel's <b>Fetch question</b> is up (issue #24, slice 2),
+     * as it is drawn: the question with the crafts a Yes starts, the "changed" line of a repeated one, and what binds
+     * it — the buffer's room or the warehouse's stock. The counterpart of {@link #terminalConfirmationLines} and
+     * {@link #terminalListConfirmationLines} for the third question the one panel shows.
+     */
+    static List<Component> terminalCraftConfirmationLines(WarehouseTerminalScreen screen) {
+        CraftFetchQuestion<ItemKey> question = screen.craftConfirmation();
+        if (question == null)
+            throw new VisualTestException("the terminal is not asking about a Fetch, so it draws no Fetch question");
+        @SuppressWarnings("unchecked")
+        List<Component> lines = (List<Component>) invoke(TERMINAL_CRAFT_CONFIRM_LINES, screen, question);
+        return lines;
     }
 
     /** Fails when a stock cell or a menu slot also claims {@code point}, which would make the click ambiguous. */

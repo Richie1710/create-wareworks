@@ -29,6 +29,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
@@ -37,13 +38,17 @@ import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.StockLine;
 import dev.wareworks.network.TerminalCraftAnswerPayload;
+import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
+import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.screens.Screen;
@@ -78,10 +83,14 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * what a chest and a cake are made of, opens the real screen through {@code WarehouseTerminalBlockEntity#openScreen}
  * and plays one <b>round</b> ({@link #round}): the toggle folds the panel out, a right-click on Oak Planks in the stock
  * list picks a ghost and left clicks stamp the chest's ring with it, Escape drops it, and the server's preview names
- * the Chest. The planks then come the honest way: the amount field is scrolled to 24 and a plain left click on Oak
- * Planks in the list <b>requests</b> them, so the crane really carries them into the buffer. A click on the result
- * crafts one chest, a Shift-click the other two; a cake shows the buckets it leaves in the buffer; and a crafting table
- * is refused because neither the buffer nor the inventory has room for it.
+ * the Chest. The planks then come the honest way, through the panel's <b>Fetch</b> (slice 2 of the issue, ADR-062): the
+ * amount field is scrolled to x3 and a click on Fetch starts the terminal's craft order, which the crane works off
+ * into the buffer while the grid is locked; the scene is frozen while the crane carries the planks, so the progress
+ * row is shot mid-delivery. A click on the result crafts one chest, a Shift-click the other two. A second Fetch is
+ * given up with the progress row's cancel mark while the crane carries its planks, which go back into the racks. A
+ * cake x4 does not fit the buffer: the server asks, the question names the room ("only x2 of x4"), Yes fetches two
+ * cakes' worth, and the cake crafted from them shows the buckets it leaves in the buffer. Last, a crafting table is
+ * refused because neither the buffer nor the inventory has room for it.
  * <p>
  * <b>A view of an earlier grid is never shown.</b> The crafting table is laid in three steps that keep the item and
  * change what the grid makes — sticks, the same two planks moved side by side into a pressure plate, then two planks
@@ -92,7 +101,8 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <p>
  * <b>Input.</b> Every click, right-click, scroll and key press goes through {@link ScreenInput}, i.e. through the mouse
  * and keyboard handlers, at a point checked against the panel's own hit tests first ({@code TerminalCraftPanel#cellAt},
- * {@code #resultAt}) — and checked to be nothing else, no stock cell and no menu slot. Two gestures need Shift, which
+ * {@code #resultAt}, {@code #fetchButtonAt}, {@code #cancelAt}, and the confirmation panel's buttons) — and checked to
+ * be nothing else, no stock cell and no menu slot. Two gestures need Shift, which
  * the harness can never hold ({@link ScreenInput#requireNoModifiers}): the Shift-click on the result and the Shift +
  * right-click that writes an item into the next free cell. For those two the run checks the point the same way and
  * then calls the branch the screen takes for them ({@code TerminalCraftPanel#craft(true)},
@@ -101,10 +111,12 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <b>Items.</b> A {@link SceneItemCensus} of the aisle <b>and of the player</b> brackets every craft: before the click
  * it must equal what the run expects, and after the answer it must have moved by exactly the recipe — eight planks out
  * and a chest in, or three milk buckets, two sugar, an egg and three wheat out and a cake and three buckets in — and by
- * nothing for the refused craft. Only two things put items into the scene that no crane carried, and both are declared
- * in the census: the full buffer and the full inventory the refusal needs ({@link #fillForRefusal}, seeded on the
- * server thread, because a crane delivers into a buffer but never into a player's pockets), and the emptying between
- * the two rounds ({@link #emptyForNextRound}).
+ * nothing for the refused craft. It brackets every Fetch as well: the crane carries items only inside the census box,
+ * so the census stays exactly what it was before the click, after the delivery, after the question and after the fetch
+ * that was given up, while the buffer is checked to hold exactly what the fetch was for. Only two things put items into
+ * the scene that no crane carried, and both are declared in the census: the full buffer and the full inventory the
+ * refusal needs ({@link #fillForRefusal}, seeded on the server thread, because a crane delivers into a buffer but never
+ * into a player's pockets), and the emptying between the two rounds ({@link #emptyForNextRound}).
  * <p>
  * <b>Languages and sizes.</b> The round is played twice, in English and in German (switched as the language screen
  * does, {@link VisualLanguage}), and every shot is taken in both; the German ones end in {@code -de}. Each round ends
@@ -164,11 +176,27 @@ public final class CraftVisualScenario implements VisualScenario {
     private static final CraftGrid<ItemKey> STICK_GRID = CraftGrid.of(PLANKS, null, null, PLANKS);
     /** The same two planks side by side: an oak pressure plate. */
     private static final CraftGrid<ItemKey> PLATE_GRID = CraftGrid.of(PLANKS, PLANKS);
-    /** Three chests' worth of planks, so one click and one Shift-click both have something to craft. */
-    private static final int PLANKS_REQUESTED = 24;
+    /** Three chests are fetched for, so one click and one Shift-click both have something to craft. */
+    private static final int CHESTS = 3;
     private static final int PLANKS_PER_CHEST = 8;
-    private static final int CHESTS = PLANKS_REQUESTED / PLANKS_PER_CHEST;
-    private static final int PLANKS_PER_TABLE = 4;
+    private static final int PLANKS_FETCHED = CHESTS * PLANKS_PER_CHEST;
+    /**
+     * The terminal's buffer slots the cake's question is measured against: the shipped default of
+     * {@code terminalBufferSlots}, which the run checks the menu really has.
+     */
+    private static final int BUFFER_SLOTS = 9;
+    /** The cakes asked for: more than fit the buffer, because every milk bucket takes a slot of its own. */
+    private static final int CAKES_ASKED = 4;
+    /** Milk buckets, sugar, eggs and wheat one cake takes. */
+    private static final int MILK_PER_CAKE = 3;
+    private static final int SUGAR_PER_CAKE = 2;
+    private static final int EGGS_PER_CAKE = 1;
+    private static final int WHEAT_PER_CAKE = 3;
+    /**
+     * The cakes whose ingredients fit the empty buffer: a slot per milk bucket, and one slot each for the sugar, the
+     * eggs and the wheat, which stack ({@code 3n + 3 <= 9}).
+     */
+    private static final int CAKES_FITTING = (BUFFER_SLOTS - 3) / MILK_PER_CAKE;
 
     // --- window sizes (design table 3.2: the 320 x 240 floor and 480 x 270) ------------------------------------------
     private static final int FLOOR_WIDTH = 1280;
@@ -191,13 +219,18 @@ public final class CraftVisualScenario implements VisualScenario {
     private static final String ENGLISH = "en_us";
     /** The width every tooltip line of the panel has to fit: the terminal's status row. */
     private static final int ROW_WIDTH = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN;
+    /**
+     * The width a line of the confirmation panel is drawn at before it wraps: the row less the panel's padding of 6 px
+     * on either side ({@code WarehouseTerminalScreen#confirmTextWidth}; {@code TerminalCraftTextWidthTest} measures the
+     * same width).
+     */
+    private static final int DIALOG_WIDTH = ROW_WIDTH - 2 * 6;
 
     private static final int SCENE_READY_TIMEOUT_TICKS = 900;
     private static final int SCREEN_TIMEOUT_TICKS = 200;
     private static final int PREVIEW_TIMEOUT_TICKS = 200;
     private static final int ANSWER_TIMEOUT_TICKS = 200;
     private static final int AMOUNT_TIMEOUT_TICKS = 200;
-    private static final int REQUEST_TIMEOUT_TICKS = 200;
     private static final int DELIVERY_TIMEOUT_TICKS = 1200;
     private static final int RESIZE_TIMEOUT_TICKS = 200;
     private static final int RELOAD_TIMEOUT_TICKS = 600;
@@ -215,6 +248,9 @@ public final class CraftVisualScenario implements VisualScenario {
     /** Client thread: the answer on screen before the last craft click, so the step after it waits for a new one. */
     @Nullable
     private TerminalCraftAnswerPayload answerBefore;
+    /** Client thread: the answer to a Fetch or an order button before the last such click, likewise. */
+    @Nullable
+    private TerminalCraftAnswerPayload fetchAnswerBefore;
     /** Client thread: where the window stood before the last fold, so a fold can be checked for a jump. */
     private int leftBeforeFold;
     /** Client thread: the window, its GUI size and the GUI scale option before the size checks, put back after. */
@@ -286,9 +322,10 @@ public final class CraftVisualScenario implements VisualScenario {
         Screen open = context.minecraft().screen;
         if (!(open instanceof WarehouseTerminalScreen terminal))
             return "screen=" + (open == null ? "none" : open.getClass().getSimpleName()) + " " + size;
-        return String.format(Locale.ROOT, "screen=terminal %s left=%d top=%d width=%d %s status='%s' statusFits=%s %s",
+        return String.format(Locale.ROOT,
+                "screen=terminal %s left=%d top=%d width=%d %s asking=%s status='%s' statusFits=%s %s",
                 terminal.isCraftPanelOpen() ? "panel=open" : "panel=closed", terminal.getGuiLeft(),
-                terminal.getGuiTop(), terminal.getXSize(), describePanel(terminal),
+                terminal.getGuiTop(), terminal.getXSize(), describePanel(terminal), terminal.isAskingSomething(),
                 terminal.shownStatusLine().getString(), terminal.statusTextsFit(), size);
     }
 
@@ -332,9 +369,8 @@ public final class CraftVisualScenario implements VisualScenario {
                 .waitTicks(SETTLE_TICKS)
                 .shot("craft-cell-tooltip" + suffix);
 
-        // The ingredients come the honest way: a request, which the crane carries into the buffer.
-        request(script, PLANKS, PLANKS_REQUESTED);
-        delivered(script, "the planks for " + CHESTS + " chests", Map.of(PLANKS, (long) PLANKS_REQUESTED));
+        // The ingredients come the honest way: the panel's Fetch, which the crane works off into the buffer.
+        fetchChestSteps(script, suffix);
         ArmVisualScenario.untilOrFail(script, "craft: the panel counts " + CHESTS + " crafts ready",
                 context -> screen(context).craftPanel().readyCrafts() == CHESTS, SCREEN_TIMEOUT_TICKS,
                 context -> describePanel(screen(context)));
@@ -361,6 +397,7 @@ public final class CraftVisualScenario implements VisualScenario {
                 context -> checkCells(context, CHEST_GRID, TerminalCraftPanel.CellState.AVAILABLE, 0));
         shot(script, "craft-crafted-all" + suffix);
 
+        cancelSteps(script, suffix);
         cakeSteps(script, suffix);
         refusalSteps(script, suffix);
         sizeSteps(script, suffix);
@@ -373,6 +410,11 @@ public final class CraftVisualScenario implements VisualScenario {
      * right-click, which fills the next free cells in row-major order. With the milk ghost held, and again once it is
      * dropped, a stock cell's and an inventory slot's tooltip are checked ({@link #tooltipSteps}): the chests of the
      * first craft are in the inventory by now.
+     * <p>
+     * The ingredients are fetched for {@value #CAKES_ASKED} cakes, which do not fit: every milk bucket takes a buffer
+     * slot of its own. The server requests nothing and asks instead ({@link TerminalCraftResult#ASKING}); the question
+     * names the room and the {@value #CAKES_FITTING} cakes that fit, and the Yes in the confirmation panel fetches
+     * exactly those. One of them is crafted.
      */
     private void cakeSteps(VisualScript script, String suffix) {
         clearGrid(script);
@@ -391,21 +433,47 @@ public final class CraftVisualScenario implements VisualScenario {
         laidSteps(script, "cake", CAKE_GRID, Items.CAKE);
         script.server("craft: CHECK laying the cake requested nothing", CraftVisualScenario::checkNothingRequested);
 
-        request(script, MILK, 3);
-        request(script, SUGAR, 2);
-        request(script, EGG, 1);
-        request(script, WHEAT, 3);
-        delivered(script, "the cake's ingredients", Map.of(MILK, 3L, SUGAR, 2L, EGG, 1L, WHEAT, 3L));
-        ArmVisualScenario.untilOrFail(script, "craft: the panel counts one cake ready",
-                context -> screen(context).craftPanel().readyCrafts() == 1, SCREEN_TIMEOUT_TICKS,
+        // x4 does not fit the buffer: the server asks before it requests anything, and the Yes fetches what fits.
+        String asked = CAKES_ASKED + " cakes";
+        amount(script, CAKES_ASKED);
+        script.client("craft: check the Fetch button's tooltip for " + asked, context -> checkFetchTooltip(context,
+                CAKE, CAKES_ASKED, List.of(Map.entry(MILK, MILK_PER_CAKE * CAKES_ASKED),
+                        Map.entry(SUGAR, SUGAR_PER_CAKE * CAKES_ASKED), Map.entry(EGG, EGGS_PER_CAKE * CAKES_ASKED),
+                        Map.entry(WHEAT, WHEAT_PER_CAKE * CAKES_ASKED))));
+        fetch(script, asked);
+        fetchAnswered(script, "the Fetch for " + asked, TerminalCraftResult.ASKING, CAKES_FITTING);
+        script.client("craft: CHECK the question names the buffer's room", this::checkRoomQuestion)
+                .server("craft: CHECK the question requested nothing", CraftVisualScenario::checkNothingRequested)
+                .server("craft: CHECK the census after the question",
+                        (server, context) -> assertCensus(server, context, "after the question about " + asked));
+        shot(script, "craft-question-room" + suffix);
+        script.client("craft: click Yes in the question", context -> {
+            WarehouseTerminalScreen screen = screen(context);
+            fetchAnswerBefore = screen.craftFetchAnswer();
+            ScreenInput.click(context.minecraft(), ScreenInput.terminalConfirmButton(screen, true));
+            if (screen.isAskingSomething())
+                throw new VisualTestException("the question is still up after its Yes");
+        });
+        String fitting = CAKES_FITTING + " cakes";
+        fetchAnswered(script, "the Yes for " + fitting, TerminalCraftResult.STARTED, CAKES_FITTING);
+        orderOpened(script, CAKE_GRID, CAKES_FITTING);
+        fetchDone(script, "the ingredients of " + fitting, CAKE_GRID, Map.of(MILK, (long) MILK_PER_CAKE * CAKES_FITTING,
+                SUGAR, (long) SUGAR_PER_CAKE * CAKES_FITTING, EGG, (long) EGGS_PER_CAKE * CAKES_FITTING, WHEAT,
+                (long) WHEAT_PER_CAKE * CAKES_FITTING));
+        ArmVisualScenario.untilOrFail(script, "craft: the panel counts " + fitting + " ready",
+                context -> screen(context).craftPanel().readyCrafts() == CAKES_FITTING, SCREEN_TIMEOUT_TICKS,
                 context -> describePanel(screen(context)));
         script.client("craft: check the cake's cells with everything here",
-                context -> checkCells(context, CAKE_GRID, TerminalCraftPanel.CellState.HERE, 1));
+                context -> checkCells(context, CAKE_GRID, TerminalCraftPanel.CellState.HERE, CAKES_FITTING));
 
-        craft(script, new CraftCheck("craft the cake", TerminalCraftResult.CRAFTED, 1, CAKE,
-                Map.of(MILK, -3L, SUGAR, -2L, EGG, -1L, WHEAT, -3L, CAKE, 1L, BUCKET, 3L)), this::clickResult);
-        script.serverUntil("craft: CHECK the three empty buckets stay in the buffer",
-                (server, context) -> bufferIs(server, context, Map.of(BUCKET, 3L)), SCREEN_TIMEOUT_TICKS);
+        craft(script, new CraftCheck("craft one cake", TerminalCraftResult.CRAFTED, 1, CAKE,
+                Map.of(MILK, (long) -MILK_PER_CAKE, SUGAR, (long) -SUGAR_PER_CAKE, EGG, (long) -EGGS_PER_CAKE, WHEAT,
+                        (long) -WHEAT_PER_CAKE, CAKE, 1L, BUCKET, (long) MILK_PER_CAKE)), this::clickResult);
+        int left = CAKES_FITTING - 1;
+        Map<ItemKey, Long> remainder = Map.of(MILK, (long) MILK_PER_CAKE * left, SUGAR, (long) SUGAR_PER_CAKE * left,
+                EGG, (long) EGGS_PER_CAKE * left, WHEAT, (long) WHEAT_PER_CAKE * left, BUCKET, (long) MILK_PER_CAKE);
+        script.serverUntil("craft: CHECK the three empty buckets stay in the buffer beside the other cake's "
+                + "ingredients", (server, context) -> bufferIs(server, context, remainder), SCREEN_TIMEOUT_TICKS);
         ArmVisualScenario.untilOrFail(script, "craft: the screen shows the buckets in the buffer",
                 context -> clientBufferCount(context, BUCKET) == 3, SCREEN_TIMEOUT_TICKS,
                 context -> "the buffer slots show " + clientBufferCount(context, BUCKET) + " buckets");
@@ -413,9 +481,9 @@ public final class CraftVisualScenario implements VisualScenario {
     }
 
     /**
-     * A crafting table nobody has room for: the buffer is full of planks — the four it takes leave every stack
-     * standing — and the inventory has no free slot and no crafting table to stack onto. The click must be refused and
-     * move nothing.
+     * A crafting table nobody has room for: the buffer is full — the other cake's ingredients and the buckets, and a
+     * stack of planks in every slot left, so the four it takes leave every stack standing — and the inventory has no
+     * free slot and no crafting table to stack onto. The click must be refused and move nothing.
      * <p>
      * The table is laid the long way, so that the panel is caught with a view of an earlier grid of the same item: two
      * planks one above the other (sticks), one of them moved beside the other (a pressure plate), two more planks (the
@@ -445,6 +513,42 @@ public final class CraftVisualScenario implements VisualScenario {
         craft(script, new CraftCheck("craft a crafting table without room for it", TerminalCraftResult.NO_ROOM, 0,
                 CRAFTING_TABLE, Map.of()), this::clickResult);
         shot(script, "craft-refused" + suffix);
+
+        // Two planks laid diagonally over a buffer full of planks: no recipe. The Fetch tooltip says so, and never
+        // "Already here: click the result to craft", which would point at a result that is not there.
+        clearGrid(script);
+        pickGhost(script, PLANKS);
+        stamp(script, 0, 4);
+        dropGhost(script);
+        ArmVisualScenario.untilOrFail(script, "craft: the server answered the diagonal planks with no recipe",
+                context -> {
+                    TerminalCraftPanel panel = screen(context).craftPanel();
+                    return !panel.previewPending() && panel.describesGrid() && panel.shownResult().isEmpty();
+                }, SCREEN_TIMEOUT_TICKS, context -> describePanel(screen(context)));
+        script.client("craft: CHECK the Fetch tooltip of a grid without a recipe",
+                CraftVisualScenario::checkNoRecipeFetchTooltip);
+        // The crafting table again, so the grid this player leaves at the terminal is the one the second pass expects
+        // the reopened screen to remember.
+        clearGrid(script);
+        pickGhost(script, PLANKS);
+        stamp(script, 0, 1, 3, 4);
+        dropGhost(script);
+        ArmVisualScenario.untilOrFail(script, "craft: the crafting table is laid again",
+                context -> previewShows(context, TABLE_GRID, Items.CRAFTING_TABLE), SCREEN_TIMEOUT_TICKS,
+                context -> describePanel(screen(context)));
+    }
+
+    /**
+     * A grid the server answered with no recipe shows that refusal in the Fetch tooltip and none of the lines of a
+     * Fetch that could start — above all not "Already here: click the result to craft", whatever the buffer holds.
+     */
+    private static void checkNoRecipeFetchTooltip(VisualContext context) {
+        List<String> lines = texts(screen(context).craftPanel().fetchTooltip());
+        String noRecipe = WareworksLang.translateDirect(TerminalCraftResult.NO_RECIPE.langKey()).getString();
+        String nothing = WareworksLang.translateDirect(TerminalCraftResult.NOTHING_TO_FETCH.langKey()).getString();
+        if (!lines.contains(noRecipe) || lines.contains(nothing))
+            throw new VisualTestException("the Fetch tooltip of a grid without a recipe is " + lines);
+        LOGGER.info(PREFIX + "craft: CHECK PASS a grid without a recipe shows {} in its Fetch tooltip", lines);
     }
 
     // --- the gestures (client thread, through ScreenInput) -----------------------------------------------------------
@@ -615,10 +719,10 @@ public final class CraftVisualScenario implements VisualScenario {
     }
 
     /**
-     * Amount field to {@code amount}, one notch of the wheel per tick, then a plain left click on {@code key} in the
-     * stock list: a request, because no ghost is on the cursor. The server has to accept it.
+     * Amount field to {@code amount}, one notch of the wheel per tick: the number of crafts the panel's Fetch is for
+     * ({@code WarehouseTerminalScreen#fetchCrafts}), the field a click in the list requests with.
      */
-    private static void request(VisualScript script, ItemKey key, int amount) {
+    private static void amount(VisualScript script, int amount) {
         ArmVisualScenario.untilOrFail(script, "craft: scroll the amount field to " + amount, context -> {
             ScrollInput input = ScreenInput.terminalAmount(screen(context));
             int state = input.getState();
@@ -628,16 +732,168 @@ public final class CraftVisualScenario implements VisualScenario {
             return false;
         }, AMOUNT_TIMEOUT_TICKS, context -> "the amount field shows "
                 + ScreenInput.terminalAmount(screen(context)).getState());
-        script.client("craft: left-click " + id(key) + " in the stock list to request " + amount, context -> {
-            WarehouseTerminalScreen screen = screen(context);
-            if (screen.craftPanel().hasGhost())
-                throw new VisualTestException("a ghost is on the cursor, so this click would pick instead of request");
-            ScreenInput.click(context.minecraft(), ScreenInput.terminalCell(screen, stockCell(context, key)));
-        }).serverUntil("craft: the server accepted the request for " + amount + " " + id(key),
-                (server, context) -> requestAccepted(server, context, key, amount), REQUEST_TIMEOUT_TICKS);
+        script.client("craft: CHECK a Fetch is for x" + amount + " now", context -> {
+            int crafts = screen(context).fetchCrafts();
+            if (crafts != amount)
+                throw new VisualTestException("the amount field shows " + amount + ", but a Fetch would be for x"
+                        + crafts);
+        });
     }
 
-    /** Waits until the crane has delivered {@code counts} into the buffer, and nothing else is there. */
+    // --- Fetch (slice 2 of the issue, ADR-062) -----------------------------------------------------------------------
+
+    /**
+     * The chest's planks fetched through the panel: the Fetch button's tooltip names what a Fetch for
+     * {@value #CHESTS} chests asks for, a click on it starts the craft order, and the order locks the grid, owns the
+     * status row and shows its progress row. The ticks are frozen while the crane carries the planks, so the progress
+     * row is shot mid-delivery ({@code craft-fetching}). Then the order finishes with exactly the planks in the buffer,
+     * gives the grid back — still laid — and says the result can be clicked.
+     */
+    private void fetchChestSteps(VisualScript script, String suffix) {
+        String what = CHESTS + " chests";
+        amount(script, CHESTS);
+        script.client("craft: check the Fetch button's tooltip for " + what, context -> checkFetchTooltip(context,
+                        CHEST, CHESTS, List.of(Map.entry(PLANKS, PLANKS_FETCHED))))
+                .client("craft: hover the Fetch button", context -> ScreenInput.hover(context.minecraft(),
+                        ScreenInput.terminalCraftFetch(screen(context))))
+                .waitTicks(SETTLE_TICKS)
+                .shot("craft-fetch-tooltip" + suffix);
+        fetch(script, what);
+        fetchAnswered(script, "the Fetch for " + what, TerminalCraftResult.STARTED, CHESTS);
+        orderOpened(script, CHEST_GRID, CHESTS);
+        script.client("craft: CHECK the running fetch locks the grid and owns the status row",
+                context -> checkFetching(context, CHEST_GRID, CHEST, CHESTS));
+        carrying(script, PLANKS);
+        script.client("craft: CHECK the progress row while the crane carries the planks",
+                CraftVisualScenario::checkProgress);
+        shot(script, "craft-fetching" + suffix);
+        script.freeze(false);
+        fetchDone(script, "the planks for " + what, CHEST_GRID, Map.of(PLANKS, (long) PLANKS_FETCHED));
+    }
+
+    /**
+     * A Fetch given up: the same chests once more, the locked grid refusing a right-click with the reason in the
+     * status row, and — with the ticks frozen while the crane carries the planks — a real click on the progress row's
+     * cancel mark. The server gives back the order's own share, which is the whole request, so the crane takes the
+     * planks back into the racks instead of delivering them: the buffer stays empty and the census unchanged. The grid
+     * unlocks and keeps the recipe.
+     */
+    private void cancelSteps(VisualScript script, String suffix) {
+        String what = CHESTS + " more chests";
+        fetch(script, what);
+        fetchAnswered(script, "the Fetch for " + what, TerminalCraftResult.STARTED, CHESTS);
+        orderOpened(script, CHEST_GRID, CHESTS);
+        script.client("craft: right-click a cell of the locked grid", CraftVisualScenario::checkLockedEdit);
+        carrying(script, PLANKS);
+        script.client("craft: click the cancel mark on the progress row while the crane carries the planks",
+                context -> {
+                    WarehouseTerminalScreen screen = screen(context);
+                    fetchAnswerBefore = screen.craftFetchAnswer();
+                    ScreenInput.click(context.minecraft(), ScreenInput.terminalCraftCancelMark(screen));
+                });
+        fetchAnswered(script, "the cancel mark", TerminalCraftResult.CANCELLED, 0);
+        // The answer comes back at once, but the menu pushes the order's state once per game tick, and the game time
+        // stands still while the ticks are frozen: the order's end reaches the screen after the ticks run again.
+        script.freeze(false);
+        ArmVisualScenario.untilOrFail(script, "craft: the given-up fetch is gone from the screen",
+                context -> !screen(context).craftOrderState().active(), SCREEN_TIMEOUT_TICKS,
+                context -> describePanel(screen(context)));
+        script.client("craft: CHECK the given-up fetch unlocked the grid and kept the recipe",
+                context -> checkCancelled(context, CHEST_GRID));
+        shot(script, "craft-cancelled" + suffix);
+        script.serverUntil("craft: wait until the crane has taken the planks back and nothing is requested",
+                        CraftVisualScenario::cancelSettled, DELIVERY_TIMEOUT_TICKS)
+                .server("craft: CHECK the census after the fetch that was given up",
+                        (server, context) -> assertCensus(server, context, "after the fetch that was given up"));
+    }
+
+    /** The census, then a real click on the Fetch button, which must be Fetch now and have a result to fetch for. */
+    private void fetch(VisualScript script, String what) {
+        script.server("craft: census before the Fetch for " + what,
+                        (server, context) -> assertCensus(server, context, "before the Fetch for " + what))
+                .client("craft: click Fetch for " + what, context -> {
+                    WarehouseTerminalScreen screen = screen(context);
+                    if (screen.craftOrderAction() != TerminalCraftOrderPayload.Action.FETCH)
+                        throw new VisualTestException("the order button is " + screen.craftOrderAction()
+                                + ", not Fetch");
+                    if (screen.craftPanel().shownResult().isEmpty())
+                        throw new VisualTestException("the panel shows no result for its grid, so Fetch would only "
+                                + "ask for a view: " + describePanel(screen));
+                    fetchAnswerBefore = screen.craftFetchAnswer();
+                    ScreenInput.click(context.minecraft(), ScreenInput.terminalCraftFetch(screen));
+                });
+    }
+
+    /** Waits for the answer to the last Fetch or order click and checks it is {@code result} x{@code crafts}. */
+    private void fetchAnswered(VisualScript script, String what, TerminalCraftResult result, int crafts) {
+        ArmVisualScenario.untilOrFail(script, "craft: the server answered " + what,
+                context -> screen(context).craftFetchAnswer() != fetchAnswerBefore, ANSWER_TIMEOUT_TICKS,
+                context -> "no answer arrived: " + describePanel(screen(context)));
+        script.client("craft: CHECK the answer to " + what, context -> {
+            TerminalCraftAnswerPayload answer = screen(context).craftFetchAnswer();
+            if (answer == null || answer.result() != result || answer.crafted() != crafts)
+                throw new VisualTestException(what + ": the server answered " + answer + ", expected " + result
+                        + " x" + crafts);
+            LOGGER.info(PREFIX + "craft: CHECK PASS {} answered {} x{}", what, answer.result(), answer.crafted());
+        });
+    }
+
+    /** Waits until the screen shows the craft order open for {@code grid} and {@code crafts} crafts. */
+    private static void orderOpened(VisualScript script, CraftGrid<ItemKey> grid, int crafts) {
+        ArmVisualScenario.untilOrFail(script, "craft: the screen shows the craft order for x" + crafts, context -> {
+            TerminalCraftOrderState order = screen(context).craftOrderState();
+            return order.isOpen() && order.crafts() == crafts && order.cells().equals(grid);
+        }, SCREEN_TIMEOUT_TICKS, context -> describePanel(screen(context)));
+    }
+
+    /**
+     * Waits until the screen shows the fetch's items on their way, then on the server until the crane holds
+     * {@code key}, then freezes the ticks and checks it still holds them and nothing has been delivered yet: the moment
+     * between the pick and the drop, held still.
+     * <p>
+     * The screen is waited for <b>first</b>: the menu pushes the order's state at most once per game tick, and the
+     * game time stands still while the ticks are frozen, so what the screen shows during the freeze is what it had
+     * before it.
+     */
+    private static void carrying(VisualScript script, ItemKey key) {
+        ArmVisualScenario.untilOrFail(script, "craft: the screen shows the " + id(key) + " on their way", context -> {
+            TerminalCraftOrderState order = screen(context).craftOrderState();
+            return order.isOpen() && order.inFlight() > 0L && order.delivered() == 0L;
+        }, SCREEN_TIMEOUT_TICKS, context -> describePanel(screen(context)));
+        script.serverUntil("craft: wait until the crane carries the " + id(key) + " of the fetch",
+                        (server, context) -> craneCarries(server, context, key), DELIVERY_TIMEOUT_TICKS)
+                .freeze(true)
+                .server("craft: CHECK the crane still carries them with the ticks frozen", (server, context) -> {
+                    StackerCraneBlockEntity crane = crane(server, context);
+                    TerminalCraftOrderState order = terminal(server.overworld(), context.origin()).craftOrderState();
+                    if (crane.heldItems().count(key) <= 0 || !order.isOpen() || order.delivered() > 0)
+                        throw new VisualTestException("the crane was not caught carrying the " + id(key) + ": it holds "
+                                + crane.heldItems() + ", the order is " + order.state() + " with " + order.delivered()
+                                + " delivered");
+                    LOGGER.info(PREFIX + "craft: frozen with the crane carrying {} {} in phase {}",
+                            crane.heldItems().count(key), id(key), crane.craneState().phase());
+                });
+    }
+
+    /**
+     * Waits until the screen counts the order done, then until the buffer holds exactly {@code counts}, and checks
+     * that the census did not move, that nothing is left requested, and that the grid is unlocked, still laid, and the
+     * status row says to click the result.
+     */
+    private void fetchDone(VisualScript script, String what, CraftGrid<ItemKey> grid, Map<ItemKey, Long> counts) {
+        ArmVisualScenario.untilOrFail(script, "craft: the fetch for " + what + " is done", context -> {
+            TerminalCraftOrderState order = screen(context).craftOrderState();
+            return order.active() && order.state() == ListOrderState.DONE;
+        }, DELIVERY_TIMEOUT_TICKS, context -> describePanel(screen(context)));
+        delivered(script, what, counts);
+        script.server("craft: CHECK the census after the fetch for " + what,
+                        (server, context) -> assertCensus(server, context, "after the fetch for " + what))
+                .server("craft: CHECK the finished fetch left nothing requested",
+                        CraftVisualScenario::checkNothingRequested)
+                .client("craft: CHECK the finished fetch gave the grid back", context -> checkFetchDone(context,
+                        grid));
+    }
+
     private static void delivered(VisualScript script, String what, Map<ItemKey, Long> counts) {
         script.serverUntil("craft: wait until the crane delivered " + what,
                 (server, context) -> bufferIs(server, context, counts), DELIVERY_TIMEOUT_TICKS);
@@ -871,6 +1127,181 @@ public final class CraftVisualScenario implements VisualScenario {
             throw new VisualTestException(check.what() + ": the status row does not fit: '" + shown + "'");
         LOGGER.info(PREFIX + "craft: CHECK PASS {}: {} x{}, the status row says '{}'", check.what(), answer.result(),
                 answer.crafted(), shown);
+    }
+
+    /**
+     * The Fetch button's tooltip before the click: {@code "Fetch the ingredients for Chest x3"}, one line per item a
+     * Fetch asks for, in grid order and topped up against the buffer, and the hint about the amount field — every
+     * line inside the terminal's row, in the language that is loaded.
+     */
+    private static void checkFetchTooltip(VisualContext context, ItemKey result, int crafts,
+            List<Map.Entry<ItemKey, Integer>> toFetch) {
+        WarehouseTerminalScreen screen = screen(context);
+        if (screen.craftOrderAction() != TerminalCraftOrderPayload.Action.FETCH)
+            throw new VisualTestException("the order button is " + screen.craftOrderAction() + ", not Fetch");
+        List<String> wanted = new ArrayList<>();
+        wanted.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH, result.toStack().getHoverName(),
+                LangNumberFormat.format(crafts)).getString());
+        for (Map.Entry<ItemKey, Integer> line : toFetch)
+            wanted.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_TO_FETCH,
+                    line.getKey().toStack().getHoverName(), LangNumberFormat.format(line.getValue())).getString());
+        wanted.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH_HINT).getString());
+        List<Component> tooltip = screen.craftPanel().fetchTooltip();
+        if (!texts(tooltip).equals(wanted))
+            throw new VisualTestException("the Fetch button's tooltip is " + texts(tooltip) + ", not " + wanted);
+        // The button's place answers with the same lines, which is what the screen draws for a mouse resting on it.
+        ScreenInput.Point button = ScreenInput.terminalCraftFetch(screen);
+        if (!texts(screen.craftPanel().tooltipAt(button.x(), button.y())).equals(wanted))
+            throw new VisualTestException("the panel draws another tooltip over the Fetch button: "
+                    + texts(screen.craftPanel().tooltipAt(button.x(), button.y())));
+        checkLines(context, "the Fetch button's tooltip", tooltip, wanted.size());
+    }
+
+    /**
+     * The running fetch on screen: the grid is the order's and locked, the order button is Cancel and its tooltip says
+     * so, the cells not yet here are plain ghosts, and the status row says what is being fetched for — first as the
+     * Fetch's answer, then as the order's own line, both inside the row.
+     */
+    private static void checkFetching(VisualContext context, CraftGrid<ItemKey> grid, ItemKey result, int crafts) {
+        WarehouseTerminalScreen screen = screen(context);
+        TerminalCraftOrderState order = screen.craftOrderState();
+        if (order.state() != ListOrderState.RUNNING || !screen.isCraftGridLocked()
+                || !screen.craftPanel().grid().equals(grid))
+            throw new VisualTestException("the fetch does not run with its grid locked: " + describePanel(screen));
+        if (screen.craftOrderAction() != TerminalCraftOrderPayload.Action.CANCEL)
+            throw new VisualTestException("the order button is " + screen.craftOrderAction() + " while the fetch runs");
+        String cancel = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CANCEL).getString();
+        if (!texts(screen.craftPanel().fetchTooltip()).equals(List.of(cancel)))
+            throw new VisualTestException("the order button's tooltip is " + texts(screen.craftPanel().fetchTooltip())
+                    + ", not '" + cancel + "'");
+        checkCells(context, grid, TerminalCraftPanel.CellState.AVAILABLE, 0);
+        Component name = result.toStack().getHoverName();
+        String started = WarehouseTerminalScreen.craftFetchText(TerminalCraftResult.STARTED, crafts, name).getString();
+        String shown = screen.feedbackLine().map(Component::getString).orElse("");
+        if (!shown.equals(started))
+            throw new VisualTestException("the status row says '" + shown + "', not '" + started + "'");
+        Component running = WarehouseTerminalScreen.craftStatusText(ListOrderState.RUNNING, crafts, name);
+        if (!screen.statusTextsFit() || !screen.fitsStatusRow(running))
+            throw new VisualTestException("the fetch's status line does not fit the row: '" + shown + "', '"
+                    + running.getString() + "'");
+        LOGGER.info(PREFIX + "craft: CHECK PASS the fetch runs locked, the status row says '{}', its own line '{}'",
+                shown, running.getString());
+    }
+
+    /**
+     * The progress row while the crane carries the planks, the ticks frozen: nothing delivered yet, the planks on the
+     * way, and the row's tooltip — with and without the cancel mark under the mouse — naming both numbers in full,
+     * every line inside the terminal's row.
+     */
+    private static void checkProgress(VisualContext context) {
+        WarehouseTerminalScreen screen = screen(context);
+        TerminalCraftOrderState order = screen.craftOrderState();
+        TerminalCraftPanel panel = screen.craftPanel();
+        String delivered = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_PROGRESS,
+                LangNumberFormat.format(order.delivered()), LangNumberFormat.format(order.wanted())).getString();
+        String onTheWay = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_IN_FLIGHT,
+                LangNumberFormat.format(order.inFlight())).getString();
+        String cancelHint = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CANCEL_MARK).getString();
+        if (!texts(panel.progressTooltip(false)).equals(List.of(delivered, onTheWay)))
+            throw new VisualTestException("the progress row's tooltip is " + texts(panel.progressTooltip(false)));
+        ScreenInput.Point mark = ScreenInput.terminalCraftCancelMark(screen);
+        List<Component> overMark = panel.tooltipAt(mark.x(), mark.y());
+        if (!texts(overMark).equals(List.of(delivered, onTheWay, cancelHint)))
+            throw new VisualTestException("the cancel mark's tooltip is " + texts(overMark));
+        checkLines(context, "the cancel mark's tooltip", overMark, 3);
+        LOGGER.info(PREFIX + "craft: CHECK PASS the progress row reads {} delivered of {}, {} on the way",
+                order.delivered(), order.wanted(), order.inFlight());
+    }
+
+    /**
+     * A real right-click on a cell of the locked grid, which would clear it: nothing changes, and the status row says
+     * the fetch has to be given up first.
+     */
+    private static void checkLockedEdit(VisualContext context) {
+        WarehouseTerminalScreen screen = screen(context);
+        CraftGrid<ItemKey> before = screen.craftPanel().grid();
+        ScreenInput.rightClick(context.minecraft(), ScreenInput.terminalCraftCell(screen, 0));
+        if (!screen.craftPanel().grid().equals(before))
+            throw new VisualTestException("a right-click changed the locked grid to " + screen.craftPanel().grid());
+        String locked = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_GRID_LOCKED).getString();
+        String shown = screen.feedbackLine().map(Component::getString).orElse("");
+        if (!shown.equals(locked) || !screen.statusTextsFit())
+            throw new VisualTestException("after an edit of the locked grid the status row says '" + shown + "', not '"
+                    + locked + "' inside the row");
+        LOGGER.info(PREFIX + "craft: CHECK PASS the locked grid refused a right-click: '{}'", shown);
+    }
+
+    /**
+     * The fetch was given up: no order on screen any more, the grid unlocked with the recipe still laid, the order
+     * button Fetch again, no progress row, and the status row says the fetch was given up.
+     */
+    private static void checkCancelled(VisualContext context, CraftGrid<ItemKey> grid) {
+        WarehouseTerminalScreen screen = screen(context);
+        if (screen.isCraftGridLocked() || !screen.craftPanel().grid().equals(grid)
+                || screen.craftOrderAction() != TerminalCraftOrderPayload.Action.FETCH)
+            throw new VisualTestException("after the cancel the panel is " + describePanel(screen));
+        if (!screen.craftPanel().progressTooltip(false).isEmpty())
+            throw new VisualTestException("the progress row is still there after the cancel");
+        String cancelled = WarehouseTerminalScreen.craftFetchText(TerminalCraftResult.CANCELLED, 0, Component.empty())
+                .getString();
+        String shown = screen.feedbackLine().map(Component::getString).orElse("");
+        if (!shown.equals(cancelled) || !screen.statusTextsFit())
+            throw new VisualTestException("after the cancel the status row says '" + shown + "', not '" + cancelled
+                    + "' inside the row");
+        LOGGER.info(PREFIX + "craft: CHECK PASS the fetch was given up, the grid unlocked, the status row says '{}'",
+                shown);
+    }
+
+    /**
+     * The finished fetch: the order is done and locks nothing, the grid keeps its cells, the order button is Fetch
+     * again, and the status row says to click the result.
+     */
+    private static void checkFetchDone(VisualContext context, CraftGrid<ItemKey> grid) {
+        WarehouseTerminalScreen screen = screen(context);
+        if (screen.isCraftGridLocked() || !screen.craftPanel().grid().equals(grid)
+                || screen.craftOrderAction() != TerminalCraftOrderPayload.Action.FETCH)
+            throw new VisualTestException("after the fetch the panel is " + describePanel(screen));
+        String done = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_DONE).getString();
+        String shown = screen.feedbackLine().map(Component::getString).orElse("");
+        if (!shown.equals(done) || !screen.statusTextsFit())
+            throw new VisualTestException("after the fetch the status row says '" + shown + "', not '" + done
+                    + "' inside the row");
+        LOGGER.info(PREFIX + "craft: CHECK PASS the fetch is done, the grid unlocked and kept, the status row says "
+                + "'{}'", shown);
+    }
+
+    /**
+     * The question a Fetch for {@value #CAKES_ASKED} cakes raises: {@value #CAKES_FITTING} of them fit, bound by the
+     * room, none ready yet — and the lines the panel draws name exactly that, each inside the panel's text width, with
+     * no "changed" line, since the player was asked nothing before.
+     */
+    private void checkRoomQuestion(VisualContext context) {
+        WarehouseTerminalScreen screen = screen(context);
+        if (screen.getMenu().bufferSlots() != BUFFER_SLOTS)
+            throw new VisualTestException("the terminal has " + screen.getMenu().bufferSlots() + " buffer slots, but "
+                    + "the cake's question is worked out for the shipped " + BUFFER_SLOTS);
+        CraftFetchQuestion<ItemKey> question = screen.craftConfirmation();
+        if (question == null || !screen.isAskingSomething())
+            throw new VisualTestException("the Fetch question is not up: " + describePanel(screen));
+        if (question.asked() != CAKES_ASKED || question.possible() != CAKES_FITTING || question.ready() != 0
+                || question.bound() != CraftFetchQuestion.Bound.ROOM || question.producing() != 0L)
+            throw new VisualTestException("the question is " + question + ", not x" + CAKES_FITTING + " of x"
+                    + CAKES_ASKED + " bound by the room");
+        Component cake = CAKE.toStack().getHoverName();
+        String possible = LangNumberFormat.format(CAKES_FITTING);
+        List<String> wanted = List.of(
+                WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_TITLE, cake, possible).getString(),
+                WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_ROOM, possible,
+                        LangNumberFormat.format(CAKES_ASKED)).getString());
+        List<Component> lines = ScreenInput.terminalCraftConfirmationLines(screen);
+        if (!texts(lines).equals(wanted))
+            throw new VisualTestException("the question reads " + texts(lines) + ", not " + wanted);
+        Font font = context.minecraft().font;
+        for (Component line : lines)
+            if (font.width(line) > DIALOG_WIDTH)
+                throw new VisualTestException("the question's line '" + line.getString() + "' is " + font.width(line)
+                        + " px, wider than the panel's " + DIALOG_WIDTH + " px: it would wrap");
+        LOGGER.info(PREFIX + "craft: CHECK PASS the question reads {}", texts(lines));
     }
 
     private static boolean stockHintShown(WarehouseTerminalScreen screen) {
@@ -1127,18 +1558,33 @@ public final class CraftVisualScenario implements VisualScenario {
         LOGGER.info(PREFIX + "craft: CHECK PASS laying the recipe requested nothing");
     }
 
-    /** Whether the terminal has an open request for {@code key}, or already holds what it asked for. */
-    private static boolean requestAccepted(MinecraftServer server, VisualContext context, ItemKey key, int amount) {
-        WarehouseControllerBlockEntity controller = controller(server, context);
+    /**
+     * Whether the crane holds the craft order's {@code key} right now: picked, and not yet delivered. Fails once the
+     * order is no longer open, because then the moment has passed.
+     */
+    private static boolean craneCarries(MinecraftServer server, VisualContext context, ItemKey key) {
+        TerminalCraftOrderState order = terminal(server.overworld(), context.origin()).craftOrderState();
+        if (!order.isOpen())
+            throw new VisualTestException("the fetch ended (" + order.state() + ", " + order.delivered() + " of "
+                    + order.wanted() + " delivered) before the crane was seen carrying " + id(key));
+        return crane(server, context).heldItems().count(key) > 0;
+    }
+
+    /**
+     * Whether everything a given-up fetch set going has come to rest: the crane has no job and holds nothing, and no
+     * request to the terminal is left. Fails if the buffer received anything meanwhile — the planks were carried for
+     * a request that is gone, so they go back into the racks.
+     */
+    private static boolean cancelSettled(MinecraftServer server, VisualContext context) {
         WarehouseTerminalBlockEntity terminal = terminal(server.overworld(), context.origin());
-        BlockPos pos = terminal.getBlockPos();
-        if (controller.requestsFor(pos).stream().anyMatch(request -> request.key().equals(key))
-                || terminal.bufferedItems().count(key) >= amount)
-            return true;
-        if (terminal.lastRejection().isPresent())
-            throw new VisualTestException("the request for " + amount + " " + id(key) + " was refused: "
-                    + terminal.lastRejection().get());
-        return false;
+        if (!terminal.bufferedItems().keys().isEmpty())
+            throw new VisualTestException("the buffer received " + terminal.bufferedItems().keys() + " of a fetch "
+                    + "that was given up");
+        if (terminal.hasOpenCraftOrder())
+            throw new VisualTestException("the terminal still has an open craft order after the cancel");
+        StackerCraneBlockEntity crane = crane(server, context);
+        return crane.currentJob().isEmpty() && crane.heldItems().isEmpty()
+                && controller(server, context).requestsFor(terminal.getBlockPos()).isEmpty();
     }
 
     /** Whether the buffer holds exactly {@code counts} and nothing else. */
@@ -1217,6 +1663,14 @@ public final class CraftVisualScenario implements VisualScenario {
         if (terminal == null)
             throw new VisualTestException("the warehouse terminal of the aisle is missing");
         return terminal;
+    }
+
+    private static StackerCraneBlockEntity crane(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(server.overworld(),
+                context.origin());
+        if (crane == null)
+            throw new VisualTestException("the stacker crane of the aisle is missing");
+        return crane;
     }
 
     private static WarehouseControllerBlockEntity controller(MinecraftServer server, VisualContext context) {
@@ -1312,11 +1766,18 @@ public final class CraftVisualScenario implements VisualScenario {
                 case UNKNOWN -> '?';
             });
         TerminalCraftAnswerPayload answer = screen.craftAnswer();
-        return String.format(Locale.ROOT, "cells=%s ghost=%s result=%s ready=%d preview=%s answer=%s",
+        TerminalCraftAnswerPayload fetched = screen.craftFetchAnswer();
+        TerminalCraftOrderState order = screen.craftOrderState();
+        String orderText = !order.active() ? "none" : String.format(Locale.ROOT, "%s(x%d %d/%d inFlight=%d)",
+                order.state(), order.crafts(), order.delivered(), order.wanted(), order.inFlight());
+        return String.format(Locale.ROOT,
+                "cells=%s ghost=%s result=%s ready=%d preview=%s answer=%s fetch=%s order=%s locked=%s",
                 cells, panel.ghost().map(CraftVisualScenario::id).orElse("none"),
                 panel.shownResult().isEmpty() ? "none" : id(ItemKey.of(panel.shownResult())), panel.readyCrafts(),
                 panel.view().recipe().map(ResourceLocation::toString).orElse("none"),
-                answer == null ? "none" : answer.result() + "x" + answer.crafted());
+                answer == null ? "none" : answer.result() + "x" + answer.crafted(),
+                fetched == null ? "none" : fetched.result() + "x" + fetched.crafted(), orderText,
+                screen.isCraftGridLocked());
     }
 
     private static String id(ItemKey key) {

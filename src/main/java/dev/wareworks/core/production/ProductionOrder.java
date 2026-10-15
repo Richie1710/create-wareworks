@@ -549,6 +549,20 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     }
 
     /**
+     * This order promising its backing request up to {@code amount} fewer of the items it has not made yet (issue #24
+     * review fix): an asker of a merged request gave its own share back, and the part of that share production was to
+     * make goes with it. Only the unfulfilled part is lowered — what was already made stays counted — and the backing
+     * request stays, so the order still answers for whatever it promises to whoever is left.
+     */
+    public ProductionOrder<K, L> withPromiseReducedBy(long amount) {
+        long take = Math.min(Math.max(0L, amount), unfulfilledPromise());
+        if (take == 0L)
+            return this;
+        return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
+                resultStockSeen, backingRequest, promisedToRequest - take, restock, parentLine);
+    }
+
+    /**
      * This order without its parent line: it stops being a step of a plan and runs on as an ordinary order, so its
      * product simply lands in stock as items nobody promised (M20, ADR-032). The exact analogue of
      * {@link #withoutBackingRequest()}, and the only way a parent link is ever cleared.

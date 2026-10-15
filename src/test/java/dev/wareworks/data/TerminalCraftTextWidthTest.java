@@ -33,9 +33,14 @@ import dev.wareworks.content.station.TerminalMenuLayout;
  * crafts, for every refusal that can arise inside a run;</li>
  * <li>the <b>tooltips</b>, whose lines the screen keeps inside the same row width, every number at its widest.</li>
  * </ul>
+ * The craft order (slice 2) adds lines to the status row and the tooltips — some of them name an item, which gives way
+ * first wherever it stands, so they are measured without it — and a fourth room: the <b>question</b> a Fetch raises,
+ * whose lines the confirmation panel draws {@value #DIALOG_WIDTH} px wide. That panel wraps a long line, but the frame
+ * of a line, with its numbers at their widest, should never have to wrap, so it is measured too.
+ * <p>
  * The visual run measures the status row again on the real client ({@code TerminalVisualScenario#statusRow}); this
  * suite needs no game, so a translation that does not fit fails the build. Every key under {@code gui.terminal.craft}
- * has to be in one of the three groups, so a new one cannot slip past unmeasured.
+ * has to be in one of the groups, so a new one cannot slip past unmeasured.
  */
 class TerminalCraftTextWidthTest {
     private static final Path GENERATED_EN_US = Path.of("src/generated/resources/assets/wareworks/lang/en_us.json");
@@ -53,7 +58,28 @@ class TerminalCraftTextWidthTest {
     /** The tooltip lines, relative to {@link #PREFIX}; every placeholder in them is a number. */
     private static final Set<String> TOOLTIP_LINES = Set.of("toggle", "toggle_hint", "clear", "per_craft",
             "available", "short", "missing", "cell_empty", "cell_empty_shift", "cell_clear", "stock_hint", "ready",
-            "once", "all");
+            "once", "all", "fetch_hint", "button.answer", "button.resume", "button.cancel", "cancel_mark", "progress",
+            "in_flight");
+    /** An argument that is an item's name: it gives way first wherever the text stands, so it is measured empty. */
+    private static final char NAME = 'n';
+    /** An argument that is a number, measured at its widest. */
+    private static final char NUMBER = '#';
+    /**
+     * The craft order's tooltip lines that name an item (slice 2), relative to {@link #PREFIX}, with the kind of each
+     * argument in order ({@link #NAME}, {@link #NUMBER}).
+     */
+    private static final Map<String, String> NAMED_TOOLTIP_LINES = Map.of("fetch", "n#", "to_fetch", "n#");
+    /** The craft order's lines in the status row, with the kinds of their arguments. */
+    private static final Map<String, String> STATUS_LINES = Map.of("done", "", "grid_locked", "", "status.running",
+            "n#", "status.asking", "n#", "status.parked", "n#");
+    /** The lines of the question a Fetch, or one portion of the craft order, raises, with their argument kinds. */
+    private static final Map<String, String> DIALOG_LINES = Map.of("confirm_item", "#n", "question.title", "n#",
+            "question.room", "##", "question.stock", "##", "question.line", "n##");
+    /**
+     * The confirmation panel's text width: the row without the panel's padding on either side
+     * ({@code WarehouseTerminalScreen#confirmTextWidth}).
+     */
+    private static final int DIALOG_WIDTH = ROW_WIDTH - 2 * 6;
     /** The form a Shift-click that crafted some and then stopped takes ({@code %3$s} is the refusal's sentence). */
     private static final String PARTIAL = "partial";
     /**
@@ -89,6 +115,12 @@ class TerminalCraftTextWidthTest {
                         fill(text(lang, "gui.terminal.craft." + key), number, number, number), ROW_WIDTH, advances);
             measured += check(tooWide, language.getKey(), "panel title", TITLE,
                     text(lang, "gui.terminal.craft." + TITLE), TerminalMenuLayout.MAX_PANEL_TITLE_WIDTH, advances);
+            measured += checkAll(tooWide, language.getKey(), lang, "tooltip", NAMED_TOOLTIP_LINES, number, ROW_WIDTH,
+                    advances);
+            measured += checkAll(tooWide, language.getKey(), lang, "status row", STATUS_LINES, number, ROW_WIDTH,
+                    advances);
+            measured += checkAll(tooWide, language.getKey(), lang, "question", DIALOG_LINES, number, DIALOG_WIDTH,
+                    advances);
         }
         assertTrue(measured > 2 * TOOLTIP_LINES.size(), "too few texts were measured; did the lang keys move?");
         if (!tooWide.isEmpty())
@@ -100,6 +132,9 @@ class TerminalCraftTextWidthTest {
     @Test
     void everyCraftKeyIsMeasured() throws IOException {
         Set<String> measured = new TreeSet<>(TOOLTIP_LINES);
+        measured.addAll(NAMED_TOOLTIP_LINES.keySet());
+        measured.addAll(STATUS_LINES.keySet());
+        measured.addAll(DIALOG_LINES.keySet());
         measured.add(TITLE);
         measured.add(PARTIAL);
         for (TerminalCraftResult result : TerminalCraftResult.values())
@@ -122,6 +157,20 @@ class TerminalCraftTextWidthTest {
             tooWide.add(String.format("%s %s %s: '%s' is %d px, the room is %d px", language, room, key, text, width,
                     budget));
         return 1;
+    }
+
+    /** Measures every line of {@code lines}, each filled as its argument kinds say, against {@code budget}. */
+    private static int checkAll(List<String> tooWide, String language, Map<String, String> lang, String room,
+            Map<String, String> lines, String number, int budget, Map<Character, Integer> advances) {
+        int measured = 0;
+        for (Map.Entry<String, String> line : lines.entrySet()) {
+            String[] arguments = new String[line.getValue().length()];
+            for (int i = 0; i < arguments.length; i++)
+                arguments[i] = line.getValue().charAt(i) == NAME ? "" : number;
+            measured += check(tooWide, language, room, line.getKey(),
+                    fill(text(lang, "gui.terminal.craft." + line.getKey()), arguments), budget, advances);
+        }
+        return measured;
     }
 
     /** The text of a relative key; a missing one fails, since LangConsistencyTest checks the two files agree. */

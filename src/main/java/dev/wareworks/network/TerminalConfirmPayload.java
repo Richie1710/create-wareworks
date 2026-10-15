@@ -31,7 +31,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * <b>The same question is raised by one portion of a clipboard order</b> (M23, issue #19): a list order is the same
  * stream of ordinary requests with nobody watching, so it stops on exactly this panel. {@link #scope()} is what tells
  * the screen where the answer belongs — back to the click as a {@link TerminalRequestPayload}, or to the order as a
- * {@link TerminalListActionPayload}. Nothing else about the question differs.
+ * {@link TerminalListActionPayload}. Nothing else about the question differs. Since issue #24 the terminal's second
+ * list order, the crafting panel's craft order, raises it too, with {@link RequestScope#CRAFT}, and its answer goes to
+ * that order as a {@link TerminalCraftOrderPayload}.
  *
  * @param containerId the menu the question belongs to; the screen ignores one for another menu
  * @param question    what the request would cross
@@ -62,6 +64,18 @@ public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKe
 
     private void write(RegistryFriendlyByteBuf buffer) {
         buffer.writeVarInt(containerId);
+        writeQuestion(buffer, question);
+        // Last, and by name: a scope a build does not know reads as a plain click, which is the answer that can only
+        // ever be refused by the server rather than acted on in the wrong place (M23).
+        buffer.writeUtf(scope.name());
+    }
+
+    /**
+     * The question's own fields, in the shape {@link #readQuestion} reads. Shared with the two answers that name the
+     * question they answer ({@link TerminalListActionPayload}, {@link TerminalCraftOrderPayload}; issue #24 review fix),
+     * so the server can tell an answer to the question it asks now from one to a question it has moved on from.
+     */
+    static void writeQuestion(RegistryFriendlyByteBuf buffer, RequestConfirmation<ItemKey> question) {
         ItemKey.STREAM_CODEC.encode(buffer, question.key());
         buffer.writeVarLong(question.amount());
         buffer.writeVarLong(question.fromReserve());
@@ -79,9 +93,6 @@ public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKe
             buffer.writeVarLong(ingredient.fromReserve());
             buffer.writeVarLong(ingredient.reserved());
         }
-        // Last, and by name: a scope a build does not know reads as a plain click, which is the answer that can only
-        // ever be refused by the server rather than acted on in the wrong place (M23).
-        buffer.writeUtf(scope.name());
     }
 
     private static RequestScope readScope(RegistryFriendlyByteBuf buffer) {
@@ -93,7 +104,8 @@ public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKe
         return RequestScope.CLICK;
     }
 
-    private static RequestConfirmation<ItemKey> readQuestion(RegistryFriendlyByteBuf buffer) {
+    /** Reads what {@link #writeQuestion} wrote. */
+    static RequestConfirmation<ItemKey> readQuestion(RegistryFriendlyByteBuf buffer) {
         ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
         long amount = buffer.readVarLong();
         long fromReserve = buffer.readVarLong();

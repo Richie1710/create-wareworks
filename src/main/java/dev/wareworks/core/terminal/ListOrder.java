@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +23,7 @@ import org.jetbrains.annotations.Nullable;
  * <b>What a list order is.</b> A stream of <b>ordinary</b> requests with one owner. The order resolves the clipboard
  * into {@link ListLine}s once, then keeps a small number of them in flight at a time, each through precisely the call a
  * click at the terminal goes through. There is no second request system beside the queue: merging (ADR-020), reserves,
- * maxima, filters, priorities, production chains, the safety stop and the full-destination back-off all keep working
+ * maxima, filters, priorities, production chains, the safety stop and the full-destination skip all keep working
  * unchanged, and nothing downstream can tell a portion from a click except by its {@link RequestScope}.
  * <p>
  * <b>What it decides, and this class decides all of it:</b>
@@ -55,7 +56,8 @@ import org.jetbrains.annotations.Nullable;
  * <li>{@link #finishPass} — the answer, the next pass's tick, and the park decision.</li>
  * </ol>
  * <b>The crane can never spin without progress.</b> Five guards, and four of them are older than this class: a full
- * destination is a planner skip with a back-off rather than a retry; a line with an open request is never asked for
+ * destination is a planner skip that leaves the request open rather than a retry ({@code NoJobReason.OUTPUT_FULL},
+ * which arms no back-off: it is found before any candidate is ranked); a line with an open request is never asked for
  * twice; the pass runs on an interval and backs off by {@value #BACKOFF_FACTOR} after
  * {@value #FRUITLESS_PASSES_BEFORE_BACKOFF} fruitless passes; and an order with nothing in flight that has made no
  * progress for {@code terminalListStallTicks} stops measuring altogether until a player resumes it.
@@ -379,7 +381,9 @@ public final class ListOrder<K> {
 
     /**
      * Whether {@code question} is covered by what the player has already accepted for this order and for the item it
-     * is about ({@link #budgetFor}).
+     * is about ({@link #budgetFor}). Measured for {@link RequestScope#LIST}, which is also exactly what a craft fetch's
+     * portion asks ({@link RequestScope#CRAFT}, {@link RequestScope#asksAboutProduction()}), so the one comparison
+     * serves both orders a terminal can run.
      */
     public boolean covers(RequestConfirmation<K> question) {
         return budgetFor(question == null ? null : question.key()).covers(question, RequestScope.LIST);
@@ -473,6 +477,17 @@ public final class ListOrder<K> {
      * @throws IllegalStateException if the line already has an open request
      */
     public boolean granted(ListPortion<K> portion, UUID requestId, int amount, long now) {
+        return granted(portion, requestId, amount, 0, now);
+    }
+
+    /**
+     * {@link #granted(ListPortion, UUID, int, long)} for a portion of which {@code producing} items are not in the
+     * racks but are being made for the request by a production order the portion started (issue #24). The line keeps
+     * that part apart ({@link ListLine#producing()}), so giving the order up can give the production promise back with
+     * the share ({@link #releaseShareParts()}), and production that falls short is taken off this line before it is
+     * taken off anybody else's ({@link #shortfall}).
+     */
+    public boolean granted(ListPortion<K> portion, UUID requestId, int amount, int producing, long now) {
         ListLine<K> line = lineOf(portion);
         Objects.requireNonNull(requestId, "requestId");
         if (amount < 1 || line.isComplete()) {
@@ -480,7 +495,7 @@ public final class ListOrder<K> {
             return false;
         }
         offeredLine = -1;
-        lines.set(portion.line(), line.withPortion(requestId, amount));
+        lines.set(portion.line(), line.withPortion(requestId, amount, producing));
         grantedThisPass = true;
         fruitlessPasses = 0;
         lastProgressTick = now;
@@ -614,17 +629,42 @@ public final class ListOrder<K> {
      * asked about has no item to credit and tops up that total alone.
      */
     public void answer(RequestAcknowledgement more, long now) {
-        if (more != null && more.given()) {
-            K key = askedKey;
-            if (key == null)
-                budget = budget.plus(produceOnly(more));
-            else if (more.any())
-                // "Whatever it costs" — for this item. One portion's answer may not sign the whole list away.
-                answered.put(key, RequestAcknowledgement.ANY);
-            else
-                answered.merge(key, more, RequestAcknowledgement::plus);
-        }
+        keepConsent(more);
         resume(now);
+    }
+
+    /**
+     * The player's answer to {@code answered}, which must be the question this order is asking <b>now</b>
+     * (issue #24 review fix): otherwise nothing is credited, nothing changes, and the caller puts the current question
+     * up instead.
+     * <p>
+     * Every screen at a terminal shows a portion's question, and another player's answer can move the order on to the
+     * next portion's question before this screen has heard of it. An answer is consent about the item and the numbers
+     * its question named, so a Yes given to "10 of the 64 reserved Iron Ingots" must never be credited to the Copper the
+     * order asks about now. The two are compared by value: the acknowledgement is derived from the question's own
+     * numbers, so a question with the very same item and numbers is the same question.
+     *
+     * @return whether {@code answered} was the question being asked, i.e. whether the answer was taken
+     */
+    public boolean answer(@Nullable RequestConfirmation<K> answered, RequestAcknowledgement more, long now) {
+        if (state != ListOrderState.ASKING || question == null || !question.equals(answered))
+            return false;
+        answer(more, now);
+        return true;
+    }
+
+    /** Keeps {@code more} for the item being asked about, or as production budget while nothing is being asked. */
+    private void keepConsent(@Nullable RequestAcknowledgement more) {
+        if (more == null || !more.given())
+            return;
+        K key = askedKey;
+        if (key == null)
+            budget = budget.plus(produceOnly(more));
+        else if (more.any())
+            // "Whatever it costs" — for this item. One portion's answer may not sign the whole list away.
+            answered.put(key, RequestAcknowledgement.ANY);
+        else
+            answered.merge(key, more, RequestAcknowledgement::plus);
     }
 
     /**
@@ -707,23 +747,164 @@ public final class ListOrder<K> {
     }
 
     /**
-     * Forgets every open request and names them, so the caller can cancel them: how a list order is given up — the
-     * Cancel button, the clipboard taken out of the slot, the terminal broken.
+     * Forgets every open request and names them: {@link #releaseShares()} without the amounts.
+     * <p>
+     * The lines keep what they were asked for, so an order that is released and then resumed starts the outstanding
+     * portions again rather than losing them.
+     */
+    public Set<UUID> release() {
+        return Collections.unmodifiableSet(releaseShares().keySet());
+    }
+
+    /**
+     * Forgets every open request and says how much of each one is <b>this order's own share</b>, so the caller can give
+     * back exactly that and nothing more: how a list order is given up — the Cancel button, the clipboard taken out of
+     * the slot, the terminal broken (issue #24, ADR-062).
+     * <p>
+     * <b>Why a share and not the whole request.</b> Repeated requests for one key and destination merge into one
+     * request that keeps its id (ADR-020), so a player's own click — or the other order at the same terminal — can
+     * share an id with this order's portion. Cancelling the whole merged request took the click down with the order.
+     * The share is what this order's lines are still owed by that request ({@link ListLine#inFlight()}), summed over
+     * every line that waits on it, and reducing the request by exactly that leaves every other asker's amount as it
+     * was. When the share is the whole request, the request is removed like any cancelled one and a crane already
+     * carrying its items takes them back into storage; while another asker's amount keeps it open, a crane that has
+     * already picked delivers what it carries, and that counts towards what is left.
      * <p>
      * The lines keep what they were asked for, so an order that is released and then resumed starts the outstanding
      * portions again rather than losing them. A production order one of those requests started keeps running and its
      * result lands in stock, exactly as for any other cancelled request ({@code §3.5}).
+     *
+     * @return per request id, in list order of the first line that waited on it, the items this order was still owed
+     *         by it; every amount at least 1. Unmodifiable; empty when nothing was in flight
      */
-    public Set<UUID> release() {
-        Set<UUID> open = new LinkedHashSet<>();
+    public Map<UUID, Integer> releaseShares() {
+        Map<UUID, Integer> amounts = new LinkedHashMap<>();
+        releaseShareParts().forEach((id, share) -> amounts.put(id, share.amount()));
+        return Collections.unmodifiableMap(amounts);
+    }
+
+    /**
+     * {@link #releaseShares()} with the <b>made part</b> of each share (issue #24 review fix): how much of what this
+     * order gives back the request was waiting for from a production order this order's own portions started
+     * ({@link ListLine#producing()}).
+     * <p>
+     * The caller gives that part back to production together with the share. A production order keeps its promise to
+     * the request it was started for, and once a merged click is all that is left of the request, a promise made for
+     * this order's portion would otherwise still be taken off the request when that production falls short — the
+     * click's amount with it.
+     *
+     * @return per request id, in list order of the first line that waited on it, this order's share and the made part
+     *         of it. Unmodifiable; empty when nothing was in flight
+     */
+    public Map<UUID, Share> releaseShareParts() {
+        Map<UUID, Share> shares = new LinkedHashMap<>();
         for (int i = 0; i < lines.size(); i++) {
             ListLine<K> line = lines.get(i);
             if (!line.isInFlight())
                 continue;
-            open.add(line.request().orElseThrow());
+            shares.merge(line.request().orElseThrow(), new Share(line.inFlight(), line.producing()), Share::plus);
             lines.set(i, line.released());
         }
-        return open;
+        return Collections.unmodifiableMap(shares);
+    }
+
+    /**
+     * One order's share of one request: what its lines were still owed by it, and how much of that the request waits
+     * for from production the order's own portions started.
+     *
+     * @param amount    items the order's lines were still owed, at least 1
+     * @param producing the made part of {@code amount}, {@code 0..amount}
+     */
+    public record Share(int amount, int producing) {
+        public Share {
+            amount = Math.max(0, amount);
+            producing = Math.max(0, Math.min(producing, amount));
+        }
+
+        Share plus(Share other) {
+            return new Share(saturatedSum(amount, other.amount), saturatedSum(producing, other.producing));
+        }
+    }
+
+    /**
+     * Production behind request {@code requestId} fell short by {@code amount} items, and the request was reduced by
+     * that much (issue #24 review fix): this order takes the shortfall off its <b>own</b> lines first, as far as their
+     * made part reaches ({@link ListLine#withShortfall}).
+     * <p>
+     * A request can be shared — a player's click merged into this order's portion (ADR-020) — and the request's lines
+     * here are credited before anybody else's. Without this, the order's lines would still claim the whole portion,
+     * would be credited the click's items when they arrive, and the click would get nothing. The order is the asker
+     * that can make up for the loss: what its lines miss afterwards is a new portion of the next pass.
+     *
+     * @return how many of {@code amount} this order took
+     */
+    public int shortfall(UUID requestId, int amount) {
+        if (requestId == null || amount < 1)
+            return 0;
+        int left = amount;
+        for (int i = 0; i < lines.size() && left > 0; i++) {
+            ListLine<K> line = lines.get(i);
+            if (!line.owedBy(requestId) || line.producing() < 1)
+                continue;
+            ListLine<K> lower = line.withShortfall(left);
+            left -= line.inFlight() - lower.inFlight();
+            lines.set(i, lower);
+        }
+        return amount - left;
+    }
+
+    /**
+     * {@link #shortfall} for several orders at the same terminal, <b>in turn</b>: the same order as
+     * {@link #creditInTurn}, each one offered only what the ones before it did not take.
+     *
+     * @return how many of {@code amount} the orders took together
+     */
+    public static <K> int shortfallInTurn(UUID requestId, int amount, List<? extends ListOrder<K>> orders) {
+        Objects.requireNonNull(orders, "orders");
+        int left = Math.max(0, amount);
+        for (ListOrder<K> order : orders) {
+            if (order == null || left < 1)
+                continue;
+            left -= order.shortfall(requestId, left);
+        }
+        return Math.max(0, amount) - left;
+    }
+
+    /**
+     * Credits one delivery to several orders at the same terminal, <b>in turn</b>: the first order claims what its
+     * lines were owed, the next one is offered only what the first did not claim, and so on (issue #24, ADR-062).
+     * <p>
+     * A terminal runs a clipboard order and a craft fetch side by side, and both are streams of ordinary requests, so a
+     * portion of one and a portion of the other can merge into the same request id (ADR-020). The delivery is counted
+     * once, by the controller; handing that same count to both orders would let a single stack tick off two lines. In
+     * turn, every order is still bounded by what its own lines were owed ({@link #credit}), and together they never
+     * claim more than {@code amount}: the sum of the {@link ListCredit#absorbed()} values is at most {@code amount}.
+     *
+     * @param requestId the request the items were delivered for
+     * @param amount    how many items arrived, as counted by the controller
+     * @param now       the game time of the delivery
+     * @param orders    the orders to offer the delivery to, in the order they claim; a {@code null} entry is a slot
+     *                  without an order and claims nothing
+     * @param <K>       item key type
+     * @return one credit per entry of {@code orders}, in the same order; {@link ListCredit#none()} for a {@code null}
+     *         entry and for every order the delivery was not for or no longer reached
+     */
+    public static <K> List<ListCredit<K>> creditInTurn(UUID requestId, int amount, long now,
+            List<? extends ListOrder<K>> orders) {
+        Objects.requireNonNull(orders, "orders");
+        List<ListCredit<K>> credits = new ArrayList<>(orders.size());
+        int left = Math.max(0, amount);
+        for (ListOrder<K> order : orders) {
+            ListCredit<K> credit = order == null || left < 1 ? ListCredit.none() : order.credit(requestId, left, now);
+            left -= Math.min(left, credit.absorbed());
+            credits.add(credit);
+        }
+        return Collections.unmodifiableList(credits);
+    }
+
+    private static int saturatedSum(int a, int b) {
+        long sum = (long) a + b;
+        return (int) Math.min(Integer.MAX_VALUE, sum);
     }
 
     /** Moves a complete order to {@link ListOrderState#DONE}; true only for the one call that really does it. */

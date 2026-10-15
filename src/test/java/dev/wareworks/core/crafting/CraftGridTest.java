@@ -16,6 +16,8 @@ import java.util.OptionalInt;
 
 import org.junit.jupiter.api.Test;
 
+import dev.wareworks.core.inventory.SlotView;
+
 /**
  * The recipe a player lays in a terminal's crafting panel (issue #24, M32): the merge into one multiset that every
  * later step works with, how many crafts a buffer holds, and what Fetch has to bring for a number of them.
@@ -162,6 +164,21 @@ class CraftGridTest {
     @Test
     void craftsFromSaturates() {
         assertEquals(Integer.MAX_VALUE, CraftGrid.of(STICK).craftsFrom(Map.of(STICK, Long.MAX_VALUE)));
+    }
+
+    @Test
+    void theBufferCountsAreReadFromItsSlotsForTheGridsKeysOnly() {
+        List<SlotView<String>> slots = List.of(SlotView.of(PLANK, 10, 99, 64), SlotView.empty(99),
+                SlotView.of(STICK, 64, 99, 64), SlotView.of(PLANK, 64, 99, 64), SlotView.of(IRON, 3, 99, 64));
+        Map<String, Long> counts = piston().countsIn(slots);
+        assertEquals(List.of(PLANK, COBBLE, IRON, REDSTONE), List.copyOf(counts.keySet()), "in first-cell order");
+        assertEquals(74L, counts.get(PLANK), "every slot holding the key counts");
+        assertEquals(0L, counts.get(COBBLE), "a key no slot holds counts 0");
+        assertEquals(3L, counts.get(IRON));
+        assertFalse(counts.containsKey(STICK), "a key the grid does not name is not counted");
+        assertEquals(0, piston().craftsFrom(counts), "no cobblestone, no piston");
+        assertEquals(Map.of(), CraftGrid.<String>empty().countsIn(slots));
+        assertThrows(UnsupportedOperationException.class, () -> counts.put(STICK, 1L));
     }
 
     // --- what to fetch -----------------------------------------------------------------------------------------------

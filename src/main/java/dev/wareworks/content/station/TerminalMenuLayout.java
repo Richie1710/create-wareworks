@@ -13,9 +13,10 @@ package dev.wareworks.content.station;
  * <p>
  * <b>Size budget.</b> Vanilla clamps the GUI scale so that the scaled screen is at least 320 × {@value #MAX_HEIGHT}
  * pixels ({@code Window#calculateScale}), so the window must not be taller than that at any buffer size a server can
- * configure. A bigger buffer grows by one slot row per {@value #GRID_COLUMNS} slots, and the <b>stock grid gives those
- * rows back</b> ({@link #gridRows()}, at most {@value #MAX_GRID_ROWS}, at least {@value #MIN_GRID_ROWS}) — the grid
- * scrolls anyway, while a buffer slot that is not drawn could not be reached by hand. Every buffer size the config
+ * configure. A bigger buffer grows by one slot row per {@value #GRID_COLUMNS} − {@value #LIST_COLUMNS} slots (the list
+ * slot takes the last column, {@link #bufferColumns()}), and the <b>stock grid gives those rows back</b>
+ * ({@link #gridRows()}, at most {@value #MAX_GRID_ROWS}, at least {@value #MIN_GRID_ROWS}) — the grid scrolls anyway,
+ * while a buffer slot that is not drawn could not be reached by hand. Every buffer size the config
  * allows (1–27) therefore fits; only a buffer grown far past it by save data ({@link StationBuffer}) can still make the
  * window taller than the floor, and it then needs a smaller GUI scale.
  * <p>

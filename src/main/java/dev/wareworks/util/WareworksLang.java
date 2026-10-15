@@ -948,6 +948,11 @@ public final class WareworksLang {
     public static final String GOGGLES_TERMINAL_LIST = "gui.goggles.terminal_list";
     /** {@code "Still to fetch: %1$s"}: items the clipboard order is missing, in the goggles. */
     public static final String GOGGLES_TERMINAL_LIST_LEFT = "gui.goggles.terminal_list_left";
+    /**
+     * {@code "Crafting fetch: %1$s of %2$s (%3$s)"}: the goggle line of a terminal whose crafting panel is fetching
+     * ingredients (issue #24, slice 2): items delivered, items wanted, and the order's state. Numbers only.
+     */
+    public static final String GOGGLES_TERMINAL_CRAFT = "gui.goggles.terminal_craft";
     /** {@code "Clipboard"}: label of the terminal's list slot. */
     public static final String TERMINAL_LIST_LABEL = "gui.terminal.list.label";
     /** What the list slot is for (its tooltip), i.e. the one sentence that explains the whole feature. */
@@ -1035,6 +1040,50 @@ public final class WareworksLang {
      * refusal it stopped at as the third argument ({@code TerminalCraftResult#langKey}).
      */
     public static final String TERMINAL_CRAFT_PARTIAL = "gui.terminal.craft.partial";
+    // The craft order (issue #24, slice 2, ADR-062): the panel's Fetch button, what it turns into while the order
+    // runs, the progress row, the status row and the question a Fetch can raise. A name gives way first wherever one
+    // stands in a row; the dialog wraps.
+    /** {@code "Fetch the ingredients for %1$s x%2$s"}: the Fetch button's tooltip title (result, crafts). */
+    public static final String TERMINAL_CRAFT_FETCH = "gui.terminal.craft.fetch";
+    /** {@code "%1$s: %2$s to fetch"}: one ingredient of the Fetch tooltip, topped up against the buffer. */
+    public static final String TERMINAL_CRAFT_TO_FETCH = "gui.terminal.craft.to_fetch";
+    /** The Fetch tooltip's last line: the window's amount field is the number of crafts. */
+    public static final String TERMINAL_CRAFT_FETCH_HINT = "gui.terminal.craft.fetch_hint";
+    /** The order button while a portion's question waits: put it up again. */
+    public static final String TERMINAL_CRAFT_ANSWER = "gui.terminal.craft.button.answer";
+    /** The order button while the order is parked: give it another try. */
+    public static final String TERMINAL_CRAFT_RESUME = "gui.terminal.craft.button.resume";
+    /** The order button while the order runs: give it up. */
+    public static final String TERMINAL_CRAFT_CANCEL = "gui.terminal.craft.button.cancel";
+    /** The tooltip of the cancel mark at the end of the progress row; delivered items stay in the buffer. */
+    public static final String TERMINAL_CRAFT_CANCEL_MARK = "gui.terminal.craft.cancel_mark";
+    /** {@code "Delivered: %1$s of %2$s"}: the exact numbers behind the progress row's compact ones. */
+    public static final String TERMINAL_CRAFT_PROGRESS = "gui.terminal.craft.progress";
+    /** {@code "On the way: %1$s"}: what the order's open requests still owe it. */
+    public static final String TERMINAL_CRAFT_IN_FLIGHT = "gui.terminal.craft.in_flight";
+    /** The status row's answer to an edit of a grid an open craft order locks. */
+    public static final String TERMINAL_CRAFT_GRID_LOCKED = "gui.terminal.craft.grid_locked";
+    /** The status row for a few seconds after the craft order finished: everything it fetched is here. */
+    public static final String TERMINAL_CRAFT_DONE = "gui.terminal.craft.done";
+    /** {@code "Fetching for %1$s x%2$s"}: the status row while the craft order runs (result, crafts). */
+    public static final String TERMINAL_CRAFT_STATUS_RUNNING = "gui.terminal.craft.status.running";
+    /** The status row while one portion's question waits for an answer (result, crafts). */
+    public static final String TERMINAL_CRAFT_STATUS_ASKING = "gui.terminal.craft.status.asking";
+    /** The status row while the craft order is parked (result, crafts). */
+    public static final String TERMINAL_CRAFT_STATUS_PARKED = "gui.terminal.craft.status.parked";
+    /**
+     * {@code "For the crafting grid: %1$s %2$s"}: the line naming amount and item in the question one portion of the
+     * craft order raised, as {@link #TERMINAL_CONFIRM_LIST_ITEM} does for the clipboard order's.
+     */
+    public static final String TERMINAL_CRAFT_CONFIRM_ITEM = "gui.terminal.craft.confirm_item";
+    /** {@code "Fetch the ingredients for %1$s x%2$s?"}: the Fetch question's title, with the crafts a Yes starts. */
+    public static final String TERMINAL_CRAFT_QUESTION_TITLE = "gui.terminal.craft.question.title";
+    /** {@code "Only x%1$s of x%2$s fit here."}: the buffer's room binds the fetch. */
+    public static final String TERMINAL_CRAFT_QUESTION_ROOM = "gui.terminal.craft.question.room";
+    /** {@code "Only x%1$s of x%2$s are available:"}: the warehouse's stock binds the fetch; the short items follow. */
+    public static final String TERMINAL_CRAFT_QUESTION_STOCK = "gui.terminal.craft.question.stock";
+    /** {@code "%1$s: %2$s available, %3$s needed"}: one item the warehouse falls short of. */
+    public static final String TERMINAL_CRAFT_QUESTION_LINE = "gui.terminal.craft.question.line";
     /** {@code "Patterns"}: label above the pattern list of a production station's screen. */
     public static final String PRODUCTION_PATTERNS = "gui.production.patterns";
     /** {@code "Delivered here"}: label above a production station's own buffer slots. */
@@ -1711,6 +1760,15 @@ public final class WareworksLang {
      */
     public static LangBuilder listProgress(int complete, int entries, String stateKey) {
         return translate(GOGGLES_TERMINAL_LIST, number(complete).style(ChatFormatting.GOLD), number(entries),
+                translate(stateKey).style(ChatFormatting.WHITE)).style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * "Crafting fetch: 6 of 16 (fetching)" — the one goggle line of a warehouse terminal's craft order (issue #24,
+     * slice 2): items delivered of items wanted, and the order's state, nested like {@link #listProgress}'s.
+     */
+    public static LangBuilder craftFetchProgress(long delivered, long wanted, String stateKey) {
+        return translate(GOGGLES_TERMINAL_CRAFT, number(delivered).style(ChatFormatting.GOLD), number(wanted),
                 translate(stateKey).style(ChatFormatting.WHITE)).style(ChatFormatting.GRAY);
     }
 

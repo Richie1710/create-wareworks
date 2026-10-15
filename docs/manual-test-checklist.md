@@ -2541,7 +2541,7 @@ you get tired of waiting, and put it back before judging check 160.
 > nothing is crafted, and the `craft` scenario's real clicks with the window measured at a 320 × 240 GUI. What no gate
 > can answer is how the ghost **feels** in the hand, the two Shift gestures with a real Shift key (the harness cannot
 > hold one), the German at the one screen where the window is tightest, and what a real server with two real players
-> does. Fetching the ingredients for a recipe is not built yet: bring them with ordinary clicks in the list.
+> does. Fetching the ingredients for a recipe has its own section, AU.
 >
 > Setup: a working one-aisle warehouse with a terminal (nine delivery slots, the default) and about a thousand oak
 > planks, some sticks, milk buckets, sugar, eggs and wheat in its racks. Open the terminal and fold the crafting grid
@@ -2645,3 +2645,85 @@ you get tired of waiting, and put it back before judging check 160.
      mode**, right-click a station with the wrench and bread in the offhand: the screen opens (the wrench cannot turn
      anything there) and the bread is not eaten. Do it once on a **dedicated server** as well: a laggy connection is
      where a disagreement between client and server would show as a block that appears and vanishes again.
+
+## AU. Fetch the ingredients at the terminal (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24), second part)
+
+> **Fetch** is measured too: exact amounts, xN, the top-up against the buffer, the room and stock questions, every
+> refusal, a fetch beside a clipboard order, a cancel that keeps a merged click (before and after the pick, and with a
+> share that was being made), a stock rule's question answered, refused, resumed and reloaded, a stale Yes from a
+> second screen, a reload and a broken terminal in GameTests, a chunk unload and a rejoin in `runRobustnessTest`, and a
+> Fetch, a cancel and the room question clicked through the real screen in the `craft` scenario. What no gate can
+> answer for it is a real dedicated server, two real clients at one terminal, the panel a stock rule's question puts
+> up, and the German at real scale 6.
+>
+> Setup: the warehouse of section AR, with the terminal's crafting grid folded out.
+
+258. **A dedicated server round trip with Fetch.** Start `runServer` and join with a client. Lay a chest and set the
+    window's amount field to **3**. Hover **Fetch** (the play button under the grid): "Fetch the ingredients for Chest
+    x3", "Oak Planks: 24 to fetch". Press it: the status row says "Fetching for Chest x3", the bar under the buttons
+    counts up, a right-click on a grid cell answers "Cancel the fetch to change the recipe", and Engineer's Goggles on
+    the terminal show "Crafting fetch: 0 of 24 (fetching)". While the crane carries the first planks, stop the server
+    with `/stop`, start it again, join and open the terminal: the panel folds out by itself, the grid shows the chest,
+    still locked, and the fetch finishes with exactly 24 planks in "Delivered here" ("Delivered: click the result to
+    craft"). Press Fetch once more: "Already here: click the result to craft", and nothing is requested. Shift-click
+    the result: three chests. Then lay a crafting table, set x4, press Fetch and give it up with the red **x** at the
+    end of the bar while the crane carries planks: "The fetch was given up", what had arrived stays in the terminal,
+    the planks on the crane go back into the racks, and the grid unlocks with the table still laid. Read the server and
+    the client log for errors mentioning `wareworks`. **The amount field is the one a click in the list requests with:
+    once the panel is out, does it read naturally as "how many crafts", or do you trip over it after a request?**
+259. **Two real players at one terminal while a fetch runs.** Slow the crane down (a low-speed motor), so a click is
+    still on its way a moment later. Two clients open the same terminal. Player B lays a crafting table and folds the
+    panel **in**; player A lays a chest and clicks Oak Planks in the stock list for 8 with the amount field at 8. Right
+    after, A sets x3 and presses Fetch: B's panel folds out by itself (B's screen at least 374 GUI px wide, e.g.
+    1920x1080 at scale 4) and B's grid now shows A's chest, locked — B's crafting table is gone, which is intended
+    while a fetch runs. B presses Fetch: "Already
+    fetching ingredients here". B gives the fetch up with the red x: both screens drop the bar, both grids unlock and
+    keep the chest. Count the planks in the racks and in the terminal before the click and after everything has
+    settled: none appeared or vanished, and A's 8 planks arrived although the fetch they shared a request with was
+    given up. Close B's screen and open it again: the panel is folded **in**, as B left it. Do the Fetch once more with
+    B on a **narrow** screen (1280x960 at GUI scale 4, i.e. 320 GUI px): B's panel stays folded **in**, the stock list
+    does not move under B's cursor, and B's status row shows "Fetching for Chest x3". **Is it clear to B why their own
+    recipe disappeared, and is laying it again an acceptable price?**
+260. **German at the real scale 6.** On the **5120x1440** monitor in fullscreen with the automatic GUI scale (6, so
+    854 × 240 GUI px) and the game in German, lay a chest and set x3. Fetch's tooltip reads "Zutaten für Truhe x3
+    holen", "Eichenholzbretter: 24 zu holen" and "Das Mengenfeld gibt die Fertigungen an", every line on screen. Press
+    it: the status row "Zutaten für Truhe x3 werden geholt", the bar's tooltip "Geliefert: 0 von 24" and "Unterwegs:
+    24", over the x "Klick: aufgeben; Geliefertes bleibt hier", a right-click on a cell "Zum Ändern erst das Holen
+    abbrechen", at the end "Geliefert: aufs Ergebnis klicken", and on the goggles "Werkbank-Zutaten: 0 von 24 (holt)".
+    Then lay a cake and set x4: the question reads "Zutaten für Kuchen x2 holen?" and "Nur x2 von x4 passen hier.",
+    inside the panel. **Does "holen" read right beside the player's "fertigen" and the production station's
+    "herstellen"? Does "Werkbank-Zutaten" on the goggles say what is being fetched?**
+261. **A stock rule's question during a fetch: Yes, No, Resume.** Give Oak Planks a stock keeper row with a
+    **reserve** of 32 while the racks hold 40, lay a chest and press Fetch for x3 (24 planks). It **starts without a
+    question** — a player is never held back by a reserve — but the first portion that would go below the reserve asks
+    with the ordinary panel: it names the item ("For the crafting grid: 24 Oak Planks"), shows no Alt hint, the order
+    button turns to **Answer** and the bar turns gold. Press
+    **No** (or Escape): "The rest of the fetch is left for now", the row says "Fetch for Chest x3 is paused" and the
+    button turns to **Resume**. Press Resume: the same question comes back. Answer **Yes**: the 24 planks arrive and 16
+    stay in the racks, below the reserve you agreed to cross. (What the server does with the question — Yes, No,
+    Resume, "show it again" and a reload while it is up — is the GameTest
+    `terminalcraftorderportionquestionisshownagainandcanberefused`; this check is about the panel.) **Is it clear that
+    this question belongs to the fetch and not to a click of yours?**
+262. **A fetch beside a clipboard list, and the terminal's request limit.** Slow the crane down (a low-speed motor),
+    empty the terminal's buffer, and make sure the racks hold at least 6 oak planks, 8 cobblestone, 2 iron ingots and 2
+    redstone. Put a **hand-written** clipboard list of four item types, at most one stack of each (16 each of four items
+    that stack to 64; none of them planks, cobblestone, iron ingots or redstone), into the list slot — not a
+    Schematicannon checklist: the Fetch is measured with the list's open portions put down first, and the nine buffer
+    slots have to hold the list's four stacks and the piston's four ingredients together, so a list of several stacks
+    per entry makes Fetch answer that there is no room for one craft, which is then expected and no bug. Press the list
+    button; while it runs, lay a **piston** and press Fetch for x2. Both run at once: with
+    the panel folded out the status row shows the fetch's line, folded in the list's. While both hold two requests
+    each, click a fifth item type in the stock list: it is refused because the terminal already waits for four item
+    types (`maxOpenRequestsPerOutput`), while a click for an item one of the orders is fetching merges. **Does that
+    refusal read as a limit you understand, or as a broken terminal?** Both orders finish: the clipboard is ticked
+    off, and the terminal holds the list's 4 × 16 items plus exactly 6 planks, 8 cobblestone, 2 iron ingots and 2
+    redstone (eight of the nine slots).
+263. **A stuck list says why, and stops saying it.** Take every glass block out of the racks, write a clipboard for
+    3 glass and 16 oak planks, press the list button and say Yes to fetching what there is. Once the planks have
+    arrived the status row says in **gold** "Glass is missing" instead of the list's progress, and the clipboard slot's
+    tooltip names it under the progress.
+    Give Oak Planks a stock keeper **reserve** that the list's planks would go below and start the list once more with
+    a fresh clipboard: while its question is up the row says the list waits for an answer, not "Glass is missing"; a
+    **No** turns it into "paused". Put glass into the racks and resume: the row goes back to the list's progress and the
+    list finishes. **Does the gold line read as a reason you can act on, and does it ever stay after it stopped being
+    true?**

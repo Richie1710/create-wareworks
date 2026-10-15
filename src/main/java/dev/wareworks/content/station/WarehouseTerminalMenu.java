@@ -19,11 +19,14 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockDiff;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalCraftOrderPayload;
+import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftPayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalListActionPayload;
@@ -82,6 +85,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * slot list above is unchanged; the menu keeps only the last grid it was sent and the server's reading of it, and
  * pushes that reading with everything else. The craft itself is the terminal's ({@link TerminalCrafting}).
  * <p>
+ * <b>The craft order</b> (issue #24, slice 2, ADR-062) — the panel's Fetch and the order it starts — arrives as
+ * {@code TerminalCraftOrderPayload} through {@link #submitCraftOrder}, under the same rules and the same budget. Its
+ * state is pushed to every screen open at the terminal, grid and lock included, and the question one of its portions
+ * raises goes out like the clipboard order's, with {@link RequestScope#CRAFT}.
+ * <p>
  * <b>Slot count.</b> The number of buffer slots is the one the server announced in the menu's extra data, on both
  * sides. The handler behind them is wrapped in a {@link FixedSlotsItemHandler} of exactly that size, because a
  * terminal's own buffer may have another one (grown past the config by save data, or shrunk by {@code /data merge}
@@ -135,6 +143,22 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      * state: the list button's <b>Answer</b> ({@link #resendListQuestion()}, M23 review fix).
      */
     private boolean listQuestionPending;
+    /**
+     * The clipboard order's question as last pushed, or {@code null} while it asks nothing (issue #24 review fix).
+     * Compared by <b>identity</b>: every question an order asks is a new object, so a question that replaced another
+     * within one tick — another player answered the first, and the next portion asked at once — is pushed although the
+     * order never left {@code ASKING}, even when its numbers happen to equal the last one's.
+     */
+    @Nullable
+    private RequestConfirmation<ItemKey> lastListQuestion;
+    /** The craft order's state as last pushed, so a terminal whose craft order did not move costs no packet. */
+    @Nullable
+    private TerminalCraftOrderState lastCraftOrder;
+    /** The question the craft order is waiting on goes out with the next push: its order button's <b>Answer</b>. */
+    private boolean craftQuestionPending;
+    /** The craft order's question as last pushed; see {@link #lastListQuestion}. */
+    @Nullable
+    private RequestConfirmation<ItemKey> lastCraftQuestion;
     /**
      * The crafting panel's grid as this player's screen last sent it, the recipe hint that came with it, and the
      * server's reading of the two (M32, issue #24, {@code docs/warehouse-system.md} §3.4.5). <b>Transient</b> per-menu
@@ -197,6 +221,10 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         fullSyncPending = true;
         lastUsage = null;
         listQuestionPending = false;
+        lastListQuestion = null;
+        lastCraftOrder = null;
+        craftQuestionPending = false;
+        lastCraftQuestion = null;
         craftCells = CraftGrid.empty();
         craftHint = Optional.empty();
         craftPreview = TerminalCrafting.Preview.NONE;
@@ -388,6 +416,19 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     public static Optional<TerminalListOutcome> submitListAction(@Nullable Player player, int containerId,
             TerminalListActionPayload.Action action, long acceptedMissing, long acceptedProducing,
             long acceptedDropped, RequestAcknowledgement acknowledged) {
+        return submitListAction(player, containerId, action, acceptedMissing, acceptedProducing, acceptedDropped,
+                acknowledged, Optional.empty());
+    }
+
+    /**
+     * {@link #submitListAction(Player, int, TerminalListActionPayload.Action, long, long, long, RequestAcknowledgement)}
+     * with the question an {@code ANSWER} was given to (issue #24 review fix), which the terminal compares with the
+     * question it is asking now.
+     */
+    public static Optional<TerminalListOutcome> submitListAction(@Nullable Player player, int containerId,
+            TerminalListActionPayload.Action action, long acceptedMissing, long acceptedProducing,
+            long acceptedDropped, RequestAcknowledgement acknowledged,
+            @Nullable Optional<RequestConfirmation<ItemKey>> answered) {
         if (player == null || player.level() == null || player.level().isClientSide || action == null
                 || action == TerminalListActionPayload.Action.NONE)
             return Optional.empty();
@@ -396,18 +437,35 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         if (!menu.takeRequestBudget())
             return Optional.empty();
         return Optional.of(menu.listAction(player, action, acceptedMissing, acceptedProducing, acceptedDropped,
-                acknowledged == null ? RequestAcknowledgement.NONE : acknowledged));
+                acknowledged == null ? RequestAcknowledgement.NONE : acknowledged,
+                answered == null ? Optional.empty() : answered));
     }
 
-    /** Server: carries one list action out on this menu's terminal; every check happens in the terminal. */
+    /**
+     * Server: carries one list action out on this menu's terminal, an {@code ANSWER} naming no question (the list
+     * button's "put the question up again").
+     */
     public TerminalListOutcome listAction(Player requester, TerminalListActionPayload.Action action,
             long acceptedMissing, long acceptedProducing, long acceptedDropped,
             RequestAcknowledgement acknowledged) {
+        return listAction(requester, action, acceptedMissing, acceptedProducing, acceptedDropped, acknowledged,
+                Optional.empty());
+    }
+
+    /**
+     * Server: carries one list action out on this menu's terminal; every check happens in the terminal. An
+     * {@code ANSWER} is taken only for {@code answered}, the question the screen showed, while it is still the one
+     * the order asks; otherwise the current question is put up again.
+     */
+    public TerminalListOutcome listAction(Player requester, TerminalListActionPayload.Action action,
+            long acceptedMissing, long acceptedProducing, long acceptedDropped,
+            RequestAcknowledgement acknowledged, Optional<RequestConfirmation<ItemKey>> answered) {
+        Objects.requireNonNull(answered, "answered");
         if (contentHolder == null || contentHolder.isRemoved())
             return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
         TerminalListOutcome outcome = switch (action) {
             case FETCH -> contentHolder.fetchList(requester, acceptedMissing, acceptedProducing, acceptedDropped);
-            case ANSWER -> contentHolder.answerListQuestion(requester, acknowledged);
+            case ANSWER -> contentHolder.answerListQuestion(requester, answered, acknowledged);
             case DECLINE -> contentHolder.declineListQuestion(requester);
             case RESUME -> contentHolder.resumeListOrder(requester);
             case CANCEL -> contentHolder.canPlayerUse(requester)
@@ -499,6 +557,14 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(cells, "cells");
         Objects.requireNonNull(hint, "hint");
+        // A screen that shows the craft order's grid resolves the recipe the order fetches for, not the first of two
+        // recipes the grid matches: without a hint of its own (it adopted the locked grid, or was opened again), and
+        // while the order is open whatever it last showed (issue #24 review fix).
+        if (contentHolder != null) {
+            Optional<ResourceLocation> orderHint = contentHolder.craftOrderHint(cells);
+            if (orderHint.isPresent() && (hint.isEmpty() || contentHolder.hasOpenCraftOrder()))
+                hint = orderHint;
+        }
         boolean sameHint = hint.equals(craftHint) || hint.isPresent() && hint.equals(craftPreview.recipe());
         if (cells.equals(craftCells) && sameHint)
             return;
@@ -530,6 +596,78 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         if ((lockedNow || outcome.crafted() > 0) && lockedNow != craftPreview.locked())
             resolveCraftPreview(player);
         return outcome;
+    }
+
+    /**
+     * Server: a {@code TerminalCraftOrderPayload} — the crafting panel's Fetch, or the Answer, No, Resume or Cancel of
+     * the craft order it starts — resolved against the menu {@code player} really has open (issue #24, slice 2,
+     * {@code docs/warehouse-system.md} §3.4.5, ADR-062).
+     * <p>
+     * Checked exactly like {@link #submitCraft}, in the same order, and empty (with nothing done) at the first check
+     * that fails: the player has a terminal menu open whose id matches; the action is one this build knows; the player
+     * is not a {@link FakePlayer}; this menu has not answered {@value #MAX_REQUESTS_PER_TICK} actions in the current
+     * tick. A Fetch measures the whole grid against the warehouse, so it is a click like a request and costs one of
+     * that budget, as every other action here does. Everything else — reach, aisle, the grid, the numbers — is
+     * validated by the terminal.
+     *
+     * @return what the action became, for the acting player; empty for everything dropped
+     */
+    public static Optional<TerminalCraftOutcome> submitCraftOrder(@Nullable Player player,
+            @Nullable TerminalCraftOrderPayload payload) {
+        if (player == null || player.level() == null || player.level().isClientSide || payload == null
+                || payload.action() == TerminalCraftOrderPayload.Action.NONE)
+            return Optional.empty();
+        if (!(player.containerMenu instanceof WarehouseTerminalMenu menu) || menu.containerId != payload.containerId())
+            return Optional.empty();
+        if (player instanceof FakePlayer)
+            return Optional.empty();
+        if (!menu.takeRequestBudget())
+            return Optional.empty();
+        return Optional.of(menu.craftOrderAction(player, payload));
+    }
+
+    /**
+     * Server: carries one craft order action out on this menu's terminal; every check happens in the terminal.
+     * <p>
+     * A <b>Fetch</b> is measured on the grid it was sent for: that grid becomes the panel's ({@link #previewCraft}), so
+     * the recipe is resolved here — where ADR-059 allows it — at most once per changed grid, and the terminal reads the
+     * grid and its recipe from this menu ({@link WarehouseTerminalBlockEntity#fetchCraft}). An Answer that accepts
+     * nothing puts the waiting question up again ({@link #resendCraftQuestion()}); every other success pushes the
+     * order's new state with the next tick.
+     */
+    public TerminalCraftOutcome craftOrderAction(Player requester, TerminalCraftOrderPayload payload) {
+        Objects.requireNonNull(requester, "requester");
+        Objects.requireNonNull(payload, "payload");
+        if (contentHolder == null || contentHolder.isRemoved())
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        TerminalCraftOutcome outcome = switch (payload.action()) {
+            case FETCH -> {
+                previewCraft(requester, payload.cells(), payload.hint());
+                yield contentHolder.fetchCraft(requester, this, payload.crafts(), payload.acceptedProducing(),
+                        payload.answering());
+            }
+            case ANSWER -> contentHolder.answerCraftQuestion(requester, payload.question(), payload.acknowledged());
+            case DECLINE -> contentHolder.declineCraftQuestion(requester);
+            case RESUME -> contentHolder.resumeCraftOrder(requester);
+            case CANCEL -> contentHolder.cancelCraftOrder(requester);
+            case NONE -> TerminalCraftOutcome.of(TerminalCraftResult.NOT_RUNNING);
+        };
+        // "Put that question up again" changes nothing and is therefore not a state push: the question itself is sent.
+        if (payload.action() == TerminalCraftOrderPayload.Action.ANSWER
+                && outcome.result() == TerminalCraftResult.ASKING)
+            resendCraftQuestion();
+        else if (outcome.isSuccess())
+            markDirty(); // the order's state changed: push it with the next tick instead of waiting for the interval
+        return outcome;
+    }
+
+    /**
+     * Server: send the question the craft order is waiting on with the next push, even though the order did not change
+     * state — the order button's <b>Answer</b>, exactly as {@link #resendListQuestion()} is the list button's.
+     */
+    private void resendCraftQuestion() {
+        craftQuestionPending = true;
+        markDirty();
     }
 
     /** The server's reading of the grid as last resolved; {@link TerminalCrafting.Preview#NONE} for an empty grid. */
@@ -664,18 +802,21 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         // without a list — and one whose list did not move — costs no packet; and with it, whenever the order is
         // waiting for an answer, the question itself, because a player who opens the screen later has to see it.
         TerminalListState list = contentHolder.listState();
-        boolean askingNow = list.asking() && (reset || lastList == null || !lastList.asking());
         if (reset || !list.equals(lastList)) {
             lastList = list;
             PacketDistributor.sendToPlayer(target, new TerminalListPayload(containerId, list));
         }
-        // On the asking edge, on a full sync, and whenever the player asked for it again (resendListQuestion): the
-        // question lives on the server, so the screen can never be the only place it exists (M23 review fix).
-        if (askingNow || listQuestionPending) {
-            listQuestionPending = false;
-            contentHolder.listQuestion().ifPresent(question -> PacketDistributor.sendToPlayer(target,
-                    new TerminalConfirmPayload(containerId, question, RequestScope.LIST)));
-        }
+        // Whenever the question is a new one, on a full sync, and whenever the player asked for it again
+        // (resendListQuestion): the question lives on the server, so the screen can never be the only place it exists
+        // (M23 review fix). "A new one" and not "the order started asking": another player's answer can move the order
+        // on to the next portion's question within one tick, and a screen still showing the first one would otherwise
+        // never hear of the second (issue #24 review fix).
+        RequestConfirmation<ItemKey> listQuestion = list.asking() ? contentHolder.listQuestion().orElse(null) : null;
+        if (listQuestion != null && (reset || listQuestionPending || listQuestion != lastListQuestion))
+            PacketDistributor.sendToPlayer(target, new TerminalConfirmPayload(containerId, listQuestion,
+                    RequestScope.LIST));
+        listQuestionPending = false;
+        lastListQuestion = listQuestion;
 
         // What the crafting panel's grid makes and what the aisle says about each of its items (M32, issue #24).
         // Compared by value like everything above; the recipe was resolved when the grid changed, never here.
@@ -684,6 +825,22 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             lastCraftView = view;
             PacketDistributor.sendToPlayer(target, view);
         }
+
+        // The craft order (issue #24, slice 2): how far it has got and the grid it was started for, which every screen
+        // at this terminal shows and locks while the order is open. Compared by value like the clipboard order's, and
+        // its question goes out the same way, with the scope that sends the answer back to the craft order.
+        TerminalCraftOrderState craftOrder = contentHolder.craftOrderState();
+        if (reset || !craftOrder.equals(lastCraftOrder)) {
+            lastCraftOrder = craftOrder;
+            PacketDistributor.sendToPlayer(target, new TerminalCraftOrderStatePayload(containerId, craftOrder));
+        }
+        RequestConfirmation<ItemKey> craftQuestion = craftOrder.asking()
+                ? contentHolder.craftQuestion().orElse(null) : null;
+        if (craftQuestion != null && (reset || craftQuestionPending || craftQuestion != lastCraftQuestion))
+            PacketDistributor.sendToPlayer(target, new TerminalConfirmPayload(containerId, craftQuestion,
+                    RequestScope.CRAFT));
+        craftQuestionPending = false;
+        lastCraftQuestion = craftQuestion;
     }
 
     /**

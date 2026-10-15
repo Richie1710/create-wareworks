@@ -111,7 +111,8 @@ teleported: every item you put in or take out is carried by the crane, where you
   by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard — a Schematicannon's material
   checklist, or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks
   each entry off as it delivers it. A **crafting grid** folds out beside the screen: lay a recipe with ghost items,
-  and craft it by hand from what the crane delivered, without walking to a crafting table.
+  press **Fetch** and the crane brings exactly what is missing for the crafts you want, then craft it by hand from
+  what it delivered, without walking to a crafting table.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
@@ -304,14 +305,24 @@ recipe in it with **ghost** items — nothing is ordered and nothing moves while
   press **Clear** for the whole grid.
 * The result appears under the grid, with **xN**: how many crafts the items delivered here allow right now. A cell
   drawn solid is here; a faded one is not, and its tooltip says how many the warehouse has.
-* Get the ingredients the usual way — a click in the list, or a clipboard — and when they have arrived, **click the
+* **Fetch** the ingredients: set how many crafts you want in the amount field and press **Fetch**, the play button
+  under the grid; its tooltip lists what will be fetched of each item first. The crane brings exactly what the
+  terminal is still missing — what was already delivered counts — while a bar under the grid counts the deliveries,
+  and the grid stays locked to that recipe until they have all arrived. The red cross at the end of the bar gives the
+  fetch up: what arrived stays, the rest stays in the racks. A fetch carries on while you are away and runs beside a
+  clipboard list.
+* Fetch counts whole crafts. If the warehouse holds too little of an ingredient, or the terminal has room for fewer
+  crafts once everything already on its way there has arrived, it asks once — "Only x2 of x4 fit here" — and Yes
+  fetches exactly those two. If not even one more craft is possible, it says why and orders nothing.
+* When the ingredients have arrived — by Fetch, or the usual way with a click in the list or a clipboard — **click the
   result** to craft once, or **Shift-click** to craft as many as the delivered items allow. The result goes into your
   inventory, or into the terminal when your inventory is full; leftovers such as a cake's empty buckets stay in the
   terminal. If something is missing or there is no room, nothing is used up and the terminal says why.
 
 Your grid is your own — two players at one terminal each lay their own — and the last 16 terminals you used each
-keep the grid you laid there until you leave the world or server. Wareworks never crafts on its own: a recipe runs only when you click the result.
-Fetching the ingredients for a recipe with one button is still to come.
+keep the grid you laid there until you leave the world or server. While a fetch runs, though, everyone at that
+terminal sees its recipe, so nobody changes it half way. Wareworks never crafts on its own: a recipe runs only when
+you click the result.
 
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
 path for your factory — and the same block can keep asking by itself, or take items *in*, which is the next section.

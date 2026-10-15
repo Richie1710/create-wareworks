@@ -7,11 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 
@@ -474,6 +476,41 @@ class ListOrderTest {
     }
 
     @Test
+    void anAnswerToAQuestionTheOrderNoLongerAsksCreditsNothing() {
+        Warehouse warehouse = new Warehouse().stocked(COBBLE, 64).stocked(PLANK, 64);
+        ListOrder<String> order = ListOrder.of(List.of(ListEntry.of(0, 0, COBBLE, 64), ListEntry.of(0, 1, PLANK, 64)),
+                CAP, RequestAcknowledgement.NONE, 0L);
+        RequestConfirmation<String> cobbleReserve = new RequestConfirmation<>(COBBLE, 64L, 10L, 64L, 0L, 0L,
+                StockRule.UNSET, List.of());
+        RequestConfirmation<String> plankReserve = new RequestConfirmation<>(PLANK, 64L, 12L, 64L, 0L, 0L,
+                StockRule.UNSET, List.of());
+
+        order.beginPass(warehouse::alive);
+        order.refused(order.nextPortion(OPEN_LIMIT, MAX_PER_REQUEST).orElseThrow());
+        assertEquals(1, order.nextPortion(OPEN_LIMIT, MAX_PER_REQUEST).orElseThrow().line(), "the planks' portion");
+        order.ask(plankReserve);
+        // A screen still showing the earlier question about cobblestone answers it: not taken, nothing credited.
+        assertFalse(order.answer(cobbleReserve, cobbleReserve.acknowledgement(RequestScope.LIST), 10L));
+        assertEquals(ListOrderState.ASKING, order.state(), "the order still asks its own question");
+        assertSame(plankReserve, order.question().orElseThrow());
+        assertEquals(RequestAcknowledgement.NONE, order.budgetFor(COBBLE), "nothing was kept for the cobblestone");
+        assertEquals(RequestAcknowledgement.NONE, order.budgetFor(PLANK), "and nothing for the planks either");
+        assertFalse(order.answer(null, plankReserve.acknowledgement(RequestScope.LIST), 10L),
+                "an answer naming no question is not a Yes");
+        assertFalse(order.answer(RequestConfirmation.none(PLANK, 64L), plankReserve.acknowledgement(RequestScope.LIST),
+                10L), "nor is one to the same item with other numbers");
+
+        // The question it really asks, as a decoded copy: compared by value.
+        RequestConfirmation<String> copy = new RequestConfirmation<>(PLANK, 64L, 12L, 64L, 0L, 0L, StockRule.UNSET,
+                List.of());
+        assertTrue(order.answer(copy, copy.acknowledgement(RequestScope.LIST), 10L));
+        assertEquals(ListOrderState.RUNNING, order.state());
+        assertTrue(order.covers(plankReserve));
+        assertFalse(order.answer(copy, copy.acknowledgement(RequestScope.LIST), 11L),
+                "an order that asks nothing takes no answer");
+    }
+
+    @Test
     void theAnsweredPortionIsOfferedAgainBeforeTheRestOfTheList() {
         Warehouse warehouse = new Warehouse().stocked(COBBLE, 64).stocked(PLANK, 64).stocked(LOG, 64);
         ListOrder<String> order = ListOrder.of(List.of(ListEntry.of(0, 0, COBBLE, 64), ListEntry.of(0, 1, PLANK, 64),
@@ -537,6 +574,210 @@ class ListOrderTest {
         assertEquals(0, order.openRequests());
         assertEquals(128L, order.outstanding(), "and the lines keep what they asked for");
         assertTrue(order.release().isEmpty());
+    }
+
+    @Test
+    void releasingNamesEachRequestWithWhatItStillOwesThisOrder() {
+        Warehouse warehouse = new Warehouse().stocked(COBBLE, 1000).stocked(PLANK, 64);
+        ListOrder<String> order = ListOrder.of(List.of(ListEntry.of(0, 0, COBBLE, 100), ListEntry.of(0, 1, COBBLE, 50),
+                ListEntry.of(0, 2, PLANK, 64)), CAP, RequestAcknowledgement.NONE, 0L);
+        pass(order, 0L, warehouse);
+        UUID cobble = order.lines().get(0).request().orElseThrow();
+        UUID plank = order.lines().get(2).request().orElseThrow();
+        order.credit(cobble, 30, 5L);
+
+        Map<UUID, Integer> shares = order.releaseShares();
+        assertEquals(Map.of(cobble, 120, plank, 64), shares,
+                "two lines on one merged request are owed 70 + 50 of it; what arrived is no longer owed");
+        assertEquals(List.of(cobble, plank), List.copyOf(shares.keySet()), "in list order");
+        assertEquals(0, order.openRequests());
+        assertEquals(184L, order.outstanding(), "the lines keep what they asked for");
+        assertEquals(30L, order.delivered());
+        assertTrue(order.releaseShares().isEmpty(), "nothing is owed twice");
+        assertThrows(UnsupportedOperationException.class, () -> shares.put(UUID.randomUUID(), 1));
+    }
+
+    @Test
+    void releaseIsTheSharesWithoutTheirAmounts() {
+        Warehouse warehouse = new Warehouse().stocked(COBBLE, 64).stocked(PLANK, 64);
+        List<ListEntry<String>> entries = List.of(ListEntry.of(0, 0, COBBLE, 64), ListEntry.of(0, 1, PLANK, 64));
+        ListOrder<String> one = ListOrder.of(entries, CAP, RequestAcknowledgement.NONE, 0L);
+        pass(one, 0L, warehouse);
+        ListOrder<String> twin = ListOrder.restore(one.lines(), 0, one.state(), one.budget(), 0L, 0L);
+        assertEquals(twin.releaseShares().keySet(), one.release());
+    }
+
+    @Test
+    void givingBackOnlyTheOrdersShareKeepsAPlayersMergedClick() {
+        Warehouse warehouse = new Warehouse().stocked(PLANK, 200);
+        // A player clicked for 40 planks; the order's portion of 24 merges into that very request (ADR-020).
+        UUID click = warehouse.request(new ListPortion<>(0, PLANK, 40)).orElseThrow().id();
+        ListOrder<String> order = ListOrder.of(List.of(ListEntry.of(0, 0, PLANK, 24)), CAP,
+                RequestAcknowledgement.NONE, 0L);
+        pass(order, 0L, warehouse);
+        assertEquals(click, order.lines().get(0).request().orElseThrow());
+        assertEquals(64, warehouse.owed(click));
+
+        // Cancel: the order gives back what it is owed, and the click keeps its 40.
+        order.releaseShares().forEach(warehouse::reduce);
+        assertTrue(warehouse.alive(click), "cancelling the whole merged request took the click down with it");
+        assertEquals(40, warehouse.owed(click));
+        assertEquals(0, order.openRequests());
+        assertTrue(order.credit(click, 40, 10L).isEmpty(), "and what then arrives for the click is the click's");
+    }
+
+    @Test
+    void aShareGivenBackCarriesTheMadePartOfIt() {
+        UUID merged = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        ListOrder<String> order = ListOrder.of(List.of(ListEntry.of(0, 0, PLANK, 10), ListEntry.of(0, 1, PLANK, 6),
+                ListEntry.of(0, 2, COBBLE, 64)), CAP, RequestAcknowledgement.NONE, 0L);
+        order.beginPass(id -> true);
+        assertTrue(order.granted(order.nextPortion(3, MAX_PER_REQUEST).orElseThrow(), merged, 10, 8, 0L));
+        assertTrue(order.granted(order.nextPortion(3, MAX_PER_REQUEST).orElseThrow(), merged, 6, 2, 0L));
+        assertTrue(order.granted(order.nextPortion(3, MAX_PER_REQUEST).orElseThrow(), other, 64, 0L));
+        assertEquals(8, order.lines().get(0).producing(), "the line keeps the part production makes for it");
+        assertEquals(0, order.lines().get(2).producing(), "and a portion out of the racks has none");
+
+        Map<UUID, ListOrder.Share> shares = order.releaseShareParts();
+        assertEquals(Map.of(merged, new ListOrder.Share(16, 10), other, new ListOrder.Share(64, 0)), shares,
+                "two lines on one merged request give back 10 + 6, of which 8 + 2 were being made");
+        assertEquals(0, order.openRequests());
+        assertEquals(0, order.lines().get(0).producing(), "a released line has no made part left");
+        assertEquals(new ListOrder.Share(3, 3), new ListOrder.Share(3, 9), "never more made than given back");
+    }
+
+    @Test
+    void aDeliveryIsCountedAgainstTheRacksPartFirst() {
+        UUID id = UUID.randomUUID();
+        ListOrder<String> order = ListOrder.of(List.of(ListEntry.of(0, 0, PLANK, 10)), CAP,
+                RequestAcknowledgement.NONE, 0L);
+        order.beginPass(alive -> true);
+        order.granted(order.nextPortion(OPEN_LIMIT, MAX_PER_REQUEST).orElseThrow(), id, 10, 8, 0L);
+        order.credit(id, 2, 1L);
+        assertEquals(8, order.lines().get(0).inFlight());
+        assertEquals(8, order.lines().get(0).producing(), "the two out of the racks arrive first");
+        order.credit(id, 3, 2L);
+        assertEquals(5, order.lines().get(0).producing(), "then the made part, and never more than is still owed");
+    }
+
+    @Test
+    void aProductionShortfallComesOffTheOrdersMadePartOnly() {
+        UUID merged = UUID.randomUUID();
+        ListOrder<String> craft = ListOrder.of(List.of(ListEntry.of(0, 0, PLANK, 4)), 9,
+                RequestAcknowledgement.NONE, 0L);
+        ListOrder<String> clipboard = ListOrder.of(List.of(ListEntry.of(0, 0, PLANK, 10),
+                ListEntry.of(0, 1, COBBLE, 5)), CAP, RequestAcknowledgement.NONE, 0L);
+        craft.beginPass(id -> true);
+        craft.granted(craft.nextPortion(OPEN_LIMIT, MAX_PER_REQUEST).orElseThrow(), merged, 4, 3, 0L);
+        clipboard.beginPass(id -> true);
+        clipboard.granted(clipboard.nextPortion(OPEN_LIMIT, MAX_PER_REQUEST).orElseThrow(), merged, 10, 8, 0L);
+        UUID cobble = UUID.randomUUID();
+        clipboard.granted(clipboard.nextPortion(OPEN_LIMIT, MAX_PER_REQUEST).orElseThrow(), cobble, 5, 0L);
+
+        // Production behind the merged request (4 + 10 + a player's click of 2) made 6 fewer than it promised.
+        assertEquals(6, ListOrder.shortfallInTurn(merged, 6, List.of(craft, clipboard)));
+        assertEquals(1, craft.lines().get(0).inFlight(), "the craft order takes its own made 3 first");
+        assertEquals(0, craft.lines().get(0).producing());
+        assertEquals(7, clipboard.lines().get(0).inFlight(), "and the clipboard order the 3 that are left");
+        assertEquals(5, clipboard.lines().get(0).producing());
+        assertEquals(5, clipboard.lines().get(1).inFlight(), "another request's line is never touched");
+        assertEquals(0L, craft.delivered() + clipboard.delivered(), "and nothing counts as delivered");
+
+        // A shortfall beyond every order's made part is the click's: the orders take only their own.
+        assertEquals(5, ListOrder.shortfallInTurn(merged, 9, Arrays.asList(null, craft, clipboard)));
+        assertEquals(2, clipboard.lines().get(0).inFlight(), "the racks' part of the portion stays owed");
+        assertEquals(0, clipboard.shortfall(merged, 3), "with no made part left, nothing more is taken");
+        assertEquals(0, clipboard.shortfall(cobble, 3), "a portion out of the racks has none to give");
+
+        // Owing nothing forgets the request, like a credit does: the next pass makes a new portion.
+        ListOrder<String> made = ListOrder.of(List.of(ListEntry.of(0, 0, PLANK, 4)), CAP,
+                RequestAcknowledgement.NONE, 0L);
+        made.beginPass(id -> true);
+        made.granted(made.nextPortion(OPEN_LIMIT, MAX_PER_REQUEST).orElseThrow(), merged, 4, 4, 0L);
+        assertEquals(4, made.shortfall(merged, 10));
+        assertFalse(made.lines().get(0).isInFlight());
+        assertEquals(4L, made.outstanding());
+    }
+
+    @Test
+    void twoOrdersCreditingOneMergedRequestNeverClaimMoreThanArrived() {
+        Warehouse warehouse = new Warehouse().stocked(COBBLE, 1000);
+        ListOrder<String> clipboard = ListOrder.of(List.of(ListEntry.of(0, 0, COBBLE, 100)), CAP,
+                RequestAcknowledgement.NONE, 0L);
+        ListOrder<String> craft = ListOrder.of(List.of(ListEntry.of(0, 3, COBBLE, 30)), 9,
+                RequestAcknowledgement.NONE, 0L);
+        pass(clipboard, 0L, warehouse);
+        pass(craft, 0L, warehouse);
+        UUID merged = clipboard.lines().get(0).request().orElseThrow();
+        assertEquals(merged, craft.lines().get(0).request().orElseThrow(), "both orders share one request id");
+        // A player's own click for 20 merges in as well: the request owes 150 in all.
+        warehouse.request(new ListPortion<>(0, COBBLE, 20));
+        assertEquals(150, warehouse.owed(merged));
+
+        // Crediting each order with the whole count would hand one stack to both of them.
+        ListOrder<String> craftTwin = ListOrder.restore(craft.lines(), 0, craft.state(), craft.budget(), 0L, 0L);
+        ListOrder<String> clipboardTwin = ListOrder.restore(clipboard.lines(), 0, clipboard.state(),
+                clipboard.budget(), 0L, 0L);
+        assertEquals(94, craftTwin.credit(merged, 64, 5L).absorbed() + clipboardTwin.credit(merged, 64, 5L).absorbed(),
+                "which is more than the 64 that arrived");
+
+        List<ListCredit<String>> first = ListOrder.creditInTurn(merged, 64, 5L, List.of(craft, clipboard));
+        assertEquals(30, first.get(0).absorbed(), "the craft order claims its own 30 first");
+        assertTrue(first.get(0).finished());
+        assertEquals(34, first.get(1).absorbed(), "and the clipboard only what is left");
+        assertFalse(first.get(1).finished());
+
+        List<ListCredit<String>> rest = ListOrder.creditInTurn(merged, 86, 6L, List.of(craft, clipboard));
+        assertTrue(rest.get(0).isEmpty(), "a finished order claims nothing more");
+        assertEquals(66, rest.get(1).absorbed());
+        assertTrue(rest.get(1).finished());
+        assertEquals(30L, craft.delivered());
+        assertEquals(100L, clipboard.delivered());
+        // 20 of the 150 were never claimed: they were the click's.
+    }
+
+    @Test
+    void anEmptySlotClaimsNothingAndTheNextOrderIsStillOffered() {
+        Warehouse warehouse = new Warehouse().stocked(COBBLE, 64);
+        ListOrder<String> clipboard = ListOrder.of(List.of(ListEntry.of(0, 0, COBBLE, 64)), CAP,
+                RequestAcknowledgement.NONE, 0L);
+        pass(clipboard, 0L, warehouse);
+        UUID id = clipboard.lines().get(0).request().orElseThrow();
+        List<ListCredit<String>> credits = ListOrder.creditInTurn(id, 64, 1L, Arrays.asList(null, clipboard));
+        assertEquals(2, credits.size());
+        assertTrue(credits.get(0).isEmpty());
+        assertEquals(64, credits.get(1).absorbed());
+        assertTrue(ListOrder.<String>creditInTurn(id, 0, 1L, List.of(clipboard)).get(0).isEmpty());
+    }
+
+    @Test
+    void creditsInTurnNeverAddUpToMoreThanWhatArrivedHoweverTheyInterleave() {
+        Random random = new Random(19L);
+        for (int round = 0; round < 200; round++) {
+            Warehouse warehouse = new Warehouse().stocked(COBBLE, 1_000_000);
+            ListOrder<String> clipboard = ListOrder.of(List.of(ListEntry.of(0, 0, COBBLE, 1 + random.nextInt(500)),
+                    ListEntry.of(0, 1, COBBLE, 1 + random.nextInt(500))), CAP, RequestAcknowledgement.NONE, 0L);
+            ListOrder<String> craft = ListOrder.of(List.of(ListEntry.of(0, 0, COBBLE, 1 + random.nextInt(500))), 9,
+                    RequestAcknowledgement.NONE, 0L);
+            long arrived = 0L;
+            for (long now = 0L; now < 40L && (clipboard.state().isOpen() || craft.state().isOpen()); now++) {
+                pass(random.nextBoolean() ? clipboard : craft, now, warehouse);
+                if (random.nextInt(3) == 0)
+                    warehouse.request(new ListPortion<>(0, COBBLE, 1 + random.nextInt(64)));
+                for (UUID id : List.copyOf(warehouse.openIds())) {
+                    int owed = warehouse.owed(id);
+                    int chunk = 1 + random.nextInt(Math.max(1, owed));
+                    warehouse.reduce(id, chunk);
+                    arrived += chunk;
+                    List<ListCredit<String>> credits = ListOrder.creditInTurn(id, chunk, now,
+                            random.nextBoolean() ? List.of(craft, clipboard) : List.of(clipboard, craft));
+                    int claimed = credits.get(0).absorbed() + credits.get(1).absorbed();
+                    assertTrue(claimed <= chunk, "round " + round + ": " + claimed + " of " + chunk);
+                }
+                assertTrue(clipboard.delivered() + craft.delivered() <= arrived, "round " + round);
+            }
+        }
     }
 
     @Test
@@ -732,6 +973,27 @@ class ListOrderTest {
         void forget(UUID id) {
             owed.remove(id);
             openByKey.values().remove(id);
+        }
+
+        /** What request {@code id} still owes; 0 once it is gone. */
+        int owed(UUID id) {
+            return owed.getOrDefault(id, 0);
+        }
+
+        /** Every open request id, in the order they were made. */
+        Set<UUID> openIds() {
+            return owed.keySet();
+        }
+
+        /** Takes {@code amount} off a request without delivering it, and forgets it once it owes nothing. */
+        void reduce(UUID id, int amount) {
+            Integer before = owed.get(id);
+            if (before == null)
+                return;
+            if (before - amount > 0)
+                owed.put(id, before - amount);
+            else
+                forget(id);
         }
 
         /** Delivers everything one request owes and credits it; the lines that are now ticked off. */

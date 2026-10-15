@@ -549,6 +549,62 @@ public final class ProductionOrders<K, L> {
     }
 
     /**
+     * Lowers what the open orders backing request {@code requestId} promise it by {@code amount} in total, oldest order
+     * first, never below what each has already made (issue #24 review fix). How a terminal's list order gives back the
+     * made part of its share of a merged request: the click left in the request must not lose its amount when the
+     * production made for the order's share falls short later.
+     *
+     * @return how much was taken off the promises, {@code 0..amount}
+     */
+    public long reducePromise(UUID requestId, long amount) {
+        Objects.requireNonNull(requestId, "requestId");
+        long left = Math.max(0L, amount);
+        for (ProductionOrder<K, L> order : List.copyOf(orders.values())) {
+            if (left == 0L)
+                break;
+            if (!order.isOpen() || order.backingRequest().filter(requestId::equals).isEmpty())
+                continue;
+            ProductionOrder<K, L> lower = order.withPromiseReducedBy(left);
+            left -= order.unfulfilledPromise() - lower.unfulfilledPromise();
+            if (lower != order)
+                store(lower);
+        }
+        return Math.max(0L, amount) - left;
+    }
+
+    /**
+     * Lowers the promises of the open orders backing request {@code requestId}, newest first, until together they owe
+     * it no more than the {@code remaining} items it still waits for (issue #24 review fix). A request is never owed
+     * more by production than it waits for, so a shortfall can never take off more than the request still has: a
+     * backstop for every reduction of a request that leaves it open.
+     *
+     * @return how much was taken off the promises
+     */
+    public long clampPromises(UUID requestId, long remaining) {
+        Objects.requireNonNull(requestId, "requestId");
+        List<ProductionOrder<K, L>> backing = new ArrayList<>();
+        long owed = 0L;
+        for (ProductionOrder<K, L> order : orders.values()) {
+            if (order.isOpen() && order.backingRequest().filter(requestId::equals).isPresent()) {
+                backing.add(order);
+                owed += order.unfulfilledPromise();
+            }
+        }
+        long excess = owed - Math.max(0L, remaining);
+        long taken = 0L;
+        for (int i = backing.size() - 1; i >= 0 && excess > 0L; i--) {
+            ProductionOrder<K, L> order = backing.get(i);
+            ProductionOrder<K, L> lower = order.withPromiseReducedBy(excess);
+            long take = order.unfulfilledPromise() - lower.unfulfilledPromise();
+            excess -= take;
+            taken += take;
+            if (lower != order)
+                store(lower);
+        }
+        return taken;
+    }
+
+    /**
      * Removes finished orders that have been finished for at least {@code retentionTicks}, using their deadline as the
      * moment they ended (a finished order's deadline is no longer pushed out).
      * <p>

@@ -25,8 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theirs until you leave the world or server
 - **Nothing is ever half-crafted.** If an ingredient is missing from the terminal, or there is no room for the result
   or for what the recipe leaves behind, nothing is used up, and the status line names the item. Two players crafting
-  from one terminal at the same moment never share an ingredient: the second one is told it is gone. Fetching the
-  ingredients for a laid recipe with one button is still to come
+  from one terminal at the same moment never share an ingredient: the second one is told it is gone
+- **Fetch the ingredients with one button.** Set how many crafts you want in the amount field and press **Fetch**
+  under the grid: the crane brings exactly what the terminal is still missing for them. What was already delivered
+  counts, so a second Fetch for the same recipe brings nothing more, and the button's tooltip lists what will be
+  fetched of each item before you press it. A bar under the grid counts the deliveries, and the red cross at its end
+  gives the fetch up at any time: what arrived stays in the terminal, the rest stays in the racks, and your recipe
+  stays in the grid. A fetch carries on with nobody at the terminal, survives a save, a chunk unload and a restart, and
+  can be started while a clipboard list runs: the two run side by side and share the terminal's open requests,
+  so one of them may wait for a request the other frees
+- **Whole crafts, and one question up front.** Before anything is ordered the terminal works out how many crafts the
+  warehouse can really supply, and how many fit into the terminal once everything already on its way there has
+  arrived. When that is fewer than you asked for it asks once — for example "Only x2 of x4 fit here", or which
+  ingredient is short — and Yes fetches exactly that many; when not even one more craft is possible it says why and
+  orders nothing. A stock rule's reserve or maximum is still asked about item by item while the fetch runs, exactly
+  as for a click. While a fetch runs, everyone at that terminal sees its recipe in their grid, locked until the fetch
+  is done or given up
 - **A note for servers running Create: Schematic Checker.** In mod-whitelist mode the checker removes Wareworks blocks
   that carry block data from uploaded schematics — every rack bay, in the report — so they show in the hologram but
   are missing from the Schematicannon's checklist and from the print. Whitelist mode is the checker's default. The
@@ -37,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A clipboard list that is stuck says why.** When the warehouse refused the list's last portion and nothing else of
+  it is on its way, the terminal's status line now names the reason in gold — for example "Glass is missing" —
+  instead of the list's progress, and the clipboard slot's tooltip names it too. While the list waits for an answer to
+  a question, the status line asks for that answer instead
 - **A Wareworks block at its default settings adds nothing to a schematic.** An unfiltered rack bay, fluid bay or
   warehouse interface, a plain warehouse port, a controller on aisle A, a dock at the default mast height and a stock
   keeper without rules no longer hand a Schematicannon any block data of their own, and saves and chunk packets carry
@@ -68,6 +86,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had armed (losing the export it promised) and zero its counters and its last refusal, and wipe a stock keeper's
   rules when the schematic carried none, which is every ordinary Schematic and Quill save, because it is taken on the
   client. They now stay, as a rack bay's goods and a station's buffer already did
+- **Giving up a clipboard list no longer cancels a click of yours that joined it.** A click for an item the list was
+  fetching at that moment merges into the list's request, as repeated requests always do, and cancelling the list (or
+  taking its clipboard out) cancelled the whole merged request, your click included. Now only the list's own share is
+  given back: your click keeps its amount and the crane brings exactly that, while the list's share stays in the racks,
+  even when the crane had already planned one trip for both, and even when the list's share was being made at one of
+  your machines. Items the crane is already carrying still arrive
+- **A clipboard list no longer takes a click of yours when its items cannot be made after all.** When the list had
+  part of an entry made at one of your machines, a click of yours for the same item joined its request, and the
+  machine's order then ended without making it all — a jammed machine, or the order cancelled — the list was credited
+  your click's items when they arrived, and you got none. The list now takes what was not made off its own entry and
+  fetches it again, and your click gets its items
+- **Two players answering a clipboard list's question no longer mix it up.** A list stops on a question when an entry
+  would take reserved items or go past a maximum, and every screen at the terminal shows it. When one player answered
+  and the list at once asked about its next entry, the other player's screen still showed the first question, and a
+  Yes there was taken as a Yes to the new one. Every screen now gets the new question, and a Yes only ever counts for
+  the question it was given to
 
 ## [0.10.0-beta] - 2026-10-14
 

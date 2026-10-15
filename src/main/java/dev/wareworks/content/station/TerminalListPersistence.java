@@ -19,12 +19,17 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 
 /**
- * NBT form of a warehouse terminal's clipboard order ({@code docs/warehouse-system.md} §3.4.4, M23, issue #19):
+ * NBT form of a warehouse terminal's clipboard order ({@code docs/warehouse-system.md} §3.4.4, M23, issue #19), and
+ * since issue #24 of its craft order too, which is the same kind of order under another tag:
  * <pre>
  * ListOrder: { State: "RUNNING", Dropped: int,
  *              Budget: { Any?: true, Reserve: long, Maximum: long, Ingredient: long, Produced: long },
- *              Lines: [ { P: int, I: int, Item: &lt;ItemKey&gt;, Want: int, Got: int, Flight: int, Req?: UUID } ] }
+ *              Lines: [ { P: int, I: int, Item: &lt;ItemKey&gt;, Want: int, Got: int, Flight: int, Req?: UUID,
+ *                         Made?: int } ] }
  * </pre>
+ * {@code Made} is the part of {@code Flight} production is making for the line's portion (issue #24 review fix),
+ * written only while it is above 0: a line saved without it reads back with no made part, which is what every line
+ * was before it existed.
  * <b>The two tick stamps are deliberately not saved.</b> A world that was closed for an hour would otherwise come back
  * with every order already past its stall timeout and immediately parked; a restored order starts its interval and its
  * stall timer over instead, exactly as a production order restarts its deadline
@@ -62,12 +67,25 @@ final class TerminalListPersistence {
     private static final String DELIVERED = "Got";
     private static final String IN_FLIGHT = "Flight";
     private static final String REQUEST = "Req";
+    private static final String MADE = "Made";
 
     private TerminalListPersistence() {
     }
 
     /** Writes {@code order} into {@code tag}, and nothing at all for a terminal without one. Never throws. */
     static void write(CompoundTag tag, @Nullable ListOrder<ItemKey> order, HolderLookup.Provider registries) {
+        write(tag, order, registries, LIST_ORDER_TAG);
+    }
+
+    /**
+     * Writes {@code order} into {@code tag} under {@code name}, and nothing at all without one. Never throws.
+     * <p>
+     * The name is what lets a terminal keep its two orders side by side in one save (issue #24, ADR-062): the
+     * clipboard's under {@value #LIST_ORDER_TAG}, the craft order's inside its own compound
+     * ({@code TerminalCraftOrder}). The format is the same for both.
+     */
+    static void write(CompoundTag tag, @Nullable ListOrder<ItemKey> order, HolderLookup.Provider registries,
+            String name) {
         if (order == null)
             return;
         ListTag lines = new ListTag();
@@ -85,6 +103,8 @@ final class TerminalListPersistence {
                 if (line.inFlight() > 0)
                     entry.putInt(IN_FLIGHT, line.inFlight());
                 line.request().ifPresent(id -> entry.putUUID(REQUEST, id));
+                if (line.producing() > 0)
+                    entry.putInt(MADE, line.producing());
                 lines.add(entry);
             } catch (RuntimeException e) {
                 Wareworks.LOGGER.warn("Could not save a clipboard order line {}", line, e);
@@ -96,7 +116,7 @@ final class TerminalListPersistence {
             orderTag.putInt(DROPPED, order.dropped());
         orderTag.put(BUDGET, writeBudget(order.budget()));
         orderTag.put(LINES, lines);
-        tag.put(LIST_ORDER_TAG, orderTag);
+        tag.put(name, orderTag);
     }
 
     /**
@@ -104,9 +124,18 @@ final class TerminalListPersistence {
      * interval and stall origin (see the class comment).
      */
     static Optional<ListOrder<ItemKey>> read(CompoundTag tag, HolderLookup.Provider registries, long now) {
-        if (!tag.contains(LIST_ORDER_TAG, Tag.TAG_COMPOUND))
+        return read(tag, registries, now, LIST_ORDER_TAG);
+    }
+
+    /**
+     * Reads the order {@link #write(CompoundTag, ListOrder, HolderLookup.Provider, String)} wrote under {@code name},
+     * or empty when the tag holds none there. Never throws.
+     */
+    static Optional<ListOrder<ItemKey>> read(CompoundTag tag, HolderLookup.Provider registries, long now,
+            String name) {
+        if (!tag.contains(name, Tag.TAG_COMPOUND))
             return Optional.empty();
-        CompoundTag orderTag = tag.getCompound(LIST_ORDER_TAG);
+        CompoundTag orderTag = tag.getCompound(name);
         ListTag lineTags = orderTag.getList(LINES, Tag.TAG_COMPOUND);
         List<ListLine<ItemKey>> lines = new ArrayList<>(Math.min(lineTags.size(), ListOrder.MAX_ENTRIES));
         int skipped = 0;
@@ -140,7 +169,7 @@ final class TerminalListPersistence {
             return Optional.empty();
         Optional<UUID> request = entry.hasUUID(REQUEST) ? Optional.of(entry.getUUID(REQUEST)) : Optional.empty();
         return Optional.of(new ListLine<>(entry.getInt(PAGE), entry.getInt(INDEX), key.get(), wanted,
-                entry.getInt(DELIVERED), entry.getInt(IN_FLIGHT), request));
+                entry.getInt(DELIVERED), entry.getInt(IN_FLIGHT), request, entry.getInt(MADE)));
     }
 
     /** The consent budget: a flag for "whatever it costs" and otherwise the four numbers the player accepted. */

@@ -118,6 +118,18 @@ class RequestAcknowledgementTest {
         assertEquals(RequestAcknowledgement.NONE, answer);
     }
 
+    /** A craft fetch's answer is compared like a list order's: what would be made is one of its numbers (issue #24). */
+    @Test
+    void anAnswerToACraftFetchHasToNameWhatWouldBeMade() {
+        RequestConfirmation<String> made = new RequestConfirmation<>(PLANK, 8L, 0L, 0L, 0L, 8L, StockRule.UNSET,
+                List.of());
+        assertTrue(new RequestAcknowledgement(false, 0L, 0L, 0L).covers(made), "a click is never asked about it");
+        assertFalse(new RequestAcknowledgement(false, 0L, 0L, 0L, 7L).covers(made, RequestScope.CRAFT));
+        assertTrue(new RequestAcknowledgement(false, 0L, 0L, 0L, 8L).covers(made, RequestScope.CRAFT));
+        assertEquals(new RequestAcknowledgement(false, 0L, 0L, 0L, 8L).covers(made, RequestScope.LIST),
+                new RequestAcknowledgement(false, 0L, 0L, 0L, 8L).covers(made, RequestScope.CRAFT));
+    }
+
     @Test
     void anyOutweighsTheNumbersItCarries() {
         RequestAcknowledgement answer = new RequestAcknowledgement(true, 1L, 1L, 1L);

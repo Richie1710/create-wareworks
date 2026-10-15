@@ -136,7 +136,10 @@ public final class TerminalVisualScenario implements VisualScenario {
      */
     private static final Item LONG_NAME = Items.WAXED_OXIDIZED_CUT_COPPER_STAIRS;
 
-    /** Item types placed into the racks; the grid shows 36 cells, so this fills it and leaves room to scroll. */
+    /**
+     * Item types placed into the racks: as many as the grid shows with the default buffer (12 × 2 cells since M11), so
+     * this fills it, and the planks the production station offers come on top of them, which leaves room to scroll.
+     */
     private static final List<ItemStack> STOCK = List.of(new ItemStack(Items.IRON_INGOT, 64),
             new ItemStack(Items.COPPER_INGOT, 64), new ItemStack(Items.GOLD_INGOT, 48),
             new ItemStack(Items.REDSTONE, 64), new ItemStack(Items.LAPIS_LAZULI, 32), new ItemStack(Items.DIAMOND, 24),
@@ -1863,6 +1866,16 @@ public final class TerminalVisualScenario implements VisualScenario {
                 TerminalCraftResult.NO_RECIPE))
             row.put("craft.partial." + result.name().toLowerCase(Locale.ROOT), WarehouseTerminalScreen
                     .craftAnswerText(result, WIDEST_AMOUNT, Component.empty(), Component.empty()));
+        // The craft order (issue #24, slice 2) wins this row like the clipboard's while it has work to do, in every
+        // state it can be in then, with the result's name left out because it gives way first; then the line it
+        // leaves when it finishes, and the answer to an edit of the grid it locks.
+        for (ListOrderState state : ListOrderState.values()) {
+            if (state.isOpen())
+                row.put("craft.status." + state.name().toLowerCase(Locale.ROOT),
+                        WarehouseTerminalScreen.craftStatusText(state, WIDEST_AMOUNT, Component.empty()));
+        }
+        row.put("craft.done", WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_DONE));
+        row.put("craft.grid_locked", WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_GRID_LOCKED));
         return new MeasuredRow("terminal status row", ROW_WIDTH, row,
                 STATUS_ROW_TOO_LONG.getOrDefault(language, Set.of()));
     }

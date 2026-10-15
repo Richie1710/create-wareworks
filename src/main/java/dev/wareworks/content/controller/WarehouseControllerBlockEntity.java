@@ -2212,7 +2212,28 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // aisle really holds — or delete it outright when the shortfall reaches its remaining amount (§3.5.3).
         long owed = order.unfulfilledPromise();
         if (owed > 0)
-            order.backingRequest().ifPresent(id -> reduceRequest(id, (int) Math.min(Integer.MAX_VALUE, owed)));
+            order.backingRequest().ifPresent(id -> reduceRequestForShortfall(id,
+                    (int) Math.min(Integer.MAX_VALUE, owed)));
+    }
+
+    /**
+     * Production that request {@code id} waited for fell short by {@code owed} items: the request is reduced by that
+     * much, and when it goes to a warehouse terminal, the list orders there that share it take the shortfall off their
+     * own made part first ({@code WarehouseTerminalBlockEntity#onRequestShortfall}, issue #24 review fix). A player's
+     * click merged into an order's portion is credited after the order's lines, so without that the order would be
+     * credited the click's items and the click would get nothing; an order makes its loss up with its next portion.
+     */
+    private void reduceRequestForShortfall(UUID id, int owed) {
+        Optional<RetrievalRequest<ItemKey, BlockPos>> before = requests.get(id);
+        reduceRequest(id, owed);
+        if (before.isEmpty() || level == null)
+            return;
+        BlockPos destination = before.get().destination();
+        // Never a chunk load for this: an unloaded terminal's orders are left as they are, which is what they were
+        // before the hook existed, and the request was reduced either way.
+        if (level.isLoaded(destination) && level.getBlockEntity(destination) instanceof WarehouseTerminalBlockEntity
+                terminal)
+            terminal.onRequestShortfall(id, owed);
     }
 
     /**
@@ -2228,15 +2249,26 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         dispatch.onOwnersCancelled(lines);
     }
 
-    /** Takes {@code amount} items off a request without counting them as delivered; releases it if nothing remains. */
+    /**
+     * Takes {@code amount} items off a request without counting them as delivered; releases it if nothing remains. A
+     * crane job that was planned for more than what is left and has not picked yet is cancelled, so it cannot fetch the
+     * items that were just given back ({@link CraneDispatch#onRequestReduced}).
+     */
     private void reduceRequest(UUID id, int amount) {
         if (amount <= 0)
             return;
         Optional<RetrievalRequest<ItemKey, BlockPos>> before = requests.get(id);
         if (before.isEmpty())
             return;
-        if (requests.reduce(id, amount).isEmpty())
+        Optional<RetrievalRequest<ItemKey, BlockPos>> after = requests.reduce(id, amount);
+        if (after.isEmpty()) {
             onRequestsGone(List.of(before.get()));
+        } else {
+            dispatch.onRequestReduced(id, after.get().remaining());
+            // The backstop (issue #24 review fix): production never owes a request more than it still waits for, so
+            // a shortfall later can never take off more than is left of it.
+            productionOrders.clampPromises(id, after.get().remaining());
+        }
         setChanged();
         markChunkKeepDirty(); // M19: what the aisle has to do changed
     }
@@ -2427,11 +2459,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     /**
      * Server: {@link #request(BlockPos, ItemKey, int, int, StockAccess, RequestAcknowledgement)} made for a
-     * {@link RequestScope} (M23, issue #19, ADR-036).
+     * {@link RequestScope} (M23, issue #19, ADR-036; the craft order's {@link RequestScope#CRAFT} since issue #24).
      * <p>
      * <b>A portion of a list order is not a new kind of request.</b> It takes this very method, with the same
      * clamping, the same merging (ADR-020), the same reserves, maxima, filters, priorities, chains, safety stop and
-     * full-destination back-off; nothing downstream can tell it from a click. The scope changes exactly two things,
+     * full-destination skip, which leaves the request open; nothing downstream can tell it from a click. The scope
+     * changes exactly two things,
      * both in {@code core.terminal}: whether a request that would have items <b>made</b> has to be agreed to first
      * ({@link RequestConfirmation#required(RequestScope)} — a list order starts production while nobody is at the
      * terminal), and whether an answer has to name that number
@@ -3777,6 +3810,43 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return counted;
     }
 
+    /**
+     * Server: gives back {@code share} items of request {@code id} that one asker no longer wants, without counting
+     * them as delivered — how a terminal's list order is given up (issue #24, ADR-062).
+     * <p>
+     * Repeated requests for one key and destination merge into one request that keeps its id (ADR-020), so a list
+     * order's portion can share an id with a player's own click or with the terminal's other order. Cancelling the
+     * whole request took everybody else's amount down with it; reducing it by the order's own share leaves theirs as it
+     * was. The request keeps its queue position, and only when nothing remains is it removed and a crane job serving
+     * it cancelled, exactly as for {@link #cancelRequest}: a crane already carrying its items then takes them back
+     * into storage. While something remains, a crane job planned for the larger amount that has not picked yet is
+     * cancelled and planned again for what is left, so the share given back stays in the racks; a crane already
+     * carrying items of the request delivers them, and they count towards what is left.
+     *
+     * @param share the asker's own outstanding amount; nothing happens for less than 1 or an unknown id
+     */
+    public void reduceRequestShare(UUID id, int share) {
+        reduceRequestShare(id, share, 0);
+    }
+
+    /**
+     * {@link #reduceRequestShare(UUID, int)} for a share of which {@code producing} items the request waits for from
+     * production the asker's own portion started (issue #24 review fix). That part of the production promise is given
+     * back first ({@link ProductionOrders#reducePromise}): the production order runs on and its result lands in stock,
+     * but it no longer owes the request those items, so a later shortfall takes nothing off whoever is left in it — a
+     * player's click merged into the portion keeps its amount.
+     *
+     * @param producing the made part of {@code share}, {@code 0..share}
+     */
+    public void reduceRequestShare(UUID id, int share, int producing) {
+        Objects.requireNonNull(id, "id");
+        if (level == null || level.isClientSide || share < 1)
+            return;
+        if (producing > 0 && productionOrders.reducePromise(id, Math.min(producing, share)) > 0)
+            setChanged();
+        reduceRequest(id, share);
+    }
+
     /** Server: removes request {@code id}; a crane job serving it is cancelled. */
     public Optional<RetrievalRequest<ItemKey, BlockPos>> cancelRequest(UUID id) {
         Optional<RetrievalRequest<ItemKey, BlockPos>> cancelled = requests.cancel(id);
@@ -3794,7 +3864,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     // --- clipboard orders (M23, issue #19, ADR-036) ----------------------------------------------------------------
 
     /**
-     * Server: from a terminal — "I have a clipboard order now, look in on me".
+     * Server: from a terminal — "I have a clipboard order now, look in on me", and since issue #24 the same for its
+     * craft order, the crafting panel's Fetch: the terminal's own hooks cover both orders, so nothing here tells them
+     * apart (ADR-062).
      * <p>
      * It is a hint and not a registration: the set is rebuilt from the world
      * ({@link #refreshListTerminals(WarehouseLayout)}), so a terminal that never calls this is found by the next
@@ -3811,7 +3883,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * Looks in on the terminals that are working a clipboard order off ({@code docs/warehouse-system.md} §3.4.4).
+     * Looks in on the terminals that are working a list order off: a clipboard order ({@code docs/warehouse-system.md}
+     * §3.4.4) or a craft order (§3.4.5, issue #24), which the terminal's own hooks run side by side.
      * <p>
      * Each terminal decides for itself whether a top-up pass is due and what it costs; this walk is one block entity
      * lookup per <b>known</b> list terminal, at most {@value #MAX_LIST_TERMINALS} of them and only every
@@ -3843,7 +3916,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     /**
      * Rebuilds {@link #listTerminals} from the warehouse's own output-style members: every loaded terminal of this
-     * warehouse that really has an open clipboard order, in aisle order and bounded by
+     * warehouse that really has an open list order (a clipboard order or a craft order), in aisle order and bounded by
      * {@value #MAX_LIST_TERMINALS}.
      * <p>
      * It resolves one block entity per <b>loaded</b> output station, which is why it runs on a dirty flag rather than on

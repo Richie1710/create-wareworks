@@ -654,8 +654,9 @@ public final class WareworksConfig {
                     .defineInRange("outputBufferSlots", 9, 1, 27);
             terminalBufferSlots = builder
                     .comment("Buffer slots of a warehouse terminal. Applies to newly placed or reloaded stations.",
-                            "More than 12 slots make the terminal screen taller; it takes those rows from its item "
-                                    + "grid (which scrolls), so the window still fits every GUI scale.")
+                            "Every 11 slots past the first 11 add a slot row to the terminal screen (its twelfth "
+                                    + "column holds the clipboard slot); it takes those rows from its item grid "
+                                    + "(which scrolls), so the window still fits every GUI scale.")
                     .worldRestart()
                     .defineInRange("terminalBufferSlots", 9, 1, 27);
             maxTerminalRequestAmount = builder
@@ -686,20 +687,22 @@ public final class WareworksConfig {
                                     + "saved for them. 0 is not allowed; to switch the order off, do not use it.")
                     .defineInRange("maxTerminalUsageEntries", 64, 1, 256);
             terminalListOpenRequests = builder
-                    .comment("Retrieval requests one clipboard order keeps open at a time.",
+                    .comment("Retrieval requests one list order keeps open at a time: a clipboard order, or the "
+                            + "ingredient fetch of a terminal's crafting grid, each on its own.",
                             "A list is worked off in portions: this is how many of its entries the crane may be "
                                     + "fetching at once. They are ordinary requests, so maxOpenRequests and "
                                     + "maxOpenRequestsPerOutput still bound them.")
                     .defineInRange("terminalListOpenRequests", 2, 1, 16);
             terminalListIntervalTicks = builder
-                    .comment("Ticks between two top-up passes of a clipboard order.",
+                    .comment("Ticks between two top-up passes of a clipboard order or of a crafting grid's "
+                            + "ingredient fetch.",
                             "A delivery makes the next pass due at once, so freed buffer space continues the list "
                                     + "without waiting for this interval; it only bounds how often an order that "
                                     + "found nothing measures again.")
                     .defineInRange("terminalListIntervalTicks", 20, 1, 1200);
             terminalListStallTicks = builder
-                    .comment("Ticks a clipboard order may make no progress at all before it stops measuring until a "
-                            + "player resumes it at the terminal.",
+                    .comment("Ticks a clipboard order or a crafting grid's ingredient fetch may make no progress at "
+                            + "all before it stops measuring until a player resumes it at the terminal.",
                             "An order that is waiting for items already on their way, or for a full buffer to be "
                                     + "emptied, is making progress and never parks. Set to 0 to let an order keep "
                                     + "trying for ever.")

@@ -7,9 +7,10 @@ import java.util.Objects;
  * ({@code docs/warehouse-system.md} §3.4.4, M23, issue #19, ADR-036).
  * <p>
  * <b>A portion is not a new kind of request.</b> It is a key and an amount, handed to precisely the call a click goes
- * through, with the order's consent budget and {@link RequestScope#LIST}. Everything downstream — merging (ADR-020),
- * reserves, maxima, filters, priorities, chains, the safety stop and the full-destination back-off — cannot tell it
- * from a click, which is the whole "no second request system" requirement of issue #19.
+ * through, with the order's consent budget and its scope ({@link RequestScope#LIST} for a clipboard,
+ * {@link RequestScope#CRAFT} for a craft fetch). Everything downstream — merging (ADR-020), reserves, maxima, filters,
+ * priorities, chains, the safety stop and the full-destination skip — cannot tell it from a click, which is the whole
+ * "no second request system" requirement of issue #19.
  * <p>
  * <b>Why the amount is what it is.</b> It is what the line still needs, bounded by {@code maxTerminalRequestAmount} —
  * not one stack. A request above one stack is already split into successive {@code RETRIEVE} jobs by the planner

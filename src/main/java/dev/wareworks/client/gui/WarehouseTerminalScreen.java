@@ -20,15 +20,19 @@ import com.simibubi.create.foundation.gui.widget.Label;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalListState;
 import dev.wareworks.content.station.TerminalMenuLayout;
+import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.TerminalScreenStatus;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
@@ -53,6 +57,8 @@ import dev.wareworks.core.terminal.TerminalUsageCounts;
 import dev.wareworks.network.ProductionCancelPayload;
 import dev.wareworks.network.TerminalConfirmPayload;
 import dev.wareworks.network.TerminalCraftAnswerPayload;
+import dev.wareworks.network.TerminalCraftOrderPayload;
+import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
@@ -116,6 +122,13 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * from what the crane delivered into the buffer with a click on the result. The panel's own work is
  * {@link TerminalCraftPanel}'s; this screen folds it, frames it and offers it each click in its turn
  * ({@link #mouseClicked}).
+ * <p>
+ * <b>Fetch</b> (issue #24, slice 2, ADR-062). The panel's order button fetches the grid's ingredients for the amount
+ * field's number of crafts: the terminal's craft order, a second list order beside the clipboard's. The button then
+ * turns into Answer, Resume or Cancel exactly as the list button does ({@link #craftOrderAction()}), the order's line
+ * wins the status row like the list's, every screen at the terminal shows the order's grid and refuses to edit it
+ * while it is open, and a Fetch that can bring fewer crafts than asked for puts its question up in this screen's one
+ * dialog ({@link #craftConfirmation()}).
  */
 public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<WarehouseTerminalMenu> {
     /** How long the answer to a request stays in the status line. */
@@ -139,7 +152,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int TITLE_Y = 2;
     private static final int COUNT_SHIFT_Z = 200;
     /** Usable width of a row of text: the window without its two margins. */
-    private static final int ROW_WIDTH = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN;
+    static final int ROW_WIDTH = TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN;
     /** Free space kept between two texts that share a row. */
     private static final int TEXT_GAP = 4;
     /** One vanilla stack: how far one shift-scroll step moves the amount input (clamped to the configured maximum). */
@@ -147,10 +160,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     // The colours the crafting panel shares with the window are package-private, so the two cannot drift apart.
     static final int COLOR_HEADER = 0xFFFBDC7D;
-    private static final int COLOR_TEXT = 0xFFEEEEEE;
+    static final int COLOR_TEXT = 0xFFEEEEEE;
     static final int COLOR_DIM = 0xFFA0A0A0;
     static final int COLOR_SUCCESS = 0xFF89F189;
-    private static final int COLOR_ERROR = 0xFFFF8080;
+    static final int COLOR_ERROR = 0xFFFF8080;
     private static final int COLOR_PANEL_INSET = 0xFF1B1710;
     private static final int COLOR_SCROLLBAR_TRACK = 0x40000000;
     private static final int COLOR_SCROLLBAR_KNOB = 0xFF9A7B4F;
@@ -160,7 +173,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** Background of such a cell: the same blue, faint enough to leave the item itself readable. */
     private static final int COLOR_PRODUCIBLE_CELL = 0x3389C7F1;
     /** A production order that ended with ingredients already handed to a machine ({@code §3.5}). */
-    private static final int COLOR_LOST = 0xFFFFAA33;
+    static final int COLOR_LOST = 0xFFFFAA33;
     /**
      * The badge of a cell a stock rule governs (M15, issue #3), in the corner opposite the amount: gold while the
      * warehouse is short of the item, red while it accepts no more of it, and a quiet blue-grey while the rule is
@@ -172,7 +185,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int COLOR_RULE_AT_MAXIMUM = 0xFFFF8080;
     private static final int COLOR_RULE_AT_RESERVE = 0xFF89C7F1;
     /** The cancel affordance at the end of an open order line: a plain glyph, so every font and language has it. */
-    private static final String CANCEL_MARK = "x";
+    static final String CANCEL_MARK = "x";
     /**
      * Smallest width the item half of an order line keeps. The state half wins the row (see {@link #renderOrderLine}),
      * but a chain's line has a badge between them, and a name cut down to three letters names nothing at all — so below
@@ -336,11 +349,17 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     @Nullable
     private RequestConfirmation<ItemKey> confirmed;
+    /**
+     * Where {@link #confirmed} was answered: a click, the clipboard order or the craft order (issue #24 review fix).
+     * The two orders can ask about the same item one after the other — their portions of it merge — and the clipboard
+     * order's Yes about planks says nothing about the craft order's first question about planks.
+     */
+    private RequestScope confirmedScope = RequestScope.CLICK;
     private boolean costChanged;
     /**
-     * Where the answer to {@link #confirming} belongs: back to the click as a request, or to the clipboard order
-     * (M23, issue #19). A list order stops on the very panel a click raises, which is the "use the mechanism the
-     * terminal already has" of the issue; this field is the whole difference between the two.
+     * Where the answer to {@link #confirming} belongs: back to the click as a request, to the clipboard order (M23,
+     * issue #19) or to the craft order (issue #24, slice 2). A list order stops on the very panel a click raises, which
+     * is the "use the mechanism the terminal already has" of the issue; this field is the whole difference.
      */
     private RequestScope confirmScope = RequestScope.CLICK;
     /**
@@ -373,9 +392,26 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private final GlobalPos craftGridKey;
     /** Whether the crafting panel is folded out, making the window {@value TerminalMenuLayout#FOLDED_WIDTH} px wide. */
     private boolean craftOpen = rememberedCraftPanel;
+    /** Whether the server's first craft-order state has arrived: the full sync that follows opening the screen. */
+    private boolean craftOrderReceived;
     /** The server's answer to the last craft click, or {@code null} before the first one (M32, issue #24). */
     @Nullable
     private TerminalCraftAnswerPayload craftAnswer;
+    /**
+     * How far this terminal's craft order has got, and the grid it was started for, as last pushed (issue #24, slice
+     * 2); {@link TerminalCraftOrderState#NONE} until the server sent one.
+     */
+    private TerminalCraftOrderState craftOrderState = TerminalCraftOrderState.NONE;
+    /** The server's answer to the last Fetch or craft order action, or {@code null} before the first one (slice 2). */
+    @Nullable
+    private TerminalCraftAnswerPayload craftFetchAnswer;
+    /**
+     * What the panel's Fetch would really bring, while the question it raised is up (issue #24, slice 2): fewer crafts
+     * than the amount field asked for, measured on the server before anything was requested. The third question the
+     * one dialog of this screen can put up; {@code null} while it is not up.
+     */
+    @Nullable
+    private CraftFetchQuestion<ItemKey> craftConfirming;
     /**
      * The wrapped text and the geometry of {@link #confirming}, built once and dropped whenever anything it is built
      * from changes: the question itself, {@link #costChanged}, and the window layout ({@link #init()}).
@@ -398,6 +434,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** The panel's Clear button; {@code null} while the panel is folded in. */
     @Nullable
     private IconButton craftClear;
+    /**
+     * The craft order's one button (slice 2): Fetch, Answer, Resume or Cancel, whichever the order's state calls for,
+     * exactly like the clipboard order's {@link #listButton}; {@code null} while the panel is folded in.
+     */
+    @Nullable
+    private IconButton craftFetch;
 
     public WarehouseTerminalScreen(WarehouseTerminalMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
@@ -494,15 +536,22 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 .withStyle(ChatFormatting.GRAY));
         addRenderableWidget(craftToggle);
         craftClear = null;
+        craftFetch = null;
         if (craftOpen) {
-            // Only the Clear place of the panel's button row is taken in slice 1; Fetch's stays free until it comes.
+            // Fetch and what it turns into while the craft order runs (slice 2), then Clear; the middle place of the
+            // row stays free for a later button. Fetch's tooltip is the panel's (TerminalCraftPanel#fetchTooltip): it
+            // names every item the press would ask for, and it is shown while the button is greyed out as well.
+            craftFetch = new IconButton(leftPos + layout.craftButtonX(TerminalMenuLayout.FETCH_BUTTON),
+                    topPos + layout.craftButtonY(), AllIcons.I_PLAY);
+            craftFetch.withCallback(this::sendCraftOrderAction);
+            addRenderableWidget(craftFetch);
             craftClear = new IconButton(leftPos + layout.craftButtonX(TerminalMenuLayout.CLEAR_BUTTON),
                     topPos + layout.craftButtonY(), AllIcons.I_TRASH);
             craftClear.setToolTip(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CLEAR));
             craftClear.withCallback(craftPanel::clear);
             addRenderableWidget(craftClear);
         }
-        updateCraftClear();
+        updateCraftButtons();
         craftPanel.opened();
 
         updateOptionButtons();
@@ -1004,6 +1053,14 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     public void onList(TerminalListPayload payload) {
         TerminalListState before = listState;
         listState = payload.state();
+        // A portion's question the order no longer asks — somebody answered it or said no, or the order ended — is
+        // dropped: a Yes to it could only be refused, and the current question arrives on its own (issue #24 review
+        // fix).
+        if (confirming != null && confirmScope == RequestScope.LIST && !listState.asking())
+            dropConfirmation();
+        // A Yes to a finished order's question says nothing about the next order's first one.
+        if (!listState.isOpen() && confirmedScope == RequestScope.LIST)
+            confirmed = null;
         // A list that has just finished says so for a few seconds, like every other answer, and then gives the row back
         // (M23 review fix): its lasting receipt is the clipboard and the ticks on it, which the slot's own tooltip
         // shows, and the status row belongs to whatever the terminal is doing now.
@@ -1038,6 +1095,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             // Only one dialog at a time: the list's question wins over a chain a player was reading (M20/M23).
             confirming = null;
             confirmed = null;
+            craftConfirming = null;
             openPlan = null;
             stepPanel = null;
             panel = null;
@@ -1099,6 +1157,210 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return craftPanel.view();
     }
 
+    /**
+     * The server sent how far this terminal's craft order has got (issue #24, slice 2): its numbers and the grid it was
+     * started for, which every screen at the terminal shows and locks while the order is open
+     * ({@link TerminalCraftOrderState#locksGrid()}).
+     */
+    public void onCraftOrder(TerminalCraftOrderStatePayload payload) {
+        TerminalCraftOrderState before = craftOrderState;
+        boolean opening = !craftOrderReceived;
+        craftOrderReceived = true;
+        craftOrderState = payload.state();
+        // A Fetch question asks about starting an order; once one is open here — this player's or another's — it can
+        // no longer be answered: the grid it was asked for is replaced below, and a Yes would only be refused as
+        // ALREADY_RUNNING (issue #24 review fix).
+        if (craftConfirming != null && craftOrderState.isOpen()) {
+            craftConfirming = null;
+            costChanged = false;
+            panel = null;
+        }
+        // A portion's question the order no longer asks is dropped, as for the clipboard order (onList).
+        if (confirming != null && confirmScope == RequestScope.CRAFT && !craftOrderState.asking())
+            dropConfirmation();
+        if (!craftOrderState.isOpen() && confirmedScope == RequestScope.CRAFT)
+            confirmed = null;
+        // The order's grid is the one every screen here shows and nobody edits while it is open (ADR-062), so this
+        // player's grid becomes it; it stays when the order ends, so what was fetched is what is crafted.
+        if (craftOrderState.locksGrid())
+            craftPanel.adopt(craftOrderState.cells(), !before.locksGrid());
+        // Finished, not given up (a cancelled order is gone, not done): say so for a few seconds, like a list does,
+        // and give the row back. The panel's result cell is where the player goes next.
+        if (before.isOpen() && craftOrderState.active() && !craftOrderState.isOpen()) {
+            feedback = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_DONE);
+            feedbackColor = COLOR_SUCCESS;
+            feedbackTicks = FEEDBACK_TICKS;
+            playUiSound(SoundEvents.NOTE_BLOCK_BELL.value(), 0.8F, 1.6F);
+        }
+        // A terminal with an open craft order folds the panel out by itself, once — on opening the screen, or when
+        // somebody starts a fetch here while the screen is wide enough that folding out moves nothing — so the
+        // progress and the locked recipe are on screen. Below MAX_FOLD_OFFSET's width the fold shifts the main window
+        // left (TerminalMenuLayout#foldOffset), under a cursor that may be about to click a stock cell, and a left click
+        // there is a request: a remote start leaves the panel folded in there, and the status row shows the fetch
+        // (issue #24 review fix). A player who folds it in afterwards keeps it folded in; their own choice for the next
+        // screen stays what it was.
+        if (craftOrderState.isOpen() && !before.isOpen() && !craftOpen
+                && (opening || TerminalMenuLayout.foldOffset(width) == TerminalMenuLayout.MAX_FOLD_OFFSET)) {
+            craftOpen = true;
+            rebuildWidgets();
+        }
+        updateCraftButtons();
+    }
+
+    /**
+     * What the craft order's button does right now (slice 2), the counterpart of {@link #listAction()}: Fetch while
+     * no order is open (a finished one is replaced), Answer while a portion's question waits, Resume while the order
+     * is parked, and Cancel while it runs. The dev harness and the tests of the client side read it too.
+     */
+    public TerminalCraftOrderPayload.Action craftOrderAction() {
+        if (!craftOrderState.isOpen())
+            return TerminalCraftOrderPayload.Action.FETCH;
+        if (craftOrderState.asking())
+            return TerminalCraftOrderPayload.Action.ANSWER;
+        if (craftOrderState.state() == ListOrderState.PARKED)
+            return TerminalCraftOrderPayload.Action.RESUME;
+        return TerminalCraftOrderPayload.Action.CANCEL;
+    }
+
+    /**
+     * Sends what the craft order's button does ({@link #craftOrderAction()}). A Fetch goes through the panel, which
+     * knows the grid and whether the server has answered it ({@link TerminalCraftPanel#fetch()}). {@code ANSWER}
+     * accepts nothing, which is the whole action: the question one portion raised lives on the server, so the button
+     * asks for it to be put up again, exactly as the list button does.
+     *
+     * @return whether anything was sent
+     */
+    public boolean sendCraftOrderAction() {
+        TerminalCraftOrderPayload.Action action = craftOrderAction();
+        if (action == TerminalCraftOrderPayload.Action.FETCH)
+            return craftPanel.fetch();
+        PacketDistributor.sendToServer(action == TerminalCraftOrderPayload.Action.ANSWER
+                ? TerminalCraftOrderPayload.showQuestion(menu.containerId)
+                : TerminalCraftOrderPayload.of(menu.containerId, action));
+        if (action == TerminalCraftOrderPayload.Action.CANCEL)
+            playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
+        else
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
+        return true;
+    }
+
+    /**
+     * Gives the open craft order up: the cancel mark on the panel's progress row, in any state of the order. The server
+     * decides — it re-checks reach and gives back only the order's own share of its requests; what was delivered stays
+     * in the buffer.
+     *
+     * @return whether a cancellation was sent
+     */
+    public boolean cancelCraftOrder() {
+        if (!craftOrderState.isOpen())
+            return false;
+        PacketDistributor.sendToServer(TerminalCraftOrderPayload.of(menu.containerId,
+                TerminalCraftOrderPayload.Action.CANCEL));
+        playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
+        return true;
+    }
+
+    /**
+     * How many crafts the panel's Fetch is for: the open craft order's own, or else the window's amount field — the
+     * field a click in the list asks with, so "x3" means three crafts here. The cells' colours and every number of
+     * the Fetch tooltip are measured against it.
+     */
+    public int fetchCrafts() {
+        if (craftOrderState.isOpen())
+            return Math.max(1, craftOrderState.crafts());
+        return TerminalAmounts.clamp(selectedAmount, maxRequestAmount());
+    }
+
+    /** Whether the terminal's open craft order locks the crafting grid (ADR-062): every edit is refused then. */
+    public boolean isCraftGridLocked() {
+        return craftOrderState.locksGrid();
+    }
+
+    /** Says in the status row why an edit of the locked grid did nothing: the fetch has to be given up first. */
+    void refuseLockedEdit() {
+        feedback = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_GRID_LOCKED);
+        feedbackColor = COLOR_ERROR;
+        feedbackTicks = FEEDBACK_TICKS;
+        playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
+    }
+
+    /** How far this terminal's craft order has got, as last pushed (the dev harness and the client side's tests). */
+    public TerminalCraftOrderState craftOrderState() {
+        return craftOrderState;
+    }
+
+    /**
+     * The server answered the panel's Fetch or one of the craft order's buttons (issue #24, slice 2): the sentence goes
+     * into the status row for a few seconds, green for an action that did what it was asked and red otherwise.
+     * <p>
+     * A <b>question</b> ({@link TerminalCraftResult#isAsking()}) requested nothing: fewer crafts than asked for can be
+     * fetched, and the screen's one dialog goes up with the numbers a Yes would start ({@link #craftConfirmation()}).
+     * {@link TerminalCraftResult#CHANGED} is that question again for a Yes the warehouse overtook, so the dialog says
+     * the warehouse changed. An {@code ASKING} without a question answers the order button's Answer: the question one
+     * portion raised is on its way as a {@code TerminalConfirmPayload}, and this answer adds nothing to it.
+     */
+    public void onCraftFetchAnswer(TerminalCraftAnswerPayload payload) {
+        craftFetchAnswer = payload;
+        if (payload.result().isAsking()) {
+            // Only ever put up when a question really arrived: the payload is decoded without that pairing enforced.
+            if (payload.question().isEmpty())
+                return;
+            costChanged = payload.result() == TerminalCraftResult.CHANGED;
+            craftConfirming = payload.question().get();
+            // Only one dialog at a time: the player has just pressed Fetch, so this question wins.
+            confirming = null;
+            confirmed = null;
+            listConfirming = null;
+            listConfirmed = null;
+            openPlan = null;
+            stepPanel = null;
+            panel = null;
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
+            return;
+        }
+        // Like onListAnswer: an answer that asks nothing settles the Fetch question — a second press that started or
+        // was refused while the first one's question was on its way, so that question asks about crafts no longer on
+        // offer (issue #24 review fix). The shared notice and panel go only with it: they may belong to another dialog.
+        if (craftConfirming != null) {
+            craftConfirming = null;
+            costChanged = false;
+            panel = null;
+        }
+        boolean success = payload.result().isSuccess();
+        feedback = craftFetchAnswerLine(payload);
+        feedbackColor = success ? COLOR_SUCCESS : COLOR_ERROR;
+        feedbackTicks = FEEDBACK_TICKS;
+        playUiSound(success ? SoundEvents.NOTE_BLOCK_BELL.value() : SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F,
+                success ? 1.6F : 0.8F);
+    }
+
+    /** The answer to the last Fetch or craft order action, or {@code null} before the first one. */
+    @Nullable
+    public TerminalCraftAnswerPayload craftFetchAnswer() {
+        return craftFetchAnswer;
+    }
+
+    /** What the panel's Fetch would really bring, while that question is up; {@code null} while it is not. */
+    @Nullable
+    public CraftFetchQuestion<ItemKey> craftConfirmation() {
+        return craftConfirming;
+    }
+
+    /** The status row's line for a Fetch answer, the item's name cut first when it does not fit. */
+    private Component craftFetchAnswerLine(TerminalCraftAnswerPayload answer) {
+        Component name = answer.about().map(key -> key.toStack().getHoverName()).orElse(Component.empty());
+        return fitNames(names -> craftFetchText(answer.result(), answer.crafted(), names.get(0)), name);
+    }
+
+    /**
+     * The sentence of a Fetch answer: the item it names as the first argument, the number of crafts as the second
+     * (the rule {@code WareworksLangGen} writes every Fetch sentence to). Public and static for the row measurement of
+     * the visual run, like {@link #craftAnswerText}.
+     */
+    public static Component craftFetchText(TerminalCraftResult result, int crafts, Component name) {
+        return WareworksLang.translateDirect(result.langKey(), name, LangNumberFormat.format(crafts));
+    }
+
     /** The answer to the last craft click, or {@code null} before the first one. */
     @Nullable
     public TerminalCraftAnswerPayload craftAnswer() {
@@ -1156,13 +1418,28 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             else
                 rememberedGrids.put(craftGridKey, grid);
         }
-        updateCraftClear();
+        updateCraftButtons();
     }
 
-    /** Clear is greyed out while there is nothing to clear. */
-    private void updateCraftClear() {
+    /**
+     * The panel's buttons as the grid and the craft order stand: Clear is greyed out while there is nothing to clear or
+     * an open order locks the grid; the order button shows its action's icon ({@link #craftOrderAction()}), green
+     * while the order works on its own, and is greyed out as Fetch while there is no recipe to fetch for.
+     */
+    private void updateCraftButtons() {
         if (craftClear != null)
-            craftClear.active = !craftPanel.grid().isEmpty();
+            craftClear.active = !craftPanel.grid().isEmpty() && !isCraftGridLocked();
+        if (craftFetch == null)
+            return;
+        TerminalCraftOrderPayload.Action action = craftOrderAction();
+        craftFetch.setIcon(switch (action) {
+            case ANSWER -> AllIcons.I_CONFIRM;
+            case RESUME -> AllIcons.I_REFRESH;
+            case CANCEL -> AllIcons.I_STOP;
+            default -> AllIcons.I_PLAY;
+        });
+        craftFetch.green = craftOrderState.isOpen() && !craftOrderState.waitsForPlayer();
+        craftFetch.active = action != TerminalCraftOrderPayload.Action.FETCH || !craftPanel.grid().isEmpty();
     }
 
     /**
@@ -1233,6 +1510,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     public static Component craftAnswerText(TerminalCraftResult result, int crafted, Component made,
             Component about) {
+        // A Fetch's answer has a shape of its own: an item and a number of crafts, never a partial craft.
+        if (result.isFetch())
+            return craftFetchText(result, crafted, result.isSuccess() ? made : about);
         String count = LangNumberFormat.format(crafted);
         if (result.isSuccess())
             return WareworksLang.translateDirect(result.langKey(), made, count);
@@ -1281,6 +1561,61 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         PacketDistributor.sendToServer(TerminalListActionPayload.fetch(menu.containerId, question.missing(),
                 question.producing(), question.entriesDropped()));
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+    }
+
+    /**
+     * Says Yes to the Fetch question (issue #24, slice 2): the same grid again, for exactly the crafts the question
+     * named and the production it agreed to. The server measures it once more and asks again
+     * ({@link TerminalCraftResult#CHANGED}) if the warehouse moved in between.
+     */
+    private void confirmCraftFetch() {
+        CraftFetchQuestion<ItemKey> question = craftConfirming;
+        craftConfirming = null;
+        costChanged = false;
+        panel = null;
+        if (question != null && craftPanel.confirmFetch(question))
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+    }
+
+    /**
+     * The lines of the Fetch question, in the order the player reads them (issue #24, slice 2): the question with the
+     * crafts a Yes starts — {@code "Fetch the ingredients for Cake x2?"} — then what binds it, named rather than
+     * described: the buffer's room ({@code "Only x2 of x4 fit here."}), or the warehouse's stock with every item it
+     * falls short of and its two numbers. No Alt hint: a Fetch is no click on an item.
+     * <p>
+     * The chain offer (a later slice of the issue) adds its "will be made first" lines here, from the named lines a
+     * chain would make ({@link CraftFetchQuestion.Line#made()}); until it is built,
+     * {@link CraftFetchQuestion#producing()} is always 0 and no line makes anything.
+     */
+    private List<Component> craftFetchConfirmationLines(CraftFetchQuestion<ItemKey> question) {
+        List<Component> lines = new ArrayList<>(3 + question.named().size());
+        ItemStack result = craftPanel.fetchedResult();
+        String possible = LangNumberFormat.format(Math.max(1, question.possible()));
+        String asked = LangNumberFormat.format(question.asked());
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_TITLE,
+                result.isEmpty() ? Component.empty() : result.getHoverName(), possible).copy()
+                .withStyle(ChatFormatting.GOLD));
+        if (costChanged)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
+                    .withStyle(ChatFormatting.GOLD));
+        switch (question.bound()) {
+            case ROOM -> lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_ROOM, possible,
+                    asked).copy().withStyle(ChatFormatting.WHITE));
+            case STOCK -> {
+                lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_STOCK, possible, asked)
+                        .copy().withStyle(ChatFormatting.WHITE));
+                for (CraftFetchQuestion.Line<ItemKey> line : question.named()) {
+                    if (line.isShort())
+                        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_LINE,
+                                line.key().toStack().getHoverName(), LangNumberFormat.format(line.inStock()),
+                                LangNumberFormat.format(line.needed())).copy().withStyle(ChatFormatting.GRAY));
+                }
+            }
+            default -> {
+                // Every craft asked for is possible: only production can have raised the question (a later slice).
+            }
+        }
+        return lines;
     }
 
     /**
@@ -1351,6 +1686,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         Component status = listState.active() && !listState.isOpen() ? listDoneLine() : listStatusLine();
         if (status != null)
             tooltip.add(status.copy().withStyle(ChatFormatting.GRAY));
+        // Why the order stands still, while its last portion was refused (issue #24, ADR-062).
+        listState.refusal().ifPresent(refusal -> tooltip.add(portionRefusalLine(refusal).copy()
+                .withStyle(ChatFormatting.GOLD)));
         if (listState.truncated())
             tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TRUNCATED,
                     LangNumberFormat.format(listState.dropped())).copy().withStyle(ChatFormatting.GOLD));
@@ -1738,7 +2076,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
         // The status line owns its row: it carries an item name and up to two amounts in every language, which no
         // width budget shared with a second text could hold (§3.4.2, M7 review fix).
-        int color = feedback != null ? feedbackColor : COLOR_TEXT;
+        // An order standing still because its last portion was refused says so in gold, like a click served in part.
+        int color = feedback != null ? feedbackColor : rowRefusal().isPresent() ? COLOR_LOST : COLOR_TEXT;
         graphics.drawString(font, fitToRow(shownStatusLine()), x + TerminalMenuLayout.MARGIN, y + layout.statusY(),
                 color, false);
         renderProduction(graphics, x, y);
@@ -2022,10 +2361,20 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // A clipboard order wins the row while it is really being worked off (M23, issue #19): it is the thing a player
         // started and is waiting for, and the two numbers it counts down say more than "waiting for 64, delivered 0"
         // does. It does *not* win it over a terminal that has lost its aisle or its crane, because that is the answer
-        // to "why is my list not moving", and a finished order does not win it at all (M23 review fix).
-        Component list = status.hasAisle() && status.craneLinked() ? listStatusLine() : null;
-        if (list != null)
-            return list;
+        // to "why is my list not moving", and a finished order does not win it at all (M23 review fix). The craft order
+        // (issue #24, slice 2) is the same kind of thing and wins the row the same way; when both run, the one whose
+        // panel is on screen does (rowOrderIsCraft). Whichever wins says why it stands still when its last portion was
+        // refused and nothing is on its way to it (rowRefusal), naming the item wherever it can (portionRefusalLine).
+        if (status.hasAisle() && status.craneLinked()) {
+            Optional<TerminalPortionRefusal> refusal = rowRefusal();
+            if (refusal.isPresent())
+                return portionRefusalLine(refusal.get());
+            if (rowOrderIsCraft())
+                return craftStatusLine();
+            Component list = listStatusLine();
+            if (list != null)
+                return list;
+        }
         if (status.requestsHere() > 0)
             return WareworksLang.translateDirect(WareworksLang.TERMINAL_WAITING,
                     LangNumberFormat.format(status.requestedHere()), LangNumberFormat.format(status.deliveredHere()));
@@ -2036,6 +2385,77 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         Component state = status.isPaused() ? WareworksLang.translateDirect(status.cranePause().langKey())
                 : WareworksLang.translateDirect(WareworksLang.cranePhaseKey(status.cranePhase()));
         return craneStatusText(state);
+    }
+
+    /**
+     * Whether the craft order, and not the clipboard order, owns the status row: it is open, and either its panel is
+     * folded out or no clipboard order is open. Both orders may run at once (ADR-062), and the row holds one line.
+     */
+    private boolean rowOrderIsCraft() {
+        return craftOrderState.isOpen() && (craftOpen || !listState.isOpen());
+    }
+
+    /**
+     * Why the order that owns the status row stands still: its last portion was refused, and nothing is on its way to
+     * it. While anything is, the order is moving and its progress line keeps the row — a list with one entry the
+     * warehouse cannot serve is refused that entry on every pass, and its row would otherwise never show the rest of
+     * the list arriving. The clipboard slot's tooltip names the refusal either way.
+     */
+    private Optional<TerminalPortionRefusal> rowRefusal() {
+        if (!status.hasAisle() || !status.craneLinked())
+            return Optional.empty();
+        // An order that asks stands still because of its question, not because of a portion refused earlier in the
+        // same pass: the row says "please answer" then (issue #24 review fix). The panel still marks the refused item.
+        if (rowOrderIsCraft())
+            return craftOrderState.asking() ? Optional.empty()
+                    : standsStill(craftOrderState.refusal(), craftOrderState.inFlight());
+        return listState.isOpen() && !listState.asking() ? standsStill(listState.refusal(), listState.inFlight())
+                : Optional.empty();
+    }
+
+    /** {@code refusal} while nothing of an order is on its way ({@code inFlight} items); otherwise none. */
+    static Optional<TerminalPortionRefusal> standsStill(Optional<TerminalPortionRefusal> refusal, long inFlight) {
+        return inFlight > 0L ? Optional.empty() : refusal;
+    }
+
+    /**
+     * Why an order's last portion was refused (issue #24, ADR-062), naming the item in the way wherever a sentence can:
+     * the production chain's own refusal with the item it names, or — for the commonest case, an item the warehouse
+     * holds none of — the chain's "Oak Log is missing", which says exactly that about the portion's own item. Every
+     * other rejection is the sentence a refused click gets ({@link #refusedLine(Component)}). The name gives way first.
+     */
+    private Component portionRefusalLine(TerminalPortionRefusal refusal) {
+        PlanRefusal plan = refusal.refusal().orElse(
+                refusal.rejection() == RequestRejection.NOT_IN_STOCK ? PlanRefusal.MISSING_INGREDIENT : null);
+        if (plan == null)
+            return refusedLine(WareworksLang.translateDirect(refusal.rejection().langKey()));
+        return fitNames(names -> WareworksLang.translateDirect(plan.langKey(), names.get(0)),
+                refusal.about().toStack().getHoverName());
+    }
+
+    /**
+     * {@code "Fetching for Chest x3"}: the craft order's line while it owns the status row, with the result the panel
+     * resolved for the order's grid — the panel shows that grid while the order is open — and its name cut first.
+     */
+    private Component craftStatusLine() {
+        ItemStack result = craftPanel.grid().equals(craftOrderState.cells()) ? craftPanel.shownResult()
+                : ItemStack.EMPTY;
+        Component name = result.isEmpty() ? Component.empty() : result.getHoverName();
+        return fitNames(names -> craftStatusText(craftOrderState.state(), craftOrderState.crafts(), names.get(0)),
+                name);
+    }
+
+    /**
+     * The craft order's status line for an order in {@code state}: fetching, waiting for an answer, or parked. Public
+     * and static for the row measurement of the visual run, like {@link #listStatusText}.
+     */
+    public static Component craftStatusText(ListOrderState state, int crafts, Component name) {
+        String key = switch (state) {
+            case ASKING -> WareworksLang.TERMINAL_CRAFT_STATUS_ASKING;
+            case PARKED -> WareworksLang.TERMINAL_CRAFT_STATUS_PARKED;
+            default -> WareworksLang.TERMINAL_CRAFT_STATUS_RUNNING;
+        };
+        return WareworksLang.translateDirect(key, name, LangNumberFormat.format(crafts));
     }
 
     /**
@@ -2172,7 +2592,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     public void onConfirm(TerminalConfirmPayload payload) {
         RequestConfirmation<ItemKey> question = payload.question();
-        costChanged = confirmed != null && confirmed.key().equals(question.key());
+        // The same item asked about again in the same place: the warehouse moved between the Yes and the re-check. The
+        // other order asking about that item is a first question of its own (issue #24 review fix).
+        costChanged = confirmed != null && confirmedScope == payload.scope() && confirmed.key().equals(question.key());
         confirmed = null;
         confirming = question;
         // Where the answer goes back to: the click that raised it, or the clipboard order one portion of which did
@@ -2180,9 +2602,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         confirmScope = payload.scope();
         panel = null;
         // Only one dialog at a time: a question the server is asking wins over a chain a player was reading (M20) and
-        // over the list dialog, which is the player's own and can be raised again by the button.
+        // over the list dialog and the Fetch question, which are the player's own and can be raised again by a button.
         listConfirming = null;
         listConfirmed = null;
+        craftConfirming = null;
         openPlan = null;
         stepPanel = null;
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
@@ -2210,11 +2633,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     /**
-     * Whether a modal question is up at all — a click's cost or a whole clipboard list's (M23, issue #19). While one
-     * is, the grid behind it is deliberately out of reach and every click and key belongs to the panel.
+     * Whether a modal question is up at all — a click's cost, a whole clipboard list's (M23, issue #19) or a Fetch's
+     * at the crafting panel (issue #24, slice 2). While one is, the grid behind it is deliberately out of reach and
+     * every click and key belongs to the panel.
      */
     public boolean isAskingSomething() {
-        return confirming != null || listConfirming != null;
+        return confirming != null || listConfirming != null || craftConfirming != null;
     }
 
     /**
@@ -2227,6 +2651,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             confirmListFetch(); // the list dialog: the same consent, measured again over the whole list (M23)
             return;
         }
+        if (craftConfirming != null) {
+            confirmCraftFetch(); // the Fetch question: the crafts it named, measured again on the server (slice 2)
+            return;
+        }
         RequestConfirmation<ItemKey> question = confirming;
         RequestScope scope = confirmScope;
         confirming = null;
@@ -2235,15 +2663,36 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (question == null)
             return;
         confirmed = question;
+        confirmedScope = scope;
         // A question one portion of a clipboard order raised belongs to the order, not to a click: the answer tops the
-        // order's consent budget up and the order offers that portion again (M23, issue #19).
+        // order's consent budget up and the order offers that portion again (M23, issue #19). It names the question it
+        // answers, so the server takes it only while that is still the question being asked (issue #24 review fix).
         if (scope == RequestScope.LIST) {
-            PacketDistributor.sendToServer(TerminalListActionPayload.answer(menu.containerId,
+            PacketDistributor.sendToServer(TerminalListActionPayload.answer(menu.containerId, question,
                     question.acknowledgement(RequestScope.LIST)));
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
             return;
         }
+        // The same for the craft order's portion (issue #24, slice 2): its answer goes back to the craft order.
+        if (scope == RequestScope.CRAFT) {
+            PacketDistributor.sendToServer(TerminalCraftOrderPayload.answer(menu.containerId, question,
+                    question.acknowledgement(RequestScope.CRAFT)));
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+            return;
+        }
         send(question.key(), (int) Math.min(Integer.MAX_VALUE, question.amount()), question.acknowledgement());
+    }
+
+    /**
+     * Takes a portion's question down without an answer, because the order it belongs to no longer asks it (issue #24
+     * review fix): another player answered it or said no, or the order ended. Nothing is sent — the order has moved on,
+     * and a question it asks now arrives on its own.
+     */
+    private void dropConfirmation() {
+        confirming = null;
+        confirmed = null;
+        costChanged = false;
+        panel = null;
     }
 
     /**
@@ -2255,18 +2704,24 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * Resume and the same question can be had again.
      */
     public void cancelConfirmation() {
-        if (confirming == null && listConfirming == null)
+        if (confirming == null && listConfirming == null && craftConfirming == null)
             return;
-        boolean declining = confirming != null && confirmScope == RequestScope.LIST;
+        // Both list orders stand in ASKING until they are told no; a click's question needs no word to the server.
+        RequestScope declining = confirming != null && confirmScope.asksAboutProduction() ? confirmScope : null;
         confirming = null;
         listConfirming = null;
         listConfirmed = null;
+        // A Fetch's question started nothing, so a no to it needs no word to the server either.
+        craftConfirming = null;
         confirmed = null;
         costChanged = false;
         panel = null;
-        if (declining)
+        if (declining == RequestScope.LIST)
             PacketDistributor.sendToServer(new TerminalListActionPayload(menu.containerId,
                     TerminalListActionPayload.Action.DECLINE));
+        else if (declining == RequestScope.CRAFT)
+            PacketDistributor.sendToServer(TerminalCraftOrderPayload.of(menu.containerId,
+                    TerminalCraftOrderPayload.Action.DECLINE));
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
     }
 
@@ -2286,14 +2741,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // A portion of a clipboard order is nothing the player clicked, so the panel has to say which item and how many
         // it is about before it names what that costs (M23 review fix): without it a question that only crosses
         // "something would be made" drew the title and the Alt hint and nothing else at all.
-        if (forList)
-            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_LIST_ITEM,
+        // The craft order's portion is no click either (issue #24, slice 2), and says so in the same way.
+        if (forList || confirmScope == RequestScope.CRAFT)
+            lines.add(WareworksLang.translateDirect(forList ? WareworksLang.TERMINAL_CONFIRM_LIST_ITEM
+                    : WareworksLang.TERMINAL_CRAFT_CONFIRM_ITEM,
                     Component.literal(LangNumberFormat.format(question.amount())),
                     question.key().toStack().getHoverName()).copy().withStyle(ChatFormatting.GOLD));
         for (Component cost : confirmationCosts(question, confirmScope))
             lines.add(cost.copy().withStyle(ChatFormatting.WHITE));
-        // Alt skips the question a *click* raises; there is no click to hold it on when the order raised this one.
-        if (!forList)
+        // Alt skips the question a *click* raises; there is no click to hold it on when an order raised this one.
+        if (!confirmScope.asksAboutProduction())
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_SKIP).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return lines;
@@ -2304,13 +2761,14 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * item itself, what a production order would spend out of <b>another</b> item's reserve — which only the server can
      * know, because it alone has the patterns — and what would be stored above the maximum.
      * <p>
-     * A {@link RequestScope#LIST} portion adds the one cost a click is never asked about: that machines would be
-     * <b>started</b> for it, with nobody at the terminal ({@link RequestConfirmation#required(RequestScope)}). That is
-     * the only cost such a question may name, so without this sentence the dialog could be empty (M23 review fix).
+     * A portion of a list order ({@link RequestScope#asksAboutProduction()}: the clipboard's or the craft order's) adds
+     * the one cost a click is never asked about: that machines would be <b>started</b> for it, with nobody at the
+     * terminal ({@link RequestConfirmation#required(RequestScope)}). That is the only cost such a question may name, so
+     * without this sentence the dialog could be empty (M23 review fix).
      */
     private List<Component> confirmationCosts(RequestConfirmation<ItemKey> question, RequestScope scope) {
         List<Component> costs = new ArrayList<>(3 + question.ingredients().size());
-        if (scope == RequestScope.LIST && question.made() > 0L)
+        if (scope.asksAboutProduction() && question.made() > 0L)
             costs.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_PRODUCE,
                     Component.literal(LangNumberFormat.format(question.made()))));
         if (question.fromReserve() > 0L)
@@ -2368,18 +2826,20 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /**
      * The panel of whichever question is up, built on demand and dropped whenever anything it is built from changes.
      * <p>
-     * One panel for two questions (M23, issue #19): a click's cost ({@link #confirming}) and a whole clipboard list's
-     * ({@link #listConfirming}) are drawn, hit-tested and answered by the same shape, which is what the issue's "use
-     * the confirmation mechanism the terminal already has" asks for. Only the rows differ.
+     * One panel for three questions (M23, issue #19): a click's cost ({@link #confirming}), a whole clipboard list's
+     * ({@link #listConfirming}) and a Fetch's at the crafting panel ({@link #craftConfirming}, issue #24) are drawn,
+     * hit-tested and answered by the same shape, which is what the issues' "use the confirmation mechanism the
+     * terminal already has" asks for. Only the rows differ.
      */
     @Nullable
     private ConfirmPanel panel() {
-        if (confirming == null && listConfirming == null)
+        if (confirming == null && listConfirming == null && craftConfirming == null)
             return null;
         if (panel != null)
             return panel;
         List<Component> lines = confirming != null ? confirmationLines(confirming)
-                : listConfirmationLines(listConfirming);
+                : listConfirming != null ? listConfirmationLines(listConfirming)
+                        : craftFetchConfirmationLines(craftConfirming);
         List<FormattedCharSequence> rows = new ArrayList<>();
         int text = 0;
         for (Component line : lines) {

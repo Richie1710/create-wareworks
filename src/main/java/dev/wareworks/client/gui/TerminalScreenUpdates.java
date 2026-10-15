@@ -4,6 +4,7 @@ import java.util.Optional;
 
 import dev.wareworks.network.TerminalConfirmPayload;
 import dev.wareworks.network.TerminalCraftAnswerPayload;
+import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
@@ -89,11 +90,27 @@ public final class TerminalScreenUpdates {
     }
 
     /**
-     * The answer to a craft click of the open screen (M32, issue #24). The crafted items arrive through the menu's
-     * slots either way, so dropping a late answer loses only its sentence.
+     * The answer to a craft click of the open screen (M32, issue #24), or to its Fetch and the craft order's buttons
+     * (slice 2): the two kinds go to their own screen methods, a Fetch's whenever it carries a question or a value only
+     * a Fetch can end in. The crafted items arrive through the menu's slots either way, and a Fetch's question that
+     * arrives late requested nothing, so dropping a late answer loses only its sentence.
      */
     public static void onCraftAnswer(TerminalCraftAnswerPayload payload) {
-        screen(payload.containerId()).ifPresent(screen -> screen.onCraftAnswer(payload));
+        boolean fetch = payload.result().isFetch() || payload.question().isPresent();
+        screen(payload.containerId()).ifPresent(screen -> {
+            if (fetch)
+                screen.onCraftFetchAnswer(payload);
+            else
+                screen.onCraftAnswer(payload);
+        });
+    }
+
+    /**
+     * How far the open screen's terminal has got with its craft order, and the grid it was started for, which the
+     * screen shows and locks while the order is open (issue #24, slice 2).
+     */
+    public static void onCraftOrder(TerminalCraftOrderStatePayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onCraftOrder(payload));
     }
 
     /** The open terminal screen of the menu {@code containerId}, if that is what the player is looking at. */

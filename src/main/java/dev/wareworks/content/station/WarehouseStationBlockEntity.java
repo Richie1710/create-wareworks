@@ -269,8 +269,9 @@ public abstract class WarehouseStationBlockEntity extends SmartBlockEntity
      * <p>
      * Every save writes {@value #BUFFER_TAG}, an empty buffer included, and so does a {@code /data merge block}, which
      * merges into a full save; a print never does, because it carries the behaviours' settings alone
-     * ({@code SmartBlockEntity#writeSafe}). What a station keeps beyond those settings — the clipboard and its order, the
-     * production patterns, a port's pulse token and counters, the last rejection — is mostly written only while it is
+     * ({@code SmartBlockEntity#writeSafe}). What a station keeps beyond those settings — the clipboard and its order, a
+     * terminal's craft order (issue #24), the production patterns, a port's pulse token and counters, the last
+     * rejection — is mostly written only while it is
      * not at its default, so a missing key cannot tell "reset it" from "says nothing about it": all of it is read only
      * from a tag this answers true for. A print over a standing station then leaves it alone, and a full save still
      * resets it.

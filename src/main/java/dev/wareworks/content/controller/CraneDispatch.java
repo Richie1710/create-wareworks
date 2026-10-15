@@ -571,6 +571,25 @@ final class CraneDispatch {
     }
 
     /**
+     * Request {@code id} was reduced and now waits for only {@code remaining} items, without counting anything as
+     * delivered — an asker gave its own share of a merged request back (issue #24, ADR-062), or production could not
+     * keep a promise. A crane job planned for more than that, which has <b>not picked yet</b>, is cancelled: it aborts
+     * before the pick, its report releases its reservations, and the next plan takes only what is still wanted. Without
+     * this the crane picked and delivered the share that had just been given back — a player whose click a list order
+     * had merged into got the cancelled order's items as well.
+     * <p>
+     * A job that has picked already keeps its items and delivers them, and they count towards what is left
+     * ({@code WarehouseControllerBlockEntity#onCraneDelivered}): taking items back off a carrying crane would be a
+     * reroute of its own, and the items have already left the racks.
+     */
+    void onRequestReduced(UUID id, int remaining) {
+        controller.linkedDockEntity().ifPresent(dock -> dock.currentJob()
+                .filter(job -> !job.picked() && job.plannedAmount() > remaining
+                        && job.requestId().filter(id::equals).isPresent())
+                .ifPresent(job -> dock.cancelJob(job.id())));
+    }
+
+    /**
      * The owners named by {@code ids} are gone: cancelled retrieval requests, or the ingredient lines of a production
      * order that was cancelled, timed out or lost its station. Their reservations stop backing anything, and a crane
      * job working for one of them is cancelled — aborted before the pick, its held items rerouted back into storage

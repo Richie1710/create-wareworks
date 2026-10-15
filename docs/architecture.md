@@ -120,11 +120,15 @@ dev.wareworks
 │   │                          payload has a test) and PlanCancelCost (what giving up on such a line really costs:
 │   │                          the orders failPlan would end and the batch it would abandon, in one tested place so
 │   │                          the panel and the server cannot disagree); the clipboard list (M23, issue #19,
-│   │                          ADR-036): RequestScope (click or list portion — the two things a scope changes),
-│   │                          ListEntry (what one clipboard entry is worth believing), ListLine (the order's own
-│   │                          record of an entry: the line is the truth, the tick mark the receipt), ListOrder (the
-│   │                          whole order: which entries, which line next, how big a portion, how a delivery maps
-│   │                          back), ListPortion / ListPass / ListCredit / ListOrderState and
+│   │                          ADR-036): RequestScope (click, list portion or, since M32, craft-fetch portion — the
+│   │                          two things a scope changes), ListEntry (what one clipboard entry is worth believing),
+│   │                          ListLine (the order's own record of an entry: the line is the truth, the tick mark the
+│   │                          receipt), ListOrder (the whole order: which entries, which line next, how big a
+│   │                          portion, how a delivery maps back; since M32 also the share it gives back with its made
+│   │                          part, the delivery two orders credit in turn, a production shortfall taken off its own
+│   │                          lines and an answer taken only for the question it was given to, ADR-062),
+│   │                          ListPortion / ListPass / ListCredit /
+│   │                          ListOrderState and
 │   │                          ListOrderConfirmation (what pressing Fetch would really mean, measured over the whole
 │   │                          list); the "most used" order (M24, issue #17, ADR-037): TerminalUsage (the bounded
 │   │                          per-player store — one count per item type, one request counted once, the weakest
@@ -135,7 +139,11 @@ dev.wareworks
 │   │                          a player's grid, the per-craft multiset in first-cell order, how many crafts a count
 │   │                          map holds and what a top-up would still need) and SlotPlan (one craft planned over
 │   │                          read-only slot views of the buffer and the player's inventory, as an overlay of the
-│   │                          touched slots: takes, remainders, result, or a refusal that names the item)
+│   │                          touched slots: takes, remainders, result, or a refusal that names the item); for the
+│   │                          Fetch (ADR-062): CraftFetchQuestion (what a Fetch would really bring, in whole crafts:
+│   │                          the stock, chain and room bounds, the verdict and the question's named lines) and
+│   │                          BufferFit (whether a demand still fits the buffer once every open request has put its
+│   │                          items down, and the most crafts that do)
 │   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
@@ -303,7 +311,12 @@ dev.wareworks
 │                              crafting at the terminal (M32, issue #24, ADR-059): TerminalCrafting (the one class of
 │                              the mod that runs a recipe: the server preview and one craft as a transaction that
 │                              refuses before anything moves) and TerminalCraftResult / TerminalCraftOutcome (what a
-│                              craft click answered: the result, the items made and the item it is about)
+│                              craft click or a Fetch answered: the result, the items made or crafts fetched for, and
+│                              the item it is about); the craft fetch (ADR-062): TerminalCraftOrder (the terminal's
+│                              second list order, with the grid it was started for, and its NBT form),
+│                              TerminalCraftOrderState (the bounded state every screen at the terminal and the goggles
+│                              get) and TerminalPortionRefusal (why either order's last portion was refused, never
+│                              saved)
 │   └── display                the five Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -322,7 +335,8 @@ dev.wareworks
 │                              StockKeeperRulePayload (client → server, moves no item) (M15, ADR-027);
 │                              TerminalConfirmPayload (server → client: what a click would cross, and nothing was
 │                              requested) (M15 part 2, ADR-027; since M23 it carries the RequestScope, so the screen
-│                              knows whether the answer belongs to the click or to the clipboard order);
+│                              knows whether the answer belongs to the click, to the clipboard order or, since M32,
+│                              to the craft order);
 │                              the three clipboard-order payloads (M23, issue #19, ADR-036): TerminalListPayload and
 │                              TerminalListAnswerPayload (server → client), TerminalListActionPayload (client →
 │                              server: fetch, answer, resume or cancel; moves no item);
@@ -334,7 +348,12 @@ dev.wareworks
 │                              server: preview, craft once or craft all, with the nine cells and a recipe hint),
 │                              TerminalCraftViewPayload (server → client: the grid it answers, the recipe, its result,
 │                              the lock flag and what the warehouse can grant of each grid item) and
-│                              TerminalCraftAnswerPayload (server → the acting player only: what the click became).
+│                              TerminalCraftAnswerPayload (server → the acting player only: what the click became;
+│                              since ADR-062 also a Fetch's measured question); the two craft-order payloads (M32,
+│                              ADR-062): TerminalCraftOrderPayload (client → server: fetch, answer naming its
+│                              question, decline, resume or cancel; moves no item) and TerminalCraftOrderStatePayload
+│                              (server → client: the order's progress and the grid every screen at the terminal shows
+│                              and locks).
 │                              Everything else syncs through block entity update packets
 ├── client
 │   ├── gui                    WarehouseTerminalScreen (the terminal's screen) and TerminalScreenUpdates (where the
@@ -343,7 +362,9 @@ dev.wareworks
 │   │                          WarehouseStockKeeperScreen (the rule rows), ClientStockKeepers,
 │   │                          StockKeeperScreenUpdates (M15, ADR-027); TerminalCraftPanel (the terminal's folding
 │   │                          crafting panel: the client-owned ghost grid, the ghost cursor, the debounced preview,
-│   │                          the cell states and the hit tests, M32, issue #24, ADR-059)
+│   │                          the cell states and the hit tests, M32, issue #24, ADR-059; since ADR-062 also the
+│   │                          order button, its tooltip, the progress row with its cancel mark and the grid a
+│   │                          running fetch locks)
 │   ├── render                 StackerCraneRenderer (animated crane, SafeBlockEntityRenderer without Flywheel visual),
 │   │                          WareworksPartialModels (crane partials), CraneModelLayout (model dimensions, pose math) (M4);
 │   │                          WarehouseInterfaceRenderer (Create's filter renderer with the view distance the mod's
@@ -444,7 +465,14 @@ dev.wareworks
 │                              that move nothing, exact keys, two players at one buffer, limited crafting, foreign
 │                              menus and the budget, the preview's lookups, a view naming the grid it answers, the
 │                              payload codecs, and 400 idle ticks in which nothing is crafted (M32, issue #24,
-│                              ADR-059)
+│                              ADR-059);
+│                              TerminalCraftFetchGameTests: the craft fetch — exact amounts, xN, the top-up against
+│                              the buffer, many ingredients within the open-request bound, the room question and the
+│                              room open requests take, every refusal leaving the requests as they were, the stock
+│                              question and a stale Yes, a fetch beside a clipboard order, a cancel that keeps a
+│                              merged click (and the same for the clipboard order), a buffer filled later, a reload,
+│                              a broken terminal, and Fetch to craft through the menu's own entry points alone (M32,
+│                              issue #24, ADR-062)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -459,7 +487,8 @@ dev.wareworks
 │                              BlocksVisualScenario (static block close-ups, creative tab check, item screen),
 │                              PonderVisualScenario (opens the real Ponder UI per item and shoots every scene, M5),
 │                              RobustnessVisualScenario (chunk unload, save + quit + rejoin, blocks broken mid job; since
-│                              M19 also a job that finishes with nobody near the aisle, and the release afterwards)
+│                              M19 also a job that finishes with nobody near the aisle, and the release afterwards;
+│                              since issue #24 a terminal craft fetch cut by a chunk unload and by a save and rejoin)
 │                              with SceneItemCensus (item census of the whole scene, M5),
 │                              ChunkLoadingVisualScenario (optional chunk loading in a running game, M19, ADR-031: one
 │                              aisle far outside the spawn chunks whose work it drives itself, run with the setting off
@@ -513,9 +542,10 @@ dev.wareworks
 │                              in English and in German, and the chosen order carried through a real save, quit to
 │                              the title screen and rejoin, which is the only automated place that shows it),
 │                              CraftVisualScenario (the terminal's crafting panel, driven through ScreenInput in
-│                              English and German: the fold, the ghost grid, real crane deliveries, crafts with an
-│                              item census around each, a remainder, a refusal, and the window at a 320 x 240 GUI,
-│                              M32, issue #24),
+│                              English and German: the fold, the ghost grid, Fetch with its tooltip, the locked grid
+│                              and the progress row while the crane carries, a fetch given up with the cancel mark,
+│                              the room question answered Yes, crafts with an item census around each, a remainder,
+│                              a refusal, and the window at a 320 x 240 GUI, M32, issue #24),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -2557,8 +2587,8 @@ safety stop, none of which may be duplicated or bypassed.
 * **A list order is not a new kind of request.** `core.terminal.ListOrder` resolves the clipboard into lines once and
   then keeps a small number of **ordinary** retrieval requests open, each made through the very call a click goes
   through (`WarehouseControllerBlockEntity#request`). No new job kind, reservation kind, queue or network of its own;
-  merging, reserves, maxima, filters, priorities, chains, the safety stop and the full-destination back-off cannot tell
-  a portion from a click. Nothing teleports: every item is fetched physically by the crane.
+  merging, reserves, maxima, filters, priorities, chains, the safety stop and the planner's skip of a full destination
+  cannot tell a portion from a click. Nothing teleports: every item is fetched physically by the crane.
 * **`RequestScope` is the whole difference between a click and a portion**, and it changes exactly two things, both in
   `core.terminal`: whether a request that would have items **made** must be agreed to first
   (`RequestConfirmation#required(scope)`) and whether an answer has to name that number
@@ -2571,7 +2601,8 @@ safety stop, none of which may be duplicated or bypassed.
 * **The order's lines are the truth; the clipboard is its receipt.** A tick mark cannot express "1300 of 2000", so
   partial progress lives in `ListLine` and a mark is written only when a line is complete. The clipboard is re-read only
   to check that it is still the same list (by the entries' **icons**) and to write marks; taken out, swapped or edited
-  mid-run ends the order and cancels its requests, and a partly delivered entry is never ticked.
+  mid-run ends the order and gives its requests back (since ADR-062 only the order's own share of each), and a partly
+  delivered entry is never ticked.
 * **Writing `checked` on a read-only clipboard is sanctioned, not a workaround.** Verified in Create 6.0.10's own
   sources: the list is one data component (`AllDataComponents.CLIPBOARD_CONTENT`), `ClipboardEntry#readAll` hands out
   **fresh, mutable page lists** (Create's own comment says so), and `ClipboardScreen` reads `readOnly` in exactly
@@ -2598,9 +2629,10 @@ safety stop, none of which may be duplicated or bypassed.
   one consent really measured over the whole list — stays list-wide; the answered portion is the first one offered
   again, and a player's **no** parks the order instead of leaving it in `ASKING` with nothing on screen to refuse it
   (M23 review fix).
-* **Waiting is the answer to a full destination, never a refusal.** A full buffer is already a planner skip with a
-  back-off, so the request stays open and the next delivery makes the order due at once. Only an order with **nothing**
-  in flight that has made no progress for `terminalListStallTicks` parks, and then a player's click resumes it.
+* **Waiting is the answer to a full destination, never a refusal.** A full buffer is already a planner skip
+  (`NoJobReason.OUTPUT_FULL`), so the request stays open and the next delivery makes the order due at once. Only an
+  order with **nothing** in flight that has made no progress for `terminalListStallTicks` parks, and then a player's
+  click resumes it.
 * **The controller keeps no saved list state.** An unsaved, server-only set of terminals worth looking in on, rebuilt
   on any membership change and bounded at 64, is the whole registration; the order itself lives in the terminal beside
   the clipboard it belongs to. A set that is wrong is self-healing and can lose no order, whatever order block entities
@@ -2630,6 +2662,15 @@ skip, and would cost a round of measuring per stack; **a second queue or a "list
 duplication the issue forbids and would have had to re-implement batching, reserves and the safety stop; **asking per
 entry**, which a 128-entry checklist turns into a dialog storm; and **a mixin on `ClipboardScreen` or
 `ClipboardContent`**, which was never needed once the checkbox path was read.
+
+*Corrected in M32 (issue #24):* two sentences of this decision said that a full destination arms a back-off ("the
+full-destination back-off", "a planner skip with a back-off"). It arms none. The planner finds a full terminal with one
+simulated insert of a single item before it ranks any storage candidate (`NoJobReason.OUTPUT_FULL`), so there is no
+scan for `fullBackoffTicks` to protect, and the dispatcher arms that back-off only for `WAREHOUSE_FULL`,
+`NO_MATCHING_FILTER` and `PORT_FULL`, which hold storing back and never a retrieval. The sentences now say "skip"; what
+they describe — the request stays open and the order waits — is what the code always did. *Amended by ADR-062:* a
+terminal now runs up to two list orders, its clipboard order and a craft order, and giving either up gives back only
+its own share of each request.
 
 ### ADR-037 — A player's terminal order and their request counts are a data attachment on the player; the server owns the numbers and the client does the sorting (M24, issue #17)
 
@@ -4365,8 +4406,12 @@ while production keeps "herstellen").
   can put anything else in.
 * **The grid is the player's, and it holds ghosts.** It is nine `ItemKey`s (`core.crafting.CraftGrid`) held by that
   player's client and remembered per terminal for as long as the player stays connected (the last 16 terminals); it is
-  never an item, never a menu slot, never saved and never synced. The server sees a grid only inside a payload, keeps
-  it per menu for the preview and forgets it when the menu closes. The client never runs recipe code: the server
+  never an item, never a menu slot, never saved and never synced. *(Amended by ADR-062: while a craft order is open,
+  the server keeps a read-only copy of the grid that order fetches for, saves it in the terminal's `CraftOrder` — a
+  finished order's copy too, until the next Fetch replaces it — and pushes it to every screen at the terminal, which
+  replaces its grid with that copy and refuses edits until the order ends. Nothing crafts from that copy, and a new
+  Fetch takes the menu's grid (`fetchCraft` reads `menu.craftCells()`), never the stored one.)* The server sees a grid
+  only inside a payload, keeps it per menu for the preview and forgets it when the menu closes. The client never runs recipe code: the server
   resolves the recipe, the result and the lock flag from a debounced preview payload, and the view it answers with
   names the very grid it read, so the panel shows a result, and lets a click craft, only for exactly the grid on
   screen.
@@ -4381,7 +4426,10 @@ while production keeps "herstellen").
   craft from, or fetch for, without a click: the first thing ADR-024 rejected, one scheduled task away. It would also
   need persistence and a rule for two players editing one grid at once. Each player's own client grid has neither
   problem; what players share at a terminal is still the buffer, and two crafts from it are serialised on the server
-  thread, so the second one is refused and names the item.
+  thread, so the second one is refused and names the item. *Partly adopted by ADR-062, for the length of one fetch
+  only:* the copy is shown read-only and locked rather than edited by two players, it is the record of one fetch that
+  ends `DONE` or given up, and the server never crafts from it or fetches for it again. Each player's editable grid
+  stays on their client.
 * **The grid's recipe as a production pattern.** It would make the terminal a production station and a craft the
   completion of an order, which is ADR-024's virtual crafting step. `ProductionPattern.fromGrid` is not used, and a
   grid's recipe is never a pattern, a production order or an order's completion.
@@ -4412,21 +4460,25 @@ while production keeps "herstellen").
    way in, not only this ADR. `TerminalCrafting#craft` and `#preview` are package-private as well, which narrows who
    could call them but guards nothing on its own: the production station and the stock keeper share the package. A
    mutation run that crafted from inside the menu's own push failed the GameTest below on item conservation.
-3. **The client-owned grid:** the server holds nothing it could repeat once the menu is closed.
+3. **The client-owned grid:** beyond an open menu's preview, the server holds no grid except the craft order's
+   read-only record of one fetch (amended by ADR-062). That record has no repeat state, is never crafted from, and is
+   never the source of a new Fetch, which always takes the menu's grid. Once the menu is closed, the server has
+   nothing it could craft again or fetch for again.
 4. **GameTest `terminalcraftnevercraftsbyitself`:** 400 ticks at a working aisle with a motor, a buffer full of planks
    and two open menus with a chest laid in their grids, one of them broadcast every tick as a real player's would be.
    The item census never moves, nothing is requested, the crane stays idle and each menu resolved its recipe once.
 
-*Consequences:* `WareworksNetwork.VERSION` is `"9"`: three payloads were added (`TerminalCraftPayload`,
-`TerminalCraftViewPayload`, `TerminalCraftAnswerPayload`), with their enums travelling by name. The terminal window is
-298 GUI px wide while the crafting panel is folded out, inside the 320 px floor at every GUI scale, and no slot of the
-menu moved. Nothing new is saved. The two Ponder lines that say Wareworks never crafts anything itself
-(`warehouse_production.text_6`, `warehouse_production_chain.text_12`) stay as they are: they speak about the production
-station and a chain, where they are still exactly true. The README and the manual checklist say instead that Wareworks
+*Consequences:* `WareworksNetwork.VERSION` is `"9"` (`"10"` since ADR-062): three payloads were added
+(`TerminalCraftPayload`, `TerminalCraftViewPayload`, `TerminalCraftAnswerPayload`), with their enums travelling by
+name. The terminal window is 298 GUI px wide while the crafting panel is folded out, inside the 320 px floor at every
+GUI scale, and no slot of the menu moved. Crafting saves nothing new (the craft order of ADR-062 does). The two Ponder
+lines that say Wareworks never crafts anything itself (`warehouse_production.text_6`,
+`warehouse_production_chain.text_12`) stay as they are: they speak about the production station and a chain, where
+they are still exactly true. The README and the manual checklist say instead that Wareworks
 never crafts on its own, and that at a terminal you can craft by hand from what the crane delivered. Fetching the
-ingredients for a laid recipe and offering to make a missing one first are the issue's next two slices; neither adds a
-second place where a recipe runs, because both only ask for deliveries and for production at the player's own
-machines.
+ingredients for a laid recipe (ADR-062) and offering to make a missing one first are the issue's next two slices;
+neither adds a second place where a recipe runs, because both only ask for deliveries and for production at the
+player's own machines.
 
 *Correction to ADR-024:* its sentence "Nothing in Wareworks executes a recipe" now reads "Nothing in Wareworks executes
 a recipe on its own", and its *Reason* paragraph stands as written: a station that crafts, a virtual crafting step and a
@@ -4605,6 +4657,161 @@ or keeper guard fails the test that covers it.
 * Outside Create, a schematic file placed with `/place template` or a structure block (operators only) restores the
   raw data, goods included — the exposure every vanilla chest has.
 
+### ADR-062 — The craft fetch is a second `ListOrder` on the terminal (amends ADR-036 and ADR-059) (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24))
+
+*Context:* The second part of issue #24 is the crafting panel's **Fetch**: the crane brings what a laid recipe still
+needs for N crafts into the terminal's buffer, where the player crafts it by hand (ADR-059). Four things made this a
+decision rather than an implementation. The terminal already runs one stream of requests with one owner, the clipboard
+order of ADR-036, and a player working off a building's checklist must still be able to fetch a recipe's ingredients.
+A fetch has to run on with nobody at the terminal and survive a reload, exactly like a list. Its portions merge into
+requests that other askers share (ADR-020), so giving a fetch up must not take anybody else's items with it — and the
+shipped clipboard order did exactly that: its cancel removed every request it had a share in. And a fetch that orders
+more than the buffer can take strands the crane at a full terminal, while one that orders part of a craft leaves the
+player an ingredient short. The design study `run/i24-design-synthesis.md` (sections 1 and 6) weighed three carriers.
+The project owner settled its open questions on 2026-10-14: a fetch tops up against the buffer only; the grid stays
+each player's own, but a running fetch's recipe is shown to everyone at that terminal and locks editing there; and a
+clipboard order and a craft fetch may run at the same time, each with at most `terminalListOpenRequests` open
+requests, both given up share-only.
+
+*Decision:*
+* **The craft order is a second `ListOrder`, not a new mechanism.** `content.station.TerminalCraftOrder` holds a
+  `core.terminal.ListOrder<ItemKey>` with one line per ingredient in the grid's first-cell order, plus the grid it was
+  started for, the number of crafts and the id of the recipe the grid matched (a hint for the screen, never trusted).
+  Every portion is `controller.request(..., StockAccess.PLAYER, order.budgetFor(key), RequestScope.CRAFT)`, the call a
+  click makes, so merging, reserves, maxima, filters, priorities, chains, the safety stop and the planner's skip of a
+  full destination cannot tell a portion from a click. No new job kind, reservation kind, queue or controller-side
+  order state.
+* **The controller keeps its three hooks, and they now mean "either order".** `hasOpenListOrder()` is true while the
+  clipboard **or** the craft order is open; `tickListOrder(now)` runs the clipboard pass with its clipboard checks and
+  then the craft pass, both through one private `runPass(order, scope, controller, now)`; and `creditListDelivery`
+  credits a delivery **in turn** (`ListOrder.creditInTurn`): the craft order first, then the clipboard order with what
+  the craft order did not claim, so a request both merged into is never credited more than the controller counted. The
+  controller gained one public method, `reduceRequestShare` (below), and the dispatcher one hook,
+  `CraneDispatch#onRequestReduced`.
+* **One clipboard order and one craft order per terminal, and neither keeps the other from starting.**
+  `ALREADY_RUNNING` answers a second Fetch of the same kind only (`hasOpenClipboardOrder()` for the list button,
+  `hasOpenCraftOrder()` for the panel). A finished craft order is kept, and saved, until the next Fetch replaces it.
+  Each order keeps at most `terminalListOpenRequests` portions open, so the two together never hold more than twice
+  that; both share the terminal's `maxOpenRequestsPerOutput`, so while both are busy a portion of one may wait for a
+  request of the other to finish (see *Consequences*).
+* **Measured before anything is requested, in whole crafts** (`core.crafting.CraftFetchQuestion`). The demand per
+  ingredient is `max(0, uses × N − inBuffer)`, a top-up against the **buffer and nothing else**. Three bounds follow,
+  each a number of crafts: what the racks may give a player (`availableTo(PLAYER)`; a reserve never holds a player
+  back), what a production chain would add (equal to the first until the chain offer exists; its seam is
+  `CraftFetchQuestion.Promises`), and the room left in the buffer (`core.crafting.BufferFit`: every open request to
+  this terminal puts its remaining items down first, then the whole demand must fit, max stack sizes included, found
+  by a binary search of at most 1 + log2(N + 1) plans). The verdict, in this order: the buffer already holds N crafts
+  (`NOTHING_TO_FETCH`); not one craft beyond what the buffer holds is possible (`NOT_ENOUGH`, naming the item, or
+  `NO_ROOM_FOR_ONE`); all N are possible and nothing would be made (`STARTED`, no question); otherwise one question
+  with the numbers a Yes will start. The Yes comes back as a Fetch for exactly that number, flagged as an answer, and
+  is measured again; a warehouse that changed in between is asked about again (`CHANGED`). Only `STARTED` requests
+  anything, and a client never decides a cost (§3.6.6).
+* **A fetch refuses when nothing beyond what is already here is possible, not only at zero crafts.** The design study
+  refused only when no craft at all was possible. A buffer that already holds one craft of four, with nothing more to
+  be had, would then have been asked "fetch x1?", and the Yes would have found nothing to fetch. The refusal carries the
+  possible number as its hint.
+* **Production consent is `RequestScope.CRAFT`**, with the semantics of `LIST` (`RequestScope#asksAboutProduction()`
+  replaced the `scope == LIST` tests in `core.terminal` and every one in the screen that has to cover both orders) and
+  answers routed to the craft order. A portion that crosses a reserve or a maximum raises the ordinary per-item panel
+  through `TerminalConfirmPayload` with that scope; the answer comes back as a `TerminalCraftOrderPayload` (`ANSWER`,
+  or `DECLINE`, which parks the order) and is kept per item (`ListOrder#budgetFor`). The Fetch's own Yes is the order's
+  production budget (`CraftFetchQuestion#budget`), zero until the chain offer exists.
+* **An answer names the question it answers, for both orders.** Every screen at a terminal shows a portion's
+  question, and another player's answer can move the order on to the next portion's question within one tick, without
+  the order ever leaving `ASKING`. `ANSWER` therefore carries the question it was given to (`TerminalCraftOrderPayload`
+  and `TerminalListActionPayload`, written before the acknowledgement), and `ListOrder#answer(question, ack, now)`
+  takes it only while that is still the question being asked, compared by value; otherwise nothing is credited and the
+  current question is put up instead. The menus push a question whenever it is a new one — compared by identity, so a
+  question that replaced another within one tick is pushed although the state never changed — and a screen drops a
+  portion's question as soon as its order stops asking. A Yes is consent about the item and the numbers it was given
+  for, and never about the next item.
+* **Giving an order up gives back only its own share, for both orders.** `ListOrder#releaseShareParts()` returns, per
+  request id, what that order still has in flight and how much of that a production order its own portions started is
+  making (`ListLine#producing`, saved as `Made`), and `WarehouseControllerBlockEntity#reduceRequestShare(id, share,
+  producing)` gives that production promise back first (`ProductionOrders#reducePromise`) and then takes the share off
+  the request. When that was the whole request it is removed like any cancelled request (`onRequestsGone`): a job that
+  has not picked aborts, and a crane already carrying its items takes them back into storage. When a player's click
+  merged into the portion, it keeps its amount and its queue position; a crane job planned for the merged amount that
+  has not picked yet is cancelled and planned again for what is left (`CraneDispatch#onRequestReduced`), so the share
+  given back stays in the racks, and a crane that has already picked delivers what it carries, which counts towards
+  what is left. The production order runs on and its result lands in stock, but it no longer owes the request the
+  given-back part, so its shortfall later cannot take the click's amount; as a backstop, every reduction that leaves
+  a request open lowers the promises behind it to at most what it still waits for (`ProductionOrders#clampPromises`).
+  Delivered items stay in the buffer: there is no way back. Before this, the clipboard order's cancel removed every
+  request it had a share in and took a merged click with it, which is a fix to shipped behaviour. `destroy()` and
+  `clearContent()` give both orders up the same way.
+* **Production that falls short is the orders' loss before it is a click's.** When a production order behind a
+  request ends without making what it promised, the controller reduces the request by that much, as before, and the
+  terminal's orders that share it take the shortfall off their own lines' made part first, craft order first
+  (`WarehouseTerminalBlockEntity#onRequestShortfall`, `ListOrder#shortfallInTurn`). Deliveries are credited to the
+  orders' lines before anybody else's, so without that an order would claim a merged click's items and the click
+  would get nothing; an order makes its loss up with its next portion, a click cannot.
+* **The grid stays the player's and stays ghosts; the running order's grid is shown to everyone at the terminal.**
+  ADR-059's grid holds no slot and lives on the player's client. The craft order needs its cells on the server — to
+  show every screen at the terminal the recipe it fetches for, and to survive a reload — so it keeps a read-only copy
+  that nothing crafts from. While the order is open, `TerminalCraftOrderStatePayload` carries those cells to every
+  screen open there; each screen replaces its grid with them, refuses every edit ("Cancel the fetch to change the
+  recipe") and folds the panel out — on opening the screen, and on another player's Fetch only where folding moves
+  nothing, i.e. on a screen at least 374 GUI px wide: below that the fold shifts the stock grid under a cursor that may
+  be about to click it, and a left click there is a request, so the panel stays in and the status row shows the fetch.
+  A menu that previews the order's grid resolves the recipe the order was started for (`craftOrderHint`), so of two
+  recipes one grid matches every screen shows, and crafts, the one being fetched for. When the order ends the grid
+  keeps the cells, so the player crafts what was fetched. A second player's own grid is overwritten while the order
+  runs, which is what the owner chose. ADR-059's third guard is amended accordingly: the copy is the record of one
+  fetch that ends `DONE` or given up, the order has no repeat state, and the server never crafts from it or fetches for
+  it again.
+* **Waiting is the answer to room taken later.** A fetch measured against every open request never makes the crane
+  wait at the terminal. Room taken afterwards — a new click, a clipboard delivery, a craft's result or remainders put
+  down — falls back to what every request does: the planner skips a target with no room for one item
+  (`NoJobReason.OUTPUT_FULL`, which arms no back-off), the request stays open, the order stays `RUNNING` and the next
+  freed slot restarts the trip.
+* **The last refusal is remembered, not saved.** Each order keeps the reason its last portion was refused
+  (`TerminalPortionRefusal`), cleared by a pass that grants something or completes the order. The status row names it
+  while the order stands still, i.e. while nothing of it is on its way and it is not asking: an order that asks stands
+  still for its question, and the row says so. A no to that question forgets the refusal, because the order is then
+  parked by the no; the panel still marks the refused ingredient while the question is up. The clipboard order got
+  the same field.
+
+*Alternatives rejected:*
+* **One order slot shared by the clipboard and the Fetch** (the study's first design): a player working off a
+  building's checklist could not fetch a recipe's ingredients until the whole list was done, and the list button would
+  have had to explain a recipe.
+* **Subtracting open requests from the demand.** Another player's click, or the clipboard's portion of the same item,
+  would have counted as this fetch's, and either the craft or the other asker came up short. **Counting what the fetch
+  has brought so far** instead over-fetched after a partial craft. The buffer is the one place where both a delivery and
+  a craft show, so the top-up is measured against it alone.
+* **One plain request per ingredient, without an order.** No progress, no share to give back, nothing saved about what
+  is still owed, and up to nine requests open at once against the terminal's `maxOpenRequestsPerOutput` (4 by default).
+* **Refusing a fetch that does not wholly fit, or fetching what fits whatever the crafts.** The first gives a player
+  nothing where two crafts were possible; the second brings ingredients for a craft that cannot be completed. Whole
+  crafts and one question are what "fetch the ingredients" can honestly promise.
+* **A new job kind, queue or controller-side order**: the duplication ADR-036 already refused.
+
+*Consequences:* `WareworksNetwork.VERSION` is `"10"`. `TerminalCraftOrderPayload` (client → server: fetch, answer,
+decline, resume or cancel) and `TerminalCraftOrderStatePayload` (server → client) are new, and
+`TerminalCraftAnswerPayload` gained the fetch's measured question and a plan refusal that the chain offer will fill.
+`RequestScope` has a third value. The terminal saves one compound more (`CraftOrder`, see *Persistence & sync*), and
+its goggles show one line more while a fetch is open. The three config keys `terminalListOpenRequests`,
+`terminalListIntervalTicks` and `terminalListStallTicks` now govern both orders. At the defaults the two orders
+together may hold the terminal's whole `maxOpenRequestsPerOutput` (2 + 2 of 4): a click for an item neither order is
+fetching is then refused as too many open requests here until a portion arrives, while a click for an item already on
+its way merges as always. The recipe is still looked up only in the menu (`WarehouseTerminalMenu#previewCraft`, which
+runs before `fetchCraft`), so ADR-059's `RecipeExecutionBoundaryTest` needed no change, and a fetch crafts nothing: it
+ends with ingredients in the buffer. A list line saves the made part of what it is owed (`Made`, written only while it
+is above 0), so a line saved before it reads back with none — what every line had before.
+
+*Amendment to ADR-036:* a terminal ran one list order, and `ALREADY_RUNNING` refused a second; it now runs up to two,
+its clipboard order and a craft order, each refusing a second of its own kind. Giving a clipboard order up — Cancel, or
+the clipboard taken out, swapped or edited — now gives back only its own share of each request. The rest of ADR-036
+stands, including that a list order is a stream of ordinary requests with one owner: each order owns its own share.
+
+*Amendment to ADR-059:* its grid bullet, its rejected "grid saved on the server and shared by everyone" and its guard 3
+now have one exception, marked in place there. The craft order keeps a read-only copy of the grid it was started for,
+saves it under `CraftOrder` (a finished order's too, until the next Fetch), and shows it on every screen at the
+terminal, locked, while the order is open. Guard 3 still holds for that copy: nothing crafts from it, a pass requests
+only the order's own remaining lines, a finished order requests nothing, and `fetchCraft` starts an order only from the
+grid of the menu the player has open (`WarehouseTerminalMenu#craftCells`), never from a stored one.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -4615,8 +4822,10 @@ or keeper guard fails the test that covers it.
   stamps restarted from the world's current time). The controller saves **nothing** about it — its set of terminals
   worth looking in on is rebuilt from the world — and a line's request id either still exists in the controller's own
   saved queue or is forgotten on the next pass, which gives nothing back because what a line is missing does not depend
-  on it. The question an order was asking is never saved: like every confirmation it is measured against the warehouse
-  as it is now, so such an order comes back `RUNNING` and asks again.
+  on it. Since issue #24 a line also saves the part of what it is owed that a production order is making (`Made`,
+  only while it is above 0; a line saved before reads back with none). The question an order was asking is never
+  saved: like every confirmation it is measured against the warehouse as it is now, so such an order comes back
+  `RUNNING` and asks again.
 * The **names a player gives a warehouse's aisles** (M25, ADR-038) are one new top-level NBT key on the controller,
   `Names` (`[{C: "A", N: "Ores"}]`), written only while at least one aisle has one — so a world from 0.7.0 saves byte
   for byte what it did before. It is deliberately **not** inside `Network`, which a straight warehouse does not write
@@ -4659,6 +4868,16 @@ or keeper guard fails the test that covers it.
   packet); the server's copy of the grid lives
   in the open menu, serves the preview and is gone when the menu closes. What a craft changes is the terminal's buffer
   and the player's inventory, which were saved and synced before M32 exactly as they are now.
+* A terminal's **craft order** (M32, ADR-062) is saved beside its clipboard order, under `CraftOrder`:
+  `{Order: <the clipboard order's format>, Cells: [{I: 0..8, Item}], Crafts, Recipe?}`, where `Order` is written and
+  read by `TerminalListPersistence` under a tag name of its own (the old overloads keep `ListOrder`). It is the one
+  copy of a grid the server keeps beyond an open menu, and it is a record of what one fetch is bringing, not a grid
+  anything crafts from. A finished order stays until the next Fetch replaces it. Reading never throws: a bad or
+  duplicate cell index and an undecodable item are skipped, the crafts are clamped, an unreadable recipe id is no hint,
+  and a compound without a readable order — or a terminal saved before M32 — has no craft order. As for the clipboard
+  order, the question, the per-item consent and the last refusal are not saved, an order that was asking comes back
+  `RUNNING` and asks again, and its two timers restart from the world's current time. The goggles get the bounded
+  numbers alone, under `CraftState` in the client packet and only while the order is open.
 * **Schematics** (ADR-061, issue #25) are a third reader of a block entity's data, with two layers: the **file** is
   vanilla `saveWithId()` (goods included in a server-side save), the **print** is Create's `PartialSafeNBT` path and
   carries a Wareworks block's **settings only**, each written only while it differs from its default. A tag that does

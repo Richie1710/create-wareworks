@@ -418,6 +418,21 @@ class RequestConfirmationTest {
         assertTrue(question.acknowledgement().covers(question), "which is what keeps a confirmation from looping");
     }
 
+    /** A craft fetch's portion asks exactly what a list order's portion asks (issue #24). */
+    @Test
+    void aCraftFetchPortionIsAskedAboutWhatWouldBeMadeLikeAListPortion() {
+        // Nothing in the racks and no rule at all: the whole request is two runs of the pattern.
+        RequestConfirmation<String> question = RequestConfirmation.of(StockRules.empty(), PLANK, 8L,
+                StockLevels.stored(0L), Optional.of(PATTERN), 2L, available(Map.of(LOG, 2L, NAILS, 4L)));
+        assertEquals(8L, question.made());
+        assertFalse(question.required(RequestScope.CLICK), "a click is not asked about production");
+        assertTrue(question.required(RequestScope.LIST));
+        assertTrue(question.required(RequestScope.CRAFT));
+        assertEquals(new RequestAcknowledgement(false, 0L, 0L, 0L, 8L), question.acknowledgement(RequestScope.CRAFT));
+        assertEquals(question.acknowledgement(RequestScope.LIST), question.acknowledgement(RequestScope.CRAFT));
+        assertEquals(0L, question.acknowledgement(RequestScope.CLICK).produced());
+    }
+
     @Test
     void aQuestionThatCrossesNothingIsCoveredByEveryAnswer() {
         RequestConfirmation<String> nothing = RequestConfirmation.none(PLANK, 10L);

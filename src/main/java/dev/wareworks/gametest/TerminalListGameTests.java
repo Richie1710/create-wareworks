@@ -15,14 +15,18 @@ import com.simibubi.create.content.equipment.clipboard.ClipboardOverrides.Clipbo
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ClipboardList;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
+import dev.wareworks.content.station.StockKeeperRules;
 import dev.wareworks.content.station.TerminalListOutcome;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalListState;
+import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
+import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.address.RackPosition;
@@ -35,6 +39,7 @@ import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.network.TerminalListActionPayload;
+import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -78,7 +83,10 @@ import net.neoforged.neoforge.items.IItemHandler;
  * <li>{@code terminallistclipboardtakenoutmidlist} — the clipboard is pulled out of the slot: the order is given up
  * and its open requests are cancelled, while the tick marks it earned stay on the clipboard;</li>
  * <li>{@code terminallistunobtainableentryneverblocksthelist} — an entry the warehouse can neither stock nor produce
- * is stepped over and left unticked, and the entries after it are served.</li>
+ * is stepped over and left unticked, and the entries after it are served;</li>
+ * <li>{@code terminallistnamesitsrefusal} — why the last portion was refused is remembered while it holds, outlives a
+ * portion's question but not a no to it, crosses the wire, is never saved, and is forgotten by the grant that
+ * follows (issue #24).</li>
  * </ul>
  * <b>Item conservation</b> is asserted on every tick of every one of them ({@link ItemCensus}). The <b>clipboard</b> is
  * deliberately not part of that census: ticking an entry off changes its data component on purpose, so its
@@ -106,6 +114,7 @@ public final class TerminalListGameTests {
     private static final RackPosition STORAGE_B = new RackPosition(2, 0, Side.LEFT);
     private static final RackPosition TERMINAL_RACK = new RackPosition(1, 0, Side.RIGHT);
     private static final RackPosition PRODUCTION_RACK = new RackPosition(3, 0, Side.RIGHT);
+    private static final RackPosition KEEPER_RACK = new RackPosition(4, 0, Side.RIGHT);
     /** A chest beside the aisle the full-destination test parks its filler items in. */
     private static final BlockPos SPILL = new BlockPos(10, BASE_Y, 0);
 
@@ -497,8 +506,9 @@ public final class TerminalListGameTests {
                             "nothing was started by asking");
 
                     // "Show it to me again": nothing changes, and the question is still there to be answered.
-                    helper.assertValueEqual(terminal.answerListQuestion(player, RequestAcknowledgement.NONE).result(),
-                            TerminalListResult.QUESTION, "an answer that accepts nothing asks for the question again");
+                    helper.assertValueEqual(terminal.answerListQuestion(player, Optional.empty(),
+                            RequestAcknowledgement.NONE).result(), TerminalListResult.QUESTION,
+                            "an answer that accepts nothing asks for the question again");
                     helper.assertValueEqual(terminal.listState().state(), ListOrderState.ASKING, "and changes nothing");
                     helper.assertTrue(terminal.listQuestion().isPresent(), "the question is still the server's");
 
@@ -526,13 +536,140 @@ public final class TerminalListGameTests {
                     WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
                     Player player = playerAt(helper, aisle.rackPos(TERMINAL_RACK));
                     RequestConfirmation<ItemKey> question = terminal.listQuestion().orElseThrow();
+                    // A Yes given to a question the order is no longer asking is not taken (issue #24 review fix): the
+                    // current question is put up again, and nothing is credited.
+                    RequestConfirmation<ItemKey> stale = new RequestConfirmation<>(question.key(),
+                            question.amount() + 1L, question.fromReserve(), question.reserved(),
+                            question.pastMaximum(), question.made(), question.maximum(), question.ingredients());
+                    helper.assertValueEqual(terminal.answerListQuestion(player, Optional.of(stale),
+                            stale.acknowledgement(RequestScope.LIST)).result(), TerminalListResult.QUESTION,
+                            "a Yes to another question asks the current one again");
+                    helper.assertValueEqual(terminal.listState().state(), ListOrderState.ASKING,
+                            "and changes nothing");
+                    helper.assertValueEqual(terminal.listQuestion(), Optional.of(question),
+                            "the question is the same one");
                     helper.assertValueEqual(
-                            terminal.answerListQuestion(player, question.acknowledgement(RequestScope.LIST)).result(),
+                            terminal.answerListQuestion(player, Optional.of(question),
+                                    question.acknowledgement(RequestScope.LIST)).result(),
                             TerminalListResult.ANSWERED, "and the Yes is the way on");
                 })
                 .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().openProductionOrders().size(), 1,
                         "the answered portion started exactly one production order"))
                 .thenSucceed();
+    }
+
+    /**
+     * <b>A stuck list says why, and only while that holds</b> (issue #24). The clipboard asks for three nether stars,
+     * which the warehouse does not hold, and six oak planks, of which a stock keeper reserves the last eight of ten.
+     * The Yes to the whole list starts it; the first pass is refused the stars and stops on the planks' question. The
+     * order names the stars' refusal through that question (the status row shows the question while it is asked),
+     * the list payload carries it, and a save does not. A <b>no</b> parks the order and forgets it, because the order is
+     * parked by the no; Resume asks again and the stars are refused again. The Yes grants the planks — the stars are
+     * still refused — and once stars are stocked the grant of their portion forgets the refusal for good.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void terminalListNamesItsRefusal(GameTestHelper helper) {
+        int planks = 10;
+        int listedPlanks = 6;
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        aisle.storage(STORAGE_A, PLANK.toStack(planks));
+        aisle.terminal(TERMINAL_RACK);
+        aisle.stockKeeper(KEEPER_RACK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(PLANK, planks);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while a stuck list says why"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(1, 0, 1);
+                    helper.assertValueEqual(aisle.controller().countOf(PLANK), (long) planks, "the planks are in");
+                })
+                .thenExecute(() -> {
+                    WarehouseStockKeeperBlockEntity keeper = aisle.stockKeeperAt(KEEPER_RACK);
+                    keeper.editRule(0, StockKeeperRules.FIELD_ITEM, PLANK, 0L);
+                    keeper.editRule(0, StockKeeperRules.FIELD_RESERVE, null, 8L);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(aisle.controller().stockRules().ruleFor(PLANK)
+                        .filter(rule -> rule.reserve() > 0L).isPresent(), "the controller knows the reserve"))
+                .thenExecute(() -> {
+                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
+                    putClipboard(helper, terminal, clipboard(entry(STAR, LISTED_STARS), entry(PLANK, listedPlanks)));
+                    Player player = playerAt(helper, aisle.rackPos(TERMINAL_RACK));
+                    ListOrderConfirmation<ItemKey> whole = terminal.fetchList(player, 0L, 0L, 0L).question()
+                            .orElseThrow();
+                    helper.assertValueEqual(whole.missing(), (long) LISTED_STARS, "the stars are missing");
+                    helper.assertValueEqual(terminal.fetchList(player, whole.missing(), whole.producing(),
+                            whole.entriesDropped()).result(), TerminalListResult.STARTED, "the Yes starts the list");
+                })
+                .thenWaitUntil(() -> assertListAsking(helper, aisle))
+                .thenExecute(() -> {
+                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
+                    TerminalListState state = terminal.listState();
+                    assertStarsRefused(helper, state);
+                    helper.assertValueEqual(terminal.listQuestion().orElseThrow().key(), PLANK,
+                            "while the planks' question is what the order waits for");
+                    helper.assertValueEqual(TerminalCraftGameTests.roundTrip(helper, new TerminalListPayload(3, state),
+                            TerminalListPayload.STREAM_CODEC).state(), state,
+                            "the list state with its refusal crosses the wire");
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    WarehouseTerminalBlockEntity loaded = detached(helper, terminal);
+                    loaded.loadWithComponents(terminal.saveWithoutMetadata(registries), registries);
+                    helper.assertTrue(loaded.listState().isOpen(), "a reloaded order is open");
+                    helper.assertValueEqual(loaded.listState().entries(), state.entries(), "with its entries");
+                    helper.assertTrue(loaded.listState().refusal().isEmpty(), "and the refusal was never saved");
+
+                    Player player = playerAt(helper, aisle.rackPos(TERMINAL_RACK));
+                    helper.assertValueEqual(terminal.declineListQuestion(player).result(), TerminalListResult.DECLINED,
+                            "No");
+                    helper.assertValueEqual(terminal.listState().state(), ListOrderState.PARKED, "parks the order");
+                    helper.assertTrue(terminal.listState().refusal().isEmpty(),
+                            "and the order is paused by the no, not by the stars");
+                    helper.assertValueEqual(terminal.resumeListOrder(player).result(), TerminalListResult.RESUMED,
+                            "Resume");
+                })
+                .thenWaitUntil(() -> assertListAsking(helper, aisle))
+                .thenExecute(() -> {
+                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
+                    assertStarsRefused(helper, terminal.listState());
+                    Player player = playerAt(helper, aisle.rackPos(TERMINAL_RACK));
+                    RequestConfirmation<ItemKey> question = terminal.listQuestion().orElseThrow();
+                    helper.assertValueEqual(terminal.answerListQuestion(player, Optional.of(question),
+                            question.acknowledgement(RequestScope.LIST)).result(), TerminalListResult.ANSWERED, "Yes");
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.terminalAt(TERMINAL_RACK).listState().inFlight(),
+                        (long) listedPlanks, "the planks are requested"))
+                .thenExecute(() -> {
+                    assertStarsRefused(helper, aisle.terminalAt(TERMINAL_RACK).listState());
+                    aisle.storage(STORAGE_B, STAR.toStack(LISTED_STARS));
+                    ItemCensus.change(conserved, STAR, LISTED_STARS);
+                })
+                .thenWaitUntil(() -> {
+                    TerminalListState state = aisle.terminalAt(TERMINAL_RACK).listState();
+                    helper.assertValueEqual(state.inFlight(), (long) (listedPlanks + LISTED_STARS),
+                            "the stars are requested once they are in stock");
+                    helper.assertTrue(state.refusal().isEmpty(), "and their grant forgot the refusal");
+                })
+                .thenExecute(aisle::placeMotor)
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.terminalAt(TERMINAL_RACK).listState().state(),
+                        ListOrderState.DONE, "the list is done"))
+                .thenExecute(() -> {
+                    TerminalListState state = aisle.terminalAt(TERMINAL_RACK).listState();
+                    helper.assertValueEqual(state.entriesComplete(), 2, "both entries are ticked off");
+                    helper.assertTrue(state.refusal().isEmpty(), "and a finished list names no refusal");
+                })
+                .thenWaitUntil(aisle::assertIdleAndEmpty)
+                .thenSucceed();
+    }
+
+    private static void assertListAsking(GameTestHelper helper, AisleFixture aisle) {
+        helper.assertValueEqual(aisle.terminalAt(TERMINAL_RACK).listState().state(), ListOrderState.ASKING,
+                "a portion's question stops the list");
+    }
+
+    private static void assertStarsRefused(GameTestHelper helper, TerminalListState state) {
+        TerminalPortionRefusal refusal = state.refusal().orElse(null);
+        helper.assertTrue(refusal != null, "the list names why its last portion was refused");
+        helper.assertValueEqual(refusal.rejection(), RequestRejection.NOT_IN_STOCK, "there are no stars");
+        helper.assertValueEqual(refusal.about(), STAR, "and it says so about the stars");
     }
 
     /**

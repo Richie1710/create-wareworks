@@ -364,6 +364,44 @@ class ProductionOrdersTest {
     }
 
     @Test
+    void aShareGivenBackLowersThePromiseOldestOrderFirst() {
+        UUID request = UUID.randomUUID();
+        // Two orders back one merged request: the first promises it 8, the second 4.
+        ProductionOrder<String, String> first = ProductionOrder.start(UUID.randomUUID(), STATION_A,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 2, lineIds, START, TIMEOUT, 0L, request, 8L);
+        ProductionOrder<String, String> second = ProductionOrder.start(UUID.randomUUID(), STATION_B,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 1, lineIds, START, TIMEOUT, 0L, request, 4L);
+        assertTrue(plans.add(first));
+        assertTrue(plans.add(second));
+
+        assertEquals(10L, plans.reducePromise(request, 10L));
+        assertEquals(0L, plans.get(first.id()).orElseThrow().unfulfilledPromise(), "the oldest order gives first");
+        assertEquals(2L, plans.get(second.id()).orElseThrow().unfulfilledPromise(), "the next one the rest");
+        assertEquals(Optional.of(request), plans.get(first.id()).orElseThrow().backingRequest(),
+                "both still back the request: whoever is left in it is still owed what is promised");
+        assertTrue(plans.get(first.id()).orElseThrow().isOpen(), "and the order runs on");
+        assertEquals(2L, plans.reducePromise(request, 5L), "never more than is promised");
+        assertEquals(0L, plans.reducePromise(UUID.randomUUID(), 5L), "another request's orders are not touched");
+    }
+
+    @Test
+    void productionNeverOwesARequestMoreThanItStillWaitsFor() {
+        UUID request = UUID.randomUUID();
+        ProductionOrder<String, String> first = ProductionOrder.start(UUID.randomUUID(), STATION_A,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 2, lineIds, START, TIMEOUT, 0L, request, 8L);
+        ProductionOrder<String, String> second = ProductionOrder.start(UUID.randomUUID(), STATION_B,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 1, lineIds, START, TIMEOUT, 0L, request, 4L);
+        plans.add(first);
+        plans.add(second);
+
+        assertEquals(7L, plans.clampPromises(request, 5L), "12 promised to a request that waits for 5");
+        assertEquals(0L, plans.get(second.id()).orElseThrow().unfulfilledPromise(), "the newest order gives first");
+        assertEquals(5L, plans.get(first.id()).orElseThrow().unfulfilledPromise());
+        assertEquals(0L, plans.clampPromises(request, 5L), "a request owed no more than it waits for is left alone");
+        assertEquals(0L, plans.clampPromises(request, 50L));
+    }
+
+    @Test
     void restoreSkipsRepeatedIdsAndIgnoresTheCap() {
         ProductionOrder<String, String> first = newOrder(STATION_A, 1);
         ProductionOrder<String, String> second = newOrder(STATION_A, 1);

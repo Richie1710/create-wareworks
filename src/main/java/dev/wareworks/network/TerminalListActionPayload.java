@@ -4,8 +4,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestConfirmation;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -30,9 +32,14 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * @param acknowledged      for {@link Action#ANSWER}: what they accepted for the one portion the order stopped on,
  *                          which is the ordinary terminal confirmation ({@code §3.6.6}). An {@code ANSWER} that accepts
  *                          <b>nothing</b> is the button's "show me that question again" and changes no state
+ * @param question          for {@link Action#ANSWER}: the question that answer was given to, as the screen showed it
+ *                          (issue #24 review fix). The server takes the answer only for the question it is asking now,
+ *                          and puts that one up instead when another player's answer has moved the order on; empty for
+ *                          the "show me that question again" and every other action
  */
 public record TerminalListActionPayload(int containerId, Action action, long acceptedMissing, long acceptedProducing,
-                                        long acceptedDropped, RequestAcknowledgement acknowledged)
+                                        long acceptedDropped, RequestAcknowledgement acknowledged,
+                                        Optional<RequestConfirmation<ItemKey>> question)
         implements CustomPacketPayload {
     /** What a player can do to a clipboard order from the screen. Travels by <b>name</b>, so the order is free. */
     public enum Action {
@@ -74,6 +81,8 @@ public record TerminalListActionPayload(int containerId, Action action, long acc
         Objects.requireNonNull(action, "action");
         if (acknowledged == null)
             acknowledged = RequestAcknowledgement.NONE;
+        if (question == null)
+            question = Optional.empty();
         acceptedMissing = Math.max(0L, acceptedMissing);
         acceptedProducing = Math.max(0L, acceptedProducing);
         acceptedDropped = Math.max(0L, acceptedDropped);
@@ -81,24 +90,39 @@ public record TerminalListActionPayload(int containerId, Action action, long acc
 
     /** An action that carries no numbers: Cancel, Resume and Decline. */
     public TerminalListActionPayload(int containerId, Action action) {
-        this(containerId, action, 0L, 0L, 0L, RequestAcknowledgement.NONE);
+        this(containerId, action, 0L, 0L, 0L, RequestAcknowledgement.NONE, Optional.empty());
     }
 
     /** A Fetch with what the player accepted after reading the question. */
     public static TerminalListActionPayload fetch(int containerId, long acceptedMissing, long acceptedProducing,
             long acceptedDropped) {
         return new TerminalListActionPayload(containerId, Action.FETCH, acceptedMissing, acceptedProducing,
-                acceptedDropped, RequestAcknowledgement.NONE);
+                acceptedDropped, RequestAcknowledgement.NONE, Optional.empty());
     }
 
-    /** The answer to the question one portion raised. */
-    public static TerminalListActionPayload answer(int containerId, RequestAcknowledgement acknowledged) {
-        return new TerminalListActionPayload(containerId, Action.ANSWER, 0L, 0L, 0L, acknowledged);
+    /** The answer to {@code question}, the question one portion raised, as the screen showed it. */
+    public static TerminalListActionPayload answer(int containerId, RequestConfirmation<ItemKey> question,
+            RequestAcknowledgement acknowledged) {
+        return new TerminalListActionPayload(containerId, Action.ANSWER, 0L, 0L, 0L, acknowledged,
+                Optional.of(Objects.requireNonNull(question, "question")));
+    }
+
+    /** The list button's Answer: no question named and nothing accepted, i.e. "put the question up again". */
+    public static TerminalListActionPayload showQuestion(int containerId) {
+        return new TerminalListActionPayload(containerId, Action.ANSWER, 0L, 0L, 0L, RequestAcknowledgement.NONE,
+                Optional.empty());
     }
 
     private TerminalListActionPayload(RegistryFriendlyByteBuf buffer) {
         this(buffer.readVarInt(), Action.byName(buffer.readUtf()).orElse(Action.NONE), buffer.readVarLong(),
-                buffer.readVarLong(), buffer.readVarLong(), readAcknowledgement(buffer));
+                buffer.readVarLong(), buffer.readVarLong(), readAnswered(buffer), buffer);
+    }
+
+    /** The second half of the reader: the question comes before the acknowledgement, which stays the last field. */
+    private TerminalListActionPayload(int containerId, Action action, long acceptedMissing, long acceptedProducing,
+            long acceptedDropped, Optional<RequestConfirmation<ItemKey>> question, RegistryFriendlyByteBuf buffer) {
+        this(containerId, action, acceptedMissing, acceptedProducing, acceptedDropped, readAcknowledgement(buffer),
+                question);
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
@@ -107,7 +131,23 @@ public record TerminalListActionPayload(int containerId, Action action, long acc
         buffer.writeVarLong(acceptedMissing);
         buffer.writeVarLong(acceptedProducing);
         buffer.writeVarLong(acceptedDropped);
+        writeAnswered(buffer, question);
         writeAcknowledgement(buffer, acknowledged);
+    }
+
+    /**
+     * The question an answer was given to, as a flag and, when present, the question in the shape
+     * {@link TerminalConfirmPayload} sends it (issue #24 review fix). Every action that names none costs one byte.
+     * Shared with {@link TerminalCraftOrderPayload}, whose answer names its question the same way.
+     */
+    static void writeAnswered(RegistryFriendlyByteBuf buffer, Optional<RequestConfirmation<ItemKey>> question) {
+        buffer.writeBoolean(question.isPresent());
+        question.ifPresent(asked -> TerminalConfirmPayload.writeQuestion(buffer, asked));
+    }
+
+    /** Reads what {@link #writeAnswered} wrote. */
+    static Optional<RequestConfirmation<ItemKey>> readAnswered(RegistryFriendlyByteBuf buffer) {
+        return buffer.readBoolean() ? Optional.of(TerminalConfirmPayload.readQuestion(buffer)) : Optional.empty();
     }
 
     /**
@@ -117,7 +157,7 @@ public record TerminalListActionPayload(int containerId, Action action, long acc
      * The fourth number is what a list order adds to the three a click sends ({@link RequestAcknowledgement#produced}):
      * a portion that would have items <b>made</b> is asked about, because nobody is at the terminal.
      */
-    private static void writeAcknowledgement(RegistryFriendlyByteBuf buffer, RequestAcknowledgement acknowledged) {
+    static void writeAcknowledgement(RegistryFriendlyByteBuf buffer, RequestAcknowledgement acknowledged) {
         if (acknowledged.any()) {
             buffer.writeVarInt(ACKNOWLEDGED_ANY);
             return;
@@ -135,9 +175,10 @@ public record TerminalListActionPayload(int containerId, Action action, long acc
 
     /**
      * A tag this build does not know reads as "nothing accepted", i.e. the server asks instead of acting. It is the
-     * last field of the payload, so an unknown tag leaves nothing unread.
+     * last field of the payload, so an unknown tag leaves nothing unread — and of {@link TerminalCraftOrderPayload}'s
+     * too, which shares this codec for the answer to a craft order's portion (issue #24).
      */
-    private static RequestAcknowledgement readAcknowledgement(RegistryFriendlyByteBuf buffer) {
+    static RequestAcknowledgement readAcknowledgement(RegistryFriendlyByteBuf buffer) {
         return switch (buffer.readVarInt()) {
             case ACKNOWLEDGED_ANY -> RequestAcknowledgement.ANY;
             case ACKNOWLEDGED_AMOUNTS -> new RequestAcknowledgement(false, buffer.readVarLong(), buffer.readVarLong(),

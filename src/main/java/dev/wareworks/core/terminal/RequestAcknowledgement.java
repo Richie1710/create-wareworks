@@ -36,8 +36,9 @@ package dev.wareworks.core.terminal;
  * @param ingredientReserve items of other keys the player accepts spending out of <b>their</b> reserves, over all
  *                          ingredients of the production order the request would start
  * @param produced          result items the player accepts having <b>made</b> for them, i.e.
- *                          {@link RequestConfirmation#made()}. It is only ever asked about and only ever checked for
- *                          {@link RequestScope#LIST} (M23): a click starts production under the player's eyes, a list
+ *                          {@link RequestConfirmation#made()}. It is only ever asked about and only ever checked for a
+ *                          scope that {@link RequestScope#asksAboutProduction() asks about production} — a list order
+ *                          (M23) or a craft fetch (issue #24): a click starts production under the player's eyes, an
  *                          order starts it while nobody is there. A plain click therefore leaves it at 0 and means
  *                          exactly what it meant before M23
  */
@@ -83,8 +84,9 @@ public record RequestAcknowledgement(boolean any, long fromReserve, long pastMax
      * one the player has already accepted.
      * <p>
      * {@link RequestScope#LIST} adds exactly one number to that comparison — what would be <b>made</b> — because a
-     * list order starts production with nobody at the terminal (M23, issue #19). Everything else is the M15 round trip
-     * unchanged, so a portion of a list order is asked about on precisely the same terms as a click.
+     * list order starts production with nobody at the terminal (M23, issue #19), and {@link RequestScope#CRAFT} adds
+     * the same one for the same reason (issue #24, {@link RequestScope#asksAboutProduction()}). Everything else is the
+     * M15 round trip unchanged, so a portion of either order is asked about on precisely the same terms as a click.
      */
     public boolean covers(RequestConfirmation<?> confirmation, RequestScope scope) {
         if (confirmation == null || !confirmation.required(scope))
@@ -93,7 +95,7 @@ public record RequestAcknowledgement(boolean any, long fromReserve, long pastMax
             return true;
         return fromReserve >= confirmation.fromReserve() && pastMaximum >= confirmation.pastMaximum()
                 && ingredientReserve >= confirmation.fromIngredientReserve()
-                && (scope != RequestScope.LIST || produced >= confirmation.made());
+                && (scope == null || !scope.asksAboutProduction() || produced >= confirmation.made());
     }
 
     /**

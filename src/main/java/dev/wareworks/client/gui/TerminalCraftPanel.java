@@ -10,6 +10,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -17,10 +18,15 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.simibubi.create.foundation.gui.AllGuiTextures;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
+import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.terminal.CountFormat;
+import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.network.TerminalCraftPayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.util.WareworksLang;
@@ -31,6 +37,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvents;
@@ -60,8 +67,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * so the cells turn solid and the ready count moves the moment an item arrives or is taken out. The server stays
  * authoritative at the craft, which resolves the recipe again and takes from the real buffer.
  * <p>
- * Slice 1 of the issue: the progress row and its cancel mark ({@code TerminalMenuLayout#craftProgressY}) and the Fetch
- * button's place ({@link TerminalMenuLayout#FETCH_BUTTON}) stay empty until the craft fetch comes.
+ * <b>Fetch</b> (slice 2 of the issue, ADR-062). The button at {@link TerminalMenuLayout#FETCH_BUTTON} — the screen's
+ * widget, whose action and tooltip come from here ({@link #fetch()}, {@link #fetchTooltip()}) — sends the grid with the
+ * window's amount field as the number of crafts, and the server starts the terminal's <b>craft order</b>, which brings
+ * what the buffer is missing for them by ordinary crane trips. While that order is open its grid is the one every
+ * screen at the terminal shows ({@link #adopt}), and no edit of it is taken: the screen says why instead. The progress
+ * row under the buttons counts what has arrived, and its cancel mark gives the order up ({@link #cancelAt}).
  */
 public final class TerminalCraftPanel {
     /** Client ticks between a player's last edit of the grid and the preview that tells the server about it. */
@@ -81,10 +92,17 @@ public final class TerminalCraftPanel {
     private static final int COLOR_GHOST = 0x30FFFFFF;
     /** The recipe book's red behind an ingredient the player has none of ({@code GhostRecipe#render}). */
     private static final int COLOR_MISSING = 0x30FF0000;
-    /** Behind a cell the warehouse has some of, but too few for the next craft: the screen's gold, faint. */
+    /** Behind a cell the warehouse has some of, but too few for the fetch: the screen's gold, faint. */
     private static final int COLOR_SHORT = 0x40FFAA33;
     /** Laid over a result limited crafting keeps this player from, in front of the item. */
     private static final int COLOR_LOCKED = 0x60FF0000;
+    /**
+     * The empty part of the progress bar: the dark of the window's inset boxes (search and amount field), so an order
+     * at 0 still shows where its bar is.
+     */
+    private static final int COLOR_PROGRESS_TRACK = 0xFF1B1710;
+    /** The cancel mark under the mouse: the window's red, lighter. */
+    private static final int COLOR_CANCEL_HOVER = 0xFFFFB0B0;
     /** How far in front a locked result's red is drawn: above the item, like a cell's amount. */
     private static final int LOCKED_Z = 200;
     /** The ghost on the cursor is drawn where vanilla draws a carried stack ({@code renderFloatingItem}). */
@@ -95,25 +113,48 @@ public final class TerminalCraftPanel {
      * right half of the result cell.
      */
     private static final int ARROW_TIP_COLUMN = 13;
+    /**
+     * Width of the cancel mark's target at the right end of the progress row. The mark is one glyph, five pixels wide,
+     * so the target is a little wider than what is drawn and still leaves the row's numbers all the room they need.
+     */
+    private static final int CANCEL_TARGET_WIDTH = 8;
+    /**
+     * Rows between where a lowercase glyph of the default font is drawn and the top of its ink: an {@code x} fills rows
+     * 2 to 6 of its cell and sits on the same baseline as a digit, which fills rows 0 to 6.
+     */
+    private static final int LOWERCASE_INK_TOP = 2;
 
     /**
-     * How one grid cell is drawn, decided cell by cell for the <b>next</b> craft ({@code docs/warehouse-system.md}
-     * §3.4.5): the buffer's items cover the cells of their key in grid order, the warehouse's available items the
-     * cells after those.
+     * How one grid cell is drawn, decided cell by cell ({@code docs/warehouse-system.md} §3.4.5): the buffer's items
+     * cover the cells of their key for the <b>next</b> craft, in grid order; every other cell says whether the
+     * warehouse could supply the fetch the amount field asks for ({@link WarehouseTerminalScreen#fetchCrafts()}).
      */
     public enum CellState {
         /** The cell names nothing. */
         EMPTY,
         /** The buffer holds this cell's item for the next craft: drawn solid. */
         HERE,
-        /** Not here, but the warehouse could grant it to a click in the list: a ghost. */
+        /**
+         * Not here, but the warehouse holds enough for the fetch, or the craft order is bringing it right now: a
+         * ghost.
+         */
         AVAILABLE,
-        /** Not here, and the warehouse has some but too few for the next craft: a ghost on gold. */
+        /**
+         * Not here, and the warehouse has some, but stock and buffer together are below what the fetch takes of it:
+         * a ghost on gold.
+         */
         SHORT,
         /** Not here, and the warehouse has none to give, or the terminal belongs to no warehouse: a ghost on red. */
         MISSING,
         /** Not here, and the server has not described this item yet (its view is of an earlier grid): a ghost. */
         UNKNOWN
+    }
+
+    /**
+     * What the last Fetch was sent for: the grid, the recipe the panel showed and the result it named. The Yes to the
+     * question that Fetch raised is sent for exactly this grid, and the question names this result.
+     */
+    private record SentFetch(CraftGrid<ItemKey> grid, Optional<ResourceLocation> hint, ItemStack result) {
     }
 
     private final WarehouseTerminalScreen screen;
@@ -131,6 +172,9 @@ public final class TerminalCraftPanel {
     private int previewIn = NO_PREVIEW;
     /** Whether the screen has been laid out once, i.e. whether a remembered grid was already announced. */
     private boolean opened;
+    /** The last Fetch this panel sent, or {@code null} before the first one. */
+    @Nullable
+    private SentFetch lastFetch;
 
     /**
      * @param grid   the grid this player last laid at this terminal, or an empty one
@@ -148,7 +192,7 @@ public final class TerminalCraftPanel {
 
     // --- state -------------------------------------------------------------------------------------------------------
 
-    /** The grid as this player laid it. */
+    /** The grid as this player laid it, or as the terminal's open craft order locks it. */
     public CraftGrid<ItemKey> grid() {
         return grid;
     }
@@ -199,6 +243,36 @@ public final class TerminalCraftPanel {
         }
     }
 
+    /**
+     * The terminal's open craft order locks the grid to {@code cells} (slice 2): every screen at the terminal shows
+     * the recipe being fetched for, whoever laid it, so nobody fetches for one grid and crafts another. The grid
+     * becomes this player's own, remembered like an edit and announced to the server at once, so its result is on
+     * screen within a tick; it stays when the order finishes, so the player crafts what was fetched. A ghost on the
+     * cursor has nowhere to go any more and is dropped.
+     * <p>
+     * The preview goes without a hint of this screen's own, and the server resolves it with the recipe the order was
+     * started for ({@code WarehouseTerminalBlockEntity#craftOrderHint}), so a grid two recipes match shows — and
+     * crafts — what is being fetched for. A grid that already was the order's is announced once more when the lock
+     * starts, for the same reason.
+     *
+     * @param starting whether the order has only now started locking the grid
+     */
+    void adopt(CraftGrid<ItemKey> cells, boolean starting) {
+        Objects.requireNonNull(cells, "cells");
+        ghost = null;
+        if (cells.equals(grid)) {
+            if (starting && !grid.isEmpty()) {
+                previewIn = NO_PREVIEW;
+                send(TerminalCraftPayload.Action.PREVIEW);
+            }
+            return;
+        }
+        grid = cells;
+        onEdit.accept(grid);
+        previewIn = NO_PREVIEW;
+        send(TerminalCraftPayload.Action.PREVIEW);
+    }
+
     // --- editing -----------------------------------------------------------------------------------------------------
 
     /**
@@ -210,9 +284,10 @@ public final class TerminalCraftPanel {
      * left click on a stock cell picks that item instead — and never requests it. Any other click drops the ghost.</li>
      * <li><b>Without one</b>, a left click on a grid cell writes the key of the real item on the cursor, which stays
      * there, or clears the cell with an empty hand; a right click clears it; a click on the result crafts once, with
-     * Shift as often as the delivered ingredients allow — once the server's view of this grid is in ({@link #craft}).
-     * Every other click is not the panel's.</li>
+     * Shift as often as the delivered ingredients allow — once the server's view of this grid is in ({@link #craft});
+     * a click on the progress row's cancel mark gives the craft order up. Every other click is not the panel's.</li>
      * </ul>
+     * While a craft order locks the grid every edit is refused, and the status row says why ({@link #edit}).
      *
      * @param shift     whether Shift is held
      * @param stockItem the item of the stock cell under the mouse, or {@code null} when the mouse is over none
@@ -243,12 +318,22 @@ public final class TerminalCraftPanel {
             craft(shift);
             return true;
         }
+        if (button == LEFT_BUTTON && cancelAt(mouseX, mouseY)) {
+            screen.cancelCraftOrder();
+            return true;
+        }
         return false;
     }
 
-    /** Puts {@code key} on the cursor as a ghost: the right-click on a stock cell. */
+    /**
+     * Puts {@code key} on the cursor as a ghost: the right-click on a stock cell. Refused while a craft order locks the
+     * grid, since there is no cell the ghost could be stamped into.
+     */
     public void pickGhost(ItemKey key) {
-        ghost = Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(key, "key");
+        if (refusedByLock())
+            return;
+        ghost = key;
         screen.uiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
     }
 
@@ -269,10 +354,12 @@ public final class TerminalCraftPanel {
      * Writes {@code key} into the first free cell in row-major order, without a ghost: Shift + right-click on a stock
      * cell.
      *
-     * @return whether a cell was free
+     * @return whether a cell was free and the grid could be edited
      */
     public boolean fillNextFree(ItemKey key) {
         Objects.requireNonNull(key, "key");
+        if (refusedByLock())
+            return false;
         OptionalInt free = grid.nextFreeCell();
         if (free.isEmpty()) {
             screen.uiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
@@ -311,15 +398,88 @@ public final class TerminalCraftPanel {
         return true;
     }
 
-    /** A changed grid: remembered, and announced to the server once the player pauses. */
+    /**
+     * The Fetch button (slice 2): asks the server to bring what the buffer is missing for the amount field's number of
+     * crafts of this grid ({@link WarehouseTerminalScreen#fetchCrafts()}). Nothing is decided here — the server
+     * measures the fetch against the warehouse and the buffer, starts it, refuses it or asks first, and the answer
+     * comes back to the screen.
+     * <p>
+     * Like a craft, <b>only for a grid the server has answered</b>: the Fetch tooltip names the result the player is
+     * fetching for, and a press while the view is of an earlier grid would fetch for something not on screen. Such a
+     * press sends the waiting preview at once and sounds the refusal instead.
+     *
+     * @return whether the Fetch was sent
+     */
+    public boolean fetch() {
+        if (grid.isEmpty()) {
+            screen.uiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
+            return false;
+        }
+        previewIn = NO_PREVIEW;
+        if (!describesGrid()) {
+            send(TerminalCraftPayload.Action.PREVIEW);
+            screen.uiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
+            return false;
+        }
+        Optional<ResourceLocation> hint = hint();
+        lastFetch = new SentFetch(grid, hint, shownResult().copy());
+        PacketDistributor.sendToServer(TerminalCraftOrderPayload.fetch(menu.containerId, grid, hint,
+                screen.fetchCrafts(), 0L, false));
+        screen.uiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
+        return true;
+    }
+
+    /**
+     * The Yes to the question a Fetch raised: the same grid again, for exactly the crafts the question said are
+     * possible and with the production total it named, marked as the answer. The server measures it once more and
+     * asks again if the warehouse moved in between, so this is consent and not a command.
+     *
+     * @return whether the answer was sent
+     */
+    boolean confirmFetch(CraftFetchQuestion<ItemKey> question) {
+        Objects.requireNonNull(question, "question");
+        // An order that opened here in the meantime makes the question stale (the screen drops it on the state push);
+        // a Yes pressed in the same frame must not re-point the server menu's grid away from the locked one either.
+        if (screen.isCraftGridLocked())
+            return false;
+        SentFetch sent = lastFetch;
+        CraftGrid<ItemKey> cells = sent != null ? sent.grid() : grid;
+        if (cells.isEmpty())
+            return false;
+        PacketDistributor.sendToServer(TerminalCraftOrderPayload.fetch(menu.containerId, cells,
+                sent != null ? sent.hint() : hint(), Math.max(1, question.possible()), question.producing(), true));
+        return true;
+    }
+
+    /** The result the last Fetch was sent for, which its question names; the shown result before the first one. */
+    public ItemStack fetchedResult() {
+        SentFetch sent = lastFetch;
+        return sent != null ? sent.result() : shownResult();
+    }
+
+    /**
+     * A changed grid: remembered, and announced to the server once the player pauses. While a craft order locks the
+     * grid nothing changes, and the status row says how to change it ({@link #refusedByLock()}).
+     */
     private void edit(CraftGrid<ItemKey> changed) {
-        if (changed.equals(grid))
+        if (changed.equals(grid) || refusedByLock())
             return;
         boolean cleared = changed.occupiedCells() < grid.occupiedCells();
         grid = changed;
         previewIn = PREVIEW_DELAY_TICKS;
         onEdit.accept(grid);
         screen.uiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, cleared ? 0.8F : 1.2F);
+    }
+
+    /**
+     * Whether the terminal's open craft order locks the grid right now; if it does, the screen has just been told to
+     * say so, so a refused edit is never a silent one.
+     */
+    private boolean refusedByLock() {
+        if (!screen.isCraftGridLocked())
+            return false;
+        screen.refuseLockedEdit();
+        return true;
     }
 
     private void send(TerminalCraftPayload.Action action) {
@@ -382,13 +542,31 @@ public final class TerminalCraftPanel {
     }
 
     /**
+     * What a Fetch of {@code crafts} crafts would ask for, per grid item in first-cell order: what the buffer is
+     * missing for them, topped up against the buffer and nothing else ({@link CraftGrid#toFetch}) — the very number the
+     * server requests. Empty when the buffer already holds every craft.
+     */
+    public Map<ItemKey, Integer> toFetch(int crafts) {
+        return grid.toFetch(crafts, hereCounts());
+    }
+
+    /**
      * How every cell is drawn, in row-major order. The buffer's items cover the cells of their key first, in grid
-     * order, so a recipe that takes eight planks with five delivered shows five solid cells and three ghosts; the
-     * warehouse's available items cover the cells after those.
+     * order, so a recipe that takes eight planks with five delivered shows five solid cells and three ghosts. A cell
+     * the buffer does not cover is short when the warehouse's stock and the buffer together hold less of its item than
+     * the fetch takes ({@code uses x crafts}, {@link WarehouseTerminalScreen#fetchCrafts()}).
+     * <p>
+     * While the craft order is open its items are on their way, partly in the crane's head and so neither here nor in
+     * stock: those cells are drawn as plain ghosts rather than flickering to short, unless the order's last portion was
+     * refused for that very item.
      */
     public List<CellState> cellStates() {
-        Map<ItemKey, Long> hereLeft = new HashMap<>(hereCounts());
-        Map<ItemKey, Long> availableLeft = new HashMap<>();
+        Map<ItemKey, Long> here = hereCounts();
+        Map<ItemKey, Long> hereLeft = new HashMap<>(here);
+        Map<ItemKey, Integer> uses = grid.perCraft();
+        long crafts = Math.max(1, screen.fetchCrafts());
+        TerminalCraftOrderState order = screen.craftOrderState();
+        Optional<ItemKey> refused = order.refusal().map(TerminalPortionRefusal::about);
         List<CellState> states = new ArrayList<>(CraftGrid.SIZE);
         for (int cell = 0; cell < CraftGrid.SIZE; cell++) {
             ItemKey key = grid.cell(cell).orElse(null);
@@ -406,17 +584,17 @@ public final class TerminalCraftPanel {
                 states.add(CellState.UNKNOWN);
                 continue;
             }
+            if (order.locksGrid() && !refused.equals(Optional.of(key))) {
+                states.add(CellState.AVAILABLE);
+                continue;
+            }
             if (view.noAisle() || described.available() <= 0L) {
                 states.add(CellState.MISSING);
                 continue;
             }
-            long left = availableLeft.computeIfAbsent(key, ignored -> described.available());
-            if (left > 0L) {
-                availableLeft.put(key, left - 1L);
-                states.add(CellState.AVAILABLE);
-            } else {
-                states.add(CellState.SHORT);
-            }
+            long needed = uses.getOrDefault(key, 0) * crafts;
+            states.add(here.getOrDefault(key, 0L) + described.available() < needed ? CellState.SHORT
+                    : CellState.AVAILABLE);
         }
         return List.copyOf(states);
     }
@@ -440,6 +618,35 @@ public final class TerminalCraftPanel {
                 && isOver(mouseX, mouseY, layout.craftResultX(), layout.craftResultY());
     }
 
+    /** Whether the mouse is over the Fetch button's place, whatever the button shows right now. */
+    public boolean fetchButtonAt(double mouseX, double mouseY) {
+        return screen.isCraftPanelOpen() && isOver(mouseX, mouseY,
+                layout.craftButtonX(TerminalMenuLayout.FETCH_BUTTON), layout.craftButtonY());
+    }
+
+    /**
+     * Whether the mouse is over the progress row — the bar and the numbers under it — while the craft order is open and
+     * the row is drawn; always false otherwise.
+     */
+    public boolean progressAt(double mouseX, double mouseY) {
+        if (!screen.isCraftPanelOpen() || !screen.craftOrderState().isOpen())
+            return false;
+        int left = screen.getGuiLeft() + TerminalMenuLayout.PANEL_CONTENT_X;
+        int top = screen.getGuiTop() + layout.craftProgressY();
+        int bottom = screen.getGuiTop() + layout.craftProgressTextY() + TerminalMenuLayout.LABEL_HEIGHT;
+        return mouseX >= left && mouseX < left + TerminalMenuLayout.PANEL_CONTENT_WIDTH && mouseY >= top
+                && mouseY < bottom;
+    }
+
+    /** Whether the mouse is over the cancel mark at the right end of the progress row, which gives the order up. */
+    public boolean cancelAt(double mouseX, double mouseY) {
+        if (!progressAt(mouseX, mouseY))
+            return false;
+        int right = screen.getGuiLeft() + TerminalMenuLayout.PANEL_CONTENT_X + TerminalMenuLayout.PANEL_CONTENT_WIDTH;
+        int top = screen.getGuiTop() + layout.craftProgressTextY();
+        return mouseX >= right - CANCEL_TARGET_WIDTH && mouseY >= top;
+    }
+
     /** Whether the mouse is over the 18 pixel cell at {@code x}/{@code y}, relative to the window. */
     private boolean isOver(double mouseX, double mouseY, int x, int y) {
         int left = screen.getGuiLeft() + x;
@@ -452,7 +659,7 @@ public final class TerminalCraftPanel {
 
     /**
      * The panel's content inside the frame the screen drew: the title, the nine cells, the arrow, the result and the
-     * ready count under it.
+     * ready count under it, and the craft order's progress row while it is open. The buttons are the screen's widgets.
      */
     void render(GuiGraphics graphics, Font font, int mouseX, int mouseY) {
         int left = screen.getGuiLeft();
@@ -486,6 +693,12 @@ public final class TerminalCraftPanel {
         // The tip, not the texture, is centred on the middle column, so it points at the middle of the result.
         int arrowX = left + layout.craftArrowX() + TerminalMenuLayout.SLOT / 2 - ARROW_TIP_COLUMN;
         AllGuiTextures.JEI_DOWN_ARROW.render(graphics, arrowX, top + layout.craftArrowY());
+        renderResult(graphics, font, left, top, mouseX, mouseY);
+        renderProgress(graphics, font, left, top, mouseX, mouseY);
+    }
+
+    /** The result cell, the result in it and the ready count under it; the cell alone while there is no result. */
+    private void renderResult(GuiGraphics graphics, Font font, int left, int top, int mouseX, int mouseY) {
         int resultX = left + layout.craftResultX();
         int resultY = top + layout.craftResultY();
         AllGuiTextures.STOCK_KEEPER_REQUEST_SLOT.render(graphics, resultX, resultY);
@@ -524,6 +737,54 @@ public final class TerminalCraftPanel {
     }
 
     /**
+     * The craft order's progress row while the order is open (slice 2): a bar of what has arrived, in green while the
+     * crane works and in gold while the order waits for a player, or stands still because its last portion was
+     * refused (the status row then says why); under it
+     * {@code "6/16"} in compact numbers, which the row's tooltip gives in full, and the cancel mark at the right end.
+     * Nothing at all while no order is open — a finished one is told in the status row and then gives the row back.
+     */
+    private void renderProgress(GuiGraphics graphics, Font font, int left, int top, int mouseX, int mouseY) {
+        TerminalCraftOrderState order = screen.craftOrderState();
+        if (!order.isOpen())
+            return;
+        int x = left + TerminalMenuLayout.PANEL_CONTENT_X;
+        int width = TerminalMenuLayout.PANEL_CONTENT_WIDTH;
+        int barY = top + layout.craftProgressY();
+        graphics.fill(x, barY, x + width, barY + TerminalMenuLayout.PROGRESS_HEIGHT, COLOR_PROGRESS_TRACK);
+        boolean waiting = order.waitsForPlayer()
+                || WarehouseTerminalScreen.standsStill(order.refusal(), order.inFlight()).isPresent();
+        graphics.fill(x, barY, x + progressWidth(order.delivered(), order.wanted(), width),
+                barY + TerminalMenuLayout.PROGRESS_HEIGHT,
+                waiting ? WarehouseTerminalScreen.COLOR_LOST : WarehouseTerminalScreen.COLOR_SUCCESS);
+
+        int rowY = top + layout.craftProgressTextY();
+        int numbersY = rowY + (TerminalMenuLayout.LABEL_HEIGHT - TerminalMenuLayout.SMALL_TEXT_HEIGHT) / 2;
+        String numbers = CountFormat.compact(order.delivered()) + "/" + CountFormat.compact(order.wanted());
+        float scale = WarehouseTerminalScreen.COUNT_SCALE;
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.scale(scale, scale, 1.0F);
+        graphics.drawString(font, numbers, Math.round(x / scale), Math.round(numbersY / scale),
+                WarehouseTerminalScreen.COLOR_TEXT, true);
+        pose.popPose();
+
+        // The mark is a lowercase glyph at full size, whose ink starts LOWERCASE_INK_TOP rows below where it is drawn,
+        // beside digits at COUNT_SCALE whose ink starts where they are drawn: drawn that much higher, its ink lines up
+        // with the numbers' top and baseline instead of hanging below them.
+        String mark = WarehouseTerminalScreen.CANCEL_MARK;
+        int markX = x + width - CANCEL_TARGET_WIDTH + (CANCEL_TARGET_WIDTH - font.width(mark)) / 2;
+        graphics.drawString(font, mark, markX, numbersY - LOWERCASE_INK_TOP,
+                cancelAt(mouseX, mouseY) ? COLOR_CANCEL_HOVER : WarehouseTerminalScreen.COLOR_ERROR, false);
+    }
+
+    /** The filled part of a {@code width} pixel bar for {@code delivered} of {@code wanted}; never wider than it. */
+    static int progressWidth(long delivered, long wanted, int width) {
+        if (wanted <= 0L || delivered <= 0L)
+            return 0;
+        return (int) Math.min(width, width * Math.min(delivered, wanted) / wanted);
+    }
+
+    /**
      * The ghost on the cursor, drawn the way vanilla draws a carried stack and the recipe book a ghost ingredient.
      * Nothing to draw while there is none.
      */
@@ -557,6 +818,10 @@ public final class TerminalCraftPanel {
      * The tooltip of whatever part of the panel is under the mouse, or an empty list. Nothing while a ghost is on the
      * cursor, as vanilla shows no slot's tooltip under a carried stack. Public, because a tooltip is drawn only while a
      * mouse hovers and the visual harness reads it instead of photographing it.
+     * <p>
+     * The Fetch button's tooltip is the panel's too ({@link #fetchTooltip()}): it names the result and every item a
+     * Fetch would ask for, which only the panel knows, and it is shown even while the button is greyed out, where it
+     * says why.
      */
     public List<Component> tooltipAt(double mouseX, double mouseY) {
         if (ghost != null)
@@ -566,39 +831,58 @@ public final class TerminalCraftPanel {
             return cellTooltip(cell);
         if (resultAt(mouseX, mouseY))
             return resultTooltip();
+        if (fetchButtonAt(mouseX, mouseY))
+            return fetchTooltip();
+        if (progressAt(mouseX, mouseY))
+            return progressTooltip(cancelAt(mouseX, mouseY));
         return List.of();
     }
 
     /**
      * A grid cell's tooltip: how to fill it while it is empty; otherwise the item, what one craft takes of it and what
-     * is here, what the warehouse could grant of the rest, and how to clear it.
+     * is here, what the warehouse could grant of the rest for the fetch, and how to clear it — or, while a craft order
+     * locks the grid, how to change it.
      */
     public List<Component> cellTooltip(int cell) {
+        boolean lockedGrid = screen.isCraftGridLocked();
         ItemKey key = grid.cell(cell).orElse(null);
-        if (key == null)
+        if (key == null) {
+            if (lockedGrid)
+                return List.of(lockedLine());
             return List.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CELL_EMPTY)
                             .withStyle(ChatFormatting.GRAY),
                     WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CELL_EMPTY_SHIFT)
                             .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        }
         List<Component> tooltip = new ArrayList<>(Screen.getTooltipFromItem(Minecraft.getInstance(), key.toStack()));
         int need = grid.perCraft().getOrDefault(key, 0);
         long here = hereCounts().getOrDefault(key, 0L);
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_PER_CRAFT,
                 LangNumberFormat.format(need), LangNumberFormat.format(here)).withStyle(ChatFormatting.GRAY));
         stockLine(key, need, here).ifPresent(tooltip::add);
-        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CELL_CLEAR)
-                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        tooltip.add(lockedGrid ? lockedLine()
+                : WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CELL_CLEAR)
+                        .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return tooltip;
     }
 
+    private static Component lockedLine() {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_GRID_LOCKED).withStyle(ChatFormatting.GOLD);
+    }
+
     /**
-     * What the warehouse says about the part of one craft's {@code key} the buffer does not hold, or nothing when the
-     * buffer holds all of it or the server has not described the item yet.
+     * What the warehouse says about the part of the fetch's {@code key} the buffer does not hold — {@code need} per
+     * craft times the amount field's crafts — or nothing when the buffer holds all of it, when the server has not
+     * described the item yet, or while the craft order is bringing it (the progress row counts that), unless the
+     * order's last portion was refused for this very item.
      */
     private Optional<Component> stockLine(ItemKey key, int need, long here) {
-        long lacking = need - here;
+        long lacking = (long) need * Math.max(1, screen.fetchCrafts()) - here;
         TerminalCraftViewPayload.KeyView described = view.keyView(key).orElse(null);
         if (lacking <= 0L || described == null)
+            return Optional.empty();
+        TerminalCraftOrderState order = screen.craftOrderState();
+        if (order.locksGrid() && order.refusal().map(TerminalPortionRefusal::about).filter(key::equals).isEmpty())
             return Optional.empty();
         if (view.noAisle())
             return Optional.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE)
@@ -640,5 +924,103 @@ public final class TerminalCraftPanel {
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_ALL)
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return tooltip;
+    }
+
+    /**
+     * The Fetch button's tooltip, which follows what the button does right now
+     * ({@link WarehouseTerminalScreen#craftOrderAction()}): Answer, Resume or Cancel while the craft order is open, one
+     * line each; otherwise {@code "Fetch the ingredients for Chest x3"} and one line per item the Fetch would ask for,
+     * topped up against the buffer — gold where the warehouse holds too few of it, red where it holds none — then how
+     * to set the number of crafts. A grid the server answered with no recipe, or with a locked one, shows only that
+     * refusal and the hint: the server refuses such a Fetch before it measures anything. Every line keeps to the
+     * window's row: an item's name gives way first.
+     */
+    public List<Component> fetchTooltip() {
+        return switch (screen.craftOrderAction()) {
+            case ANSWER -> List.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_ANSWER));
+            case RESUME -> List.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_RESUME));
+            case CANCEL -> List.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CANCEL));
+            default -> fetchLines();
+        };
+    }
+
+    private List<Component> fetchLines() {
+        if (grid.isEmpty())
+            return List.of(WareworksLang.translateDirect(TerminalCraftResult.GRID_EMPTY.langKey())
+                    .withStyle(ChatFormatting.GRAY));
+        int crafts = screen.fetchCrafts();
+        String count = LangNumberFormat.format(crafts);
+        List<Component> tooltip = new ArrayList<>(CraftGrid.SIZE + 3);
+        ItemStack result = shownResult();
+        if (!result.isEmpty())
+            tooltip.add(fitName(name -> WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH, name, count),
+                    result.getHoverName()));
+        else if (describesGrid())
+            tooltip.add(WareworksLang.translateDirect(TerminalCraftResult.NO_RECIPE.langKey())
+                    .withStyle(ChatFormatting.RED));
+        if (locked())
+            tooltip.add(WareworksLang.translateDirect(TerminalCraftResult.LOCKED.langKey())
+                    .withStyle(ChatFormatting.RED));
+        // The server refuses a Fetch for a grid without a recipe or with a locked one before it measures anything
+        // (WarehouseTerminalBlockEntity#fetchCraft): nothing would be fetched, and "click the result to craft" would
+        // point at a result that is not there (issue #24 review fix).
+        boolean refused = describesGrid() && (result.isEmpty() || locked());
+        Map<ItemKey, Integer> missing = refused ? Map.of() : toFetch(crafts);
+        if (!refused && missing.isEmpty())
+            tooltip.add(WareworksLang.translateDirect(TerminalCraftResult.NOTHING_TO_FETCH.langKey())
+                    .withStyle(ChatFormatting.GREEN));
+        missing.forEach((key, amount) -> tooltip.add(fitName(name -> WareworksLang.translateDirect(
+                WareworksLang.TERMINAL_CRAFT_TO_FETCH, name, LangNumberFormat.format(amount)),
+                key.toStack().getHoverName()).copy().withStyle(fetchLineStyle(key, amount))));
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH_HINT)
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        return tooltip;
+    }
+
+    /** Grey for an item the warehouse can supply; gold for one it holds too few of; red for one it holds none of. */
+    private ChatFormatting fetchLineStyle(ItemKey key, int amount) {
+        TerminalCraftViewPayload.KeyView described = describesGrid() ? view.keyView(key).orElse(null) : null;
+        if (described == null)
+            return ChatFormatting.GRAY;
+        if (view.noAisle() || described.available() <= 0L)
+            return ChatFormatting.RED;
+        return described.available() < amount ? ChatFormatting.GOLD : ChatFormatting.GRAY;
+    }
+
+    /**
+     * The progress row's tooltip while the craft order is open: what has arrived of what it asks for and what is on
+     * the way, in full where the row shows compact numbers; over the cancel mark also what a click on it does.
+     */
+    public List<Component> progressTooltip(boolean overCancelMark) {
+        TerminalCraftOrderState order = screen.craftOrderState();
+        if (!order.isOpen())
+            return List.of();
+        List<Component> tooltip = new ArrayList<>(3);
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_PROGRESS,
+                LangNumberFormat.format(order.delivered()), LangNumberFormat.format(order.wanted())));
+        if (order.inFlight() > 0L)
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_IN_FLIGHT,
+                    LangNumberFormat.format(order.inFlight())).withStyle(ChatFormatting.GRAY));
+        if (overCancelMark)
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CANCEL_MARK)
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        return tooltip;
+    }
+
+    /**
+     * The line {@code build} makes of {@code name}, with the name cut until the line fits the window's row: the
+     * numbers around it are what the line is about, and a name is still recognizable from its beginning.
+     */
+    private static Component fitName(Function<Component, Component> build, Component name) {
+        Font font = Minecraft.getInstance().font;
+        Component line = build.apply(name);
+        int over = font.width(line) - WarehouseTerminalScreen.ROW_WIDTH;
+        if (over <= 0)
+            return line;
+        int room = font.width(name) - over - font.width(CommonComponents.ELLIPSIS);
+        if (room <= 0)
+            return line;
+        return build.apply(Component.literal(font.plainSubstrByWidth(name.getString(), room))
+                .append(CommonComponents.ELLIPSIS));
     }
 }

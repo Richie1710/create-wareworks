@@ -544,6 +544,8 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_LIST),
                 "Clipboard order: %1$s of %2$s entries (%3$s)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_LIST_LEFT), "Still to fetch: %1$s");
+        // The craft order (issue #24, slice 2): the crafting panel's Fetch, one line of numbers while it is open.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_CRAFT), "Crafting fetch: %1$s of %2$s (%3$s)");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_LABEL), "Clipboard");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_SLOT),
                 "A clipboard with a list of items - the warehouse fetches it and ticks off what it delivered");
@@ -626,9 +628,39 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_ONCE), "Click: craft once");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_ALL), "Shift-click: craft all");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_PARTIAL), "Crafted %1$s x%2$s. %3$s");
+        // The craft order (issue #24, slice 2): Fetch brings the grid's ingredients by crane, topped up against what
+        // the buffer already holds. Where a line names an item, the name gives way first; the question's lines wrap.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_FETCH), "Fetch the ingredients for %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_TO_FETCH), "%1$s: %2$s to fetch");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_FETCH_HINT),
+                "The amount field sets how many crafts");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_ANSWER), "Answer the question about this fetch");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_RESUME), "Try the rest of the fetch again");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CANCEL), "Stop fetching the ingredients");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CANCEL_MARK),
+                "Click to give up; what arrived stays here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_PROGRESS), "Delivered: %1$s of %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_IN_FLIGHT), "On the way: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_GRID_LOCKED),
+                "Cancel the fetch to change the recipe");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_DONE), "Delivered: click the result to craft");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_STATUS_RUNNING), "Fetching for %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_STATUS_ASKING),
+                "Fetch for %1$s x%2$s: please answer");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_STATUS_PARKED), "Fetch for %1$s x%2$s is paused");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CONFIRM_ITEM), "For the crafting grid: %1$s %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_TITLE),
+                "Fetch the ingredients for %1$s x%2$s?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_ROOM), "Only x%1$s of x%2$s fit here.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_STOCK),
+                "Only x%1$s of x%2$s are available:");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_LINE),
+                "%1$s: %2$s available, %3$s needed");
         // One sentence per way a craft click can end. The ones that name an item take it as %1$s; "crafted" takes the
         // result and the number of items made. A refusal that stops a Shift-click after some crafts stands after
         // TERMINAL_CRAFT_PARTIAL, so each is a whole sentence of its own.
+        // The Fetch button's answers (issue #24, slice 2) follow the same rule: an item as %1$s, a number of crafts as
+        // %2$s. Every one of them fits the status row with the widest number (TerminalCraftTextWidthTest).
         for (TerminalCraftResult result : TerminalCraftResult.values()) {
             lang.accept(WareworksLang.key(result.langKey()), switch (result) {
                 case CRAFTED -> "Crafted %1$s x%2$s";
@@ -638,6 +670,19 @@ public final class WareworksLangGen {
                 case LOCKED -> "You have not unlocked this recipe";
                 case OUT_OF_REACH -> "You are too far away";
                 case GRID_EMPTY -> "Lay a recipe first";
+                case STARTED -> "Fetching for %1$s x%2$s";
+                case ASKING -> "Answer the question about this fetch";
+                case CHANGED -> "The warehouse changed in between";
+                case NOTHING_TO_FETCH -> "Already here: click the result to craft";
+                case NOT_ENOUGH -> "Can't fetch: not enough %1$s";
+                case NO_ROOM_FOR_ONE -> "No room here for one more craft";
+                case ALREADY_RUNNING -> "Already fetching ingredients here";
+                case NO_AISLE -> "This terminal is not part of a warehouse";
+                case ANSWERED -> "Carrying on with the fetch";
+                case DECLINED -> "The rest of the fetch is left for now";
+                case RESUMED -> "Trying the rest of the fetch again";
+                case CANCELLED -> "The fetch was given up";
+                case NOT_RUNNING -> "No ingredients are being fetched here";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_PATTERNS), "Patterns");

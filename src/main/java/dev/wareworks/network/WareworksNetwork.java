@@ -97,8 +97,19 @@ public final class WareworksNetwork {
      * {@link TerminalCraftAnswerPayload} server → client), which an older client would neither send nor understand.
      * Their actions and results travel by <b>name</b>, and no existing payload's field order moved, so the bump is for
      * the three new types alone. Each later slice of the issue that changes the wire bumps it again.
+     * <p>
+     * <b>{@code "10"} is slice 2 of issue #24</b> (Fetch at the crafting panel, ADR-062): the two craft order payloads
+     * ({@link TerminalCraftOrderPayload} client → server, {@link TerminalCraftOrderStatePayload} server →
+     * client), which an older client would neither send nor understand; two fields appended to
+     * {@link TerminalCraftAnswerPayload} (the plan refusal by name and the measured question) and one to the
+     * clipboard order's {@link TerminalListPayload} (why its last portion was refused), which a reader of the old shape
+     * would stop before and leave in the buffer; the Fetch's values of {@code TerminalCraftResult} and the scope
+     * {@link dev.wareworks.core.terminal.RequestScope#CRAFT} on {@link TerminalConfirmPayload}, both by name, which an
+     * older client would read as a plain refusal and as a click — and answer in the wrong place; and the question an
+     * answer was given to, in {@link TerminalListActionPayload} as in the craft order's payload, before the
+     * acknowledgement, which a reader of the old shape would take for the acknowledgement's tag.
      */
-    public static final String VERSION = "9";
+    public static final String VERSION = "10";
 
     private WareworksNetwork() {
     }
@@ -134,6 +145,10 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalCraftView);
         registrar.playToClient(TerminalCraftAnswerPayload.TYPE, TerminalCraftAnswerPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalCraftAnswer);
+        registrar.playToServer(TerminalCraftOrderPayload.TYPE, TerminalCraftOrderPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalCraftOrder);
+        registrar.playToClient(TerminalCraftOrderStatePayload.TYPE, TerminalCraftOrderStatePayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalCraftOrderState);
         registrar.playToClient(ProductionScreenPayload.TYPE, ProductionScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionScreen);
         registrar.playToServer(ProductionPatternPayload.TYPE, ProductionPatternPayload.STREAM_CODEC,
@@ -186,7 +201,7 @@ public final class WareworksNetwork {
         Player player = context.player();
         Optional<TerminalListOutcome> outcome = WarehouseTerminalMenu.submitListAction(player, payload.containerId(),
                 payload.action(), payload.acceptedMissing(), payload.acceptedProducing(), payload.acceptedDropped(),
-                payload.acknowledged());
+                payload.acknowledged(), payload.question());
         if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
             return;
         PacketDistributor.sendToPlayer(serverPlayer, new TerminalListAnswerPayload(payload.containerId(),
@@ -217,6 +232,25 @@ public final class WareworksNetwork {
         Player player = context.player();
         Optional<TerminalCraftOutcome> outcome = WarehouseTerminalMenu.submitCraft(player, payload.containerId(),
                 payload.action(), payload.cells(), payload.hint());
+        if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
+            return;
+        PacketDistributor.sendToPlayer(serverPlayer, TerminalCraftAnswerPayload.of(payload.containerId(),
+                outcome.get()));
+    }
+
+    /**
+     * A player pressed Fetch on the crafting panel of their open terminal screen, or one of the buttons of the craft
+     * order it started (issue #24, slice 2, ADR-062).
+     * <p>
+     * The payload is only a hint: the menu the player really has open decides which terminal is meant, the terminal
+     * re-validates reach and aisle, the recipe is resolved on the server, and the whole fetch is measured on the server
+     * before anything is requested. A Fetch whose consent does not cover what it would really bring is answered with
+     * the question and nothing else — no request, no promise — exactly as a clipboard's Fetch is. The answer goes to
+     * the acting player only; the order's state reaches every screen at the terminal with the menus' own pushes.
+     */
+    private static void onTerminalCraftOrder(TerminalCraftOrderPayload payload, IPayloadContext context) {
+        Player player = context.player();
+        Optional<TerminalCraftOutcome> outcome = WarehouseTerminalMenu.submitCraftOrder(player, payload);
         if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
             return;
         PacketDistributor.sendToPlayer(serverPlayer, TerminalCraftAnswerPayload.of(payload.containerId(),
@@ -320,10 +354,16 @@ public final class WareworksNetwork {
             dev.wareworks.client.gui.TerminalScreenUpdates.onCraftView(payload);
     }
 
-    /** The answer to a craft click of the open screen (M32, issue #24). */
+    /** The answer to a craft click or a craft order action of the open screen (M32, issue #24). */
     private static void onTerminalCraftAnswer(TerminalCraftAnswerPayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.TerminalScreenUpdates.onCraftAnswer(payload);
+    }
+
+    /** How far the open screen's terminal has got with its craft order, and the grid it locks (issue #24). */
+    private static void onTerminalCraftOrderState(TerminalCraftOrderStatePayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onCraftOrder(payload);
     }
 
     private static void onProductionScreen(ProductionScreenPayload payload, IPayloadContext context) {

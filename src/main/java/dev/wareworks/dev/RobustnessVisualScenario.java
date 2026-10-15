@@ -3,10 +3,12 @@ package dev.wareworks.dev;
 import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
@@ -22,10 +24,17 @@ import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.TerminalCraftOrderState;
+import dev.wareworks.content.station.TerminalCraftOutcome;
+import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
+import dev.wareworks.content.station.WarehouseTerminalBlock;
+import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.storage.FluidBayBlock;
@@ -37,10 +46,13 @@ import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
+import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.TerminalSort;
+import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -75,6 +87,9 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *       and comes back;</li>
  *   <li><b>save, quit and rejoin</b> — the world is saved in the middle of a job, the game returns to the title screen
  *       (which stops the integrated server) and opens the same world again;</li>
+ *   <li><b>a craft fetch interrupted twice</b> (issue #24, slice 2, ADR-062) — the player presses Fetch at the
+ *       terminal's crafting panel and walks away, and the one order then rides a chunk unload and a save, quit and
+ *       rejoin, each in the middle of a crane trip, and still ends with exactly what it asked for in the buffer;</li>
  *   <li><b>blocks broken at defined moments</b> — the controller is broken while the crane carries items, and later the
  *       dock itself, which drops the handling head at the dock.</li>
  * </ol>
@@ -91,6 +106,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <b>fluid bay</b> with lava in it, and the crane performs one real <b>container exchange</b> into it before the
  * phases above begin (M30, issue #21) — so a tank, a filled container and the one move that legitimately turns one
  * item into another all ride the chunk unload, the world reload, the chunk hold and the broken blocks.
+ * <p>
+ * A <b>warehouse terminal</b> stands beside the input from the start, so every phase carries an output-style member
+ * and its buffer as well. Its craft order is <b>saved with the terminal</b> and keeps the crane working with nobody at
+ * the screen, so a chunk unload or a world reload in the middle of one is a real risk, and it gets a phase of its own.
  */
 public final class RobustnessVisualScenario implements VisualScenario {
     public static final String NAME = "robustness";
@@ -170,6 +189,28 @@ public final class RobustnessVisualScenario implements VisualScenario {
     /** The bay's load before the warehouse exists: more than one {@code ItemStack} could ever carry. */
     private static final int BAY_LOAD = 2 * STACK;
 
+    /**
+     * The warehouse terminal of the craft fetch phase (issue #24, slice 2): beside the input, before the first storage
+     * location, where neither the store gate nor any other phase sends anything.
+     */
+    private static final RackPosition TERMINAL = RackPosition.of(1, 0, Side.RIGHT);
+    private static final ItemKey PLANK = ItemKey.of(Items.OAK_PLANKS);
+    private static final ItemKey TABLE = ItemKey.of(Items.CRAFTING_TABLE);
+    /** Four planks in a square: a crafting table. */
+    private static final CraftGrid<ItemKey> TABLE_GRID = CraftGrid.of(PLANK, PLANK, null, PLANK, PLANK);
+    private static final int PLANKS_PER_TABLE = 4;
+    /**
+     * The crafts the fetch is for: 320 planks, five crane trips of one stack with the shipped grabber, so a trip is
+     * still under way for the save after the chunk round trip, and more are left after the rejoin.
+     */
+    private static final int FETCH_CRAFTS = 80;
+    private static final long FETCH_PLANKS = (long) FETCH_CRAFTS * PLANKS_PER_TABLE;
+    /** Planks stored before the fetch: one stack more than it takes, so the racks keep some. */
+    private static final int PLANK_STACKS = 6;
+    private static final long PLANK_STOCK = (long) PLANK_STACKS * STACK;
+    /** Trips the fetch must take at least: one cut by the chunk unload, one by the save, and one after the rejoin. */
+    private static final int FETCH_MIN_TRIPS = 3;
+
     /** The order and the two items whose request counts have to survive the save, quit and rejoin (M24, issue #17). */
     private static final TerminalSort PREFERRED_SORT = TerminalSort.USED;
     private static final Item PREFERRED_ITEM = Items.AMETHYST_SHARD;
@@ -207,6 +248,14 @@ public final class RobustnessVisualScenario implements VisualScenario {
         return List.of(new ItemStack(Items.COAL, STACK));
     }
 
+    /** What the craft fetch phase stores first, so the fetch has something to take out of the racks. */
+    private static List<ItemStack> plankFill() {
+        List<ItemStack> stacks = new ArrayList<>(PLANK_STACKS);
+        for (int i = 0; i < PLANK_STACKS; i++)
+            stacks.add(PLANK.toStack(STACK));
+        return stacks;
+    }
+
     private static final CameraView AFTERMATH = CameraView.of("aftermath", 9.5, 6.0, 6.5, 3.0, 1.0, 0.5);
 
     /** Set by a server step, read by later server steps (and the shot status on the client). */
@@ -229,6 +278,19 @@ public final class RobustnessVisualScenario implements VisualScenario {
     /** The fluid census every step is asserted against, in millibuckets per fluid ({@link SceneFluidCensus}). */
     private volatile Map<FluidKey, Long> expectedFluid = Map.of();
 
+    /**
+     * The terminal and the controller before the camera flies away during the craft fetch: like
+     * {@link #dockBeforeUnload}, a chunk that really unloads marks them removed, and what they held at that moment is
+     * exactly what their chunks saved.
+     */
+    private volatile WarehouseTerminalBlockEntity terminalBeforeUnload;
+    private volatile WarehouseControllerBlockEntity controllerBeforeUnload;
+    /**
+     * The craft order the last interruption has to give back: as its chunk saved it (chunk round trip), or as it stood
+     * when the world was saved (save, quit and rejoin).
+     */
+    private volatile TerminalCraftOrderState fetchBefore = TerminalCraftOrderState.NONE;
+
     @Override
     public String name() {
         return NAME;
@@ -243,7 +305,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> server.overworld().isLoaded(new BlockPos(BUILD_X, LOADED_PROBE_Y, BUILD_Z)),
                         CHUNK_TIMEOUT_TICKS)
                 .server("robustness: clear the area and place the creative motor", this::placeMotor)
-                .server("robustness: build dock, rails, controller, input and storage", this::buildAisle)
+                .server("robustness: build dock, rails, controller, input, terminal and storage", this::buildAisle)
                 .serverUntil("robustness: wait until the controller is ready with every member", this::sceneReady,
                         SCENE_READY_TIMEOUT_TICKS)
                 .server("robustness: fill the input and take the baseline census", this::fillAndBaseline)
@@ -263,6 +325,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         brokenBay(script);
         chunkRoundTrip(script);
         saveAndReload(script);
+        craftFetch(script);
         chunkHold(script);
         brokenBlocks(script);
 
@@ -363,6 +426,81 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         JOB_TIMEOUT_TICKS)
                 .server("robustness: census after the resumed job finished",
                         (server, context) -> census(server, "the job resumed after the reload"));
+    }
+
+    /**
+     * <b>A craft fetch survives a chunk unload and a save, quit and rejoin</b> (issue #24, slice 2, ADR-062,
+     * {@code docs/warehouse-system.md} §8.1).
+     * <p>
+     * The player stands at the terminal, presses Fetch for {@value #FETCH_CRAFTS} crafting tables through the menu's
+     * own payload entry ({@link WarehouseTerminalMenu#submitCraftOrder}) and walks away: from then on the craft order
+     * is the only thing that keeps the crane busy, and it lives in the terminal's save data and in the controller's
+     * request queue, two block entities in two different chunks. The phase then
+     * <ol>
+     * <li>flies the camera away while the crane carries planks for it and waits until the dock, the terminal
+     * <b>and</b> the controller have really been unloaded, comes back, and requires a <b>new</b> terminal block entity
+     * whose order is the one its chunk saved: still open, the same grid and crafts, the same amount wanted, and nothing
+     * delivered forgotten;</li>
+     * <li>waits for a <b>later</b> trip — the one the unload cut has arrived — saves the world while the crane carries
+     * it, quits to the title screen, rejoins and requires the same of the order read back from disk;</li>
+     * <li>waits until the order is done and requires that the buffer holds <b>exactly</b> the planks it asked for and
+     * nothing else, that no request to the terminal is left, and that the racks kept the rest.</li>
+     * </ol>
+     * The exact buffer is what makes the phase worth having: a delivery credited twice ends the order early with too
+     * few planks, one never credited makes the order ask again and brings too many, and either way the census alone
+     * would still read PASS. Both censuses are taken after every interruption as in every other phase.
+     */
+    private void craftFetch(VisualScript script) {
+        script.server("robustness: store planks for the craft fetch",
+                        (server, context) -> refill(server, context, plankFill()))
+                .serverUntil("robustness: wait until the planks are stored", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census before the craft fetch",
+                        (server, context) -> census(server, "the planks for the craft fetch were stored"))
+                .server("robustness: fetch the ingredients for crafting tables at the terminal and walk away",
+                        this::startCraftFetch)
+                .serverUntil("robustness: wait until the crane carries planks for the craft fetch",
+                        this::craneCarriesForFetch, JOB_TIMEOUT_TICKS)
+                .server("robustness: remember dock, terminal and controller and move the camera far away",
+                        (server, context) -> {
+                            dockBeforeUnload = crane(server, context);
+                            terminalBeforeUnload = terminal(server, context);
+                            controllerBeforeUnload = controller(server, context);
+                            moveAway(server, context);
+                        })
+                .serverUntil("robustness: wait until the aisle chunks with the craft fetch really unload",
+                        this::fetchUnloaded, UNLOAD_TIMEOUT_TICKS)
+                .waitTicks(UNLOADED_TICKS)
+                .server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded again", this::sceneLoaded, CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the craft fetch was read from the save again", (server, context) -> {
+                    if (terminal(server, context) == terminalBeforeUnload)
+                        throw new VisualTestException("the terminal block entity was never unloaded and read again");
+                    fetchBefore = terminalBeforeUnload.craftOrderState();
+                    assertFetchCameBack(server, context, "the chunk round trip");
+                })
+                .server("robustness: census after the chunk round trip during the craft fetch",
+                        (server, context) -> census(server, "chunk unload and reload while a craft fetch ran"))
+                .serverUntil("robustness: wait until the crane carries planks of a later trip",
+                        this::craneCarriesLaterTrip, JOB_TIMEOUT_TICKS)
+                .server("robustness: save the world in the middle of the craft fetch", (server, context) -> {
+                    fetchBefore = requireTripsLeft(server, context);
+                    server.saveEverything(true, true, true);
+                });
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the craft fetch came back after the rejoin",
+                        (server, context) -> assertFetchCameBack(server, context, "the save, quit and rejoin"))
+                .server("robustness: census after save, quit and rejoin during the craft fetch",
+                        (server, context) -> census(server, "save, quit and rejoin while a craft fetch ran"))
+                .serverUntil("robustness: wait until the resumed craft fetch finished", this::craftFetchDone,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: the buffer holds exactly what the craft fetch asked for",
+                        this::assertFetchDelivered)
+                .server("robustness: census after the resumed craft fetch finished",
+                        (server, context) -> census(server, "the craft fetch finished after both interruptions"));
     }
 
     /**
@@ -495,6 +633,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
         BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(INPUT), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
                 .setValue(WarehouseInputBlock.FACING, layout.sideDirection(INPUT.side()).getOpposite()));
+        level.setBlockAndUpdate(layout.rackPos(TERMINAL), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
+                .setValue(WarehouseTerminalBlock.FACING, layout.sideDirection(TERMINAL.side()).getOpposite()));
         for (Side side : Side.values()) {
             Direction outward = layout.sideDirection(side);
             for (int x = STORAGE_FIRST_POSITION; x <= RAILS; x++) {
@@ -550,7 +690,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
         return controller != null && crane != null && controller.status() == ControllerStatus.READY
                 && !controller.isMembershipDirty() && controller.pendingSnapshotCount() == 0
                 && controller.storageLocations().size() == storage && controller.inputStations().size() == 1
-                && crane.isControllerLinked() && crane.aisleLength() == RAILS;
+                && controller.outputStations().size() == 1 && crane.isControllerLinked()
+                && crane.aisleLength() == RAILS;
     }
 
     private void powerOn(MinecraftServer server, VisualContext context) {
@@ -791,7 +932,192 @@ public final class RobustnessVisualScenario implements VisualScenario {
                 crane.heldItems().totalCount());
     }
 
+    // --- the craft fetch (issue #24, slice 2) ------------------------------------------------------------------------
+
+    /**
+     * The player presses Fetch for {@value #FETCH_CRAFTS} crafting tables and walks away. The camera player has no
+     * interaction range of its own, so it is put on top of the terminal first: within the four blocks every player
+     * gets on top of their range ({@code Container#stillValidBlockEntity}), which is the reach the terminal checks. The
+     * Fetch goes through the menu's payload entry, exactly as the screen's packet arrives, and the screen is closed
+     * again in the same tick: the order has to run on with nobody at the terminal.
+     */
+    private void startCraftFetch(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminal(server, context);
+        if (terminal.hasCraftOrder() || !terminal.bufferedItems().keys().isEmpty())
+            throw new VisualTestException("the terminal must have an empty buffer and no craft order before the fetch, "
+                    + "but holds " + terminal.bufferedItems().keys() + " and " + terminal.craftOrderState());
+        long stocked = controller(server, context).stockIndex().count(PLANK);
+        if (stocked != PLANK_STOCK)
+            throw new VisualTestException("the racks hold " + stocked + " planks instead of " + PLANK_STOCK);
+        int carry = InventoryGrabber.carryLimitFor(PLANK);
+        if (FETCH_PLANKS <= (long) (FETCH_MIN_TRIPS - 1) * carry)
+            throw new VisualTestException("a fetch of " + FETCH_PLANKS + " planks takes fewer than " + FETCH_MIN_TRIPS
+                    + " crane trips of " + carry + ", so it cannot be interrupted twice; this phase assumes the "
+                    + "shipped grabber limits");
+
+        ServerPlayer player = context.serverPlayer(server);
+        BlockPos at = layout(context.origin()).rackPos(TERMINAL);
+        teleport(server, context, at.getX() + 0.5, at.getY() + 1.0, at.getZ() + 0.5);
+        if (!terminal.openScreen(player) || !(player.containerMenu instanceof WarehouseTerminalMenu menu))
+            throw new VisualTestException("the terminal screen could not be opened for the camera player");
+        Optional<TerminalCraftOutcome> answer = WarehouseTerminalMenu.submitCraftOrder(player,
+                TerminalCraftOrderPayload.fetch(menu.containerId, TABLE_GRID, Optional.empty(), FETCH_CRAFTS, 0L,
+                        false));
+        player.closeContainer();
+        moveToBuildSite(server, context);
+
+        TerminalCraftOutcome outcome = answer.orElseThrow(
+                () -> new VisualTestException("the terminal menu dropped the Fetch for " + FETCH_CRAFTS + " tables"));
+        if (outcome.result() != TerminalCraftResult.STARTED || outcome.crafted() != FETCH_CRAFTS
+                || !outcome.about().equals(Optional.of(TABLE)))
+            throw new VisualTestException("Fetch x" + FETCH_CRAFTS + " for crafting tables answered " + outcome
+                    + " instead of STARTED x" + FETCH_CRAFTS);
+        TerminalCraftOrderState state = terminal.craftOrderState();
+        if (!state.isOpen() || state.crafts() != FETCH_CRAFTS || state.wanted() != FETCH_PLANKS
+                || !state.cells().equals(TABLE_GRID))
+            throw new VisualTestException("the started craft order is not the fetch that was asked for: " + state);
+        LOGGER.info(PREFIX + "robustness: the craft fetch started: {} planks for {} crafting tables, {} per crane "
+                + "trip; the player left the terminal", state.wanted(), state.crafts(), carry);
+    }
+
+    /** The crane holds planks of the craft order. Fails once the order is no longer open: the moment has passed. */
+    private boolean craneCarriesForFetch(MinecraftServer server, VisualContext context) {
+        requireFetchOpen(server, context, "before the crane was seen carrying planks for it");
+        return crane(server, context).heldItems().count(PLANK) > 0;
+    }
+
+    /**
+     * Whether the dock, the terminal and the controller have all really been unloaded: each block entity was marked
+     * removed by its chunk's unload and its position no longer counts as loaded. The controller stands in another chunk
+     * than the terminal, and the order needs both — the terminal saves the order, the controller the requests it made.
+     */
+    private boolean fetchUnloaded(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminalBeforeUnload;
+        WarehouseControllerBlockEntity controller = controllerBeforeUnload;
+        ServerLevel level = server.overworld();
+        return dockUnloaded(server, context) && terminal != null && terminal.isRemoved()
+                && !level.isLoaded(terminal.getBlockPos()) && controller != null && controller.isRemoved()
+                && !level.isLoaded(controller.getBlockPos());
+    }
+
+    /**
+     * The terminal's craft order after an interruption is the one {@link #fetchBefore} describes: still open, for the
+     * same grid, crafts and amount, and with nothing that had been delivered forgotten. Deliveries may have gone on in
+     * the ticks since the aisle came back, so {@code delivered} may only have grown.
+     */
+    private void assertFetchCameBack(MinecraftServer server, VisualContext context, String after) {
+        TerminalCraftOrderState before = fetchBefore;
+        TerminalCraftOrderState now = terminal(server, context).craftOrderState();
+        if (!before.isOpen())
+            throw new VisualTestException("the craft fetch was no longer open before " + after + ": " + before);
+        if (!now.isOpen())
+            throw new VisualTestException("the craft fetch did not come back open after " + after + ": " + now);
+        if (now.state() != ListOrderState.RUNNING)
+            throw new VisualTestException("the craft fetch came back " + now.state() + " instead of RUNNING after "
+                    + after);
+        if (!now.cells().equals(before.cells()) || !now.cells().equals(TABLE_GRID) || now.crafts() != before.crafts()
+                || now.wanted() != before.wanted() || now.wanted() != FETCH_PLANKS)
+            throw new VisualTestException("the craft fetch came back as another order after " + after + ": " + now
+                    + " instead of " + before);
+        if (now.delivered() < before.delivered())
+            throw new VisualTestException("the craft fetch forgot delivered planks across " + after + ": "
+                    + now.delivered() + " after, " + before.delivered() + " before");
+        LOGGER.info(PREFIX + "robustness: PASS the craft fetch came back after {}: {} of {} planks delivered ({} "
+                + "before), {} on the way", after, now.delivered(), now.wanted(), before.delivered(), now.inFlight());
+    }
+
+    /**
+     * The crane carries planks of a trip <b>after</b> the one the chunk unload cut: that one has arrived and been
+     * credited, so the save that follows cuts a different trip.
+     */
+    private boolean craneCarriesLaterTrip(MinecraftServer server, VisualContext context) {
+        TerminalCraftOrderState state = requireFetchOpen(server, context,
+                "before a later trip could be cut by the save");
+        return state.delivered() > fetchBefore.delivered() && crane(server, context).heldItems().count(PLANK) > 0;
+    }
+
+    /**
+     * Right before the save: the order is open, the crane carries planks for it, and the order still needs more than
+     * those — so after the rejoin it has to go on with requests read back from disk, not only finish a trip.
+     *
+     * @return the order as it stands when the world is saved
+     */
+    private TerminalCraftOrderState requireTripsLeft(MinecraftServer server, VisualContext context) {
+        TerminalCraftOrderState state = requireFetchOpen(server, context, "before the save");
+        int held = crane(server, context).heldItems().count(PLANK);
+        if (held <= 0 || state.outstanding() <= held)
+            throw new VisualTestException("the save would not interrupt the craft fetch: the crane holds " + held
+                    + " planks and the order still misses " + state.outstanding());
+        LOGGER.info(PREFIX + "robustness: saving while the crane carries {} planks of the craft fetch ({} of {} "
+                + "delivered)", held, state.delivered(), state.wanted());
+        return state;
+    }
+
+    /**
+     * The craft fetch has finished and the crane has come to rest. Fails at once if the order is gone or stopped to
+     * wait for a player: nothing in this phase asks a question or parks it, so either would be a lost order.
+     */
+    private boolean craftFetchDone(MinecraftServer server, VisualContext context) {
+        TerminalCraftOrderState state = terminal(server, context).craftOrderState();
+        if (!state.active())
+            throw new VisualTestException("the craft fetch is gone from the terminal");
+        if (state.waitsForPlayer())
+            throw new VisualTestException("the craft fetch stopped to wait for a player: " + state);
+        return !state.isOpen() && craneIdleAndEmpty(server, context);
+    }
+
+    /**
+     * The order is done with every plank it wanted, the buffer holds exactly those and nothing else, no request to the
+     * terminal is left, and the racks kept the rest of the stock.
+     */
+    private void assertFetchDelivered(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminal(server, context);
+        TerminalCraftOrderState state = terminal.craftOrderState();
+        if (state.state() != ListOrderState.DONE || state.delivered() != FETCH_PLANKS || state.wanted() != FETCH_PLANKS)
+            throw new VisualTestException("the craft fetch did not finish with every plank: " + state);
+        long buffered = terminal.bufferedItems().count(PLANK);
+        if (buffered != FETCH_PLANKS || !terminal.bufferedItems().keys().equals(Set.of(PLANK)))
+            throw new VisualTestException("the terminal's buffer holds " + buffered + " planks and "
+                    + terminal.bufferedItems().keys() + " instead of exactly " + FETCH_PLANKS + " planks");
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        if (!controller.requestsFor(terminal.getBlockPos()).isEmpty())
+            throw new VisualTestException("requests to the terminal are left after the craft fetch: "
+                    + controller.requestsFor(terminal.getBlockPos()));
+        long left = controller.stockIndex().count(PLANK);
+        if (left != PLANK_STOCK - FETCH_PLANKS)
+            throw new VisualTestException("the racks hold " + left + " planks after the craft fetch instead of "
+                    + (PLANK_STOCK - FETCH_PLANKS));
+        LOGGER.info(PREFIX + "robustness: PASS the craft fetch ended DONE with exactly {} planks in the buffer, no "
+                + "request left and {} planks in the racks", buffered, left);
+    }
+
+    /** The terminal's craft order, which has to be open; fails naming {@code moment} otherwise. */
+    private TerminalCraftOrderState requireFetchOpen(MinecraftServer server, VisualContext context, String moment) {
+        TerminalCraftOrderState state = terminal(server, context).craftOrderState();
+        if (!state.isOpen())
+            throw new VisualTestException("the craft fetch ended (" + state.state() + ", " + state.delivered() + " of "
+                    + state.wanted() + " planks delivered) " + moment);
+        return state;
+    }
+
     // --- helpers -----------------------------------------------------------------------------------------------------
+
+    private static WarehouseTerminalBlockEntity terminal(MinecraftServer server, VisualContext context) {
+        BlockPos pos = layout(context.origin()).rackPos(TERMINAL);
+        WarehouseTerminalBlockEntity terminal = WareworksBlockEntityTypes.WAREHOUSE_TERMINAL
+                .getNullable(server.overworld(), pos);
+        if (terminal == null)
+            throw new VisualTestException("the warehouse terminal at " + pos + " is gone");
+        return terminal;
+    }
+
+    private static WarehouseControllerBlockEntity controller(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER
+                .getNullable(server.overworld(), controllerPos(context));
+        if (controller == null)
+            throw new VisualTestException("the warehouse controller at " + controllerPos(context) + " is gone");
+        return controller;
+    }
 
     /** Position of the warehouse controller: one block behind the dock, against the aisle direction. */
     private static BlockPos controllerPos(VisualContext context) {

@@ -1,6 +1,7 @@
 package dev.wareworks.content.station;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,8 +30,12 @@ import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.inventory.KeyCount;
+import dev.wareworks.core.inventory.SlotView;
 import dev.wareworks.core.inventory.StockView;
+import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.stock.StockAccess;
@@ -39,6 +44,7 @@ import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.stock.StockRules;
 import dev.wareworks.core.terminal.ListCredit;
+import dev.wareworks.core.terminal.ListEntry;
 import dev.wareworks.core.terminal.ListLine;
 import dev.wareworks.core.terminal.ListOrder;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
@@ -97,7 +103,9 @@ import net.neoforged.neoforge.items.ItemStackHandler;
  * <li>{@link #bufferedItems()} (inherited) — what already arrived here;</li>
  * <li>{@link #status()} — controller link, totals, this terminal's requests and the crane's state;</li>
  * <li>{@link #requestFromTerminal(Player, ItemKey, int)} — the request itself;</li>
- * <li>{@link #craftFromBuffer} — a player's craft from what was delivered here (M32, issue #24, ADR-059).</li>
+ * <li>{@link #craftFromBuffer} — a player's craft from what was delivered here (M32, issue #24, ADR-059);</li>
+ * <li>{@link #fetchCraft} — the crafting panel's Fetch: the grid's ingredients brought here by a <b>craft order</b>,
+ * the second list order a terminal can run beside its clipboard's (issue #24, slice 2, ADR-062).</li>
  * </ul>
  * A request is validated before it reaches the controller: the player must be allowed to use the block (the vanilla
  * container rule, {@link #canPlayerUse}), the amount must be positive, and the item must be one the <b>server's own</b>
@@ -113,6 +121,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     public static final String LIST_SLOT_TAG = "ListSlot";
     /** NBT key of the bounded list state in client packets (goggles). */
     public static final String LIST_STATE_TAG = "ListState";
+    /** NBT key of the bounded craft order numbers in client packets (goggles; issue #24). */
+    public static final String CRAFT_STATE_TAG = "CraftState";
 
     /**
      * The clipboard a list order is read from and ticked off on ({@link #listSlot()}). Its own handler rather than a
@@ -127,6 +137,19 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     private boolean listTicksPending;
     /** The bounded list state: built on the server when goggles are observed, received on the client. */
     private TerminalListState shownList = TerminalListState.NONE;
+    /**
+     * Why the clipboard order's last portion was refused, while that still holds (issue #24, ADR-062). Transient: it is
+     * measured against the warehouse as it is, so a reloaded order finds out again with its next portion.
+     */
+    private Optional<TerminalPortionRefusal> listRefusal = Optional.empty();
+    /**
+     * The craft order — the crafting panel's Fetch (issue #24, slice 2, ADR-062) — or {@code null} while there is
+     * none. It runs beside {@link #listOrder} and never blocks it or is blocked by it. Saved with this block entity.
+     */
+    @Nullable
+    private TerminalCraftOrder craftOrder;
+    /** The craft order's numbers for the goggles: built on the server when observed, received on the client. */
+    private TerminalCraftOrderState shownCraft = TerminalCraftOrderState.NONE;
 
     public WarehouseTerminalBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.terminalBufferSlots());
@@ -635,6 +658,305 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         return super.controller();
     }
 
+    // --- the craft order: Fetch at the crafting panel (issue #24, slice 2, ADR-062) --------------------------------
+
+    /** Whether a craft order exists at all, finished ones included. */
+    public boolean hasCraftOrder() {
+        return craftOrder != null;
+    }
+
+    /** Whether a craft order still has work to do: Fetch is then refused, and every screen here shows its recipe. */
+    public boolean hasOpenCraftOrder() {
+        return craftOrder != null && craftOrder.isOpen();
+    }
+
+    /**
+     * How far the craft order has got, in the bounded form every screen open at this terminal is given — including
+     * the grid it was started for, which those screens show and lock while the order is open.
+     */
+    public TerminalCraftOrderState craftOrderState() {
+        TerminalCraftOrder craft = craftOrder;
+        return craft == null ? TerminalCraftOrderState.NONE : craft.state();
+    }
+
+    /**
+     * The recipe the craft order was started for, while {@code cells} is that order's grid (open or finished), and
+     * otherwise none (issue #24 review fix): a menu that previews the order's grid without a hint of its own — a second
+     * screen that adopted the locked grid, or one reopened — resolves the recipe being fetched for, not whichever
+     * recipe the manager finds first for a grid two recipes match. A hint only: the menu still looks it up and falls
+     * back to the first match when it no longer matches.
+     */
+    public Optional<ResourceLocation> craftOrderHint(CraftGrid<ItemKey> cells) {
+        TerminalCraftOrder craft = craftOrder;
+        return craft != null && craft.cells().equals(cells) ? craft.recipe() : Optional.empty();
+    }
+
+    /**
+     * The question one portion of the craft order raised, while the order is {@link ListOrderState#ASKING}: an ordinary
+     * {@link RequestConfirmation}, the very question a click raises, which the screen shows in the same panel and
+     * answers with {@link RequestScope#CRAFT} ({@code §3.6.6}).
+     */
+    public Optional<RequestConfirmation<ItemKey>> craftQuestion() {
+        TerminalCraftOrder craft = craftOrder;
+        return craft == null ? Optional.empty() : craft.order().question();
+    }
+
+    /**
+     * Server: the crafting panel's <b>Fetch</b> — bring what the buffer is missing for {@code crafts} crafts of the
+     * grid {@code menu} shows ({@code docs/warehouse-system.md} §3.4.5, issue #24, slice 2).
+     * <p>
+     * <b>Measured before anything is requested</b> ({@link CraftFetchQuestion}). The demand is topped up against the
+     * buffer and nothing else — per ingredient {@code max(0, uses × crafts − inBuffer)} — and it counts whole crafts
+     * only, bounded by what the racks may give a player and by the buffer room that is left once every open request to
+     * this terminal has put its items down. Then, in this order:
+     * <ul>
+     * <li>the buffer already holds every craft: {@link TerminalCraftResult#NOTHING_TO_FETCH}, and the player can craft
+     * right away;</li>
+     * <li>not one craft beyond what the buffer holds can be supplied, or fit: refused, naming the reason
+     * ({@link TerminalCraftResult#NOT_ENOUGH} with the ingredient, {@link TerminalCraftResult#NO_ROOM_FOR_ONE});</li>
+     * <li>every craft asked for is possible and nothing would be made: the order starts at once, without a question
+     * ({@link TerminalCraftResult#STARTED});</li>
+     * <li>otherwise the player is asked once ({@link TerminalCraftResult#ASKING}), with the numbers a Yes starts. The
+     * Yes comes back as a Fetch for exactly {@link CraftFetchQuestion#possible()} crafts with {@code answering} set,
+     * and is measured again: a warehouse that changed in between is asked about again
+     * ({@link TerminalCraftResult#CHANGED}) — a client never decides a cost.</li>
+     * </ul>
+     * Nothing is promised by measuring, and every answer but {@link TerminalCraftResult#STARTED} leaves the aisle's
+     * requests exactly as they were.
+     * <p>
+     * <b>The order is a second list order</b> (ADR-062): one line per ingredient, worked off in portions that are each
+     * an ordinary {@code controller.request(..., StockAccess.PLAYER, ..., RequestScope.CRAFT)}, the call a click
+     * makes, at most {@code terminalListOpenRequests} of them open at a time. A clipboard order never blocks it, and
+     * only an <b>open</b> craft order refuses another Fetch ({@link TerminalCraftResult#ALREADY_RUNNING}); a finished
+     * one is replaced. It moves no item and crafts nothing: it ends with the ingredients in the buffer.
+     * <p>
+     * Who may: a player who has <b>this</b> terminal's menu open right now and may still use the block, exactly as for
+     * {@link #craftFromBuffer}. The grid and the recipe are the menu's — its last preview, which the menu resolved for
+     * the Fetch's own grid right before calling this — so the recipe is looked up where ADR-059 allows it and nowhere
+     * else. No aisle, no Fetch ({@link TerminalCraftResult#NO_AISLE}).
+     *
+     * @param crafts            the amount field: how many crafts to fetch for, clamped to
+     *                          {@code 1..maxTerminalRequestAmount}
+     * @param acceptedProducing the production total a Yes agreed to; 0 for a Fetch nobody was asked about
+     * @param answering         whether this Fetch is the Yes to a question the player was shown
+     */
+    public TerminalCraftOutcome fetchCraft(Player player, WarehouseTerminalMenu menu, int crafts,
+            long acceptedProducing, boolean answering) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(menu, "menu");
+        if (level == null || level.isClientSide || isRemoved())
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        if (menu.terminal() != this || player.containerMenu != menu || !canPlayerUse(player))
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        if (hasOpenCraftOrder())
+            return TerminalCraftOutcome.of(TerminalCraftResult.ALREADY_RUNNING);
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return TerminalCraftOutcome.of(TerminalCraftResult.NO_AISLE);
+        WarehouseControllerBlockEntity controller = found.get();
+        CraftGrid<ItemKey> grid = menu.craftCells();
+        TerminalCrafting.Preview preview = menu.craftPreview();
+        if (grid.isEmpty())
+            return TerminalCraftOutcome.of(TerminalCraftResult.GRID_EMPTY);
+        if (preview.recipe().isEmpty())
+            return TerminalCraftOutcome.of(TerminalCraftResult.NO_RECIPE);
+        if (preview.locked())
+            return TerminalCraftOutcome.of(TerminalCraftResult.LOCKED);
+        int asked = Math.max(1, Math.min(crafts, Math.max(1, WareworksConfig.maxTerminalRequestAmount())));
+        // One set of slot views for the measurement and the order's lines, so what the player is told and what is
+        // requested are worked out from the very same buffer.
+        List<SlotView<ItemKey>> views = bufferViews();
+        CraftFetchQuestion<ItemKey> question = CraftFetchQuestion.measure(grid, asked, views,
+                key -> controller.availableTo(StockAccess.PLAYER, key), openRequestCounts(controller),
+                ItemKey::getMaxStackSize);
+        Optional<ItemKey> made = ItemKey.fromStack(preview.result());
+        switch (question.verdict(answering, acceptedProducing)) {
+            case NOTHING_TO_FETCH:
+                return new TerminalCraftOutcome(TerminalCraftResult.NOTHING_TO_FETCH, question.ready(), made);
+            case NOT_ENOUGH:
+                return TerminalCraftOutcome.measured(TerminalCraftResult.NOT_ENOUGH, question);
+            case NO_ROOM_FOR_ONE:
+                return TerminalCraftOutcome.measured(TerminalCraftResult.NO_ROOM_FOR_ONE, question);
+            case ASK:
+                return TerminalCraftOutcome.measured(TerminalCraftResult.ASKING, question);
+            case CHANGED:
+                return TerminalCraftOutcome.measured(TerminalCraftResult.CHANGED, question);
+            case START:
+            default:
+                break;
+        }
+        List<ListEntry<ItemKey>> entries = CraftFetchQuestion.entries(grid, asked, views);
+        if (entries.isEmpty())
+            return new TerminalCraftOutcome(TerminalCraftResult.NOTHING_TO_FETCH, question.ready(), made);
+        long now = level.getGameTime();
+        // The exact clipboard sequence (fetchList): resolved once, running from this tick, with the production total
+        // the player agreed to as its budget. A finished craft order is simply replaced.
+        TerminalCraftOrder started = new TerminalCraftOrder(ListOrder.of(entries, CraftGrid.SIZE, question.budget(),
+                now), grid, asked, preview.recipe());
+        craftOrder = started;
+        setChanged();
+        controller.onListOrderStarted(worldPosition);
+        markSummaryDirty();
+        // Every ingredient counts once towards this player's "most used" order, as a clipboard's items do (M24): they
+        // asked for each of them, here, and the order then runs on with nobody at the terminal.
+        TerminalPreferences.countListOrder(player, started.order().lines().stream().map(ListLine::key).toList());
+        return new TerminalCraftOutcome(TerminalCraftResult.STARTED, asked, made);
+    }
+
+    /**
+     * Server: the player's answer to the question one portion of the craft order raised ({@link #craftQuestion()}). It
+     * tops the order's consent up for that ingredient — it never replaces it ({@link ListOrder#answer}) — and the order
+     * runs again from this tick, offering that portion first and measuring it against the warehouse as it is then.
+     * <p>
+     * An answer that accepts <b>nothing</b> is the order button's "show me that question again": it changes no state
+     * and answers {@link TerminalCraftResult#ASKING}, and the menu puts the question up once more. So does an answer to
+     * a question the order is no longer asking ({@code answered} differs from {@link #craftQuestion()}, issue #24
+     * review fix): another player's answer moved the order on to the next portion's question, and a Yes given to the
+     * first one is consent about another item or other numbers, never about this one.
+     *
+     * @param answered the question the player answered, as their screen showed it
+     */
+    public TerminalCraftOutcome answerCraftQuestion(Player player, Optional<RequestConfirmation<ItemKey>> answered,
+            RequestAcknowledgement acknowledged) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(answered, "answered");
+        Objects.requireNonNull(acknowledged, "acknowledged");
+        if (level == null || level.isClientSide || isRemoved() || !canPlayerUse(player))
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        TerminalCraftOrder craft = craftOrder;
+        if (craft == null || craft.order().state() != ListOrderState.ASKING)
+            return TerminalCraftOutcome.of(TerminalCraftResult.NOT_RUNNING);
+        if (!acknowledged.given()
+                || !craft.order().answer(answered.orElse(null), acknowledged, level.getGameTime()))
+            return TerminalCraftOutcome.of(TerminalCraftResult.ASKING);
+        setChanged();
+        markSummaryDirty();
+        controller().ifPresent(controller -> controller.onListOrderStarted(worldPosition));
+        return TerminalCraftOutcome.of(TerminalCraftResult.ANSWERED);
+    }
+
+    /**
+     * Server: the player's <b>no</b> to the question one portion of the craft order raised. Nothing is accepted and
+     * nothing is requested; the order parks ({@link ListOrderState#PARKED}), so the order button becomes Resume, and a
+     * player who changes their mind gets the same question again.
+     */
+    public TerminalCraftOutcome declineCraftQuestion(Player player) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved() || !canPlayerUse(player))
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        TerminalCraftOrder craft = craftOrder;
+        if (craft == null || !craft.order().decline(level.getGameTime()))
+            return TerminalCraftOutcome.of(TerminalCraftResult.NOT_RUNNING);
+        // The order is parked by this no, not by a portion refused before the question: the row says "paused".
+        craft.lastRefusal(Optional.empty());
+        setChanged();
+        markSummaryDirty();
+        return TerminalCraftOutcome.of(TerminalCraftResult.DECLINED);
+    }
+
+    /** Server: gives a parked or stalled craft order another try. */
+    public TerminalCraftOutcome resumeCraftOrder(Player player) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved() || !canPlayerUse(player))
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        TerminalCraftOrder craft = craftOrder;
+        if (craft == null || !craft.isOpen())
+            return TerminalCraftOutcome.of(TerminalCraftResult.NOT_RUNNING);
+        craft.order().resume(level.getGameTime());
+        setChanged();
+        markSummaryDirty();
+        controller().ifPresent(controller -> controller.onListOrderStarted(worldPosition));
+        return TerminalCraftOutcome.of(TerminalCraftResult.RESUMED);
+    }
+
+    /**
+     * Server: {@code player} gives the craft order up — the order button's Cancel, or the cancel mark on the progress
+     * row, in any state. Any player who may use the terminal may, because requests have no owner here.
+     *
+     * @see #cancelCraftOrder()
+     */
+    public TerminalCraftOutcome cancelCraftOrder(Player player) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved() || !canPlayerUse(player))
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        return TerminalCraftOutcome.of(cancelCraftOrder() ? TerminalCraftResult.CANCELLED
+                : TerminalCraftResult.NOT_RUNNING);
+    }
+
+    /**
+     * Server: gives the open craft order up (a player's Cancel, the terminal broken or cleared).
+     * <p>
+     * <b>Only the order's own share is given back</b> ({@link ListOrder#releaseShares()}): a portion may have merged
+     * into a player's own click or into the clipboard order's portion (ADR-020), and those keep their amounts. Items
+     * the crane already delivered stay in the buffer — there is no way back (issue #24). When the order's share was the
+     * whole request, the request is removed like any cancelled one, and a crane already carrying its items takes them
+     * back into storage. When another asker's amount keeps the request open, a crane that has already picked delivers
+     * what it carries, and that counts towards what is left. The grid the order was started for unlocks.
+     *
+     * @return whether an open order was given up
+     */
+    public boolean cancelCraftOrder() {
+        TerminalCraftOrder craft = craftOrder;
+        if (craft == null || !craft.isOpen())
+            return false;
+        giveBackShares(craft.order());
+        craftOrder = null;
+        setChanged();
+        markSummaryDirty();
+        return true;
+    }
+
+    /**
+     * One craft order pass: the same top-up pass the clipboard order runs ({@link #runPass}), with
+     * {@link RequestScope#CRAFT} and without any of the clipboard's checks — the grid's lines are the whole truth.
+     *
+     * @return whether the craft order is still open
+     */
+    private boolean tickCraftOrder(long now) {
+        TerminalCraftOrder craft = craftOrder;
+        if (craft == null || !craft.isOpen())
+            return false;
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return true; // no aisle right now (misaligned, unloaded): wait, never give the order up for it
+        ListOrder<ItemKey> order = craft.order();
+        if (!order.due(now))
+            return true;
+        PassOutcome pass = runPass(order, RequestScope.CRAFT, found.get(), now);
+        craft.lastRefusal(pass.refusalAfter(craft.lastRefusal()));
+        if (pass.pass() != ListPass.WAITING)
+            setChanged();
+        markSummaryDirty();
+        return order.state().isOpen();
+    }
+
+    /** The terminal's buffer slots as a plan reads them: one view per slot, built from the live stacks, none copied. */
+    private List<SlotView<ItemKey>> bufferViews() {
+        int slots = buffer.getSlots();
+        List<SlotView<ItemKey>> views = new ArrayList<>(slots);
+        for (int slot = 0; slot < slots; slot++) {
+            ItemStack stack = buffer.getStackInSlot(slot);
+            int limit = buffer.getSlotLimit(slot);
+            views.add(stack.isEmpty() ? SlotView.empty(limit)
+                    : SlotView.of(ItemKey.of(stack), stack.getCount(), limit, stack.getMaxStackSize()));
+        }
+        return views;
+    }
+
+    /**
+     * What every open request to this terminal still brings, oldest first — a player's own clicks, other players'
+     * clicks, the clipboard order's portions and the craft order's own — for the room a Fetch is measured against.
+     */
+    private List<KeyCount<ItemKey>> openRequestCounts(WarehouseControllerBlockEntity controller) {
+        List<RetrievalRequest<ItemKey, BlockPos>> open = controller.requestsFor(worldPosition);
+        List<KeyCount<ItemKey>> counts = new ArrayList<>(open.size());
+        for (RetrievalRequest<ItemKey, BlockPos> request : open) {
+            if (request.remaining() > 0)
+                counts.add(new KeyCount<>(request.key(), request.remaining()));
+        }
+        return counts;
+    }
+
     // --- clipboard orders (M23, issue #19, ADR-036) ----------------------------------------------------------------
 
     /**
@@ -661,14 +983,27 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         return listOrder != null;
     }
 
-    /** Whether a clipboard order still has work to do, i.e. whether the controller has to look in on this terminal. */
+    /**
+     * Whether a list order still has work to do here — the clipboard's <b>or</b> the craft order (issue #24, ADR-062) —
+     * i.e. whether the controller has to look in on this terminal. It is one of the three hooks the controller calls
+     * ({@link #tickListOrder}, {@link #creditListDelivery}), and covering both orders here is what lets the controller
+     * run them without knowing there are two.
+     */
     public boolean hasOpenListOrder() {
+        return hasOpenClipboardOrder() || hasOpenCraftOrder();
+    }
+
+    /** Whether the clipboard order still has work to do. */
+    public boolean hasOpenClipboardOrder() {
         return listOrder != null && listOrder.state().isOpen();
     }
 
-    /** How far the clipboard order has got, in the bounded form the screen and the goggles are given. */
+    /**
+     * How far the clipboard order has got, in the bounded form the screen and the goggles are given, with why its last
+     * portion was refused while that still holds (issue #24).
+     */
     public TerminalListState listState() {
-        return TerminalListState.of(listOrder);
+        return TerminalListState.of(listOrder, listRefusal);
     }
 
     /**
@@ -713,7 +1048,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
         if (!canPlayerUse(player))
             return TerminalListOutcome.of(TerminalListResult.OUT_OF_REACH);
-        if (hasOpenListOrder())
+        // Only another clipboard order blocks this one: a craft fetch runs beside it (issue #24, ADR-062).
+        if (hasOpenClipboardOrder())
             return TerminalListOutcome.of(TerminalListResult.ALREADY_RUNNING);
         ItemStack clipboard = listClipboard();
         if (!ClipboardList.isClipboard(clipboard))
@@ -759,10 +1095,16 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * <p>
      * An answer that accepts <b>nothing</b> is not a Yes and not a No: it is the list button asking for the question to
      * be put up again ({@link TerminalListResult#QUESTION}), because the question lives here and a player who closed
-     * the panel would otherwise have no way back to it (M23 review fix). It changes no state at all.
+     * the panel would otherwise have no way back to it (M23 review fix). It changes no state at all. Neither does an
+     * answer to a question the order is no longer asking (issue #24 review fix): the current one is put up instead,
+     * because a Yes is consent about the item and the numbers it was given for ({@link ListOrder#answer}).
+     *
+     * @param answered the question the player answered, as their screen showed it
      */
-    public TerminalListOutcome answerListQuestion(Player player, RequestAcknowledgement acknowledged) {
+    public TerminalListOutcome answerListQuestion(Player player, Optional<RequestConfirmation<ItemKey>> answered,
+            RequestAcknowledgement acknowledged) {
         Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(answered, "answered");
         Objects.requireNonNull(acknowledged, "acknowledged");
         if (level == null || level.isClientSide || isRemoved())
             return TerminalListOutcome.of(TerminalListResult.NO_AISLE);
@@ -771,9 +1113,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         ListOrder<ItemKey> order = listOrder;
         if (order == null || order.state() != ListOrderState.ASKING)
             return TerminalListOutcome.of(TerminalListResult.NOT_RUNNING);
-        if (!acknowledged.given())
+        if (!acknowledged.given() || !order.answer(answered.orElse(null), acknowledged, level.getGameTime()))
             return TerminalListOutcome.of(TerminalListResult.QUESTION);
-        order.answer(acknowledged, level.getGameTime());
         setChanged();
         controller().ifPresent(controller -> controller.onListOrderStarted(worldPosition));
         return TerminalListOutcome.of(TerminalListResult.ANSWERED);
@@ -797,6 +1138,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         ListOrder<ItemKey> order = listOrder;
         if (order == null || !order.decline(level.getGameTime()))
             return TerminalListOutcome.of(TerminalListResult.NOT_RUNNING);
+        // Parked by this no, not by a portion refused before the question: the row says "paused".
+        listRefusal = Optional.empty();
         setChanged();
         markSummaryDirty();
         return TerminalListOutcome.of(TerminalListResult.DECLINED);
@@ -822,10 +1165,16 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * Server: gives the clipboard order up (the Cancel button, the clipboard taken out of the slot, the terminal
      * broken).
      * <p>
-     * Its open requests are cancelled, so nothing is left promised; items the crane already delivered stay in the
-     * buffer, and the tick marks the clipboard carries stay as they are — they are a receipt for what really arrived,
-     * and a cancelled order may never un-tick a delivered entry. A production order one of those requests started
-     * keeps running and its result lands in stock, exactly as for any other cancelled request ({@code §3.5}).
+     * <b>Only the order's own share of its requests is given back</b> ({@link ListOrder#releaseShares()}, issue #24,
+     * ADR-062), so nothing it asked for is left promised. A portion may have merged into a player's own click or into
+     * the craft order's portion (ADR-020), and before issue #24 cancelling the whole merged request took that click
+     * down with the list; now the click keeps its own amount. Items the crane already delivered stay in the buffer. A
+     * crane already carrying items of a request takes them back into storage when the order's share was the whole
+     * request, and delivers them, counting towards what is left, when another asker keeps the request open. The tick
+     * marks the clipboard carries stay as they are — they are a receipt for what really arrived, and a cancelled order
+     * may never un-tick a delivered entry.
+     * A production order one of those requests started keeps running and its result lands in stock, exactly as for any
+     * other cancelled request ({@code §3.5}).
      *
      * @return whether an order was given up
      */
@@ -833,39 +1182,85 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         ListOrder<ItemKey> order = listOrder;
         if (order == null)
             return false;
-        Set<UUID> open = order.release();
-        Optional<WarehouseControllerBlockEntity> found = controller();
-        if (found.isPresent()) {
-            for (UUID id : open)
-                found.get().cancelRequest(id);
-        }
+        giveBackShares(order);
         listOrder = null;
         listTicksPending = false;
+        listRefusal = Optional.empty();
         setChanged();
         markSummaryDirty();
         return true;
     }
 
     /**
-     * Server: one top-up pass of the clipboard order ({@code docs/warehouse-system.md} §3.4.4), called by the
-     * controller.
+     * Gives the controller back exactly what {@code order} was still owed by each of its open requests, and nothing
+     * more ({@code WarehouseControllerBlockEntity#reduceRequestShare}), together with the part of each share production
+     * was making for the order (issue #24 review fix), so a click left in a merged request never pays for that
+     * production falling short later. The order forgets those requests whether or not a controller is there to tell:
+     * an unloaded aisle keeps its queue, and the requests are then simply served.
+     */
+    private void giveBackShares(ListOrder<ItemKey> order) {
+        Map<UUID, ListOrder.Share> shares = order.releaseShareParts();
+        if (shares.isEmpty())
+            return;
+        controller().ifPresent(controller -> shares.forEach(
+                (id, share) -> controller.reduceRequestShare(id, share.amount(), share.producing())));
+    }
+
+    /**
+     * Server: production behind request {@code id} fell short by {@code owed} items, and the controller has reduced the
+     * request by that much ({@code WarehouseControllerBlockEntity#onProductionOrderFinished}, issue #24 review fix).
+     * <p>
+     * The orders here that share the request take the shortfall off their own lines' made part, in the turn deliveries
+     * are credited in — the craft order first, then the clipboard order ({@link ListOrder#shortfallInTurn}). A
+     * player's click merged into a portion is credited after the orders' lines, so without this the orders would claim
+     * the click's items when they arrive, and the click would get nothing; an order makes up its own loss with its
+     * next portion.
+     */
+    public void onRequestShortfall(UUID id, int owed) {
+        if (id == null || owed < 1 || level == null || level.isClientSide)
+            return;
+        ListOrder<ItemKey> craft = hasOpenCraftOrder() ? craftOrder.order() : null;
+        ListOrder<ItemKey> clipboard = hasOpenClipboardOrder() ? listOrder : null;
+        if (craft == null && clipboard == null)
+            return;
+        if (ListOrder.shortfallInTurn(id, owed, Arrays.asList(craft, clipboard)) > 0) {
+            setChanged();
+            markSummaryDirty();
+        }
+    }
+
+    /**
+     * Server: one top-up pass of each list order this terminal runs, called by the controller — first the clipboard
+     * order ({@code docs/warehouse-system.md} §3.4.4), then the craft order (§3.4.5, issue #24, ADR-062).
      * <p>
      * It is the whole "worked off in portions" of issue #19, and every portion goes through precisely the call a click
-     * goes through ({@code WarehouseControllerBlockEntity#request} with {@link RequestScope#LIST}): the same clamping,
-     * the same merging (ADR-020), the same reserves, maxima, filters, priorities, chains, safety stop and
-     * full-destination back-off. A full buffer is a planner skip with a back-off, so the request stays open and the
-     * order simply waits — it never refuses because a whole schematic does not fit — and the first freed slot restarts
-     * the trip.
+     * goes through ({@code WarehouseControllerBlockEntity#request} with {@link RequestScope#LIST} or
+     * {@link RequestScope#CRAFT}): the same clamping, the same merging (ADR-020), the same reserves, maxima, filters,
+     * priorities, chains and safety stop ({@link #runPass}). A full buffer is a planner skip that leaves the request
+     * open — {@code NoJobReason.OUTPUT_FULL} arms no back-off — so the order simply waits, it never refuses because a
+     * whole schematic does not fit, and the first freed slot restarts the trip.
      * <p>
      * <b>The clipboard is checked before anything is asked for.</b> A clipboard that was taken out, swapped or edited
      * no longer shows this order's items ({@link ClipboardList#stillShowsAll}), and the order is then given up rather
-     * than carried on against a list nobody can read any more.
+     * than carried on against a list nobody can read any more. The craft order has no such check: its lines are the
+     * whole truth about what it fetches.
      *
-     * @return whether this terminal is still worth looking in on
+     * @return whether this terminal is still worth looking in on, i.e. whether either order is still open
      */
     public boolean tickListOrder(long now) {
         if (level == null || level.isClientSide || isRemoved())
             return false;
+        boolean clipboard = tickClipboardOrder(now);
+        boolean craft = tickCraftOrder(now);
+        return clipboard || craft;
+    }
+
+    /**
+     * One top-up pass of the clipboard order, with the clipboard's own checks around the shared pass.
+     *
+     * @return whether the clipboard order is still open
+     */
+    private boolean tickClipboardOrder(long now) {
         ListOrder<ItemKey> order = listOrder;
         if (order == null || !order.state().isOpen())
             return false;
@@ -889,58 +1284,122 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return true;
         if (!stillThisList(clipboard, order))
             return false;
-        WarehouseControllerBlockEntity controller = found.get();
-        order.beginPass(controller::hasOpenRequest);
-        int perRequest = Math.max(1, WareworksConfig.maxTerminalRequestAmount());
-        int openLimit = Math.max(1, WareworksConfig.terminalListOpenRequests());
-        Optional<ListPortion<ItemKey>> next;
-        while ((next = order.nextPortion(openLimit, perRequest)).isPresent()) {
-            ListPortion<ItemKey> portion = next.get();
-            // A player's own request: a stock rule's reserve does not hold it back, and the one thing the scope adds is
-            // that production has to be agreed to first, because nobody is at the terminal (RequestScope).
-            // What this portion may spend is what the player accepted for *this item* plus the list's own production
-            // total: a Yes about one item never pays for another's reserve (ListOrder#budgetFor, M23 review fix).
-            TerminalRequestOutcome outcome = controller.request(worldPosition, portion.key(), portion.amount(),
-                    perRequest, StockAccess.PLAYER, order.budgetFor(portion.key()), RequestScope.LIST);
-            if (outcome.isAsking()) {
-                order.ask(outcome.question().orElseThrow());
-                break;
-            }
-            RequestResult result = outcome.result().orElseThrow();
-            if (result.isAccepted()
-                    && order.granted(portion, result.request().orElseThrow().id(), result.granted(), now))
-                // What the portion really cost comes out of the budget, so one Yes cannot pay for the next portion too.
-                outcome.cost().ifPresent(order::spend);
-            else
-                order.refused(portion);
-        }
-        ListPass pass = order.finishPass(now, WareworksConfig.terminalListIntervalTicks(),
-                WareworksConfig.terminalListStallTicks());
-        if (pass != ListPass.WAITING)
+        PassOutcome pass = runPass(order, RequestScope.LIST, found.get(), now);
+        listRefusal = pass.refusalAfter(listRefusal);
+        if (pass.pass() != ListPass.WAITING)
             setChanged();
         markSummaryDirty();
         return order.state().isOpen();
     }
 
     /**
-     * Server: {@code amount} items of request {@code id} really arrived in this terminal's buffer
-     * ({@code WarehouseControllerBlockEntity#onCraneDelivered}) — the one event that moves a clipboard order forward.
+     * The top-up pass both list orders share: {@link ListOrder#beginPass}, portions until there is nothing more to ask
+     * for right now, {@link ListOrder#finishPass}.
      * <p>
-     * The items are credited to the lines that really asked for them, and a line that reaches its amount is ticked off
-     * on the clipboard ({@link ListCredit#completed()}). A delivery no line of this order was waiting for is claimed
-     * as nothing, which is what makes a request shared with a player's own click (ADR-020) safe.
+     * Every portion is a player's own request: a stock rule's reserve does not hold it back, and the one thing the
+     * scope adds is that production has to be agreed to first, because nobody is at the terminal
+     * ({@link RequestScope}). What it may spend is what the player accepted for <b>this item</b> plus the order's own
+     * production total: a Yes about one item never pays for another's reserve ({@link ListOrder#budgetFor}, M23 review
+     * fix). Each order keeps at most {@code terminalListOpenRequests} portions open, so the clipboard and the craft
+     * order together never take more than twice that of the terminal's request slots, and neither keeps the other
+     * from starting; both share the terminal's {@code maxOpenRequestsPerOutput}, so a portion refused there waits for
+     * a slot.
+     * <p>
+     * Merging with a player's own click (ADR-020) stays safe: {@code ListLine#inFlight()} bounds every credit, and a
+     * cancel gives back only that share. {@code REQUEST_FULL} and {@code OUTPUT_FULL} step over a line for one pass;
+     * nothing is refused for good, and the last refusal is remembered so the screen can name it.
+     */
+    private PassOutcome runPass(ListOrder<ItemKey> order, RequestScope scope, WarehouseControllerBlockEntity controller,
+            long now) {
+        order.beginPass(controller::hasOpenRequest);
+        int perRequest = Math.max(1, WareworksConfig.maxTerminalRequestAmount());
+        int openLimit = Math.max(1, WareworksConfig.terminalListOpenRequests());
+        Optional<TerminalPortionRefusal> refused = Optional.empty();
+        boolean granted = false;
+        Optional<ListPortion<ItemKey>> next;
+        while ((next = order.nextPortion(openLimit, perRequest)).isPresent()) {
+            ListPortion<ItemKey> portion = next.get();
+            TerminalRequestOutcome outcome = controller.request(worldPosition, portion.key(), portion.amount(),
+                    perRequest, StockAccess.PLAYER, order.budgetFor(portion.key()), scope);
+            if (outcome.isAsking()) {
+                order.ask(outcome.question().orElseThrow());
+                break;
+            }
+            RequestResult result = outcome.result().orElseThrow();
+            // The part production makes for the portion is kept on the line, so giving the order up can give that
+            // promise back with the share, and a shortfall comes off the line rather than off a merged click.
+            if (result.isAccepted() && order.granted(portion, result.request().orElseThrow().id(), result.granted(),
+                    Math.min(result.producing(), result.granted()), now)) {
+                // What the portion really cost comes out of the budget, so one Yes cannot pay for the next portion too.
+                outcome.cost().ifPresent(order::spend);
+                granted = true;
+            } else {
+                order.refused(portion);
+                Optional<TerminalPortionRefusal> refusal = TerminalPortionRefusal.of(result, portion.key());
+                if (refusal.isPresent())
+                    refused = refusal;
+            }
+        }
+        ListPass pass = order.finishPass(now, WareworksConfig.terminalListIntervalTicks(),
+                WareworksConfig.terminalListStallTicks());
+        return new PassOutcome(pass, refused, granted);
+    }
+
+    /**
+     * What one pass of a list order found.
      *
-     * @return whether this order claimed any of the delivery
+     * @param pass    the order's own answer ({@link ListOrder#finishPass})
+     * @param refused the last portion of the pass that was refused, if any
+     * @param granted whether the pass made at least one portion
+     */
+    private record PassOutcome(ListPass pass, Optional<TerminalPortionRefusal> refused, boolean granted) {
+        /**
+         * The refusal to remember after this pass: the newest one when the pass was refused something; none once the
+         * pass made a portion or the order is complete, because the warehouse has moved since; otherwise
+         * {@code before}, since a pass that only waited for items on their way has learnt nothing new.
+         * <p>
+         * A pass that stopped on a portion's question keeps a refusal from earlier in the same pass: the ingredient it
+         * names really is missing, and the panel marks it. The status row does not show it while the order asks
+         * ({@code WarehouseTerminalScreen#rowRefusal}), and a no to the question forgets it, because the order is then
+         * parked by the no and not by that refusal.
+         */
+        Optional<TerminalPortionRefusal> refusalAfter(Optional<TerminalPortionRefusal> before) {
+            if (refused.isPresent())
+                return refused;
+            if (granted || pass == ListPass.COMPLETE)
+                return Optional.empty();
+            return before == null ? Optional.empty() : before;
+        }
+    }
+
+    /**
+     * Server: {@code amount} items of request {@code id} really arrived in this terminal's buffer
+     * ({@code WarehouseControllerBlockEntity#onCraneDelivered}) — the one event that moves a list order forward.
+     * <p>
+     * <b>Credited in turn</b> ({@link ListOrder#creditInTurn}, issue #24, ADR-062): the craft order first, then the
+     * clipboard order with what the craft order did not claim. Both are streams of ordinary requests, so a portion of
+     * one and a portion of the other can merge into the same request id (ADR-020); the delivery is counted once, by the
+     * controller, and the two orders together never claim more than that count. Within an order, the items go to the
+     * lines that really asked for them, and a clipboard line that reaches its amount is ticked off on the clipboard
+     * ({@link ListCredit#completed()}). A delivery no line was waiting for is claimed as nothing, which is what makes a
+     * request shared with a player's own click safe.
+     *
+     * @return whether either order claimed any of the delivery
      */
     public boolean creditListDelivery(UUID id, int amount, long now) {
-        ListOrder<ItemKey> order = listOrder;
-        if (order == null || !order.state().isOpen() || id == null || amount < 1)
+        if (id == null || amount < 1)
             return false;
-        ListCredit<ItemKey> credit = order.credit(id, amount, now);
-        if (credit.isEmpty())
+        ListOrder<ItemKey> craft = hasOpenCraftOrder() ? craftOrder.order() : null;
+        ListOrder<ItemKey> clipboard = hasOpenClipboardOrder() ? listOrder : null;
+        if (craft == null && clipboard == null)
             return false;
-        if (!credit.completed().isEmpty())
-            writeTickMarks(listClipboard(), credit.completed());
+        List<ListCredit<ItemKey>> credits = ListOrder.creditInTurn(id, amount, now, Arrays.asList(craft, clipboard));
+        ListCredit<ItemKey> craftCredit = credits.get(0);
+        ListCredit<ItemKey> clipboardCredit = credits.get(1);
+        if (craftCredit.isEmpty() && clipboardCredit.isEmpty())
+            return false;
+        if (!clipboardCredit.completed().isEmpty())
+            writeTickMarks(listClipboard(), clipboardCredit.completed());
         setChanged();
         markSummaryDirty();
         return true;
@@ -1025,6 +1484,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             if (!ClipboardList.stillShowsAll(listClipboard(), listOrder.lines())) {
                 listOrder = null;
                 listTicksPending = false;
+                listRefusal = Optional.empty();
                 markSummaryDirty();
             }
             return;
@@ -1046,9 +1506,12 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     }
 
     /**
-     * Goggles: the clipboard order's own lines, between the aisle assignment and the request lines (M23, issue #19).
+     * Goggles: the clipboard order's own lines (M23, issue #19) and the craft order's one line of numbers (issue #24),
+     * between the aisle assignment and the request lines.
      * <p>
-     * A terminal without an order adds nothing at all, so the tooltip every terminal had before M23 is unchanged.
+     * A terminal without an order adds nothing at all, so the tooltip every terminal had before M23 is unchanged. A
+     * craft order shows only while it is open: it has no clipboard to stand as its receipt, and a finished one is
+     * nothing a goggle wearer has to know about.
      */
     @Override
     protected void addStationGoggleLines(List<Component> tooltip, StationGoggleSummary shown) {
@@ -1060,6 +1523,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
                 WareworksLang.countLine(WareworksLang.GOGGLES_TERMINAL_LIST_LEFT, list.outstanding())
                         .forGoggles(tooltip, 2);
         }
+        TerminalCraftOrderState craft = shownCraft;
+        if (craft.isOpen())
+            WareworksLang.craftFetchProgress(craft.delivered(), craft.wanted(), craft.state().langKey())
+                    .forGoggles(tooltip, 1);
         super.addStationGoggleLines(tooltip, shown);
     }
 
@@ -1067,33 +1534,52 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     public void onGoggleObserved() {
         if (level == null || level.isClientSide || isVirtual() || isRemoved())
             return;
-        TerminalListState next = listState();
+        // The goggles never show why a portion was refused, so a new refusal is no reason to send a packet.
+        TerminalListState next = TerminalListState.of(listOrder);
         if (!next.equals(shownList)) {
             shownList = next;
+            markSummaryDirty();
+        }
+        TerminalCraftOrderState craft = craftOrderState().forGoggles();
+        if (!craft.equals(shownCraft)) {
+            shownCraft = craft;
             markSummaryDirty();
         }
         super.onGoggleObserved();
     }
 
-    /** Real break (server): the clipboard is dropped with the buffer — a receipt is never deleted. */
+    /**
+     * Real break (server): the clipboard is dropped with the buffer — a receipt is never deleted — and both list
+     * orders are given up, each giving back only its own share of its requests (issue #24, ADR-062). The clipboard
+     * order ends with its clipboard ({@link #onListSlotChanged()}), the craft order here.
+     */
     @Override
     public void destroy() {
         super.destroy();
         if (level == null || level.isClientSide)
             return;
+        cancelCraftOrder();
+        craftOrder = null;
         ItemStack clipboard = listSlot.extractItem(LIST_SLOT, Integer.MAX_VALUE, false);
         if (!clipboard.isEmpty())
             Containers.dropItemStack(level, worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
                     clipboard);
     }
 
-    /** {@link net.minecraft.world.Clearable}: commands and structure placement empty the list slot with the buffer. */
+    /**
+     * {@link net.minecraft.world.Clearable}: commands and structure placement empty the list slot with the buffer, and
+     * both list orders end with them — on a server, giving back only their own share of their requests.
+     */
     @Override
     public void clearContent() {
         super.clearContent();
         listSlot.setStackInSlot(LIST_SLOT, ItemStack.EMPTY);
         listOrder = null;
         listTicksPending = false;
+        listRefusal = Optional.empty();
+        if (level != null && !level.isClientSide)
+            cancelCraftOrder();
+        craftOrder = null;
     }
 
     // --- persistence ---------------------------------------------------------------------------------------------
@@ -1109,13 +1595,20 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         shownList.write(listTag);
         if (!listTag.isEmpty())
             tag.put(LIST_STATE_TAG, listTag);
+        // The same for the craft order (issue #24): numbers only, while it is open — never its grid or an item.
+        CompoundTag craftTag = new CompoundTag();
+        shownCraft.write(craftTag);
+        if (!craftTag.isEmpty())
+            tag.put(CRAFT_STATE_TAG, craftTag);
     }
 
     @Override
     protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         super.read(tag, registries, clientPacket);
-        if (clientPacket)
+        if (clientPacket) {
             shownList = TerminalListState.read(tag.getCompound(LIST_STATE_TAG));
+            shownCraft = TerminalCraftOrderState.read(tag.getCompound(CRAFT_STATE_TAG));
+        }
     }
 
     @Override
@@ -1124,15 +1617,20 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         if (!listClipboard().isEmpty())
             tag.put(LIST_SLOT_TAG, listSlot.serializeNBT(registries));
         TerminalListPersistence.write(tag, listOrder, registries);
+        // The craft order beside it, under a compound of its own (issue #24, ADR-062). A finished one is kept, as the
+        // clipboard's is, until the next Fetch replaces it.
+        TerminalCraftOrder.write(tag, craftOrder, registries);
     }
 
     @Override
     protected void readStationData(CompoundTag tag, HolderLookup.Provider registries) {
         super.readStationData(tag, registries);
-        // A tag that is no full save says nothing about the clipboard or the order: it is a schematic print landing on
-        // a terminal that is already standing (isFullSave, issue #25, ADR-061). Clearing the slot here deleted the
-        // player's clipboard without a drop and cancelled its order. Both keys are written only while they are set, so
-        // a full save without them still clears the slot, and a world load reads into a fresh terminal anyway.
+        // A tag that is no full save says nothing about the clipboard or either order: it is a schematic print landing
+        // on a terminal that is already standing (isFullSave, issue #25, ADR-061). Clearing the slot here deleted the
+        // player's clipboard without a drop and cancelled its order, and reading the craft order here would drop an
+        // open fetch without giving its share of its requests back. Every key is written only while it is set, so a
+        // full save without them still clears the slot and both orders, and a world load reads into a fresh terminal
+        // anyway.
         if (!isFullSave(tag))
             return;
         listSlot.setStackInSlot(LIST_SLOT, ItemStack.EMPTY);
@@ -1142,7 +1640,12 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // world that was closed for an hour does not come back with every order already parked.
         long now = level == null ? 0L : level.getGameTime();
         listOrder = TerminalListPersistence.read(tag, registries, now).orElse(null);
-        shownList = listState();
+        listRefusal = Optional.empty();
+        shownList = TerminalListState.of(listOrder);
+        // A terminal saved before issue #24 has no CraftOrder compound and therefore no craft order; one that was
+        // asking comes back running and asks again (TerminalCraftOrder#read). Reading never throws.
+        craftOrder = TerminalCraftOrder.read(tag, registries, now).orElse(null);
+        shownCraft = craftOrderState().forGoggles();
         // The clipboard and the order were saved together, but a tick mark is written to the item and the lines live in
         // the block entity: re-asserting them once after the load is what makes the two agree whatever the save caught.
         listTicksPending = listOrder != null;
@@ -1151,9 +1654,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     @Override
     public void onLoad() {
         super.onLoad();
-        // The order is back; the controller of this aisle has to know that this terminal is worth looking in on. Its
-        // own membership probe would find it anyway (WarehouseControllerBlockEntity#onMemberChanged, which the base's
-        // onLoad fires), so this is the cheap, direct half of the same answer.
+        // An order is back — the clipboard's or the craft order, hasOpenListOrder covers both: the controller of this
+        // aisle has to know that this terminal is worth looking in on. Its own membership probe would find it anyway
+        // (WarehouseControllerBlockEntity#onMemberChanged, which the base's onLoad fires), so this is the cheap, direct
+        // half of the same answer.
         if (level instanceof ServerLevel && hasOpenListOrder())
             controller().ifPresent(controller -> controller.onListOrderStarted(worldPosition));
     }

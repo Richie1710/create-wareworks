@@ -15,11 +15,11 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
  * How far a warehouse terminal's clipboard order has got, in the bounded form the screen and the goggles are given
  * ({@code docs/warehouse-system.md} §3.4.4, M23, issue #19).
  * <p>
- * Everything in it is a number or an enum name, plus at most <b>one</b> item: the entry the order is working on, which
- * is what makes "Fetching Oak Log, 3 of 12 entries" possible. That one item travels only in the terminal's
- * <b>payload</b> ({@code TerminalListPayload}) and never in a chunk packet: {@link #write(CompoundTag)} leaves it out,
- * so a goggle tooltip costs the same bytes whatever the clipboard holds (the rule every station's summary follows,
- * {@link StationGoggleSummary}).
+ * Everything in it is a number or an enum name, plus at most <b>two</b> items: the entry the order is working on, which
+ * is what makes "Fetching Oak Log, 3 of 12 entries" possible, and the item a refused portion names ({@link #refusal()},
+ * issue #24). Both travel only in the terminal's <b>payload</b> ({@code TerminalListPayload}) and never in a chunk
+ * packet: {@link #write(CompoundTag)} leaves them out, so a goggle tooltip costs the same bytes whatever the clipboard
+ * holds (the rule every station's summary follows, {@link StationGoggleSummary}).
  * <p>
  * It is derived state, rebuilt from the order whenever it is asked for, and compares by value — so a terminal whose
  * order did not move costs no packet.
@@ -36,13 +36,16 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
  *                        to the screen through the terminal's ordinary confirmation payload, because it is the very
  *                        question a click raises ({@code §3.6.6})
  * @param current         the entry the order is working on, for the status line; empty for a finished order
+ * @param refusal         why the last portion was refused, while that still holds (issue #24, ADR-062): the status
+ *                        row names the item in the way instead of standing still without a reason. Like
+ *                        {@link #current()} it travels only in the payload, never in a chunk packet
  */
 public record TerminalListState(boolean active, ListOrderState state, int entries, int entriesComplete, long wanted,
                                 long delivered, long inFlight, int dropped, boolean asking,
-                                Optional<ItemKey> current) {
+                                Optional<ItemKey> current, Optional<TerminalPortionRefusal> refusal) {
     /** No clipboard order on this terminal. */
     public static final TerminalListState NONE = new TerminalListState(false, ListOrderState.DONE, 0, 0, 0L, 0L, 0L, 0,
-            false, Optional.empty());
+            false, Optional.empty(), Optional.empty());
 
     private static final String ACTIVE = "Active";
     private static final String STATE = "State";
@@ -56,6 +59,7 @@ public record TerminalListState(boolean active, ListOrderState state, int entrie
 
     public TerminalListState {
         Objects.requireNonNull(current, "current");
+        Objects.requireNonNull(refusal, "refusal");
         if (state == null)
             state = ListOrderState.DONE;
         entries = Math.max(0, entries);
@@ -74,16 +78,33 @@ public record TerminalListState(boolean active, ListOrderState state, int entrie
             dropped = 0;
             asking = false;
             current = Optional.empty();
+            refusal = Optional.empty();
         }
+    }
+
+    /** A state without a refused portion: every state before issue #24. */
+    public TerminalListState(boolean active, ListOrderState state, int entries, int entriesComplete, long wanted,
+            long delivered, long inFlight, int dropped, boolean asking, Optional<ItemKey> current) {
+        this(active, state, entries, entriesComplete, wanted, delivered, inFlight, dropped, asking, current,
+                Optional.empty());
     }
 
     /** The state of {@code order}; {@link #NONE} for a terminal without one. */
     public static TerminalListState of(ListOrder<ItemKey> order) {
+        return of(order, Optional.empty());
+    }
+
+    /**
+     * The state of {@code order} with why its last portion was refused; {@link #NONE} for a terminal without one. A
+     * refusal is only reported while the order still has work to do: a finished list has nothing left to be refused.
+     */
+    public static TerminalListState of(ListOrder<ItemKey> order, Optional<TerminalPortionRefusal> refusal) {
         if (order == null)
             return NONE;
         return new TerminalListState(true, order.state(), order.entries(), order.entriesComplete(), order.wanted(),
                 order.delivered(), order.inFlight(), order.dropped(),
-                order.state() == ListOrderState.ASKING, order.current().map(ListLine::key));
+                order.state() == ListOrderState.ASKING, order.current().map(ListLine::key),
+                order.state().isOpen() && refusal != null ? refusal : Optional.empty());
     }
 
     /** Items the list is still missing. */
@@ -158,6 +179,8 @@ public record TerminalListState(boolean active, ListOrderState state, int entrie
         buffer.writeBoolean(asking);
         buffer.writeBoolean(current.isPresent());
         current.ifPresent(key -> ItemKey.STREAM_CODEC.encode(buffer, key));
+        // Appended last (issue #24): the payload is the only place it travels.
+        TerminalPortionRefusal.write(buffer, refusal);
     }
 
     /** Reads a state written by {@link #write(RegistryFriendlyByteBuf)}; an unknown state ordinal reads as RUNNING. */
@@ -176,7 +199,8 @@ public record TerminalListState(boolean active, ListOrderState state, int entrie
         boolean asking = buffer.readBoolean();
         Optional<ItemKey> current = buffer.readBoolean() ? Optional.of(ItemKey.STREAM_CODEC.decode(buffer))
                 : Optional.empty();
+        Optional<TerminalPortionRefusal> refusal = TerminalPortionRefusal.read(buffer);
         return new TerminalListState(true, state, entries, complete, wanted, delivered, inFlight, dropped, asking,
-                current);
+                current, refusal);
     }
 }

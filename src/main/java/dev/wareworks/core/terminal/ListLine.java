@@ -35,10 +35,15 @@ import java.util.UUID;
  * @param inFlight  how many of the outstanding items an open request still owes this line, {@code 0..outstanding()};
  *                  0 exactly when no request is open for it
  * @param request   the retrieval request that owes them, empty exactly when {@link #inFlight()} is 0
+ * @param producing how many of {@link #inFlight()} the request waits for from a production order this line's portion
+ *                  started, {@code 0..inFlight()} (issue #24). The rest of the portion was promised out of the racks.
+ *                  It is what this line gives back to production when it is given up
+ *                  ({@link ListOrder#releaseShareParts()}), and the most it takes off its own amount when that
+ *                  production falls short ({@link ListOrder#shortfall}); 0 for a line saved before it existed
  * @param <K>       item key type
  */
 public record ListLine<K>(int page, int index, K key, int wanted, int delivered, int inFlight,
-                          Optional<UUID> request) {
+                          Optional<UUID> request, int producing) {
     public ListLine {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(request, "request");
@@ -55,11 +60,18 @@ public record ListLine<K>(int page, int index, K key, int wanted, int delivered,
             inFlight = 0;
             request = Optional.empty();
         }
+        // The made part is a part of what is owed, never more.
+        producing = Math.max(0, Math.min(producing, inFlight));
+    }
+
+    /** A line without a made part: every item it is owed comes out of the racks. */
+    public ListLine(int page, int index, K key, int wanted, int delivered, int inFlight, Optional<UUID> request) {
+        this(page, index, key, wanted, delivered, inFlight, request, 0);
     }
 
     /** A fresh line: nothing delivered, no request open. */
     public static <K> ListLine<K> of(int page, int index, K key, int wanted) {
-        return new ListLine<>(page, index, key, wanted, 0, 0, Optional.empty());
+        return new ListLine<>(page, index, key, wanted, 0, 0, Optional.empty(), 0);
     }
 
     /** Items the line is still missing, i.e. {@code wanted - delivered}. */
@@ -94,11 +106,21 @@ public record ListLine<K>(int page, int index, K key, int wanted, int delivered,
      * @throws IllegalStateException if a request is already open for this line
      */
     public ListLine<K> withPortion(UUID id, int amount) {
+        return withPortion(id, amount, 0);
+    }
+
+    /**
+     * This line with a portion of {@code amount} items made for it by request {@code id}, {@code producing} of which
+     * the request waits for from a production order that portion started ({@link #producing()}).
+     *
+     * @throws IllegalStateException if a request is already open for this line
+     */
+    public ListLine<K> withPortion(UUID id, int amount, int producing) {
         Objects.requireNonNull(id, "id");
         if (isInFlight())
             throw new IllegalStateException("a line can only have one open request: " + request.get());
         return new ListLine<>(page, index, key, wanted, delivered, Math.min(Math.max(0, amount), outstanding()),
-                Optional.of(id));
+                Optional.of(id), producing);
     }
 
     /**
@@ -106,13 +128,31 @@ public record ListLine<K>(int page, int index, K key, int wanted, int delivered,
      * by the same number, bounded by what the open request still owes. Crediting the last owed item forgets the
      * request, whether or not the line is complete — a request that delivered less than the line wants has had its
      * say, and the rest is a new portion.
+     * <p>
+     * The made part is kept as long as it fits what is still owed: the racks' part of a portion is there at once and
+     * arrives first, the made part only once a machine has made it, so a delivery is counted against the racks' part
+     * before it touches {@link #producing()}.
      */
     public ListLine<K> withCredited(int amount) {
         int take = Math.min(Math.max(0, amount), inFlight);
         if (take == 0)
             return this;
         return new ListLine<>(page, index, key, wanted, delivered + take, inFlight - take,
-                inFlight - take == 0 ? Optional.empty() : request);
+                inFlight - take == 0 ? Optional.empty() : request, producing);
+    }
+
+    /**
+     * This line owed {@code amount} fewer items <b>of its made part</b>, without crediting them: the production order
+     * behind its request ended without making them, and the request was reduced by that much (issue #24). At most
+     * {@link #producing()} is taken, so the racks' part of the portion is never touched; owing nothing forgets the
+     * request like a credit does.
+     */
+    public ListLine<K> withShortfall(int amount) {
+        int take = Math.min(Math.max(0, amount), producing);
+        if (take == 0)
+            return this;
+        return new ListLine<>(page, index, key, wanted, delivered, inFlight - take,
+                inFlight - take == 0 ? Optional.empty() : request, producing - take);
     }
 
     /**
@@ -121,6 +161,6 @@ public record ListLine<K>(int page, int index, K key, int wanted, int delivered,
      * still wants are {@link #outstanding()} either way, and the next pass makes a new portion for them.
      */
     public ListLine<K> released() {
-        return isInFlight() ? new ListLine<>(page, index, key, wanted, delivered, 0, Optional.empty()) : this;
+        return isInFlight() ? new ListLine<>(page, index, key, wanted, delivered, 0, Optional.empty(), 0) : this;
     }
 }

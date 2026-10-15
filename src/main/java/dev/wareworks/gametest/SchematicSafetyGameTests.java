@@ -37,6 +37,8 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.RequestFilterBehaviour;
 import dev.wareworks.content.station.StockKeeperRules;
+import dev.wareworks.content.station.TerminalCraftOrderState;
+import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.WarehouseDeliveryStationBlockEntity;
 import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
@@ -47,6 +49,7 @@ import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.content.storage.FluidBayBlock;
 import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.FluidBayHandler;
@@ -59,9 +62,12 @@ import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.storage.BayTier;
 import dev.wareworks.core.stock.StockRule;
+import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksEntityTypes;
 import net.minecraft.core.BlockPos;
@@ -146,7 +152,8 @@ public final class SchematicSafetyGameTests {
     private static final Set<String> GOODS_KEYS = Set.of(RackBayHandler.STORED_TAG, RackBayHandler.COUNT_TAG,
             "StoredItem", FluidBayHandler.FLUID_TAG, FluidBayHandler.AMOUNT_TAG, FluidBayHandler.STORED_FLUID_TAG,
             WarehouseStationBlockEntity.BUFFER_TAG, "Items", "Head", "Crane", "CraneSync", "Job",
-            WarehouseTerminalBlockEntity.LIST_SLOT_TAG, "ListOrder", "Requests", "ProductionOrders", "Locations",
+            WarehouseTerminalBlockEntity.LIST_SLOT_TAG, "ListOrder", "CraftOrder", "Requests", "ProductionOrders",
+            "Locations",
             "Stock", "Reservations", "LastRejection", WarehouseOutputBlockEntity.ARMED_TAG, "PortExported",
             "PortCollected", "Layout", "Network", "StockRules", "StockPauses");
 
@@ -317,9 +324,9 @@ public final class SchematicSafetyGameTests {
     private static final long RULE_RESERVE = 5L;
 
     /**
-     * A working warehouse — controller, dock, storage, an input, a configured port, a terminal working off a clipboard,
-     * a production station with a pattern and an order, a stock keeper with a rule and a home point — every station
-     * with goods in its buffer.
+     * A working warehouse — controller, dock, storage, an input, a configured port, a terminal working off a clipboard
+     * and fetching the ingredients for a craft (issue #24), a production station with a pattern and an order, a stock
+     * keeper with a rule and a home point — every station with goods in its buffer.
      * <p>
      * <b>Phase 1</b>, with the crane standing still so nothing moves: every station and the controller (with open
      * requests and a production order) is saved, printed fresh into a row on the empty floor, and printed over itself.
@@ -392,6 +399,13 @@ public final class SchematicSafetyGameTests {
                             TerminalListResult.STARTED, "the list is started");
                     helper.assertTrue(terminal.requestFromTerminal(player, PLANK, ORDERED_PLANKS).isAccepted(),
                             "planks are ordered, to be made");
+                    // And a craft fetch beside the clipboard: a log for one craft of planks (issue #24).
+                    WarehouseTerminalMenu menu = WarehouseTerminalMenu.create(player.containerMenu.containerId + 1,
+                            player.getInventory(), terminal);
+                    player.containerMenu = menu;
+                    helper.assertValueEqual(menu.craftOrderAction(player, TerminalCraftOrderPayload.fetch(
+                            menu.containerId, CraftGrid.of(LOG), Optional.empty(), 1, 0L, false)).result(),
+                            TerminalCraftResult.STARTED, "a craft fetch is started");
                     clipboard[0] = terminal.listClipboard().copy();
                 })
                 .thenWaitUntil(() -> {
@@ -399,6 +413,8 @@ public final class SchematicSafetyGameTests {
                     helper.assertTrue(controller.openRequestCount() > 0, "the warehouse has open requests");
                     helper.assertValueEqual(controller.productionOrders().size(), 1, "and a production order");
                     helper.assertTrue(aisle.terminalAt(TERMINAL).hasOpenListOrder(), "and the list order runs");
+                    helper.assertTrue(aisle.terminalAt(TERMINAL).craftOrderState().inFlight() > 0L,
+                            "and the craft fetch has its log requested");
                 })
                 .thenExecute(() -> {
                     // --- phase 1: every station and the controller, fresh ---
@@ -425,14 +441,15 @@ public final class SchematicSafetyGameTests {
                     Travel terminal = saveAndPrintCopy(helper, "terminal", aisle.rackPos(TERMINAL), copyAt(4));
                     assertFileHoldsBuffer(helper, terminal, "the terminal");
                     helper.assertTrue(terminal.file().contains(WarehouseTerminalBlockEntity.LIST_SLOT_TAG)
-                            && terminal.file().contains("ListOrder"),
-                            "the saved file holds the terminal's clipboard and its order");
+                            && terminal.file().contains("ListOrder") && terminal.file().contains("CraftOrder"),
+                            "the saved file holds the terminal's clipboard and both its orders");
                     assertPrintCarries(helper, terminal.copy(), "a warehouse terminal");
                     WarehouseTerminalBlockEntity terminalCopy = blockEntity(helper, copyAt(4),
                             WarehouseTerminalBlockEntity.class);
                     assertEmptyBuffer(helper, terminalCopy, "the printed terminal");
                     helper.assertTrue(terminalCopy.listClipboard().isEmpty(), "it holds no clipboard");
                     helper.assertFalse(terminalCopy.hasListOrder(), "and no order");
+                    helper.assertFalse(terminalCopy.hasCraftOrder(), "and no craft fetch");
 
                     Travel station = saveAndPrintCopy(helper, "production", aisle.rackPos(PRODUCTION), copyAt(5));
                     assertFileHoldsBuffer(helper, station, "the production station");
@@ -460,6 +477,9 @@ public final class SchematicSafetyGameTests {
                     assertEmptyController(helper, copyAt(0));
 
                     // --- phase 1: the same prints, landing on the standing stations ---
+                    TerminalCraftOrderState fetching = aisle.terminalAt(TERMINAL).craftOrderState();
+                    List<RetrievalRequest<ItemKey, BlockPos>> terminalRequests = List.copyOf(
+                            aisle.controller().requestsFor(aisle.absoluteRackPos(TERMINAL)));
                     SchematicPrint.print(helper, input.name(), aisle.rackPos(INPUT), true);
                     SchematicPrint.print(helper, port.name(), aisle.rackPos(OUTPUT), true);
                     SchematicPrint.print(helper, terminal.name(), aisle.rackPos(TERMINAL), true);
@@ -477,6 +497,11 @@ public final class SchematicSafetyGameTests {
                     helper.assertTrue(ItemStack.matches(standing.listClipboard(), clipboard[0]),
                             "and the clipboard in its list slot");
                     helper.assertTrue(standing.hasOpenListOrder(), "and the order working it off");
+                    helper.assertValueEqual(standing.craftOrderState(), fetching,
+                            "and the craft fetch, exactly as it was (issue #24)");
+                    helper.assertValueEqual(List.copyOf(aisle.controller().requestsFor(
+                            aisle.absoluteRackPos(TERMINAL))), terminalRequests,
+                            "and every request to the terminal keeps its amount");
                     helper.assertValueEqual(aisle.stationCount(PRODUCTION, STICK), (long) STICKS_IN_PRODUCTION,
                             "a print over the production station leaves its buffer");
                     helper.assertValueEqual(aisle.productionAt(PRODUCTION).activePatterns().size(), 1,

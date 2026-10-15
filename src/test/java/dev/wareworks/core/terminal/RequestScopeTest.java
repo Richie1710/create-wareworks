@@ -20,6 +20,9 @@ import dev.wareworks.core.stock.StockRule;
  * {@link RequestAcknowledgement#covers(RequestConfirmation)} must keep meaning exactly what they meant before M23, and
  * the answer a click sends must stay the same four numbers — a redstone port, a GameTest and the terminal screen all
  * go through them.
+ * <p>
+ * A <b>craft fetch</b> (issue #24) is the second order a terminal can run, and its portions ask and are answered
+ * exactly like a list order's: the scope only tells the terminal which order an answer belongs to.
  */
 class RequestScopeTest {
     private static final String PLANK = "oak_plank";
@@ -154,5 +157,53 @@ class RequestScopeTest {
     void aNullQuestionIsCoveredInEveryScope() {
         assertTrue(RequestAcknowledgement.NONE.covers(null, RequestScope.LIST));
         assertTrue(RequestAcknowledgement.NONE.covers(null, RequestScope.CLICK));
+        assertTrue(RequestAcknowledgement.NONE.covers(null, RequestScope.CRAFT));
+    }
+
+    // --- a craft fetch: the second order at a terminal (issue #24) ---------------------------------------------------
+
+    @Test
+    void onlyTheTwoOrdersAskAboutProduction() {
+        assertFalse(RequestScope.CLICK.asksAboutProduction(), "a click starts production under the player's eyes");
+        assertTrue(RequestScope.LIST.asksAboutProduction());
+        assertTrue(RequestScope.CRAFT.asksAboutProduction(), "a craft fetch runs on while the player is elsewhere");
+    }
+
+    @Test
+    void aCraftFetchIsAskedAndAnsweredExactlyLikeAList() {
+        List<RequestConfirmation<String>> questions = List.of(RequestConfirmation.none(PLANK, 64L), fromReserve(4L),
+                producing(256L), new RequestConfirmation<>(PLANK, 64L, 0L, 0L, 8L, 256L, 128L, List.of()),
+                new RequestConfirmation<>(PLANK, 64L, 4L, 64L, 8L, 256L, 128L,
+                        List.of(new RequestConfirmation.ReservedIngredient<>(LOG, 6L, 32L))));
+        for (RequestConfirmation<String> question : questions) {
+            assertEquals(question.required(RequestScope.LIST), question.required(RequestScope.CRAFT));
+            assertEquals(question.acknowledgement(RequestScope.LIST), question.acknowledgement(RequestScope.CRAFT));
+            for (RequestAcknowledgement answer : List.of(RequestAcknowledgement.NONE, RequestAcknowledgement.ANY,
+                    new RequestAcknowledgement(false, 4L, 8L, 6L), new RequestAcknowledgement(false, 0L, 0L, 0L, 256L),
+                    new RequestAcknowledgement(false, 999L, 999L, 999L, 255L), question.acknowledgement(),
+                    question.acknowledgement(RequestScope.CRAFT)))
+                assertEquals(answer.covers(question, RequestScope.LIST), answer.covers(question, RequestScope.CRAFT),
+                        "the scope decides where the answer goes, never what it has to say");
+        }
+    }
+
+    @Test
+    void aCraftFetchHasToAgreeToWhatWouldBeMade() {
+        RequestConfirmation<String> made = producing(256L);
+        assertTrue(made.required(RequestScope.CRAFT));
+        assertFalse(RequestAcknowledgement.NONE.covers(made, RequestScope.CRAFT));
+        assertFalse(made.acknowledgement().covers(made, RequestScope.CRAFT),
+                "the answer to a click does not name what would be made");
+        assertEquals(256L, made.acknowledgement(RequestScope.CRAFT).produced());
+        assertTrue(made.acknowledgement(RequestScope.CRAFT).covers(made, RequestScope.CRAFT));
+        assertTrue(RequestAcknowledgement.ANY.covers(made, RequestScope.CRAFT));
+    }
+
+    @Test
+    void everyScopeIsKnownByItsName() {
+        // The scope travels by name (TerminalConfirmPayload), so the names are part of the wire.
+        assertEquals(RequestScope.CLICK, RequestScope.valueOf("CLICK"));
+        assertEquals(RequestScope.LIST, RequestScope.valueOf("LIST"));
+        assertEquals(RequestScope.CRAFT, RequestScope.valueOf("CRAFT"));
     }
 }
