@@ -187,7 +187,8 @@ mod in beta.
 
 ## Installation
 
-Download from CurseForge (coming soon) and put the jar into your `mods` folder next to Create.
+Download the jar from [CurseForge](https://www.curseforge.com/minecraft/mc-mods/create-wareworks) and put it into
+your `mods` folder next to Create.
 
 ## Quick start: build your first warehouse
 
@@ -318,7 +319,8 @@ recipe in it with **ghost** items — nothing is ordered and nothing moves while
   terminal is still missing — what was already delivered counts — while a bar under the grid counts the deliveries,
   and the grid stays locked to that recipe until they have all arrived. The red cross at the end of the bar gives the
   fetch up: what arrived stays, the rest stays in the racks. A fetch carries on while you are away and runs beside a
-  clipboard list.
+  clipboard list; one that can make no progress for a minute pauses until someone presses "Try the rest of the fetch
+  again".
 * Fetch counts whole crafts. If the warehouse holds too little of an ingredient, or the terminal has room for fewer
   crafts once everything already on its way there has arrived, it asks once — "Only x2 of x4 fit here" — and Yes
   fetches exactly those two. If not even one more craft is possible, it says why and orders nothing.
@@ -331,13 +333,14 @@ recipe in it with **ghost** items — nothing is ordered and nothing moves while
   grid is always yours to craft.
 * When the ingredients have arrived — by Fetch, or the usual way with a click in the list or a clipboard — **click the
   result** to craft once, or **Shift-click** to craft as many as the delivered items allow. The result goes into your
-  inventory, or into the terminal when your inventory is full; leftovers such as a cake's empty buckets stay in the
-  terminal. If something is missing or there is no room, nothing is used up and the terminal says why.
+  inventory, or into the terminal when your inventory is full; leftovers such as a cake's empty buckets go into the
+  terminal, or into your inventory when the terminal is full. If something is missing or there is no room, nothing is
+  used up and the terminal says why.
 
 Your grid is your own — two players at one terminal each lay their own — and the last 16 terminals you used each
 keep the grid you laid there until you leave the world or server. While a fetch runs, though, everyone at that
-terminal sees its recipe, so nobody changes it half way. Wareworks never crafts on its own: a recipe runs only when
-you click the result.
+terminal sees its recipe, so nobody changes it half way, and it stays in the grid afterwards in place of the one
+you had laid there. Wareworks never crafts on its own: a recipe runs only when you click the result.
 
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
 path for your factory — and the same block can keep asking by itself, or take items *in*, which is the next section.

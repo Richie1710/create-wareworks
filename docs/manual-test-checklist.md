@@ -2690,7 +2690,7 @@ you get tired of waiting, and put it back before judging check 160.
     it: the status row "Zutaten für Truhe x3 werden geholt", the bar's tooltip "Geliefert: 0 von 24" and "Unterwegs:
     24", over the x "Klick: aufgeben; Geliefertes bleibt hier", a right-click on a cell "Zum Ändern erst das Holen
     abbrechen", at the end "Geliefert: aufs Ergebnis klicken", and on the goggles "Werkbank-Zutaten: 0 von 24 (holt)".
-    Then lay a cake and set x4: the question reads "Zutaten für Kuchen x2 holen?" and "Nur x2 von x4 passen hier.",
+    Then lay a cake and set x4: the question reads "Zutaten für Kuchen x2 holen?" and "Nur x2 von x4 passen hinein.",
     inside the panel. **Does "holen" read right beside the player's "fertigen" and the production station's
     "herstellen"? Does "Werkbank-Zutaten" on the goggles say what is being fetched?**
 261. **A stock rule's question during a fetch: Yes, No, Resume.** Give Oak Planks a stock keeper row with a

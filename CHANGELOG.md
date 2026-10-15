@@ -7,13 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0-beta] - 2026-10-15
+
 ### Added
 
 - **Craft at the warehouse terminal.** A new button beside your inventory in the terminal's screen folds out a
   crafting grid. Lay a recipe in it and craft it **by hand from what the crane delivered** into the terminal, without
   carrying everything to a crafting table first. Click the result to craft once, **Shift**-click to craft as many as
   the delivered items allow. The result goes into your inventory, or into the terminal when your inventory is full,
-  and leftovers like a cake's empty buckets stay in the terminal. Any crafting recipe works, including the special ones
+  and leftovers like a cake's empty buckets go into the terminal, or into your inventory when the terminal is full.
+  Any crafting recipe works, including the special ones
   such as fireworks and dyeing, and with the `doLimitedCrafting` game rule on, a recipe you have not unlocked stays
   locked. Wareworks still never crafts on its own: a recipe runs only when you click it
 - **The grid holds ghosts, not items.** Right-click an item in the stock list to pick it up as a ghost, then
@@ -33,14 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gives the fetch up at any time: what arrived stays in the terminal, the rest stays in the racks, and your recipe
   stays in the grid. A fetch carries on with nobody at the terminal, survives a save, a chunk unload and a restart, and
   can be started while a clipboard list runs: the two run side by side and share the terminal's open requests,
-  so one of them may wait for a request the other frees
+  so one of them may wait for a request the other frees. Like a clipboard list, a fetch pauses ("Fetch for Chest x4 is
+  paused") when it can make no progress at all for a minute, or when you answer a question about a reserve or maximum
+  with No, until someone at the terminal presses "Try the rest of the fetch again". The server settings
+  `terminalListOpenRequests`, `terminalListIntervalTicks` and `terminalListStallTicks` now bound each fetch on its own,
+  as they bound each clipboard list. While a fetch is open, Engineer's Goggles on the terminal show its progress, for
+  example "Crafting fetch: 6 of 16 (fetching)"
 - **Whole crafts, and one question up front.** Before anything is ordered the terminal works out how many crafts the
   warehouse can really supply, and how many fit into the terminal once everything already on its way there has
   arrived. When that is fewer than you asked for it asks once — for example "Only x2 of x4 fit here", or which
   ingredient is short — and Yes fetches exactly that many; when not even one more craft is possible it says why and
   orders nothing. A stock rule's reserve or maximum is still asked about item by item while the fetch runs, exactly
   as for a click. While a fetch runs, everyone at that terminal sees its recipe in their grid, locked until the fetch
-  is done or given up
+  is done or given up. The recipe then stays in the grid of everyone who had the screen open, in place of the one
+  they had laid there
 - **Missing ingredients can be made first.** A grid cell whose item the warehouse is short of shows the stock list's
   blue **+** when one of your production stations has a pattern for it ("Can be made here: Fetch asks first"), and turns
   red with a red **!** when the safety stop holds that item ("Making Oak Planks is stopped"); a cell nothing can make
@@ -76,10 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is on its way, the terminal's status line now names the reason in gold — for example "Glass is missing" —
   instead of the list's progress, and the clipboard slot's tooltip names it too. While the list waits for an answer to
   a question, the status line asks for that answer instead
-- **A Wareworks block at its default settings adds nothing to a schematic.** An unfiltered rack bay, fluid bay or
-  warehouse interface, a plain warehouse port, a controller on aisle A, a dock at the default mast height and a stock
-  keeper without rules no longer hand a Schematicannon any block data of their own, and saves and chunk packets carry
-  a little less. Worlds and schematics from earlier versions load unchanged
+- **A Wareworks block at its default settings prints without block data of its own.** An unfiltered rack bay, fluid
+  bay or warehouse interface, a plain warehouse port, a controller on aisle A, a dock at the default mast height and a
+  stock keeper without rules no longer hand a Schematicannon any block data of their own, and saves and chunk packets
+  carry a little less. Worlds and schematics from earlier versions load unchanged. The schematic file still stores
+  every block's full data, so a server running Create: Schematic Checker still needs the `wareworks` whitelist line
 - **A filter slot stores a single item as its sample.** Setting the filter of a storage location or a port with a
   whole stack in hand used to store the whole stack as the sample, so a schematic of the block named items that do not
   exist. Nothing is taken from you either way, the filter works exactly as before, and a Create filter item is kept as
@@ -95,10 +105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the production station, the clipboard opens its own editor, the Display Link selects its source, goggles are put
   on, and sneaking with an empty hand on a production station still restarts what the safety stop held. Funnels and
   Deployers place against them as before
-- **A creative instant print no longer duplicates a pallet.** A Schematic and Quill saves every entity in its area,
-  and a pallet — the load of a broken rack bay — went into the schematic with its whole load; printing it in creative
-  then added a second pallet beside the first. Create now leaves pallets out of every print except an operator's
-  creative print, which keeps every saved entity
+- **A non-operator's creative instant print no longer duplicates a pallet.** A Schematic and Quill saves every entity
+  in its area, and a pallet — the load of a broken rack bay — went into the schematic with its whole load; printing it
+  in creative then added a second pallet beside the first. Create now leaves pallets out of every print except an
+  operator's creative instant print, which keeps every saved entity. A single-player world with cheats on (the default
+  for a new creative world) makes you an operator, so there a saved pallet still comes along with its load: leave
+  pallets out of the area you save
 - **A schematic printed over a standing crane, terminal, production station, port or stock keeper no longer deletes
   what it holds.** A print lands on a standing block when one of its block states differs (a dock turned another way,
   a terminal's screen on another side, a port that is powered now): in creative, and at a Schematicannon with *Replace
@@ -1057,7 +1069,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.10.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.11.0-beta...HEAD
+[0.11.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.10.0-beta...v0.11.0-beta
 [0.10.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.9.2-alpha...v0.10.0-beta
 [0.9.2-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.9.1-alpha...v0.9.2-alpha
 [0.9.1-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.9.0-alpha...v0.9.1-alpha
