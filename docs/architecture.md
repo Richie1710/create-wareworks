@@ -141,9 +141,11 @@ dev.wareworks
 │   │                          read-only slot views of the buffer and the player's inventory, as an overlay of the
 │   │                          touched slots: takes, remainders, result, or a refusal that names the item); for the
 │   │                          Fetch (ADR-062): CraftFetchQuestion (what a Fetch would really bring, in whole crafts:
-│   │                          the stock, chain and room bounds, the verdict and the question's named lines) and
-│   │                          BufferFit (whether a demand still fits the buffer once every open request has put its
-│   │                          items down, and the most crafts that do)
+│   │                          the stock, chain and room bounds, the verdict and the question's named lines; since the
+│   │                          chain offer also the search for the largest fetch whose chains hold, through its Chains
+│   │                          seam, and the item one craft more falls short of) and BufferFit (whether a demand still
+│   │                          fits the buffer once every open request has put its items down, and the most crafts
+│   │                          that do)
 │   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
@@ -152,7 +154,12 @@ dev.wareworks
 │   │                          out at the click, or a refusal that names the item), ProductionPlan / PlanNode (the
 │   │                          steps in dependency order, root last), PlanBudget (the one availability snapshot),
 │   │                          ProductionPlanInput / ProductionPlanResult, PlanLimits (steps, ingredient items — no
-│   │                          depth key), PlanRefusal (eight reasons, each naming an item), StationPattern
+│   │                          depth key), PlanRefusal (eight reasons, each naming an item), StationPattern; for the
+│   │                          crafting grid's chain offer (M32, issue #24, ADR-062): SequentialPlans (a craft
+│   │                          fetch's lines walked in line order against one snapshot, each taking from the racks
+│   │                          at its own turn and a chain paying for the rest out of what the earlier lines and
+│   │                          chains left), FetchPreview (per line its take and its chain) and ChainPreview (what one
+│   │                          short line's chain would promise and make, or the refusal that names its item)
 │   ├── port                   the policy of one warehouse port (M17, issue #12, ADR-029): PortDirection (request /
 │   │                          accept, derived from the sign of the rank; since M18 also collect, from one sentinel
 │   │                          rank), PortRedstone (on a pulse / while powered /
@@ -349,7 +356,8 @@ dev.wareworks
 │                              TerminalCraftViewPayload (server → client: the grid it answers, the recipe, its result,
 │                              the lock flag and what the warehouse can grant of each grid item) and
 │                              TerminalCraftAnswerPayload (server → the acting player only: what the click became;
-│                              since ADR-062 also a Fetch's measured question); the two craft-order payloads (M32,
+│                              since ADR-062 also a Fetch's measured question, and since its chain offer why a chain
+│                              does not hold and the item that names); the two craft-order payloads (M32,
 │                              ADR-062): TerminalCraftOrderPayload (client → server: fetch, answer naming its
 │                              question, decline, resume or cancel; moves no item) and TerminalCraftOrderStatePayload
 │                              (server → client: the order's progress and the grid every screen at the terminal shows
@@ -364,7 +372,7 @@ dev.wareworks
 │   │                          crafting panel: the client-owned ghost grid, the ghost cursor, the debounced preview,
 │   │                          the cell states and the hit tests, M32, issue #24, ADR-059; since ADR-062 also the
 │   │                          order button, its tooltip, the progress row with its cancel mark and the grid a
-│   │                          running fetch locks)
+│   │                          running fetch locks, and since its chain offer the makeable and stopped cells)
 │   ├── render                 StackerCraneRenderer (animated crane, SafeBlockEntityRenderer without Flywheel visual),
 │   │                          WareworksPartialModels (crane partials), CraneModelLayout (model dimensions, pose math) (M4);
 │   │                          WarehouseInterfaceRenderer (Create's filter renderer with the view distance the mod's
@@ -472,7 +480,12 @@ dev.wareworks
 │                              question and a stale Yes, a fetch beside a clipboard order, a cancel that keeps a
 │                              merged click (and the same for the clipboard order), a buffer filled later, a reload,
 │                              a broken terminal, and Fetch to craft through the menu's own entry points alone (M32,
-│                              issue #24, ADR-062)
+│                              issue #24, ADR-062);
+│                              TerminalCraftChainGameTests: the chain offer — a chain offered, accepted and played at
+│                              a saw until the craft works, an offer declined (and a portion's question declined),
+│                              a refusal naming the raw material, a stopped ingredient and the click that lifts it,
+│                              previews that change nothing, two chains sharing two logs, and a fence gate whose
+│                              chains follow its lines and never ask again after the Yes (M32, issue #24, ADR-062)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -545,7 +558,10 @@ dev.wareworks
 │                              English and German: the fold, the ghost grid, Fetch with its tooltip, the locked grid
 │                              and the progress row while the crane carries, a fetch given up with the cancel mark,
 │                              the room question answered Yes, crafts with an item census around each, a remainder,
-│                              a refusal, and the window at a 320 x 240 GUI, M32, issue #24),
+│                              a refusal, and the window at a 320 x 240 GUI; since the chain offer also a player's
+│                              machine — a production station, a Mechanical Arm and a Mechanical Crafter — whose
+│                              nuggets the grid offers to have made, the makeable cells, the offer answered Yes and
+│                              the chain run at that machine, M32, issue #24),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -4468,16 +4484,16 @@ while production keeps "herstellen").
    and two open menus with a chest laid in their grids, one of them broadcast every tick as a real player's would be.
    The item census never moves, nothing is requested, the crane stays idle and each menu resolved its recipe once.
 
-*Consequences:* `WareworksNetwork.VERSION` is `"9"` (`"10"` since ADR-062): three payloads were added
-(`TerminalCraftPayload`, `TerminalCraftViewPayload`, `TerminalCraftAnswerPayload`), with their enums travelling by
-name. The terminal window is 298 GUI px wide while the crafting panel is folded out, inside the 320 px floor at every
-GUI scale, and no slot of the menu moved. Crafting saves nothing new (the craft order of ADR-062 does). The two Ponder
-lines that say Wareworks never crafts anything itself (`warehouse_production.text_6`,
-`warehouse_production_chain.text_12`) stay as they are: they speak about the production station and a chain, where
-they are still exactly true. The README and the manual checklist say instead that Wareworks
-never crafts on its own, and that at a terminal you can craft by hand from what the crane delivered. Fetching the
-ingredients for a laid recipe (ADR-062) and offering to make a missing one first are the issue's next two slices;
-neither adds a second place where a recipe runs, because both only ask for deliveries and for production at the
+*Consequences:* `WareworksNetwork.VERSION` is `"9"` (`"10"` since ADR-062, `"11"` since its chain offer): three payloads
+were added (`TerminalCraftPayload`, `TerminalCraftViewPayload`, `TerminalCraftAnswerPayload`), with their enums
+travelling by name. The terminal window is 298 GUI px wide while the crafting panel is folded out, inside the 320 px
+floor at every GUI scale, and no slot of the menu moved. Crafting saves nothing new (the craft order of ADR-062 does).
+The two Ponder lines that say Wareworks never crafts anything itself (`warehouse_production.text_6`,
+`warehouse_production_chain.text_12`) stay as they are: they speak about the production station and a chain, where they
+are still exactly true. The README and the manual checklist say instead that Wareworks never crafts on its own, and that
+at a terminal you can craft by hand from what the crane delivered. Fetching the ingredients for a laid recipe and
+offering to make a missing one first followed as the issue's next two slices (ADR-062 and its chain offer); neither adds
+a second place where a recipe runs, because both only ask for deliveries and for production of the ingredients at the
 player's own machines.
 
 *Correction to ADR-024:* its sentence "Nothing in Wareworks executes a recipe" now reads "Nothing in Wareworks executes
@@ -4657,7 +4673,7 @@ or keeper guard fails the test that covers it.
 * Outside Create, a schematic file placed with `/place template` or a structure block (operators only) restores the
   raw data, goods included — the exposure every vanilla chest has.
 
-### ADR-062 — The craft fetch is a second `ListOrder` on the terminal (amends ADR-036 and ADR-059) (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24))
+### ADR-062 — The craft fetch is a second `ListOrder` on the terminal, and a missing ingredient is offered through a side-effect-free preview of the chain planner (amends ADR-036 and ADR-059) (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24))
 
 *Context:* The second part of issue #24 is the crafting panel's **Fetch**: the crane brings what a laid recipe still
 needs for N crafts into the terminal's buffer, where the player crafts it by hand (ADR-059). Four things made this a
@@ -4697,15 +4713,15 @@ requests, both given up share-only.
 * **Measured before anything is requested, in whole crafts** (`core.crafting.CraftFetchQuestion`). The demand per
   ingredient is `max(0, uses × N − inBuffer)`, a top-up against the **buffer and nothing else**. Three bounds follow,
   each a number of crafts: what the racks may give a player (`availableTo(PLAYER)`; a reserve never holds a player
-  back), what a production chain would add (equal to the first until the chain offer exists; its seam is
-  `CraftFetchQuestion.Promises`), and the room left in the buffer (`core.crafting.BufferFit`: every open request to
-  this terminal puts its remaining items down first, then the whole demand must fit, max stack sizes included, found
-  by a binary search of at most 1 + log2(N + 1) plans). The verdict, in this order: the buffer already holds N crafts
-  (`NOTHING_TO_FETCH`); not one craft beyond what the buffer holds is possible (`NOT_ENOUGH`, naming the item, or
-  `NO_ROOM_FOR_ONE`); all N are possible and nothing would be made (`STARTED`, no question); otherwise one question
-  with the numbers a Yes will start. The Yes comes back as a Fetch for exactly that number, flagged as an answer, and
-  is measured again; a warehouse that changed in between is asked about again (`CHANGED`). Only `STARTED` requests
-  anything, and a client never decides a cost (§3.6.6).
+  back), what production chains at the player's own machines would add (the chain offer below, through the seams
+  `CraftFetchQuestion.Promises` and `Chains`), and the room left in the buffer (`core.crafting.BufferFit`: every open
+  request to this terminal puts its remaining items down first, then the whole demand must fit, max stack sizes
+  included, found by a binary search of at most 1 + log2(N + 1) plans). The verdict, in this order: the buffer already
+  holds N crafts (`NOTHING_TO_FETCH`); not one craft beyond what the buffer holds is possible (`NOT_ENOUGH`, naming the
+  item, or `NO_ROOM_FOR_ONE`); all N are possible and nothing would be made (`STARTED`, no question); otherwise one
+  question with the numbers a Yes will start. The Yes comes back as a Fetch for exactly that number, flagged as an
+  answer, and is measured again; a warehouse that changed in between is asked about again (`CHANGED`). Only `STARTED`
+  requests anything, and a client never decides a cost (§3.6.6).
 * **A fetch refuses when nothing beyond what is already here is possible, not only at zero crafts.** The design study
   refused only when no craft at all was possible. A buffer that already holds one craft of four, with nothing more to
   be had, would then have been asked "fetch x1?", and the Yes would have found nothing to fetch. The refusal carries the
@@ -4715,7 +4731,8 @@ requests, both given up share-only.
   answers routed to the craft order. A portion that crosses a reserve or a maximum raises the ordinary per-item panel
   through `TerminalConfirmPayload` with that scope; the answer comes back as a `TerminalCraftOrderPayload` (`ANSWER`,
   or `DECLINE`, which parks the order) and is kept per item (`ListOrder#budgetFor`). The Fetch's own Yes is the order's
-  production budget (`CraftFetchQuestion#budget`), zero until the chain offer exists.
+  production budget (`CraftFetchQuestion#budget`): what the chain offer below agreed to have made, zero when nothing
+  is made.
 * **An answer names the question it answers, for both orders.** Every screen at a terminal shows a portion's
   question, and another player's answer can move the order on to the next portion's question within one tick, without
   the order ever leaving `ASKING`. `ANSWER` therefore carries the question it was given to (`TerminalCraftOrderPayload`
@@ -4787,9 +4804,10 @@ requests, both given up share-only.
   crafts and one question are what "fetch the ingredients" can honestly promise.
 * **A new job kind, queue or controller-side order**: the duplication ADR-036 already refused.
 
-*Consequences:* `WareworksNetwork.VERSION` is `"10"`. `TerminalCraftOrderPayload` (client → server: fetch, answer,
-decline, resume or cancel) and `TerminalCraftOrderStatePayload` (server → client) are new, and
-`TerminalCraftAnswerPayload` gained the fetch's measured question and a plan refusal that the chain offer will fill.
+*Consequences:* `WareworksNetwork.VERSION` is `"10"` (`"11"` since the chain offer, below). `TerminalCraftOrderPayload`
+(client → server: fetch, answer, decline, resume or cancel) and `TerminalCraftOrderStatePayload` (server → client) are
+new, and `TerminalCraftAnswerPayload` gained the fetch's measured question and a plan refusal, which the chain offer
+fills.
 `RequestScope` has a third value. The terminal saves one compound more (`CraftOrder`, see *Persistence & sync*), and
 its goggles show one line more while a fetch is open. The three config keys `terminalListOpenRequests`,
 `terminalListIntervalTicks` and `terminalListStallTicks` now govern both orders. At the defaults the two orders
@@ -4811,6 +4829,149 @@ saves it under `CraftOrder` (a finished order's too, until the next Fetch), and 
 terminal, locked, while the order is open. Guard 3 still holds for that copy: nothing crafts from it, a pass requests
 only the order's own remaining lines, a finished order requests nothing, and `fetchCraft` starts an order only from the
 grid of the menu the player has open (`WarehouseTerminalMenu#craftCells`), never from a stored one.
+
+*Context, part two — the chain offer (slice 3):* the third part of issue #24 shows missing ingredients in the grid and,
+when a production station of the same warehouse has a pattern for one, offers in the Fetch's question to have it made
+first. The machinery exists: ADR-032 plans a chain at a click, from one snapshot, and refuses with a reason that names
+the item. Three things made the offer a decision. A Fetch is answered before anything is ordered, so whatever tells it
+whether a chain would hold must order nothing. A grid can be short of several ingredients made from the same raw
+material — the fence's planks and its sticks both come from logs — so asking the planner once per ingredient would
+promise the same logs twice. And a chain that makes an ingredient is one step from a chain that makes the grid's result,
+which is the virtual crafting step ADR-024 and ADR-059 reject. The project owner settled it on 2026-10-14: missing
+ingredients are shown in the grid; the offer goes through the existing chain planning; only the player crafts, never the
+warehouse — a chain makes ingredients at the player's machines; and there is no way back, so ingredients that arrived
+stay in the buffer.
+
+*Decision, the chain offer:*
+
+* **What is offered, and when.** An ingredient the racks cannot cover for the crafts that fit, which a production
+  station of the same aisle has a pattern for (`producibleKeys()`) and which the safety stop does not hold, is offered
+  when the preview says its chain holds. A Fetch that would make anything always asks: one "Oak Planks x4 will be made
+  first." per made ingredient and, when the racks alone serve fewer crafts, "Without making: x1" with the hint to set x1
+  for that. The Yes carries the total it agreed to have made (`producing`, the sum of every chain root's whole-run
+  output, `ChainPreview#made`); it is measured again, a warehouse that would now make more or serve fewer crafts is
+  asked about again (`CHANGED`), and the total becomes the craft order's production budget
+  (`CraftFetchQuestion#budget`). A No sends nothing.
+* **The preview is a measurement and has no side effects.** `WarehouseControllerBlockEntity#previewProduction(needs,
+  access)` resolves `aislePatterns()` once, takes one availability snapshot
+  (`StockAvailability.of(stockRules(), access, availabilityLookup())`, the number a portion's request pays its chain
+  with) and runs the unchanged ADR-032 planner through `productionPlanInput`. It creates no order, request, promise or
+  reservation and saves nothing; GameTest `terminalcraftpreviewchangesnothing` compares the controller's and the
+  terminal's full save tags before and after repeated previews and Fetches. `productionPreviews(access)` is the same as
+  the `CraftFetchQuestion.Chains` a Fetch is measured with: it takes its snapshot at the first preview and answers every
+  later preview of that measurement from it, so the answers of one Fetch describe one warehouse, and it is never kept
+  beyond the call. ADR-032's "acceptance is the reservation" is untouched: the preview reserves nothing, each portion
+  plans its chain again from the warehouse as it is then, and only a portion's accepted chain is a promise. The preview
+  is a measurement; the portions are the truth.
+* **One shared budget, walked in line order** (`core.production.SequentialPlans`). The craft order's lines are walked
+  one after another in the order its portions are requested — the grid's first-cell order — against that one
+  snapshot, and the answer is a `FetchPreview`: per line what it takes out of the racks, per line that falls short the
+  chain for the rest. Each line takes from the racks at its own turn, as its portion's request claims the racks first,
+  so a chain is never planned with logs an earlier line fetches as logs; when a line takes less than it needs, the
+  chain for the rest is planned, and an accepted chain spends its `leafDemand()` and the production orders it would open
+  (`steps()`) before the next line is walked. The next line and chain are measured against the snapshot minus every
+  take and spend so far and the free order slots minus those orders; the configured cap stays, so a chain the earlier
+  ones crowded out is `ORDERS_BUSY`, not `TOO_MANY_STEPS`. A refused chain spends nothing. That is what the portions
+  will meet: once a portion's request and chain exist, its claim and its chain's ingredient lines are subtracted from
+  the availability and its orders hold their slots before the next portion is planned. A fence gate (stick, plank,
+  stick) with two planks and a log has its sticks made of the two planks, and its planks' line, which comes second,
+  then has its own made of the log — the preview offers both chains, which is what a Yes has to cover; and a line a
+  chain was planned for is measured with what it took and what the chain promises, never with the racks' whole stock
+  of its item again. `ProductionPlanner`, `ProduciblePlanner`, `PlanRefusal` and
+  `productionPlanInput` are unchanged; the design study's extra `usedSlots` parameter was not needed, because the ledger
+  derives the reduced free slots itself. Each preview is greedy in grid order, so two ingredients that share one raw
+  material can be offered a little less than an optimal split would allow, never more than the chains hold; and two
+  chains never pay out of each other's surplus.
+* **The measurement searches for the largest fetch the chains hold.** The racks are measured first, and a fetch they
+  serve previews nothing, unless they supply exactly the crafts that fit and fewer fit than were asked for: then the
+  one tie preview below. Otherwise the lines of the crafts that fit (`min(N, roomRuns)`) are previewed once, and when
+  the chains make up for them that is the answer. When they do not, the largest number of crafts whose chains hold is
+  searched for — the chains' own offer first, one craft above it, then halving the range — because a fetch that does
+  not hold for more crafts can hold for fewer: a campfire takes logs and its sticks are made of logs, so with four logs
+  x2 needs seven (six as logs, one for the sticks' planks) while x1 needs four and holds. A preview is at most nine
+  plans, a measurement on the search path at most 3 + log2(fits) previews, and one that does not search at most two:
+  what fits, and one craft past it when supply and room tie, which decides whether the buffer or the stock binds, so
+  the question blames the right one. A press therefore costs at most 9 × (3 + log2(fits)) plans; with nine distinct
+  ingredients at most 64 crafts fit a nine-slot buffer, so that is 81 plans (99 with 27 slots). An ingredient refused
+  outright for itself (`NO_PATTERN`, or `PAUSED` about the ingredient) caps the search at what the racks hold of it, so
+  a fetch short of slime balls costs one preview. This replaces the design study's fixed second preview at the possible
+  number ("at most 2 × 9 plans per press"), which would have refused the campfire's x1.
+* **Every refusal names its item, and the question names what one craft more falls short of.** A chain's refusal is the
+  planner's own: `PAUSED` ("Making Oak Planks is stopped"), `MISSING_INGREDIENT` about the raw material ("Oak Log is
+  missing"), `ORDERS_BUSY`, `NO_ROOM`, `LOOP` or a plan bound. An ingredient nothing in the aisle makes (`NO_PATTERN`)
+  is no chain refusal: it is simply missing. A `NOT_ENOUGH` answer carries the chain's refusal and the item it names
+  (`TerminalCraftOutcome#refusal`, and `#about` = `CraftFetchQuestion#reasonItem()`), and the status row shows the
+  planner's sentence; an `ASKING` or `CHANGED` answer whose stock binds carries both as well, shown inside its
+  question. After a search the question keeps the numbers of the fetch that holds but names the bottleneck of the
+  smallest fetch that does not: at the fetch that holds every short ingredient ties, and fences x2 with two logs fall
+  short because the sticks' chain finds no log once the planks' chain has both, so the question says "Oak Log is
+  missing" about the sticks, not that the planks are short. When only the cap says that one craft more does not hold —
+  no smaller guess failed — that craft was never previewed, and the chains planned for the larger fetch say nothing
+  about it: a crossbow x4 takes all four iron ingots as iron and leaves the hooks' chain none, while x2 would leave it
+  enough. The capping ingredient is short there whatever any chain does, so it is the one named ("not enough String",
+  or "Making Oak Planks is stopped" for a stopped one), at no extra preview. A tie with the room that the stock wins
+  names what the craft past what fits falls short of, from the tie's own preview: a full buffer with no logs is "Oak
+  Log is missing", not the bare planks.
+* **A Yes makes ingredients, through the ordinary portions.** Each `CRAFT` portion's `controller.request` takes what the
+  racks hold first and has only the rest made, as one atomic chain whose root is the ingredient (ADR-032). The root
+  backs that line's request; its product is stored and then delivered into this terminal's buffer, where it credits the
+  line, and the surplus of whole runs stays in the racks. Within the agreed budget the portion asks nothing more; when
+  the racks changed after a Fetch that started without production, the portion asks the ordinary `CRAFT`-scope question
+  and a No parks the order. The chain shows in the terminal's production section with its step panel and cancel, a chain
+  that fails arms the safety stop as usual, and the next preview says `PAUSED`. Nothing goes back: what arrived stays in
+  the buffer.
+* **The tints come from what the push already carries.** A grid cell the buffer and the racks cannot cover is drawn
+  stopped while the safety stop holds its item, makeable while a station of the aisle has a pattern for it, and
+  otherwise short or missing — stopped first, because the planner tests `PAUSED` first. Both flags are slice 1's
+  `TerminalCraftViewPayload.KeyView(producible, paused)`, so nothing new is pushed. A makeable cell says only that a
+  pattern exists ("Can be made here: Fetch asks first"); whether the chain holds is the Fetch's question, and a Fetch
+  that finds no logs says so.
+* **The preview never runs on a stock push.** It runs only for a Fetch and the Yes to its question, which are clicks
+  within the menu's eight actions per tick. The menu's push, every tick for every open screen, keeps reading
+  `producibleKeys()`, a set of pattern results, as the stock list's blue "+" always has (`warehouse-system.md` §3.5.6,
+  "Can be made now" stays single level): a chain-aware tint would run the planner for every grid item of every open
+  screen on every push, and would still only be a guess, because the portion plans again when it runs.
+* **The grid's recipe never becomes a pattern.** A chain makes ingredients at the player's own machines. The recipe in
+  the grid is never a `ProductionPattern` (`ProductionPattern.fromGrid` is not used), never a production order and never
+  an order's completion, and no order anywhere makes the grid's result: GameTest `terminalcraftoffersachain` and the
+  `craft` scenario check it. The craft stays the player's click, the one place a recipe runs (ADR-059), and
+  `RecipeExecutionBoundaryTest` needed no change.
+
+*Alternatives rejected for the chain offer:*
+
+* **Each short ingredient planned on its own.** Every chain would be told about every log, the offer would promise the
+  same logs twice, and the second portion would then be refused after the first had used them.
+* **One plan for the whole grid, rooted in the grid's result.** The planner could then balance the ingredients against
+  each other, but the root is the grid's recipe as a pattern: the virtual crafting step ADR-024 rejects and ADR-059
+  guards against, and an order whose completion is a craft only the player may make.
+* **`confirmationFor` as the preview.** It answers "nothing to confirm" without planning when no stock rule governs
+  anything, which is the commonest warehouse.
+* **Reserving at the question.** A promise made while the player reads the question would hold the logs over a No and
+  over the client's round trip; ADR-032's reservation stays where it is, at the portion's accepted chain.
+* **The design study's fixed two previews per press.** Cheaper (at most 2 × 9 plans per press, against at most 81 with
+  a nine-slot buffer), but it refuses a campfire x1 the chains hold (above).
+* **Every line's stock taken first, then the chains** (the design study's `directTake`, and the first cut of this
+  slice). It counts a line's stock that an earlier line's chain will use, because the portions do not run that way: a
+  fence gate's sticks come first, their chain uses the two planks in the racks, the preview had counted them for the
+  planks' line, and its Yes covered the sticks alone — the planks' portion then asked again, or sat waiting for an
+  answer nobody was there to give. Walking the lines in their own order costs nothing more and is what the portions
+  meet.
+* **A chain-aware tint on every push.** The cost above, for a number that is only a guess until the portion plans.
+
+*Consequences of the chain offer:* `WareworksNetwork.VERSION` is `"11"`: `TerminalCraftAnswerPayload`'s question carries
+the chain's refusal by name (a name this build does not know reads as none) and the item it names, after the named
+lines. `CraftFetchQuestion` gained two record components (`chainRefusal`, `chainAbout`; the old constructor stays) and a
+measure overload over the `Chains` seam, and `Promises` carries each chained line's take; `core.production` gained
+`SequentialPlans`, `FetchPreview` and `ChainPreview`; the controller gained two public methods, `previewProduction` and
+`productionPreviews`. Nothing new is saved: the preview is transient
+and the craft order saves what it saved before. The question names at most five ingredients (`MAX_NAMED`), so in a grid
+with more than five short or made ingredients, one made past the fifth gets no "will be made first" line, although
+`producing` still counts it. A makeable cell can still be refused at the Fetch, which then names why; and while an open
+order's portion is refused for a producible item, its cell is drawn short or missing with the refusal's sentence, not
+makeable. A stopped cell carries a red "!" beside its tint. The missing cell's
+tooltip became "None available, and nothing here makes it", and four lang keys were added (the makeable tooltip, "will
+be made first", "Without making" and its hint), German keeping "herstellen" for production and "fertigen" for the
+player's craft.
 
 ## Persistence & sync
 

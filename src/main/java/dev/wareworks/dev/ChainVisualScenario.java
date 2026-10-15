@@ -1012,8 +1012,11 @@ public final class ChainVisualScenario implements VisualScenario {
                 .setValue(RotatedPillarKineticBlock.AXIS, Direction.Axis.Y));
     }
 
-    /** The crafter block state whose arrow points at {@code target} (looked up through Create, as the showcase does). */
-    private static BlockState crafterState(Direction facing, Direction target) {
+    /**
+     * The crafter block state whose arrow points at {@code target} (looked up through Create, as the showcase does);
+     * the craft scenario builds its machine with it too.
+     */
+    static BlockState crafterState(Direction facing, Direction target) {
         for (Pointing pointing : Pointing.values()) {
             BlockState state = AllBlocks.MECHANICAL_CRAFTER.getDefaultState()
                     .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, facing)
@@ -1294,8 +1297,11 @@ public final class ChainVisualScenario implements VisualScenario {
                 armPos(dock, station), take.getPos(), take.getType(), deposit.getPos(), deposit.getType());
     }
 
-    /** One interaction point of the primary type of the block at {@code pos}, in the wanted mode. */
-    private static ArmInteractionPoint point(ServerLevel level, BlockPos pos, Mode mode) {
+    /**
+     * One interaction point of the primary type of the block at {@code pos}, in the wanted mode; the craft scenario
+     * teaches its arm with it too.
+     */
+    static ArmInteractionPoint point(ServerLevel level, BlockPos pos, Mode mode) {
         ArmInteractionPoint point = ArmInteractionPoint.create(level, pos, level.getBlockState(pos));
         if (point == null)
             throw new VisualTestException("no Mechanical Arm interaction point for the block at " + pos + ": "

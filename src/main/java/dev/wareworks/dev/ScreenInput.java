@@ -377,9 +377,10 @@ final class ScreenInput {
     }
 
     /**
-     * Every line of the confirmation panel while the crafting panel's <b>Fetch question</b> is up (issue #24, slice 2),
-     * as it is drawn: the question with the crafts a Yes starts, the "changed" line of a repeated one, and what binds
-     * it — the buffer's room or the warehouse's stock. The counterpart of {@link #terminalConfirmationLines} and
+     * Every line of the confirmation panel while the crafting panel's <b>Fetch question</b> is up (issue #24, slices 2
+     * and 3), as it is drawn: the question with the crafts a Yes starts, the "changed" line of a repeated one, what
+     * binds it — the buffer's room or the warehouse's stock — and what a Yes would have made first, with what the racks
+     * alone could serve. The counterpart of {@link #terminalConfirmationLines} and
      * {@link #terminalListConfirmationLines} for the third question the one panel shows.
      */
     static List<Component> terminalCraftConfirmationLines(WarehouseTerminalScreen screen) {

@@ -108,8 +108,13 @@ public final class WareworksNetwork {
      * older client would read as a plain refusal and as a click — and answer in the wrong place; and the question an
      * answer was given to, in {@link TerminalListActionPayload} as in the craft order's payload, before the
      * acknowledgement, which a reader of the old shape would take for the acknowledgement's tag.
+     * <p>
+     * <b>{@code "11"} is slice 3 of issue #24</b> (missing ingredients and the chain offer): the Fetch question in
+     * {@link TerminalCraftAnswerPayload} gained two fields after its named lines — why no production chain makes up
+     * for the ingredient that binds, by name, and the item that reason names — which a reader of the old shape would
+     * stop before and leave in the buffer. No new payload type.
      */
-    public static final String VERSION = "10";
+    public static final String VERSION = "11";
 
     private WareworksNetwork() {
     }

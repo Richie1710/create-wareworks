@@ -38,12 +38,13 @@
 ## Planned
 
 **M32, in progress: craft at the warehouse terminal**
-([issue #24](https://github.com/Richie1710/create-wareworks/issues/24)). The first two parts are built: a crafting
+([issue #24](https://github.com/Richie1710/create-wareworks/issues/24)). The first three parts are built: a crafting
 grid folds out of the terminal's screen, you lay a recipe in it with ghost items, **Fetch** has the crane bring
-exactly what is missing for the crafts you want — asking once when fewer whole crafts can be had or fit — and you
-craft it by hand from what the crane delivered into the terminal. Wareworks itself still never crafts on its own.
-Still to come in the same milestone: an offer to make a missing ingredient first. The milestone joins the table above
-once it is done.
+exactly what is missing for the crafts you want — asking once when fewer whole crafts can be had or fit, and offering
+to have a missing ingredient made first at your own machines — and you craft it by hand from what the crane delivered
+into the terminal. Wareworks itself still never crafts on its own: your machines make the ingredients, and you craft
+the recipe in the grid. Still to come in the same milestone: laying a recipe into the grid from JEI with its "+"
+button, as an optional dependency. The milestone joins the table above once it is done.
 
 Planned features and ideas are tracked as [GitHub issues](https://github.com/Richie1710/create-wareworks/issues?q=is%3Aissue+label%3Aenhancement):
 

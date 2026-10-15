@@ -23,16 +23,27 @@ import dev.wareworks.core.production.PlanRefusal;
  * <p>
  * {@link #about()} is the item the sentence names: the result for {@link TerminalCraftResult#CRAFTED},
  * {@link TerminalCraftResult#STARTED} and {@link TerminalCraftResult#NOTHING_TO_FETCH}, the missing ingredient for
- * {@link TerminalCraftResult#NOT_IN_BUFFER} and {@link TerminalCraftResult#NOT_ENOUGH}, the item without room for
- * {@link TerminalCraftResult#NO_ROOM}. The other answers name nothing.
+ * {@link TerminalCraftResult#NOT_IN_BUFFER}, the missing ingredient or the item the tried chain could not get past for
+ * {@link TerminalCraftResult#NOT_ENOUGH}, the item without room for {@link TerminalCraftResult#NO_ROOM}. A measured
+ * answer ({@link #measured}: {@link TerminalCraftResult#NOT_ENOUGH}, {@link TerminalCraftResult#NO_ROOM_FOR_ONE},
+ * {@link TerminalCraftResult#ASKING} after a Fetch and {@link TerminalCraftResult#CHANGED}) carries the question's
+ * {@link CraftFetchQuestion#reasonItem()} and chain refusal whenever the stock binds, and neither when the buffer's room
+ * does; for ASKING and CHANGED the screen shows the question instead, where the refusal is a line of its own, and reads
+ * neither. The other answers name nothing. When a production chain was tried for the ingredient a Fetch falls short of
+ * and does not hold (issue #24, slice 3), {@link #refusal()} says why and {@link #about()} names the item that refusal
+ * is about — "Oak Log is missing" rather than "not enough Oak Planks", because the logs are what the player has to do
+ * something about ({@link CraftFetchQuestion#reasonItem()}).
  *
  * @param result   how the action ended
  * @param crafted  for a craft, how many items the click made, i.e. the result's count summed over every craft that
  *                 happened; for a Fetch, a number of crafts (see above)
  * @param about    the item the sentence names; see above
- * @param refusal  why a production chain could not make up for the item {@link #about()} names. The grid's chain offer
- *                 is a later step of issue #24, so nothing sets it yet; it travels so that the sentence can name it
- *                 then without another change to the answer's shape
+ * @param refusal  why a production chain could not make up for the ingredient the Fetch falls short of, when one was
+ *                 tried for it ({@link CraftFetchQuestion#chainRefusal()}); {@link #about()} is then the item the
+ *                 refusal names. Set only by {@link #measured} while the stock binds — NOT_ENOUGH turns it into the
+ *                 status row's sentence, ASKING and CHANGED carry it inside their question. Empty for an ingredient
+ *                 nothing in the aisle makes, when the buffer's room binds, and for every answer not built by
+ *                 {@link #measured}
  * @param question what a Fetch would really bring, measured on the server: present for
  *                 {@link TerminalCraftResult#ASKING} after a Fetch, {@link TerminalCraftResult#CHANGED} and the two
  *                 measured refusals, {@link TerminalCraftResult#NOT_ENOUGH} and
@@ -59,12 +70,17 @@ public record TerminalCraftOutcome(TerminalCraftResult result, int crafted, Opti
     }
 
     /**
-     * A Fetch answered from a measurement: {@code result} with the crafts that can be had at all, the item that falls
-     * short when the warehouse is what binds, and the measurement itself for the screen's question.
+     * A Fetch answered from a measurement ({@link TerminalCraftResult#NOT_ENOUGH},
+     * {@link TerminalCraftResult#NO_ROOM_FOR_ONE}, {@link TerminalCraftResult#ASKING},
+     * {@link TerminalCraftResult#CHANGED}): {@code result} with the crafts that can be had at all, the item the reason
+     * names when the warehouse is what binds — the ingredient that falls short, or, when a chain was tried for it and
+     * does not hold, the item that chain could not get past, together with the planner's reason
+     * ({@link CraftFetchQuestion#reasonItem()}, {@link CraftFetchQuestion#chainRefusal()}) — and the measurement itself
+     * for the screen's question.
      */
     public static TerminalCraftOutcome measured(TerminalCraftResult result, CraftFetchQuestion<ItemKey> question) {
         Objects.requireNonNull(question, "question");
-        return new TerminalCraftOutcome(result, question.possible(), question.about(), Optional.empty(),
+        return new TerminalCraftOutcome(result, question.possible(), question.reasonItem(), question.chainRefusal(),
                 Optional.of(question));
     }
 

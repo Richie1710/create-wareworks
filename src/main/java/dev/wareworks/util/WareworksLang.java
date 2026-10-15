@@ -1019,8 +1019,16 @@ public final class WareworksLang {
     public static final String TERMINAL_CRAFT_AVAILABLE = "gui.terminal.craft.available";
     /** {@code "Only %1$s available, %2$s needed"}: a grid item the warehouse has too few of for the next craft. */
     public static final String TERMINAL_CRAFT_SHORT = "gui.terminal.craft.short";
-    /** {@code "None available"}: a grid item that is neither here nor to be had from the warehouse. */
+    /**
+     * {@code "None available, and nothing here makes it"}: a grid item that is neither here nor to be had from the
+     * warehouse, and that no production station of the aisle has a pattern for.
+     */
     public static final String TERMINAL_CRAFT_MISSING = "gui.terminal.craft.missing";
+    /**
+     * {@code "Can be made here: Fetch asks first"}: a grid item the warehouse holds too few of, or none, but that a
+     * production station of the aisle has a pattern for (issue #24, slice 3): a Fetch offers to have it made first.
+     */
+    public static final String TERMINAL_CRAFT_MAKEABLE = "gui.terminal.craft.makeable";
     /** How an empty grid cell is filled (its tooltip). */
     public static final String TERMINAL_CRAFT_CELL_EMPTY = "gui.terminal.craft.cell_empty";
     /** The second gesture of an empty cell's tooltip: Shift + right-click in the list fills the next free cell. */
@@ -1084,6 +1092,19 @@ public final class WareworksLang {
     public static final String TERMINAL_CRAFT_QUESTION_STOCK = "gui.terminal.craft.question.stock";
     /** {@code "%1$s: %2$s available, %3$s needed"}: one item the warehouse falls short of. */
     public static final String TERMINAL_CRAFT_QUESTION_LINE = "gui.terminal.craft.question.line";
+    /**
+     * {@code "%1$s x%2$s will be made first."}: an ingredient a production chain makes before the fetch brings it
+     * (issue #24, slice 3), with what the chain makes of it in whole runs.
+     */
+    public static final String TERMINAL_CRAFT_QUESTION_MADE = "gui.terminal.craft.question.made";
+    /**
+     * {@code "Without making: x%1$s"}: the crafts the racks alone can supply, in a question that would have something
+     * made — shown only when that is more than the buffer already holds and less than the Yes starts
+     * ({@code CraftFetchQuestion#offersWithoutMaking}), so setting it really fetches something.
+     */
+    public static final String TERMINAL_CRAFT_QUESTION_WITHOUT = "gui.terminal.craft.question.without";
+    /** {@code "Set x%1$s to fetch only that."}: how to have that fetch and nothing made, under the line above. */
+    public static final String TERMINAL_CRAFT_QUESTION_WITHOUT_HINT = "gui.terminal.craft.question.without_hint";
     /** {@code "Patterns"}: label above the pattern list of a production station's screen. */
     public static final String PRODUCTION_PATTERNS = "gui.production.patterns";
     /** {@code "Delivered here"}: label above a production station's own buffer slots. */

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
+import dev.wareworks.core.production.PlanRefusal;
 
 /**
  * Keeps every text of the terminal's crafting panel (M32, issue #24) inside the room it is drawn in, in English and in
@@ -38,6 +39,12 @@ import dev.wareworks.content.station.TerminalMenuLayout;
  * whose lines the confirmation panel draws {@value #DIALOG_WIDTH} px wide. That panel wraps a long line, but the frame
  * of a line, with its numbers at their widest, should never have to wrap, so it is measured too.
  * <p>
+ * The chain offer (slice 3) adds a cell tooltip line, the question's "made first" and "without making" lines, and
+ * borrows the production planner's refusals ({@link PlanRefusal}): a Fetch no chain can help is refused in the status
+ * row with one of them, a stopped cell's tooltip is {@link PlanRefusal#PAUSED}'s, and the question says with one why
+ * a craft more is not possible. They name an item, so they are measured without it, in the narrowest of the three
+ * rooms.
+ * <p>
  * The visual run measures the status row again on the real client ({@code TerminalVisualScenario#statusRow}); this
  * suite needs no game, so a translation that does not fit fails the build. Every key under {@code gui.terminal.craft}
  * has to be in one of the groups, so a new one cannot slip past unmeasured.
@@ -57,9 +64,9 @@ class TerminalCraftTextWidthTest {
     private static final String TITLE = "title";
     /** The tooltip lines, relative to {@link #PREFIX}; every placeholder in them is a number. */
     private static final Set<String> TOOLTIP_LINES = Set.of("toggle", "toggle_hint", "clear", "per_craft",
-            "available", "short", "missing", "cell_empty", "cell_empty_shift", "cell_clear", "stock_hint", "ready",
-            "once", "all", "fetch_hint", "button.answer", "button.resume", "button.cancel", "cancel_mark", "progress",
-            "in_flight");
+            "available", "short", "missing", "makeable", "cell_empty", "cell_empty_shift", "cell_clear", "stock_hint",
+            "ready", "once", "all", "fetch_hint", "button.answer", "button.resume", "button.cancel", "cancel_mark",
+            "progress", "in_flight");
     /** An argument that is an item's name: it gives way first wherever the text stands, so it is measured empty. */
     private static final char NAME = 'n';
     /** An argument that is a number, measured at its widest. */
@@ -74,7 +81,8 @@ class TerminalCraftTextWidthTest {
             "n#", "status.asking", "n#", "status.parked", "n#");
     /** The lines of the question a Fetch, or one portion of the craft order, raises, with their argument kinds. */
     private static final Map<String, String> DIALOG_LINES = Map.of("confirm_item", "#n", "question.title", "n#",
-            "question.room", "##", "question.stock", "##", "question.line", "n##");
+            "question.room", "##", "question.stock", "##", "question.line", "n##", "question.made", "n#",
+            "question.without", "#", "question.without_hint", "#");
     /**
      * The confirmation panel's text width: the row without the panel's padding on either side
      * ({@code WarehouseTerminalScreen#confirmTextWidth}).
@@ -121,6 +129,11 @@ class TerminalCraftTextWidthTest {
                     advances);
             measured += checkAll(tooWide, language.getKey(), lang, "question", DIALOG_LINES, number, DIALOG_WIDTH,
                     advances);
+            // The planner's sentences: in the status row, a stopped cell's tooltip and the question, whose text width
+            // is the narrowest of the three; the item they name gives way first in the row and the tooltip.
+            for (PlanRefusal refusal : PlanRefusal.values())
+                measured += check(tooWide, language.getKey(), "plan refusal", refusal.langKey(),
+                        fill(text(lang, refusal.langKey()), ""), DIALOG_WIDTH, advances);
         }
         assertTrue(measured > 2 * TOOLTIP_LINES.size(), "too few texts were measured; did the lang keys move?");
         if (!tooWide.isEmpty())

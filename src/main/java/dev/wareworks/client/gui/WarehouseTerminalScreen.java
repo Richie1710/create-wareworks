@@ -128,7 +128,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * turns into Answer, Resume or Cancel exactly as the list button does ({@link #craftOrderAction()}), the order's line
  * wins the status row like the list's, every screen at the terminal shows the order's grid and refuses to edit it
  * while it is open, and a Fetch that can bring fewer crafts than asked for puts its question up in this screen's one
- * dialog ({@link #craftConfirmation()}).
+ * dialog ({@link #craftConfirmation()}) — as does one that would have an ingredient made first at a production station
+ * of the warehouse (slice 3), naming what would be made and what the racks alone could serve.
  */
 public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<WarehouseTerminalMenu> {
     /** How long the answer to a request stays in the status line. */
@@ -168,10 +169,13 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int COLOR_SCROLLBAR_TRACK = 0x40000000;
     private static final int COLOR_SCROLLBAR_KNOB = 0xFF9A7B4F;
     static final int COLOR_CELL_HOVER = 0x60FFFFFF;
-    /** An item that is not in stock but can be produced here (M11, ADR-024). */
-    private static final int COLOR_PRODUCIBLE = 0xFF89C7F1;
+    /**
+     * An item that is not in stock but can be produced here (M11, ADR-024); the crafting panel marks an ingredient a
+     * Fetch would have made first with it too (issue #24, slice 3).
+     */
+    static final int COLOR_PRODUCIBLE = 0xFF89C7F1;
     /** Background of such a cell: the same blue, faint enough to leave the item itself readable. */
-    private static final int COLOR_PRODUCIBLE_CELL = 0x3389C7F1;
+    static final int COLOR_PRODUCIBLE_CELL = 0x3389C7F1;
     /** A production order that ended with ingredients already handed to a machine ({@code §3.5}). */
     static final int COLOR_LOST = 0xFFFFAA33;
     /**
@@ -1346,10 +1350,31 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return craftConfirming;
     }
 
-    /** The status row's line for a Fetch answer, the item's name cut first when it does not fit. */
+    /**
+     * The status row's line for a Fetch answer, the item's name cut first when it does not fit.
+     * <p>
+     * A Fetch refused because no production chain makes up for the ingredient that binds (slice 3) says what the chain
+     * ran into instead, in the planner's own sentence and naming the item it ran into it with — {@code "Oak Log is
+     * missing"} for planks nobody has the logs for — exactly as a refused click does ({@link #planRefusalLine}), and in
+     * place of the frame for the same reason: "Can't fetch: not enough Oak Planks" would send the player looking at
+     * the planks.
+     */
     private Component craftFetchAnswerLine(TerminalCraftAnswerPayload answer) {
         Component name = answer.about().map(key -> key.toStack().getHoverName()).orElse(Component.empty());
+        PlanRefusal refusal = answer.result() == TerminalCraftResult.NOT_ENOUGH && answer.about().isPresent()
+                ? answer.refusal().orElse(null) : null;
+        if (refusal != null)
+            return fitNames(names -> craftChainRefusalText(refusal, names.get(0)), name);
         return fitNames(names -> craftFetchText(answer.result(), answer.crafted(), names.get(0)), name);
+    }
+
+    /**
+     * The sentence of a Fetch no production chain can help (slice 3): the planner's refusal naming the item the chain
+     * ran into, {@code "Oak Log is missing"}. Public and static for the row measurement of the visual run, like
+     * {@link #craftFetchText}.
+     */
+    public static Component craftChainRefusalText(PlanRefusal refusal, Component name) {
+        return WareworksLang.translateDirect(refusal.langKey(), name);
     }
 
     /**
@@ -1578,17 +1603,23 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     /**
-     * The lines of the Fetch question, in the order the player reads them (issue #24, slice 2): the question with the
-     * crafts a Yes starts — {@code "Fetch the ingredients for Cake x2?"} — then what binds it, named rather than
-     * described: the buffer's room ({@code "Only x2 of x4 fit here."}), or the warehouse's stock with every item it
-     * falls short of and its two numbers. No Alt hint: a Fetch is no click on an item.
+     * The lines of the Fetch question, in the order the player reads them (issue #24, slices 2 and 3): the question
+     * with the crafts a Yes starts — {@code "Fetch the ingredients for Cake x2?"} — then what binds it, named rather
+     * than described: the buffer's room ({@code "Only x2 of x4 fit here."}), or the warehouse's stock with every item
+     * it falls short of and its two numbers and, when a production chain was tried for the item that binds, why that
+     * chain does not hold, in the planner's own sentence ({@code "Oak Log is missing"}).
      * <p>
-     * The chain offer (a later slice of the issue) adds its "will be made first" lines here, from the named lines a
-     * chain would make ({@link CraftFetchQuestion.Line#made()}); until it is built,
-     * {@link CraftFetchQuestion#producing()} is always 0 and no line makes anything.
+     * <b>The chain offer</b> (slice 3) follows: one line per ingredient a Yes has made first, with what its chain makes
+     * in whole runs ({@link CraftFetchQuestion.Line#made()}: {@code "Oak Planks x8 will be made first."}), in the blue
+     * of a makeable cell; then what the racks alone could serve and how to have only that
+     * ({@code "Without making: x1"}, {@link CraftFetchQuestion#withoutMaking()}), so saying no to the machines is not
+     * saying no to the fetch — only when that smaller fetch really brings something beyond what the buffer already
+     * holds, and less than the Yes starts ({@link CraftFetchQuestion#offersWithoutMaking()}). A question nothing binds —
+     * every craft asked for is possible — is raised by production alone and holds the title and these lines. No Alt
+     * hint: a Fetch is no click on an item.
      */
     private List<Component> craftFetchConfirmationLines(CraftFetchQuestion<ItemKey> question) {
-        List<Component> lines = new ArrayList<>(3 + question.named().size());
+        List<Component> lines = new ArrayList<>(6 + 2 * question.named().size());
         ItemStack result = craftPanel.fetchedResult();
         String possible = LangNumberFormat.format(Math.max(1, question.possible()));
         String asked = LangNumberFormat.format(question.asked());
@@ -1610,10 +1641,32 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                                 line.key().toStack().getHoverName(), LangNumberFormat.format(line.inStock()),
                                 LangNumberFormat.format(line.needed())).copy().withStyle(ChatFormatting.GRAY));
                 }
+                // Why one craft more is not possible, when a chain was tried for it (CraftFetchQuestion#chainRefusal).
+                PlanRefusal refusal = question.chainRefusal().orElse(null);
+                ItemKey about = question.chainAbout().orElse(null);
+                if (refusal != null && about != null)
+                    lines.add(WareworksLang.translateDirect(refusal.langKey(), about.toStack().getHoverName()).copy()
+                            .withStyle(ChatFormatting.GRAY));
             }
             default -> {
-                // Every craft asked for is possible: only production can have raised the question (a later slice).
+                // Every craft asked for is possible: only production can have raised the question.
             }
+        }
+        for (CraftFetchQuestion.Line<ItemKey> line : question.named()) {
+            if (line.made() > 0L)
+                lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_MADE,
+                        line.key().toStack().getHoverName(), LangNumberFormat.format(line.made())).copy()
+                        .withColor(COLOR_PRODUCIBLE));
+        }
+        // Only beside something made, and only for a smaller fetch that still brings something beyond what the buffer
+        // holds: what a No to the machines still leaves the player. Setting x1 for the one craft already here would
+        // fetch nothing.
+        if (question.offersWithoutMaking()) {
+            String count = LangNumberFormat.format(question.withoutMaking());
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT, count).copy()
+                    .withStyle(ChatFormatting.WHITE));
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT_HINT, count).copy()
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         }
         return lines;
     }
@@ -2423,8 +2476,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * the production chain's own refusal with the item it names, or — for the commonest case, an item the warehouse
      * holds none of — the chain's "Oak Log is missing", which says exactly that about the portion's own item. Every
      * other rejection is the sentence a refused click gets ({@link #refusedLine(Component)}). The name gives way first.
+     * The crafting panel gives a refused cell the very same sentence ({@code TerminalCraftPanel#stockLines}).
      */
-    private Component portionRefusalLine(TerminalPortionRefusal refusal) {
+    Component portionRefusalLine(TerminalPortionRefusal refusal) {
         PlanRefusal plan = refusal.refusal().orElse(
                 refusal.rejection() == RequestRejection.NOT_IN_STOCK ? PlanRefusal.MISSING_INGREDIENT : null);
         if (plan == null)

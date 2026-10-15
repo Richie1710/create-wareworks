@@ -49,9 +49,10 @@ public enum TerminalCraftResult {
     /** The craft order is running: the crane brings what the buffer is missing for the crafts the outcome names. */
     STARTED,
     /**
-     * Fewer crafts than asked for can be fetched: the player is asked once, with the numbers a Yes will start
-     * ({@code CraftFetchQuestion}). Nothing was requested. Also the answer to the order button's <b>Answer</b> while a
-     * portion's question is waiting: that question is then put up again and nothing changes.
+     * Fewer crafts than asked for can be fetched, or an ingredient would have to be made first by a production chain
+     * (slice 3): the player is asked once, with the numbers a Yes will start ({@code CraftFetchQuestion}). Nothing was
+     * requested and nothing ordered. Also the answer to the order button's <b>Answer</b> while a portion's question is
+     * waiting: that question is then put up again and nothing changes.
      */
     ASKING,
     /**
@@ -61,7 +62,11 @@ public enum TerminalCraftResult {
     CHANGED,
     /** The buffer already holds every craft asked for. Nothing was requested: the player can craft right away. */
     NOTHING_TO_FETCH,
-    /** Not one craft more than the buffer holds can be supplied; the outcome names the item that falls short. */
+    /**
+     * Not one craft more than the buffer holds can be supplied; the outcome names the item that falls short — or, when
+     * a production chain was tried for it and does not hold, the item that chain could not get past, with the plan
+     * refusal ("Oak Log is missing", slice 3).
+     */
     NOT_ENOUGH,
     /** The buffer has no room for one more craft's ingredients once the open requests to it have arrived. */
     NO_ROOM_FOR_ONE,

@@ -1048,9 +1048,11 @@ public final class TerminalCraftGameTests {
      * The Fetch's payloads (issue #24, slice 2) through their real codecs: the craft order's actions — a Fetch, an
      * answer that names the question it answers, "show it again", No, Resume and Cancel — and the same naming in the
      * clipboard order's answer; the order's state with and without a refusal; a Fetch answer carrying a question with
-     * named lines for each result that carries one. And the hostile shapes: a Fetch of eight cells and an unknown action
-     * (both {@code NONE}), a state naming a rejection this build does not know (no refusal, the stream still in step),
-     * and a question that claims a thousand named lines (five read).
+     * named lines for each result that carries one, and (slice 3) the chain refusal behind its bottleneck with the item
+     * it names. And the hostile shapes: a Fetch of eight cells and an unknown action (both {@code NONE}), a state
+     * naming a rejection this build does not know (no refusal, the stream still in step), a question that claims a
+     * thousand named lines (five read), and one naming a chain refusal this build does not know (none, every byte
+     * read).
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void terminalCraftOrderPayloadCodecs(GameTestHelper helper) {
@@ -1159,6 +1161,21 @@ public final class TerminalCraftGameTests {
             helper.assertValueEqual(decoded.question().orElseThrow().about(), Optional.of(PLANK),
                     result + ": and the item it is about");
         }
+        // Slice 3: why no chain makes up for the bottleneck, and the item that reason names.
+        CraftFetchQuestion<ItemKey> chained = new CraftFetchQuestion<>(4, 0, 2, 2, 4, Optional.of(PLANK), 8L,
+                List.of(new CraftFetchQuestion.Line<>(PLANK, 32L, 8L, 8L)), Optional.of(PlanRefusal.MISSING_INGREDIENT),
+                Optional.of(LOG));
+        helper.assertValueEqual(chained.reasonItem(), Optional.of(LOG), "the chain's refusal names the logs");
+        for (TerminalCraftResult result : List.of(TerminalCraftResult.ASKING, TerminalCraftResult.NOT_ENOUGH)) {
+            TerminalCraftAnswerPayload answer = new TerminalCraftAnswerPayload(3, result, 2, Optional.of(LOG),
+                    Optional.of(PlanRefusal.MISSING_INGREDIENT), Optional.of(chained));
+            TerminalCraftAnswerPayload decoded = roundTrip(helper, answer, TerminalCraftAnswerPayload.STREAM_CODEC);
+            helper.assertValueEqual(decoded, answer, result + ": an answer with a chain refusal round trip");
+            helper.assertValueEqual(decoded.question().orElseThrow().chainRefusal(),
+                    Optional.of(PlanRefusal.MISSING_INGREDIENT), result + ": with the chain's refusal");
+            helper.assertValueEqual(decoded.question().orElseThrow().chainAbout(), Optional.of(LOG),
+                    result + ": and the item it names");
+        }
         CraftFetchQuestion<ItemKey> room = new CraftFetchQuestion<>(2, 0, 2, 2, 0, Optional.empty(), 0L, List.of());
         TerminalCraftAnswerPayload full = new TerminalCraftAnswerPayload(3, TerminalCraftResult.NO_ROOM_FOR_ONE, 0,
                 Optional.empty(), Optional.empty(), Optional.of(room));
@@ -1185,9 +1202,38 @@ public final class TerminalCraftGameTests {
                 buffer.writeVarLong(1L);
                 buffer.writeVarLong(0L);
             }
+            // The chain's fields (slice 3): no refusal, no item.
+            buffer.writeUtf("");
+            buffer.writeBoolean(false);
         });
         helper.assertValueEqual(claimsMore.question().orElseThrow().named().size(), CraftFetchQuestion.MAX_NAMED,
                 "a question claiming a thousand named lines reads at most five");
+        TerminalCraftAnswerPayload unknownChain = decodeRaw(helper, TerminalCraftAnswerPayload.STREAM_CODEC,
+                buffer -> {
+                    buffer.writeVarInt(3);
+                    buffer.writeUtf("NOT_ENOUGH");
+                    buffer.writeVarInt(0);
+                    buffer.writeBoolean(false);
+                    buffer.writeUtf("");
+                    buffer.writeBoolean(true);
+                    buffer.writeVarInt(1);
+                    buffer.writeVarInt(0);
+                    buffer.writeVarInt(0);
+                    buffer.writeVarInt(0);
+                    buffer.writeVarInt(1);
+                    buffer.writeBoolean(true);
+                    ItemKey.STREAM_CODEC.encode(buffer, PLANK);
+                    buffer.writeVarLong(0L);
+                    buffer.writeVarInt(0);
+                    buffer.writeUtf("CURSED");
+                    buffer.writeBoolean(true);
+                    ItemKey.STREAM_CODEC.encode(buffer, LOG);
+                });
+        CraftFetchQuestion<ItemKey> unknown = unknownChain.question().orElseThrow();
+        helper.assertValueEqual(unknown.about(), Optional.of(PLANK),
+                "a question with an unknown chain refusal is read");
+        helper.assertTrue(unknown.chainRefusal().isEmpty() && unknown.chainAbout().isEmpty(),
+                "with no chain refusal, and every byte read");
         helper.succeed();
     }
 

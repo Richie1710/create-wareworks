@@ -41,6 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   orders nothing. A stock rule's reserve or maximum is still asked about item by item while the fetch runs, exactly
   as for a click. While a fetch runs, everyone at that terminal sees its recipe in their grid, locked until the fetch
   is done or given up
+- **Missing ingredients can be made first.** A grid cell whose item the warehouse is short of shows the stock list's
+  blue **+** when one of your production stations has a pattern for it ("Can be made here: Fetch asks first"), and turns
+  red with a red **!** when the safety stop holds that item ("Making Oak Planks is stopped"); a cell nothing can make
+  says so in its tooltip. Fetch then offers to have such ingredients made at your own machines before they are brought —
+  "Oak Planks x4 will be made first." — and says how many crafts the racks alone could serve ("Without making: x1").
+  Nothing is ordered before you say Yes, and a No orders nothing. The chain runs like one you order with a click: it
+  shows in the terminal's production section, what your machines make beyond what the fetch needs stays in the racks,
+  and two missing ingredients made from the same logs are never promised the same logs. When no chain can help, Fetch
+  names the reason, for example "Oak Log is missing". Only the ingredients are made: the recipe in the grid is never
+  made by the warehouse, and you still craft it by hand
 - **A note for servers running Create: Schematic Checker.** In mod-whitelist mode the checker removes Wareworks blocks
   that carry block data from uploaded schematics — every rack bay, in the report — so they show in the hologram but
   are missing from the Schematicannon's checklist and from the print. Whitelist mode is the checker's default. The

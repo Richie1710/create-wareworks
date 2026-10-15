@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 import org.jetbrains.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
@@ -16,6 +18,12 @@ import com.mojang.blaze3d.platform.Window;
 import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
+import com.simibubi.create.content.kinetics.base.RotatedPillarKineticBlock;
+import com.simibubi.create.content.kinetics.crafter.MechanicalCrafterBlockEntity;
+import com.simibubi.create.content.kinetics.mechanicalArm.ArmBlockEntity;
+import com.simibubi.create.content.kinetics.mechanicalArm.ArmInteractionPoint;
+import com.simibubi.create.content.kinetics.mechanicalArm.ArmInteractionPoint.Mode;
+import com.simibubi.create.content.kinetics.mechanicalArm.ArmPlacementPacket;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
@@ -29,9 +37,13 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
+import dev.wareworks.content.station.WarehouseInputBlock;
+import dev.wareworks.content.station.WarehouseProductionBlock;
+import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
@@ -41,10 +53,14 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.production.ProductionOrder;
+import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.StockLine;
 import dev.wareworks.network.TerminalCraftAnswerPayload;
 import dev.wareworks.network.TerminalCraftOrderPayload;
+import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
@@ -58,6 +74,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -79,8 +96,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * Scenario "craft": the crafting panel of the warehouse terminal (M32, issue #24, {@code docs/warehouse-system.md}
  * §3.4.5), driven like a player in the real screen.
  * <p>
- * It builds one short aisle with a powered crane, a warehouse terminal beside the dock and a rack of chests holding
- * what a chest and a cake are made of, opens the real screen through {@code WarehouseTerminalBlockEntity#openScreen}
+ * It builds one short aisle with a powered crane, a warehouse terminal beside the dock, a rack of chests holding
+ * what a chest and a cake are made of, and one machine of the player's behind the rack wall: a production station whose
+ * pattern turns an iron ingot into nine nuggets, a Mechanical Arm and a Mechanical Crafter that really do it, and the
+ * warehouse input the crafter fills. It opens the real screen through {@code WarehouseTerminalBlockEntity#openScreen}
  * and plays one <b>round</b> ({@link #round}): the toggle folds the panel out, a right-click on Oak Planks in the stock
  * list picks a ghost and left clicks stamp the chest's ring with it, Escape drops it, and the server's preview names
  * the Chest. The planks then come the honest way, through the panel's <b>Fetch</b> (slice 2 of the issue, ADR-062): the
@@ -88,9 +107,12 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * into the buffer while the grid is locked; the scene is frozen while the crane carries the planks, so the progress
  * row is shot mid-delivery. A click on the result crafts one chest, a Shift-click the other two. A second Fetch is
  * given up with the progress row's cancel mark while the crane carries its planks, which go back into the racks. A
- * cake x4 does not fit the buffer: the server asks, the question names the room ("only x2 of x4"), Yes fetches two
- * cakes' worth, and the cake crafted from them shows the buckets it leaves in the buffer. Last, a crafting table is
- * refused because neither the buffer nor the inventory has room for it.
+ * chain x4 takes eight iron nuggets, of which the racks hold only a chain's worth (slice 3 of the issue,
+ * {@link #offerSteps}): the nugget cells are drawn makeable, the Fetch asks whether nine nuggets should be made first,
+ * the Yes has the player's machine make them (a production chain, ADR-032), and the four chains are crafted from the
+ * buffer. A cake x4 does not fit the buffer: the server asks, the question names the room ("only x2 of x4"), Yes
+ * fetches two cakes' worth, and the cake crafted from them shows the buckets it leaves in the buffer. Last, a crafting
+ * table is refused because neither the buffer nor the inventory has room for it.
  * <p>
  * <b>A view of an earlier grid is never shown.</b> The crafting table is laid in three steps that keep the item and
  * change what the grid makes — sticks, the same two planks moved side by side into a pressure plate, then two planks
@@ -113,10 +135,12 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * and a chest in, or three milk buckets, two sugar, an egg and three wheat out and a cake and three buckets in — and by
  * nothing for the refused craft. It brackets every Fetch as well: the crane carries items only inside the census box,
  * so the census stays exactly what it was before the click, after the delivery, after the question and after the fetch
- * that was given up, while the buffer is checked to hold exactly what the fetch was for. Only two things put items into
- * the scene that no crane carried, and both are declared in the census: the full buffer and the full inventory the
- * refusal needs ({@link #fillForRefusal}, seeded on the server thread, because a crane delivers into a buffer but never
- * into a player's pockets), and the emptying between the two rounds ({@link #emptyForNextRound}).
+ * that was given up, while the buffer is checked to hold exactly what the fetch was for. Only three things change the
+ * scene's items in a way no crane trip does, and all three are declared in the census: the player's crafter turning an
+ * iron ingot into nine nuggets ({@link #declareMachineRun}, once its production order is complete), the full buffer
+ * and the full inventory the refusal needs ({@link #fillForRefusal}, seeded on the server thread, because a crane
+ * delivers into a buffer but never into a player's pockets), and the emptying between the two rounds
+ * ({@link #emptyForNextRound}).
  * <p>
  * <b>Languages and sizes.</b> The round is played twice, in English and in German (switched as the language screen
  * does, {@link VisualLanguage}), and every shot is taken in both; the German ones end in {@code -de}. Each round ends
@@ -151,17 +175,27 @@ public final class CraftVisualScenario implements VisualScenario {
     private static final ItemKey CAKE = ItemKey.of(Items.CAKE);
     private static final ItemKey BUCKET = ItemKey.of(Items.BUCKET);
     private static final ItemKey CRAFTING_TABLE = ItemKey.of(Items.CRAFTING_TABLE);
+    private static final ItemKey IRON = ItemKey.of(Items.IRON_INGOT);
+    private static final ItemKey NUGGET = ItemKey.of(Items.IRON_NUGGET);
+    /** The chain offer's result: vanilla's Chain item, not to be confused with the production chain that offers it. */
+    private static final ItemKey IRON_CHAIN = ItemKey.of(Items.CHAIN);
     /** What the refusal fills the player's free inventory slots with: an item that is nowhere else in the scene. */
     private static final ItemKey INVENTORY_FILLER = ItemKey.of(Items.COBBLESTONE);
     private static final int FULL_STACK = 64;
 
-    /** Item types in the racks: everything the three recipes take, and a few more so the list looks like a store. */
+    /** Nuggets in the racks before the first round: one chain's worth, so the question says what a No still leaves. */
+    private static final int NUGGETS_IN_STOCK = 2;
+    /**
+     * Item types in the racks: everything the four recipes take, and a few more so the list looks like a store. The
+     * iron nuggets are a single small stack: one chain's worth, short of what the chain offer asks for.
+     */
     private static final List<ItemStack> STOCK = List.of(new ItemStack(Items.OAK_PLANKS, 64),
             new ItemStack(Items.MILK_BUCKET, 1), new ItemStack(Items.SUGAR, 64), new ItemStack(Items.EGG, 16),
             new ItemStack(Items.WHEAT, 64), new ItemStack(Items.IRON_INGOT, 64), new ItemStack(Items.OAK_LOG, 32),
             new ItemStack(Items.GLASS, 48), new ItemStack(Items.STRING, 16), new ItemStack(Items.REDSTONE, 64),
-            new ItemStack(Items.COAL, 64), new ItemStack(Items.LEATHER, 8));
-    private static final int ITEM_TYPES = 12;
+            new ItemStack(Items.COAL, 64), new ItemStack(Items.LEATHER, 8),
+            new ItemStack(Items.IRON_NUGGET, NUGGETS_IN_STOCK));
+    private static final int ITEM_TYPES = 13;
     /** Stacks of the same item put into one chest; a full stack of milk is one bucket, so 20 buckets. */
     private static final int STACKS_PER_LOCATION = 20;
 
@@ -172,6 +206,14 @@ public final class CraftVisualScenario implements VisualScenario {
     private static final CraftGrid<ItemKey> CAKE_GRID = CraftGrid.of(MILK, MILK, MILK, SUGAR, EGG, SUGAR, WHEAT, WHEAT,
             WHEAT);
     private static final CraftGrid<ItemKey> TABLE_GRID = CraftGrid.of(PLANKS, PLANKS, null, PLANKS, PLANKS);
+    /** Vanilla's Chain, laid down the middle column: an iron nugget above and below an iron ingot. */
+    private static final CraftGrid<ItemKey> CHAIN_GRID = CraftGrid.of(null, NUGGET, null, null, IRON, null, null,
+            NUGGET);
+    /**
+     * The nugget cell whose tooltip the makeable shot shows: the lower one, so the tooltip covers the rows below the
+     * stock list rather than the list itself.
+     */
+    private static final int HOVERED_NUGGET_CELL = 7;
     /** Two planks one above the other, where the table is laid from: sticks. */
     private static final CraftGrid<ItemKey> STICK_GRID = CraftGrid.of(PLANKS, null, null, PLANKS);
     /** The same two planks side by side: an oak pressure plate. */
@@ -197,6 +239,20 @@ public final class CraftVisualScenario implements VisualScenario {
      * eggs and the wheat, which stack ({@code 3n + 3 <= 9}).
      */
     private static final int CAKES_FITTING = (BUFFER_SLOTS - 3) / MILK_PER_CAKE;
+
+    // --- the chain offer (slice 3 of the issue): the player's machine and what it makes ------------------------------
+    /** The production station of the player's machine: the crane delivers iron here, a Mechanical Arm takes it on. */
+    private static final RackPosition STATION = RackPosition.of(4, 0, Side.RIGHT);
+    /** The warehouse input the machine's Mechanical Crafter points into: the nuggets come back like any delivery. */
+    private static final RackPosition MACHINE_INPUT = RackPosition.of(5, 0, Side.RIGHT);
+    /** Chains the offer fetches for: eight nuggets, which the racks cannot give. */
+    private static final int CHAINS = 4;
+    private static final int NUGGETS_PER_CHAIN = 2;
+    private static final int IRON_PER_CHAIN = 1;
+    /** What the player's crafter really does (vanilla {@code minecraft:iron_nugget}): one ingot makes nine nuggets. */
+    private static final int NUGGETS_PER_INGOT = 9;
+    /** The station's pattern and the crafter's recipe take one ingot per run. */
+    private static final int IRON_PER_RUN = 1;
 
     // --- window sizes (design table 3.2: the 320 x 240 floor and 480 x 270) ------------------------------------------
     private static final int FLOOR_WIDTH = 1280;
@@ -232,6 +288,9 @@ public final class CraftVisualScenario implements VisualScenario {
     private static final int ANSWER_TIMEOUT_TICKS = 200;
     private static final int AMOUNT_TIMEOUT_TICKS = 200;
     private static final int DELIVERY_TIMEOUT_TICKS = 1200;
+    /** A chain: a trip to the station, the arm and the crafter, a store trip and the delivery of what was made. */
+    private static final int CHAIN_TIMEOUT_TICKS = 2400;
+    private static final int MACHINE_READY_TIMEOUT_TICKS = 400;
     private static final int RESIZE_TIMEOUT_TICKS = 200;
     private static final int RELOAD_TIMEOUT_TICKS = 600;
     private static final int SETTLE_TICKS = 4;
@@ -251,6 +310,12 @@ public final class CraftVisualScenario implements VisualScenario {
     /** Client thread: the answer to a Fetch or an order button before the last such click, likewise. */
     @Nullable
     private TerminalCraftAnswerPayload fetchAnswerBefore;
+    /** Server thread: the nuggets and the iron the racks held at the chain offer's Fetch. */
+    private volatile long nuggetsBefore;
+    private volatile long ironBefore;
+    /** Server thread: the production order the Yes to the offer created, followed until it is complete. */
+    @Nullable
+    private volatile UUID chainRoot;
     /** Client thread: where the window stood before the last fold, so a fold can be checked for a jump. */
     private int leftBeforeFold;
     /** Client thread: the window, its GUI size and the GUI scale option before the size checks, put back after. */
@@ -273,10 +338,18 @@ public final class CraftVisualScenario implements VisualScenario {
 
     @Override
     public void setup(VisualScript script) {
-        script.server("craft: clear the area and place the creative motor", this::placeMotor)
-                .server("craft: build the aisle, the terminal and the stocked racks", CraftVisualScenario::buildAisle)
+        script.server("craft: clear the area and place the creative motors", this::placeMotor)
+                .server("craft: build the aisle, the terminal, the stocked racks and the player's machine",
+                        CraftVisualScenario::buildAisle)
                 .serverUntil("craft: wait until the controller has indexed every rack", this::sceneReady,
                         SCENE_READY_TIMEOUT_TICKS)
+                .server("craft: write the station's pattern, one iron ingot makes nine nuggets",
+                        CraftVisualScenario::writePattern)
+                .serverUntil("craft: wait until the aisle knows the nuggets can be made",
+                        CraftVisualScenario::patternLive, MACHINE_READY_TIMEOUT_TICKS)
+                .server("craft: give the Mechanical Arm its station and its crafter", CraftVisualScenario::teachTheArm)
+                .serverUntil("craft: wait until the arm has resolved both points and turns",
+                        CraftVisualScenario::armReady, MACHINE_READY_TIMEOUT_TICKS)
                 .server("craft: the census every craft is measured against", (server, context) -> {
                     expected = SceneItemCensus.take(server.overworld(), censusBox, context.serverPlayer(server));
                     LOGGER.info(PREFIX + "craft: baseline census {}", SceneItemCensus.describe(expected));
@@ -398,9 +471,99 @@ public final class CraftVisualScenario implements VisualScenario {
         shot(script, "craft-crafted-all" + suffix);
 
         cancelSteps(script, suffix);
+        offerSteps(script, suffix);
         cakeSteps(script, suffix);
         refusalSteps(script, suffix);
         sizeSteps(script, suffix);
+    }
+
+    /**
+     * The chain offer (slice 3 of the issue, {@code docs/warehouse-system.md} §3.4.5, ADR-062): vanilla's Chain, an
+     * iron nugget above and below an iron ingot, fetched for x{@value #CHAINS}. The racks hold only a chain's worth of
+     * nuggets, but the aisle's production station has the pattern "1 iron ingot makes 9 nuggets", so the nugget cells
+     * are drawn <b>makeable</b>: the stock list's "+" on its faint blue, and a tooltip that says what the racks hold
+     * and that the Fetch asks first ({@code craft-makeable}). A click on Fetch requests and orders nothing: the server
+     * measures the chain without changing anything and asks ({@code craft-offer}), naming the nine nuggets the player's
+     * crafter will make first and the one chain the racks could serve without making anything.
+     * <p>
+     * The Yes starts the craft order. Its nugget line takes what the racks hold and has the rest made, as one
+     * production order at the player's station that backs that line's request; the grid's Chain is never ordered. The
+     * crane hands the station an ingot, the Mechanical Arm carries it into the crafter, the nuggets come back through
+     * the warehouse input, are stored and fetched into the buffer with the iron, and the rest of the whole run stays in
+     * the racks. A Shift-click crafts all four chains.
+     * <p>
+     * The census brackets every step: the question and every crane trip leave it as it was, the crafter's one run moves
+     * it once (declared once the production order is complete: one ingot out, nine nuggets in), and the craft once.
+     */
+    private void offerSteps(VisualScript script, String suffix) {
+        String what = CHAINS + " chains";
+        clearGrid(script);
+        pickGhost(script, NUGGET);
+        stamp(script, 1, 7);
+        switchGhost(script, IRON);
+        stamp(script, 4);
+        dropGhost(script);
+        laidSteps(script, "chain", CHAIN_GRID, Items.CHAIN);
+        script.server("craft: CHECK laying the chain requested and ordered nothing",
+                CraftVisualScenario::checkNothingOrdered);
+        amount(script, CHAINS);
+        ArmVisualScenario.untilOrFail(script, "craft: the nugget cells are drawn makeable",
+                context -> screen(context).craftPanel().cellStates().equals(chainCells()), PREVIEW_TIMEOUT_TICKS,
+                context -> describePanel(screen(context)));
+        script.client("craft: CHECK the makeable cell's tooltip and the Fetch tooltip for " + what,
+                        CraftVisualScenario::checkMakeable)
+                .client("craft: hover the lower nugget cell", context -> ScreenInput.hover(context.minecraft(),
+                        ScreenInput.terminalCraftCell(screen(context), HOVERED_NUGGET_CELL)))
+                .waitTicks(SETTLE_TICKS)
+                .shot("craft-makeable" + suffix);
+
+        script.server("craft: remember what the racks hold before the Fetch for " + what, this::rememberStock);
+        fetch(script, what);
+        fetchAnswered(script, "the Fetch for " + what, TerminalCraftResult.ASKING, CHAINS);
+        script.client("craft: CHECK the question offers to make the nuggets first",
+                        CraftVisualScenario::checkOfferQuestion)
+                .server("craft: CHECK the question requested and ordered nothing",
+                        CraftVisualScenario::checkNothingOrdered)
+                .server("craft: CHECK the census after the offer",
+                        (server, context) -> assertCensus(server, context, "after the offer for " + what));
+        shot(script, "craft-offer" + suffix);
+
+        script.client("craft: click Yes in the offer", this::clickYes);
+        fetchAnswered(script, "the Yes to the offer", TerminalCraftResult.STARTED, CHAINS);
+        orderOpened(script, CHAIN_GRID, CHAINS);
+        script.serverUntil("craft: CHECK the Yes has the nuggets made at the player's machine, never the chain",
+                        this::chainStarted, ANSWER_TIMEOUT_TICKS)
+                .serverUntil("craft: wait until the player's crafter has made the nuggets", this::chainComplete,
+                        CHAIN_TIMEOUT_TICKS)
+                .server("craft: the crafter turned one iron ingot into nine nuggets (declared in the census)",
+                        this::declareMachineRun);
+        fetchDone(script, "the iron for " + what, CHAIN_GRID, Map.of(NUGGET, (long) NUGGETS_PER_CHAIN * CHAINS, IRON,
+                (long) IRON_PER_CHAIN * CHAINS));
+        script.serverUntil("craft: CHECK the rest of the crafter's run stays in the racks", this::surplusStored,
+                SCREEN_TIMEOUT_TICKS);
+        ArmVisualScenario.untilOrFail(script, "craft: the panel counts " + what + " ready",
+                context -> screen(context).craftPanel().readyCrafts() == CHAINS, SCREEN_TIMEOUT_TICKS,
+                context -> describePanel(screen(context)));
+        script.client("craft: check the chain's cells with everything here",
+                context -> checkCells(context, CHAIN_GRID, TerminalCraftPanel.CellState.HERE, CHAINS));
+        craft(script, new CraftCheck("craft every chain with a Shift-click on the result", TerminalCraftResult.CRAFTED,
+                CHAINS, IRON_CHAIN, Map.of(NUGGET, (long) -NUGGETS_PER_CHAIN * CHAINS, IRON,
+                        (long) -IRON_PER_CHAIN * CHAINS, IRON_CHAIN, (long) CHAINS)), this::shiftClickResult);
+        ArmVisualScenario.untilOrFail(script, "craft: the buffer holds no chain any more",
+                context -> screen(context).craftPanel().readyCrafts() == 0, SCREEN_TIMEOUT_TICKS,
+                context -> describePanel(screen(context)));
+    }
+
+    /** What the chain's cells are drawn as before the Fetch: the nuggets makeable, the ingot available. */
+    private static List<TerminalCraftPanel.CellState> chainCells() {
+        List<TerminalCraftPanel.CellState> cells = new ArrayList<>(CraftGrid.SIZE);
+        for (int cell = 0; cell < CraftGrid.SIZE; cell++) {
+            Optional<ItemKey> key = CHAIN_GRID.cell(cell);
+            cells.add(key.isEmpty() ? TerminalCraftPanel.CellState.EMPTY
+                    : key.get().equals(NUGGET) ? TerminalCraftPanel.CellState.MAKEABLE
+                            : TerminalCraftPanel.CellState.AVAILABLE);
+        }
+        return cells;
     }
 
     /**
@@ -447,13 +610,7 @@ public final class CraftVisualScenario implements VisualScenario {
                 .server("craft: CHECK the census after the question",
                         (server, context) -> assertCensus(server, context, "after the question about " + asked));
         shot(script, "craft-question-room" + suffix);
-        script.client("craft: click Yes in the question", context -> {
-            WarehouseTerminalScreen screen = screen(context);
-            fetchAnswerBefore = screen.craftFetchAnswer();
-            ScreenInput.click(context.minecraft(), ScreenInput.terminalConfirmButton(screen, true));
-            if (screen.isAskingSomething())
-                throw new VisualTestException("the question is still up after its Yes");
-        });
+        script.client("craft: click Yes in the question", this::clickYes);
         String fitting = CAKES_FITTING + " cakes";
         fetchAnswered(script, "the Yes for " + fitting, TerminalCraftResult.STARTED, CAKES_FITTING);
         orderOpened(script, CAKE_GRID, CAKES_FITTING);
@@ -637,6 +794,15 @@ public final class CraftVisualScenario implements VisualScenario {
         ArmVisualScenario.untilOrFail(script, "craft: the grid is empty",
                 context -> screen(context).craftPanel().grid().isEmpty(), SETTLE_TICKS,
                 context -> "the grid is " + screen(context).craftPanel().grid());
+    }
+
+    /** A real click on the question's Yes; the question must be gone at once. */
+    private void clickYes(VisualContext context) {
+        WarehouseTerminalScreen screen = screen(context);
+        fetchAnswerBefore = screen.craftFetchAnswer();
+        ScreenInput.click(context.minecraft(), ScreenInput.terminalConfirmButton(screen, true));
+        if (screen.isAskingSomething())
+            throw new VisualTestException("the question is still up after its Yes");
     }
 
     /** A real click on the result cell: one craft. */
@@ -1304,6 +1470,93 @@ public final class CraftVisualScenario implements VisualScenario {
         LOGGER.info(PREFIX + "craft: CHECK PASS the question reads {}", texts(lines));
     }
 
+    /**
+     * The nugget cells before the Fetch: the server describes the nuggets as producible, not stopped, and short of what
+     * x{@value #CHAINS} take; a nugget cell's tooltip says how many the racks hold of how many are needed and then that
+     * the item can be made here and the Fetch asks first, and never that nothing makes it. The Fetch tooltip names
+     * both items, the nuggets in the blue of their cells and the iron not.
+     */
+    private static void checkMakeable(VisualContext context) {
+        WarehouseTerminalScreen screen = screen(context);
+        TerminalCraftPanel panel = screen.craftPanel();
+        int needed = NUGGETS_PER_CHAIN * CHAINS;
+        TerminalCraftViewPayload.KeyView nuggets = panel.view().keyView(NUGGET)
+                .orElseThrow(() -> new VisualTestException("the server has not described the nuggets"));
+        if (!nuggets.producible() || nuggets.paused() || nuggets.available() <= 0L
+                || nuggets.available() >= needed)
+            throw new VisualTestException("the server describes the nuggets as " + nuggets + ", not as short of "
+                    + needed + " but makeable");
+        List<Component> tooltip = panel.cellTooltip(HOVERED_NUGGET_CELL);
+        List<String> lines = texts(tooltip);
+        String shortLine = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_SHORT,
+                LangNumberFormat.format(nuggets.available()), LangNumberFormat.format(needed)).getString();
+        String makeable = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_MAKEABLE).getString();
+        String missing = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_MISSING).getString();
+        int shortAt = lines.indexOf(shortLine);
+        if (shortAt < 0 || lines.indexOf(makeable) != shortAt + 1 || lines.contains(missing))
+            throw new VisualTestException("a makeable cell's tooltip is " + lines + ", not '" + shortLine
+                    + "' followed by '" + makeable + "'");
+        checkLines(context, "a makeable cell's tooltip", tooltip, 5);
+        checkFetchTooltip(context, IRON_CHAIN, CHAINS, List.of(Map.entry(NUGGET, needed),
+                Map.entry(IRON, IRON_PER_CHAIN * CHAINS)));
+        TextColor blue = tooltip.get(shortAt + 1).getStyle().getColor();
+        List<Component> fetch = panel.fetchTooltip();
+        if (blue == null || !blue.equals(fetch.get(1).getStyle().getColor())
+                || blue.equals(fetch.get(2).getStyle().getColor()))
+            throw new VisualTestException("the Fetch tooltip colours the nuggets " + fetch.get(1).getStyle().getColor()
+                    + " and the iron " + fetch.get(2).getStyle().getColor() + ", the makeable line is " + blue);
+        LOGGER.info(PREFIX + "craft: CHECK PASS the nuggets are makeable ({} of {} in the racks), the cell says {}",
+                nuggets.available(), needed, lines);
+    }
+
+    /**
+     * The question a Fetch for {@value #CHAINS} chains raises: every craft is possible, but only with production, so
+     * the player is asked before anything is made. It names the nuggets with the nine the crafter's whole run makes
+     * and no chain refusal, counts the racks' nuggets as they are, says what the racks alone could serve — as many
+     * chains as they hold pairs of nuggets, at least one and fewer than asked for — and the lines the panel draws say
+     * exactly that, each inside the panel's text width: the title, "Iron Nugget x9 will be made first.", "Without
+     * making: x1" and its hint.
+     */
+    private static void checkOfferQuestion(VisualContext context) {
+        WarehouseTerminalScreen screen = screen(context);
+        CraftFetchQuestion<ItemKey> question = screen.craftConfirmation();
+        if (question == null || !screen.isAskingSomething())
+            throw new VisualTestException("the Fetch question is not up: " + describePanel(screen));
+        long inStock = screen.craftPanel().view().keyView(NUGGET).map(TerminalCraftViewPayload.KeyView::available)
+                .orElse(-1L);
+        int needed = NUGGETS_PER_CHAIN * CHAINS;
+        int withoutMaking = (int) (inStock / NUGGETS_PER_CHAIN);
+        if (withoutMaking < 1 || withoutMaking >= CHAINS)
+            throw new VisualTestException("the racks hold " + inStock + " nuggets, not some but too few for x"
+                    + CHAINS);
+        List<CraftFetchQuestion.Line<ItemKey>> named = List.of(new CraftFetchQuestion.Line<>(NUGGET, needed, inStock,
+                NUGGETS_PER_INGOT));
+        if (question.asked() != CHAINS || question.possible() != CHAINS || question.ready() != 0
+                || question.bound() != CraftFetchQuestion.Bound.NONE || question.producing() != NUGGETS_PER_INGOT
+                || question.withoutMaking() != withoutMaking || !question.named().equals(named)
+                || question.chainRefusal().isPresent())
+            throw new VisualTestException("the question is " + question + ", not x" + CHAINS + " with "
+                    + NUGGETS_PER_INGOT + " nuggets made first and x" + withoutMaking + " without making");
+        String without = LangNumberFormat.format(withoutMaking);
+        List<String> wanted = List.of(
+                WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_TITLE,
+                        IRON_CHAIN.toStack().getHoverName(), LangNumberFormat.format(CHAINS)).getString(),
+                WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_MADE,
+                        NUGGET.toStack().getHoverName(), LangNumberFormat.format(NUGGETS_PER_INGOT)).getString(),
+                WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT, without).getString(),
+                WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT_HINT, without)
+                        .getString());
+        List<Component> lines = ScreenInput.terminalCraftConfirmationLines(screen);
+        if (!texts(lines).equals(wanted))
+            throw new VisualTestException("the offer reads " + texts(lines) + ", not " + wanted);
+        Font font = context.minecraft().font;
+        for (Component line : lines)
+            if (font.width(line) > DIALOG_WIDTH)
+                throw new VisualTestException("the offer's line '" + line.getString() + "' is " + font.width(line)
+                        + " px, wider than the panel's " + DIALOG_WIDTH + " px: it would wrap");
+        LOGGER.info(PREFIX + "craft: CHECK PASS the offer reads {}", texts(lines));
+    }
+
     private static boolean stockHintShown(WarehouseTerminalScreen screen) {
         StockLine<ItemKey> planks = screen.entry(PLANKS)
                 .orElseThrow(() -> new VisualTestException("the terminal does not list Oak Planks"));
@@ -1475,15 +1728,22 @@ public final class CraftVisualScenario implements VisualScenario {
             level.setBlockAndUpdate(pos.immutable(), Blocks.AIR.defaultBlockState());
         level.setBlockAndUpdate(dock.below(),
                 AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.UP));
+        // The machine's two motors sit in the ground, below the cogwheels that drive the arm and the crafter.
+        level.setBlockAndUpdate(armMotorPos(dock),
+                AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.UP));
+        level.setBlockAndUpdate(crafterMotorPos(dock),
+                AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, AISLE.getOpposite()));
     }
 
     private static void buildAisle(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
-        CreativeMotorBlockEntity motor = AllBlockEntityTypes.MOTOR.getNullable(level, dock.below());
-        if (motor == null)
-            throw new VisualTestException("the creative motor below the dock is missing");
-        motor.generatedSpeed.setValue(MOTOR_RPM);
+        for (BlockPos pos : List.of(dock.below(), armMotorPos(dock), crafterMotorPos(dock))) {
+            CreativeMotorBlockEntity motor = AllBlockEntityTypes.MOTOR.getNullable(level, pos);
+            if (motor == null)
+                throw new VisualTestException("the creative motor at " + pos + " is missing");
+            motor.generatedSpeed.setValue(MOTOR_RPM);
+        }
         level.setBlockAndUpdate(dock, WareworksBlocks.STACKER_CRANE.getDefaultState()
                 .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, AISLE));
         for (int x = 1; x <= RAILS; x++)
@@ -1494,13 +1754,17 @@ public final class CraftVisualScenario implements VisualScenario {
         BranchLayout layout = layout(dock);
         level.setBlockAndUpdate(layout.rackPos(TERMINAL), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
                 .setValue(WarehouseTerminalBlock.FACING, layout.sideDirection(TERMINAL.side()).getOpposite()));
+        buildMachine(level, dock);
 
         int next = 0;
         for (Side side : Side.values()) {
             Direction outward = layout.sideDirection(side);
             for (int x = STORAGE_FIRST_POSITION; x <= RAILS; x++) {
                 for (int y = 0; y < STORAGE_LEVELS; y++) {
-                    BlockPos rack = layout.rackPos(RackPosition.of(x, y, side));
+                    RackPosition position = RackPosition.of(x, y, side);
+                    if (position.equals(STATION) || position.equals(MACHINE_INPUT))
+                        continue;
+                    BlockPos rack = layout.rackPos(position);
                     BlockPos chest = rack.relative(outward);
                     level.setBlockAndUpdate(chest,
                             Blocks.CHEST.defaultBlockState().setValue(ChestBlock.FACING, outward.getOpposite()));
@@ -1528,6 +1792,73 @@ public final class CraftVisualScenario implements VisualScenario {
         }
     }
 
+    /**
+     * The player's machine behind the right-hand rack wall, the same machine the chain scenario's first one is: the
+     * production station the crane delivers iron to, a Mechanical Arm that carries whatever the station holds into a
+     * Mechanical Crafter, and the warehouse input the crafter's arrow points into. No warehouse block changes an item
+     * here: the arm and the crafter are Create's, and the input takes the nuggets like any other delivery (ADR-024).
+     * The crafter is driven from below, so the chests of the second rack level stand above the machine as everywhere.
+     */
+    private static void buildMachine(ServerLevel level, BlockPos dock) {
+        BranchLayout layout = layout(dock);
+        Direction inward = layout.sideDirection(Side.RIGHT).getOpposite();
+        level.setBlockAndUpdate(layout.rackPos(STATION), WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
+                .setValue(WarehouseProductionBlock.FACING, inward));
+        level.setBlockAndUpdate(layout.rackPos(MACHINE_INPUT), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
+                .setValue(WarehouseInputBlock.FACING, inward));
+        level.setBlockAndUpdate(crafterPos(dock), ChainVisualScenario.crafterState(AISLE.getOpposite(), inward));
+        level.setBlockAndUpdate(crafterCogPos(dock), AllBlocks.COGWHEEL.getDefaultState()
+                .setValue(RotatedPillarKineticBlock.AXIS, AISLE.getAxis()));
+        level.setBlockAndUpdate(armPos(dock), AllBlocks.MECHANICAL_ARM.getDefaultState());
+        level.setBlockAndUpdate(armCogPos(dock), AllBlocks.COGWHEEL.getDefaultState()
+                .setValue(RotatedPillarKineticBlock.AXIS, Direction.Axis.Y));
+    }
+
+    /**
+     * The station's pattern: what the player's crafter really does with an iron ingot. A pattern is the player's own
+     * declaration; the grid's recipe never becomes one.
+     */
+    private static void writePattern(MinecraftServer server, VisualContext context) {
+        WarehouseProductionBlockEntity station = station(server, context);
+        if (!station.setPatternEntry(0, 0, IRON, IRON_PER_RUN)
+                || !station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, NUGGET, NUGGETS_PER_INGOT))
+            throw new VisualTestException("the pattern " + IRON_PER_RUN + " iron ingot -> " + NUGGETS_PER_INGOT
+                    + " iron nuggets was refused");
+    }
+
+    private static boolean patternLive(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        return controller.aislePatterns().size() == 1 && controller.producibleKeys().equals(Set.of(NUGGET));
+    }
+
+    /**
+     * Gives the arm its two points through Create's own placement packet, the message a player's click sends after
+     * selecting blocks with a Mechanical Arm in hand, as the chain scenario does: take from the station, deposit into
+     * the crafter.
+     */
+    private static void teachTheArm(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        ArmInteractionPoint take = ChainVisualScenario.point(level, layout(dock).rackPos(STATION), Mode.TAKE);
+        ArmInteractionPoint deposit = ChainVisualScenario.point(level, crafterPos(dock), Mode.DEPOSIT);
+        new ArmPlacementPacket(List.of(take, deposit), armPos(dock)).handle(context.serverPlayer(server));
+    }
+
+    /** The arm has resolved its two points into its own lists, and both the arm and the crafter turn. */
+    private static boolean armReady(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        ArmBlockEntity arm = AllBlockEntityTypes.MECHANICAL_ARM.getNullable(level, armPos(dock));
+        MechanicalCrafterBlockEntity crafter = AllBlockEntityTypes.MECHANICAL_CRAFTER.getNullable(level,
+                crafterPos(dock));
+        if (arm == null || crafter == null)
+            throw new VisualTestException("the player's machine is missing its arm or its crafter");
+        return !(Boolean) ArmVisualScenario.Reflect.get(ArmVisualScenario.Reflect.ARM_UPDATE, arm)
+                && ((List<?>) ArmVisualScenario.Reflect.get(ArmVisualScenario.Reflect.ARM_INPUTS, arm)).size() == 1
+                && ((List<?>) ArmVisualScenario.Reflect.get(ArmVisualScenario.Reflect.ARM_OUTPUTS, arm)).size() == 1
+                && arm.getSpeed() != 0.0F && crafter.getSpeed() != 0.0F;
+    }
+
     private boolean sceneReady(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
         BlockPos dock = context.origin();
@@ -1536,10 +1867,12 @@ public final class CraftVisualScenario implements VisualScenario {
         StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock);
         if (controller == null || crane == null || !SceneItemCensus.isFullyLoaded(level, censusBox))
             return false;
-        int expectedStorage = (RAILS - STORAGE_FIRST_POSITION + 1) * STORAGE_LEVELS * Side.values().length;
+        // Every rack position of the two storage levels holds a chest, but the machine's station and its input.
+        int expectedStorage = (RAILS - STORAGE_FIRST_POSITION + 1) * STORAGE_LEVELS * Side.values().length - 2;
         return controller.status() == ControllerStatus.READY && !controller.isMembershipDirty()
                 && controller.pendingSnapshotCount() == 0 && controller.storageLocations().size() == expectedStorage
-                && controller.outputStations().size() == 1 && crane.isControllerLinked()
+                && controller.outputStations().size() == 1 && controller.inputStations().size() == 1
+                && controller.productionStations().size() == 1 && crane.isControllerLinked()
                 && controller.stockIndex().distinctKeys() >= ITEM_TYPES;
     }
 
@@ -1556,6 +1889,101 @@ public final class CraftVisualScenario implements VisualScenario {
         if (!controller.requestsFor(terminal).isEmpty())
             throw new VisualTestException("laying the recipe requested something: " + controller.requestsFor(terminal));
         LOGGER.info(PREFIX + "craft: CHECK PASS laying the recipe requested nothing");
+    }
+
+    /** Laying the chain, and the question about it, order nothing: no request to the terminal, no production. */
+    private static void checkNothingOrdered(MinecraftServer server, VisualContext context) {
+        checkNothingRequested(server, context);
+        List<ProductionOrder<ItemKey, RackPosition>> open = controller(server, context).openProductionOrders();
+        if (!open.isEmpty())
+            throw new VisualTestException("something was ordered at a production station: " + open);
+    }
+
+    /** What the racks hold of the chain's two items before its Fetch: the numbers the whole run is checked against. */
+    private void rememberStock(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        nuggetsBefore = controller.countOf(NUGGET);
+        ironBefore = controller.countOf(IRON);
+        chainRoot = null;
+        if (nuggetsBefore <= 0L || nuggetsBefore >= (long) NUGGETS_PER_CHAIN * CHAINS)
+            throw new VisualTestException("the racks hold " + nuggetsBefore + " nuggets, not some but too few for x"
+                    + CHAINS);
+        LOGGER.info(PREFIX + "craft: the racks hold {} nuggets and {} iron ingots before the chain offer",
+                nuggetsBefore, ironBefore);
+    }
+
+    /**
+     * The production the Yes started, checked in the server tick that first sees it: exactly one open production order,
+     * the root of its plan, at the player's station, making the nuggets, backing the craft order's nugget line and
+     * promising it what the racks do not hold. No production order anywhere makes the grid's Chain.
+     */
+    private boolean chainStarted(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        List<ProductionOrder<ItemKey, RackPosition>> open = controller.openProductionOrders();
+        if (open.isEmpty())
+            return false;
+        BlockPos terminal = layout(context.origin()).rackPos(TERMINAL);
+        RetrievalRequest<ItemKey, BlockPos> line = controller.requestsFor(terminal).stream()
+                .filter(request -> request.key().equals(NUGGET)).findFirst()
+                .orElseThrow(() -> new VisualTestException("the craft order asks for no nuggets: "
+                        + controller.requestsFor(terminal)));
+        ProductionOrder<ItemKey, RackPosition> root = open.getFirst();
+        long promised = (long) NUGGETS_PER_CHAIN * CHAINS - nuggetsBefore;
+        if (open.size() != 1 || !root.result().equals(NUGGET) || !root.station().equals(STATION) || root.isStep()
+                || root.resultAmount() != NUGGETS_PER_INGOT || !root.backingRequest().equals(Optional.of(line.id()))
+                || root.promisedToRequest() != promised)
+            throw new VisualTestException("the Yes ordered " + open + " for the craft line " + line + ", not one run "
+                    + "of nuggets at " + STATION + " promising it " + promised);
+        if (controller.productionOrders().stream().anyMatch(order -> order.result().equals(IRON_CHAIN)))
+            throw new VisualTestException("the grid's Chain was ordered: " + controller.productionOrders());
+        chainRoot = root.id();
+        LOGGER.info(PREFIX + "craft: CHECK PASS the Yes ordered one run of {} nuggets at the player's station, backing "
+                + "the craft line and promising it {}", root.resultAmount(), promised);
+        return true;
+    }
+
+    /** Whether the chain's production order is complete; fails if it ended any other way. */
+    private boolean chainComplete(MinecraftServer server, VisualContext context) {
+        UUID root = chainRoot;
+        if (root == null)
+            throw new VisualTestException("no production order of the chain was recorded");
+        ProductionOrder<ItemKey, RackPosition> order = controller(server, context).productionOrder(root)
+                .orElseThrow(() -> new VisualTestException("the chain's production order is gone"));
+        if (order.state() == ProductionOrderState.COMPLETE)
+            return true;
+        if (!order.isOpen())
+            throw new VisualTestException("the chain's production order ended " + order.state());
+        return false;
+    }
+
+    /**
+     * The one move in this scene that is not a move: the player's crafter turned an iron ingot into nine nuggets. It is
+     * declared once the production order is complete — the nuggets are in the warehouse by then — and the census must
+     * agree at once.
+     */
+    private void declareMachineRun(MinecraftServer server, VisualContext context) {
+        expected = SceneItemCensus.plus(SceneItemCensus.plus(expected, IRON, -IRON_PER_RUN), NUGGET,
+                NUGGETS_PER_INGOT);
+        assertCensus(server, context, "after the player's crafter made the nuggets");
+    }
+
+    /**
+     * The racks after the chain's fetch: the nuggets they held plus the crafter's whole run less what the buffer took,
+     * the iron less the ingot the crafter used and the four in the buffer; nothing is still being made and nothing
+     * is stopped.
+     */
+    private boolean surplusStored(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        long nuggets = nuggetsBefore + NUGGETS_PER_INGOT - (long) NUGGETS_PER_CHAIN * CHAINS;
+        long iron = ironBefore - IRON_PER_RUN - (long) IRON_PER_CHAIN * CHAINS;
+        if (!controller.openProductionOrders().isEmpty() || controller.pausedStockRuleCount() != 0)
+            throw new VisualTestException("after the chain " + controller.openProductionOrders().size()
+                    + " production orders are open and " + controller.pausedStockRuleCount() + " items stopped");
+        if (controller.countOf(NUGGET) != nuggets || controller.countOf(IRON) != iron)
+            return false;
+        LOGGER.info(PREFIX + "craft: CHECK PASS the racks hold {} nuggets and {} iron ingots after the chain", nuggets,
+                iron);
+        return true;
     }
 
     /**
@@ -1651,6 +2079,43 @@ public final class CraftVisualScenario implements VisualScenario {
     private void assertCensus(MinecraftServer server, VisualContext context, String step) {
         SceneItemCensus.assertEquals(server.overworld(), censusBox, expected, "craft: " + step,
                 context.serverPlayer(server));
+    }
+
+    private static WarehouseProductionBlockEntity station(MinecraftServer server, VisualContext context) {
+        WarehouseProductionBlockEntity station = WareworksBlockEntityTypes.WAREHOUSE_PRODUCTION
+                .getNullable(server.overworld(), layout(context.origin()).rackPos(STATION));
+        if (station == null)
+            throw new VisualTestException("the production station of the player's machine is missing");
+        return station;
+    }
+
+    /** Behind the machine's input, one step outside the rack wall: the crafter's arrow points back into that input. */
+    private static BlockPos crafterPos(BlockPos dock) {
+        BranchLayout layout = layout(dock);
+        return layout.rackPos(MACHINE_INPUT).relative(layout.sideDirection(MACHINE_INPUT.side()));
+    }
+
+    /** Below the crafter: a crafter is a small cogwheel on the axis of its facing. */
+    private static BlockPos crafterCogPos(BlockPos dock) {
+        return crafterPos(dock).below();
+    }
+
+    private static BlockPos crafterMotorPos(BlockPos dock) {
+        return crafterCogPos(dock).relative(AISLE);
+    }
+
+    /** Two steps behind the station, within reach of the station and of the crafter. */
+    private static BlockPos armPos(BlockPos dock) {
+        BranchLayout layout = layout(dock);
+        return layout.rackPos(STATION).relative(layout.sideDirection(STATION.side()), 2);
+    }
+
+    private static BlockPos armCogPos(BlockPos dock) {
+        return armPos(dock).relative(AISLE.getOpposite());
+    }
+
+    private static BlockPos armMotorPos(BlockPos dock) {
+        return armCogPos(dock).below();
     }
 
     private static BranchLayout layout(BlockPos dock) {
@@ -1762,6 +2227,8 @@ public final class CraftVisualScenario implements VisualScenario {
                 case HERE -> 'H';
                 case AVAILABLE -> 'A';
                 case SHORT -> 'S';
+                case MAKEABLE -> '+';
+                case STOPPED -> 'P';
                 case MISSING -> 'M';
                 case UNKNOWN -> '?';
             });

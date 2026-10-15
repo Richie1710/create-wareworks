@@ -617,7 +617,11 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_PER_CRAFT), "%1$s per craft, %2$s here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_AVAILABLE), "%1$s available");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_SHORT), "Only %1$s available, %2$s needed");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_MISSING), "None available");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_MISSING),
+                "None available, and nothing here makes it");
+        // Issue #24, slice 3: an ingredient a production station of the aisle has a pattern for. The Fetch measures
+        // the chain and asks before anything is made; the grid's own recipe is never made by the warehouse (ADR-059).
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_MAKEABLE), "Can be made here: Fetch asks first");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CELL_EMPTY),
                 "Right-click a listed item, then click here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CELL_EMPTY_SHIFT),
@@ -656,6 +660,12 @@ public final class WareworksLangGen {
                 "Only x%1$s of x%2$s are available:");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_LINE),
                 "%1$s: %2$s available, %3$s needed");
+        // The chain offer (slice 3): what production makes first, and the fetch the racks alone could serve. The hint
+        // is a line of its own, so neither line has to wrap with its number at the widest.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_MADE), "%1$s x%2$s will be made first.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT), "Without making: x%1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT_HINT),
+                "Set x%1$s to fetch only that.");
         // One sentence per way a craft click can end. The ones that name an item take it as %1$s; "crafted" takes the
         // result and the number of items made. A refusal that stops a Shift-click after some crafts stands after
         // TERMINAL_CRAFT_PARTIAL, so each is a whole sentence of its own.

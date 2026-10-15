@@ -2727,3 +2727,64 @@ you get tired of waiting, and put it back before judging check 160.
     **No** turns it into "paused". Put glass into the racks and resume: the row goes back to the list's progress and the
     list finishes. **Does the gold line read as a reason you can act on, and does it ever stay after it stopped being
     true?**
+
+## AV. Missing ingredients made first (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24), third part)
+
+> The chain offer is measured as well: the offer and its Yes played through to the craft, a No that orders nothing and a
+> portion's question declined, a refusal that names the raw material, a stopped ingredient and the click that lifts the
+> stop, previews that change nothing, two chains sharing two logs, and a fence gate whose chains follow its lines in
+> `TerminalCraftChainGameTests` (the tests play the machines themselves), and a Chain x4 whose nuggets a real
+> Mechanical Arm and Mechanical Crafter make in the `craft` scenario, in English and in German, with the makeable cells
+> and the question shot. What no gate can answer is a chain at a machine a player built, on a dedicated server; how the
+> offer reads in German at the real scale; whether a declined offer feels as safe as it is; and how the stopped cell
+> looks, which no shot shows.
+>
+> Setup: the warehouse of section AR with the crafting grid folded out, plus a warehouse production station on its rack
+> wall with the pattern **1 Oak Log → 4 Oak Planks**, feeding a real **Mechanical Saw** whose planks go back into a
+> warehouse input (the saw of section W). Take every oak plank out of the racks and leave about 16 oak logs in them.
+
+264. **The chain offer at a real machine, on a dedicated server.** Start `runServer` and join with a client. Lay
+    **sticks** (two planks, one above the other) and set x1. Both plank cells show the blue **+** on a faint blue, and
+    their tooltip reads "Can be made here: Fetch asks first"; the Fetch tooltip's plank line is blue too. Press Fetch:
+    the question reads "Fetch the ingredients for Stick x1?" and "Oak Planks x4 will be made first.", and **nothing has
+    moved** — the crane stands still and the terminal's production section is empty. Press **Yes**: one order appears in
+    the production section, the crane takes a log to the station, the saw cuts it, the crane stores the planks and
+    brings exactly two into "Delivered here"; the rest of the log stays in the racks as planks. Click the result: four
+    sticks. Now take the planks out of the racks, put exactly **3** back, set x4 and press Fetch: "Oak Planks x8 will be
+    made first.", "Without making: x1" and "Set x1 to fetch only that.". Yes: exactly 8 planks arrive, and what the saw
+    cut beyond them stays in the racks. Read the server and the client log for errors mentioning `wareworks`. **Does
+    "will be made first" make it clear that your saw does the work and the warehouse only carries? Does the made number
+    — x8 where only 5 were missing, because the pattern makes 4 per log — read as a surprise?**
+265. **German at the real scale 6.** On the **5120x1440** monitor in fullscreen with the automatic GUI scale (6, so
+    854 × 240 GUI px) and the game in German, with no planks in the racks: lay sticks and set x1. A plank cell's tooltip
+    reads "Hier herstellbar: Holen fragt erst nach", and Fetch asks "Zutaten für Stock x1 holen?" and "Wird zuerst
+    hergestellt: Eichenholzbretter x4". Answer No, put 3 planks back, set x4: "Wird zuerst hergestellt:
+    Eichenholzbretter x8", "Ohne Herstellung: x1" and, in dark grey italics, "x1 einstellen, um nur das zu holen.",
+    every line inside the
+    dialog without a wrap. Answer No again, take every log out of the racks and press Fetch for x4 once more: "Nur x1
+    von x4 verfügbar:", "Eichenholzbretter: 3 verfügbar, 8 nötig" and, in grey, "Eichenstamm fehlt". Answer No, take the
+    3 planks out as well and press Fetch: nothing is ordered and the status row says "Eichenstamm fehlt". Repeat the
+    dialog at GUI scale 4. **Does "Wird zuerst hergestellt: Eichenholzbretter x8" read right — the colon form needs no
+    agreement with a plural item name — and does "hergestellt" — your machines — stay clearly apart from "gefertigt",
+    your own craft? Is the dark grey italic hint readable on the dialog's background at both scales?**
+266. **A declined offer orders nothing, and the hint leads to what the racks hold.** With 3 planks and the logs in the
+    racks, lay sticks, set x4 and press Fetch. Look at the stock list's log count, then answer **No** (or press Escape):
+    the dialog goes, the crane does not move, the production section stays empty, no log is taken or held back, and
+    nothing is requested for the terminal. Press Fetch again: exactly the same question. Answer No once more and do what
+    the hint says — set x1 and press Fetch: it starts **without a question** and brings 2 planks; nothing is made. Craft
+    the sticks, set x4 again, say **Yes**, and give the fetch up with the red **x** while the saw is cutting: "The fetch
+    was given up", whatever planks arrived stay in "Delivered here", and the saw's order is not cancelled with it: it
+    runs on, and its planks go into the racks, promised to nobody. **Is it clear after a No that nothing at all was
+    ordered? Is "Set x1 to fetch only that." an instruction you would follow, or does it read like a second question?**
+267. **A stopped ingredient looks stopped.** With no planks in the racks, arm the safety stop for Oak Planks the way
+    check 145 does, or quicker: break the saw's shaft so it cuts nothing, click Oak Planks in the stock list for 4 and,
+    once the crane has handed the station its log, cancel that order in the terminal's production section; the station's
+    ring lights up. Lay sticks: the plank cells are a lighter red than a missing cell and carry a red **!** in the count
+    corner, their tooltip reads "Making Oak Planks is stopped" in red, and the Fetch tooltip's plank line is red. To
+    compare the two side by side, put a slime ball (none in the racks, nothing makes it) into a free cell, look at both
+    at GUI scale 4 and 6, and clear that cell again. Press Fetch: nothing is ordered and the status row says "Making Oak
+    Planks is stopped".
+    Sneak-right-click the station with an empty hand: the ring goes out, the plank cells turn to the blue **+** within a
+    moment, and Fetch offers the chain again (answer No, then repair the shaft; the log the saw was handed comes back as
+    planks). **Can you tell a stopped cell from a missing one at a glance — is the red "!" visible at both scales — and
+    the "+" on its faint blue from an available cell?**

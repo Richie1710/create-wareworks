@@ -703,7 +703,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
 
     /**
      * Server: the crafting panel's <b>Fetch</b> — bring what the buffer is missing for {@code crafts} crafts of the
-     * grid {@code menu} shows ({@code docs/warehouse-system.md} §3.4.5, issue #24, slice 2).
+     * grid {@code menu} shows ({@code docs/warehouse-system.md} §3.4.5, issue #24, slices 2 and 3).
      * <p>
      * <b>Measured before anything is requested</b> ({@link CraftFetchQuestion}). The demand is topped up against the
      * buffer and nothing else — per ingredient {@code max(0, uses × crafts − inBuffer)} — and it counts whole crafts
@@ -723,6 +723,18 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * </ul>
      * Nothing is promised by measuring, and every answer but {@link TerminalCraftResult#STARTED} leaves the aisle's
      * requests exactly as they were.
+     * <p>
+     * <b>Missing ingredients can be made first</b> (slice 3). When the racks fall short of an ingredient that a
+     * production station of the same aisle has a pattern for, the measurement asks the controller what the chain
+     * behind it would make ({@link WarehouseControllerBlockEntity#productionPreviews}, the ADR-032 planner with one
+     * shared budget, ordering nothing), and the question offers it: "Oak Planks x8 will be made first", with the
+     * crafts the player gets without having anything made. A Fetch that would make something always asks, and its Yes
+     * carries the production total it agreed to, which becomes the order's consent budget
+     * ({@link CraftFetchQuestion#budget()}). A chain that does not hold is refused with the planner's own reason and
+     * item ("Oak Log is missing"; {@link TerminalCraftOutcome#refusal()}). The chain makes <b>ingredients</b>: each
+     * portion's request claims from the racks first and has only the rest made, as one atomic chain whose root is the
+     * ingredient; its product is stored and then fetched into this buffer like any other item. The grid's own recipe is
+     * never a pattern, a production order or an order's completion — only the player crafts (ADR-024, ADR-059).
      * <p>
      * <b>The order is a second list order</b> (ADR-062): one line per ingredient, worked off in portions that are each
      * an ordinary {@code controller.request(..., StockAccess.PLAYER, ..., RequestScope.CRAFT)}, the call a click
@@ -766,9 +778,12 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // One set of slot views for the measurement and the order's lines, so what the player is told and what is
         // requested are worked out from the very same buffer.
         List<SlotView<ItemKey>> views = bufferViews();
+        // An ingredient the racks are short of can be made first at the aisle's own machines (slice 3, ADR-032): the
+        // chains are previewed only when the racks fall short of what fits, from one snapshot for the whole
+        // measurement, and nothing is ordered by it — the portions make the chains, the player makes the craft.
         CraftFetchQuestion<ItemKey> question = CraftFetchQuestion.measure(grid, asked, views,
                 key -> controller.availableTo(StockAccess.PLAYER, key), openRequestCounts(controller),
-                ItemKey::getMaxStackSize);
+                ItemKey::getMaxStackSize, controller.productionPreviews(StockAccess.PLAYER));
         Optional<ItemKey> made = ItemKey.fromStack(preview.result());
         switch (question.verdict(answering, acceptedProducing)) {
             case NOTHING_TO_FETCH:

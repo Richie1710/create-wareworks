@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.SequencedMap;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
@@ -48,6 +49,7 @@ import dev.wareworks.core.address.Heading;
 import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
+import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crane.AbortReason;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.HomeReturn;
@@ -67,6 +69,7 @@ import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.production.FetchPreview;
 import dev.wareworks.core.production.PlanBudget;
 import dev.wareworks.core.production.PlanNode;
 import dev.wareworks.core.production.PlanRefusal;
@@ -79,6 +82,7 @@ import dev.wareworks.core.production.ProductionPlan;
 import dev.wareworks.core.production.ProductionPlanInput;
 import dev.wareworks.core.production.ProductionPlanResult;
 import dev.wareworks.core.production.ProductionPlanner;
+import dev.wareworks.core.production.SequentialPlans;
 import dev.wareworks.core.production.StationPattern;
 import dev.wareworks.core.production.SupplyLine;
 import dev.wareworks.core.stock.RestockDecision;
@@ -1809,6 +1813,80 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (level == null || layout == null || amount < 1L || input.patterns().isEmpty())
             return Optional.empty();
         return Optional.of(ProductionPlanner.plan(input, key, amount));
+    }
+
+    /**
+     * Server: what the lines of a craft fetch at a terminal would meet, and what production chains at this aisle's own
+     * machines would make of what the racks cannot give them — measured, and nothing else
+     * ({@code docs/warehouse-system.md} §3.4.5, issue #24, slice 3).
+     * <p>
+     * It is the grid's chain offer, "Oak Planks x8 will be made first": the lines of {@code needs} are walked in its
+     * order — the craft order's line order, the grid's first-cell order, the order its portions are requested in — by
+     * {@link SequentialPlans}, against <b>one</b> snapshot of this aisle and one shared budget. That budget starts at
+     * what a player may have of the racks ({@link StockAvailability#of} for {@code access}, exactly what a portion's
+     * request claims and pays its chain with). Each line takes what is left of its item, as its portion's request
+     * claims the racks first, and when that is less than it needs, the unchanged ADR-032 planner plans the chain for
+     * the rest against what is left then; an accepted chain spends its {@link ProductionPlan#leafDemand()} and the
+     * production orders it would open before the next line is walked. So two ingredients made from the same logs are
+     * never promised the same logs, a chain is never planned with logs a line fetches as logs, and a line whose items
+     * an earlier line's chain uses — a fence gate's planks, after its sticks were made of them — has its own made too,
+     * just as its portion will.
+     * <p>
+     * Every answer is the planner's own and <b>names its item</b>: an accepted chain's promise and its root's whole-run
+     * output, or {@link PlanRefusal#PAUSED} about a stopped ingredient, {@link PlanRefusal#NO_PATTERN} about one no
+     * production station of the aisle makes (also when the aisle has no production station at all),
+     * {@link PlanRefusal#MISSING_INGREDIENT} about the raw material a chain cannot get past ("Oak Log is missing"),
+     * {@link PlanRefusal#ORDERS_BUSY} once the earlier chains have taken the free order slots.
+     * <p>
+     * <b>Side-effect free.</b> No order, no request, no promise and no reservation is created, and nothing is saved:
+     * the craft order's portions later go through {@link #request(BlockPos, ItemKey, int, int, StockAccess,
+     * RequestAcknowledgement, RequestScope)}, which plans the same chain again from the warehouse as it is then. The
+     * preview is a measurement, and the portions are the truth.
+     * <p>
+     * <b>Cost.</b> One {@link #aislePatterns()} and one availability snapshot per call, and at most one plan per line —
+     * nine for a full grid. It is asked only by a terminal's Fetch and the Yes to its question, which are clicks within
+     * the menu's per-tick action budget, and never by a stock push (ADR-032, §3.5.6). A measurement that previews
+     * several times takes one snapshot for all of them ({@link #productionPreviews}).
+     *
+     * @param needs  per ingredient, in line order, what its line asks for; amounts of 0 or less are skipped
+     * @param access whose availability the lines and chains are measured with: {@link StockAccess#PLAYER} for a
+     *               terminal
+     * @return per line what it takes out of the racks, and per line the racks cannot serve in full its chain's
+     *         preview; nothing on a client or without an aisle
+     */
+    public FetchPreview<ItemKey> previewProduction(SequencedMap<ItemKey, Long> needs, StockAccess access) {
+        return productionPreviews(access).preview(needs);
+    }
+
+    /**
+     * {@link #previewProduction} for a whole craft fetch measurement, as the {@link CraftFetchQuestion.Chains} it is
+     * measured with: every preview it asks for is answered from <b>one</b> snapshot of this aisle — its patterns, the
+     * availability, the free order slots — taken at the first preview, so the search for the largest number of crafts
+     * whose chains hold compares answers about the same warehouse and resolves the production stations once. A fetch
+     * the racks serve takes no snapshot, unless they supply exactly the crafts that fit and fewer fit than were asked
+     * for: then one preview one craft past what fits decides whether the room or the stock binds.
+     * <p>
+     * Use it within the call it was made for, never across ticks: a snapshot does not follow the warehouse.
+     *
+     * @param access whose availability the chains are planned with: {@link StockAccess#PLAYER} for a terminal
+     */
+    public CraftFetchQuestion.Chains<ItemKey> productionPreviews(StockAccess access) {
+        Objects.requireNonNull(access, "access");
+        return new CraftFetchQuestion.Chains<>() {
+            /** The aisle as the first preview found it; every later preview of this measurement plans against it. */
+            private @Nullable ProductionPlanInput<ItemKey, RackPosition> snapshot;
+
+            @Override
+            public FetchPreview<ItemKey> preview(SequencedMap<ItemKey, Long> needs) {
+                Objects.requireNonNull(needs, "needs");
+                if (needs.isEmpty() || level == null || level.isClientSide || isRemoved() || layout == null)
+                    return FetchPreview.none();
+                if (snapshot == null)
+                    snapshot = productionPlanInput(aislePatterns(),
+                            StockAvailability.of(stockRules(), access, availabilityLookup()));
+                return SequentialPlans.preview(snapshot, needs);
+            }
+        };
     }
 
     /**

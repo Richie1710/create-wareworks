@@ -29,16 +29,18 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * <p>
  * <b>The Fetch's fields come last</b> (slice 2): the plan refusal behind an ingredient that falls short, by name, and
  * the measured question ({@link CraftFetchQuestion}) — present for a question and for the two measured refusals, and
- * then what the screen's dialog shows: whole crafts asked for, possible and ready, the three bounds, and at most
- * {@value CraftFetchQuestion#MAX_NAMED} named ingredients, whatever the length prefix claims. A craft click's answer
- * costs two zero bytes for them.
+ * then what the screen's dialog shows: whole crafts asked for, possible and ready, the three bounds, the production
+ * total a Yes agrees to, at most {@value CraftFetchQuestion#MAX_NAMED} named ingredients whatever the length prefix
+ * claims — each with what a chain would make of it — and, appended in slice 3, why no chain makes up for the
+ * ingredient that binds, by name, with the item that reason names ({@link CraftFetchQuestion#chainRefusal()},
+ * {@link CraftFetchQuestion#chainAbout()}). A craft click's answer costs two zero bytes for them.
  *
  * @param containerId the menu the answer belongs to; the screen ignores one for another menu
  * @param result      how the action ended
  * @param crafted     how many items a craft made, also before a refusal; for a Fetch, a number of crafts
  * @param about       the item the sentence names, if any ({@link TerminalCraftOutcome#about()})
- * @param refusal     why a production chain could not make up for {@link #about()}; nothing sets it before the grid's
- *                    chain offer
+ * @param refusal     why a production chain could not make up for the ingredient a Fetch falls short of;
+ *                    {@link #about()} is then the item it names ({@link TerminalCraftOutcome#refusal()})
  * @param question    what a Fetch would really bring, measured on the server
  */
 public record TerminalCraftAnswerPayload(int containerId, TerminalCraftResult result, int crafted,
@@ -117,11 +119,17 @@ public record TerminalCraftAnswerPayload(int containerId, TerminalCraftResult re
             buffer.writeVarLong(line.inStock());
             buffer.writeVarLong(line.made());
         }
+        // Appended in slice 3 (the chain offer): why no chain makes up for the bottleneck, by name like every refusal.
+        buffer.writeUtf(question.chainRefusal().map(PlanRefusal::name).orElse(""), MAX_REFUSAL_NAME);
+        buffer.writeBoolean(question.chainAbout().isPresent());
+        question.chainAbout().ifPresent(key -> ItemKey.STREAM_CODEC.encode(buffer, key));
     }
 
     /**
      * A question written by {@link #writeQuestion}. Every number is clamped by {@link CraftFetchQuestion} itself, and
-     * at most {@value CraftFetchQuestion#MAX_NAMED} named lines are read whatever the length prefix claims.
+     * at most {@value CraftFetchQuestion#MAX_NAMED} named lines are read whatever the length prefix claims. A chain
+     * refusal the record would not keep — one without a bottleneck — is dropped by the record as well, and a name this
+     * build does not know reads as none.
      */
     private static Optional<CraftFetchQuestion<ItemKey>> readQuestion(RegistryFriendlyByteBuf buffer) {
         if (!buffer.readBoolean())
@@ -139,8 +147,11 @@ public record TerminalCraftAnswerPayload(int containerId, TerminalCraftResult re
         for (int i = 0; i < count; i++)
             named.add(new CraftFetchQuestion.Line<>(ItemKey.STREAM_CODEC.decode(buffer), buffer.readVarLong(),
                     buffer.readVarLong(), buffer.readVarLong()));
+        Optional<PlanRefusal> chainRefusal = planRefusal(buffer.readUtf(MAX_REFUSAL_NAME));
+        Optional<ItemKey> chainAbout = buffer.readBoolean() ? Optional.of(ItemKey.STREAM_CODEC.decode(buffer))
+                : Optional.empty();
         return Optional.of(new CraftFetchQuestion<>(asked, ready, stockRuns, madeRuns, roomRuns, about, producing,
-                named));
+                named, chainRefusal, chainAbout));
     }
 
     /** The plan refusal by name; a name this build does not know reads as none. */

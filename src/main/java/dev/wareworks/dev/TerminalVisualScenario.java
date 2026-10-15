@@ -52,6 +52,7 @@ import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.ListOrderState;
@@ -1773,7 +1774,7 @@ public final class TerminalVisualScenario implements VisualScenario {
      *     {@link CranePauseReason}, the two "no aisle" and "no crane" lines, the waiting line and every refusal with
      *     the widest amounts they can show, the whole clipboard vocabulary - the progress line in each of its
      *     states, the receipt and every answer the list button can produce (M23) - and every answer a craft click at
-     *     the crafting panel can end in (M32);</li>
+     *     the crafting panel can end in (M32), including a Fetch refused in a production chain's own sentence;</li>
      * <li>the <b>state column</b> of the terminal's order lines, for an open order, for a finished one and behind a
      *     chain's step badge ({@link #orderStateColumns});</li>
      * <li>the production station's <b>order line</b> and its <b>stopped row</b> ({@link #stationRows}).</li>
@@ -1876,6 +1877,11 @@ public final class TerminalVisualScenario implements VisualScenario {
         }
         row.put("craft.done", WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_DONE));
         row.put("craft.grid_locked", WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_GRID_LOCKED));
+        // A Fetch no production chain can help (issue #24, slice 3) is refused in the planner's own sentence, with the
+        // item the chain ran into left out, because it gives way first (WarehouseTerminalScreen#craftFetchAnswerLine).
+        for (PlanRefusal refusal : PlanRefusal.values())
+            row.put("craft.chain_refusal." + refusal.name().toLowerCase(Locale.ROOT),
+                    WarehouseTerminalScreen.craftChainRefusalText(refusal, Component.empty()));
         return new MeasuredRow("terminal status row", ROW_WIDTH, row,
                 STATUS_ROW_TOO_LONG.getOrDefault(language, Set.of()));
     }

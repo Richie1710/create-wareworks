@@ -111,8 +111,9 @@ teleported: every item you put in or take out is carried by the crane, where you
   by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard — a Schematicannon's material
   checklist, or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks
   each entry off as it delivers it. A **crafting grid** folds out beside the screen: lay a recipe with ghost items,
-  press **Fetch** and the crane brings exactly what is missing for the crafts you want, then craft it by hand from
-  what it delivered, without walking to a crafting table.
+  press **Fetch** and the crane brings exactly what is missing for the crafts you want — an ingredient the warehouse
+  lacks it offers to have **made first** at your own machines — then craft it by hand from what it delivered, without
+  walking to a crafting table.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
@@ -314,6 +315,13 @@ recipe in it with **ghost** items — nothing is ordered and nothing moves while
 * Fetch counts whole crafts. If the warehouse holds too little of an ingredient, or the terminal has room for fewer
   crafts once everything already on its way there has arrived, it asks once — "Only x2 of x4 fit here" — and Yes
   fetches exactly those two. If not even one more craft is possible, it says why and orders nothing.
+* **Missing ingredients can be made first.** A cell whose item the warehouse is short of shows a blue **+** when one
+  of your production stations has a pattern for it, and turns red with a red **!** while the safety stop holds that
+  item. Fetch then asks before anything is ordered — "Oak Planks x4 will be made first." — and tells you how many
+  crafts the racks alone could serve ("Without making: x1"). Yes has your machines make the ingredients, exactly as a
+  click would order the chain, and the crane brings them; what a whole run makes beyond that stays in the racks. If no
+  chain can help, Fetch names why, for example "Oak Log is missing". Only the ingredients are made: the recipe in the
+  grid is always yours to craft.
 * When the ingredients have arrived — by Fetch, or the usual way with a click in the list or a clipboard — **click the
   result** to craft once, or **Shift-click** to craft as many as the delivered items allow. The result goes into your
   inventory, or into the terminal when your inventory is full; leftovers such as a cake's empty buckets stay in the

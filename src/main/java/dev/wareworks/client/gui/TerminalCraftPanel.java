@@ -25,6 +25,7 @@ import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.terminal.CountFormat;
 import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.network.TerminalCraftPayload;
@@ -39,6 +40,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.item.ItemStack;
@@ -73,6 +75,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * what the buffer is missing for them by ordinary crane trips. While that order is open its grid is the one every
  * screen at the terminal shows ({@link #adopt}), and no edit of it is taken: the screen says why instead. The progress
  * row under the buttons counts what has arrived, and its cancel mark gives the order up ({@link #cancelAt}).
+ * <p>
+ * <b>Missing ingredients</b> (slice 3). A cell the warehouse cannot fill from its racks says what can be done about
+ * it, from the server's view of the item ({@link TerminalCraftViewPayload.KeyView}): a production station of the aisle
+ * has a pattern for it — the stock list's blue "+", and a Fetch offers to have it made first — or the safety stop
+ * holds the making of it, or nothing makes it at all ({@link CellState}). Only the ingredients are ever made, at the
+ * player's own machines; the grid's recipe is crafted by the player and nobody else (ADR-024, ADR-059).
  */
 public final class TerminalCraftPanel {
     /** Client ticks between a player's last edit of the grid and the preview that tells the server about it. */
@@ -94,6 +102,19 @@ public final class TerminalCraftPanel {
     private static final int COLOR_MISSING = 0x30FF0000;
     /** Behind a cell the warehouse has some of, but too few for the fetch: the screen's gold, faint. */
     private static final int COLOR_SHORT = 0x40FFAA33;
+    /**
+     * Behind a cell whose item the safety stop keeps the warehouse from making (slice 3): a lighter red than a missing
+     * item's, though on the panel's dark slots the two tints are close. What tells them apart at a glance is the red
+     * {@link #STOPPED_MARK} in the count corner, as the blue "+" tells a makeable cell — this one is lifted at the
+     * production station.
+     */
+    private static final int COLOR_STOPPED = 0x50FF5050;
+    /** The mark on a cell a production station could make up for: the stock list's own, for the same meaning. */
+    private static final String MAKEABLE_MARK = "+";
+    /** The mark on a stopped cell, in the window's red: the warehouse would make it, but the safety stop holds it. */
+    private static final String STOPPED_MARK = "!";
+    /** How far in front the mark is drawn: above the item, where the stock list draws its amounts and its "+". */
+    private static final int MARK_Z = 201;
     /** Laid over a result limited crafting keeps this player from, in front of the item. */
     private static final int COLOR_LOCKED = 0x60FF0000;
     /**
@@ -140,11 +161,27 @@ public final class TerminalCraftPanel {
          */
         AVAILABLE,
         /**
-         * Not here, and the warehouse has some, but stock and buffer together are below what the fetch takes of it:
-         * a ghost on gold.
+         * Not here, and the warehouse has some, but stock and buffer together are below what the fetch takes of it,
+         * and nothing in the aisle makes it: a ghost on gold.
          */
         SHORT,
-        /** Not here, and the warehouse has none to give, or the terminal belongs to no warehouse: a ghost on red. */
+        /**
+         * Not here, the warehouse holds too few of it or none for the fetch, but a production station of the aisle
+         * has a pattern for it (slice 3): a ghost with the stock list's blue "+". A Fetch measures the chain that would
+         * make it and asks before anything is made. Never while an open craft order's last portion was refused for it:
+         * then no Fetch can ask anything, and the cell is short or missing with the refusal's sentence.
+         */
+        MAKEABLE,
+        /**
+         * Not here, the warehouse holds too few of it or none for the fetch, and the safety stop holds the making of it
+         * (slice 3): a ghost on red with a red "!" in the count corner. No chain makes it until the stop is lifted at
+         * the production station, so it counts with what the racks hold and nothing more.
+         */
+        STOPPED,
+        /**
+         * Not here, the warehouse has none to give and nothing in the aisle makes it, or the terminal belongs to no
+         * warehouse: a ghost on the recipe book's red.
+         */
         MISSING,
         /** Not here, and the server has not described this item yet (its view is of an earlier grid): a ghost. */
         UNKNOWN
@@ -553,12 +590,14 @@ public final class TerminalCraftPanel {
     /**
      * How every cell is drawn, in row-major order. The buffer's items cover the cells of their key first, in grid
      * order, so a recipe that takes eight planks with five delivered shows five solid cells and three ghosts. A cell
-     * the buffer does not cover is short when the warehouse's stock and the buffer together hold less of its item than
-     * the fetch takes ({@code uses x crafts}, {@link WarehouseTerminalScreen#fetchCrafts()}).
+     * the buffer does not cover is available when the warehouse's stock and the buffer together hold what the fetch
+     * takes of its item ({@code uses x crafts}, {@link WarehouseTerminalScreen#fetchCrafts()}); otherwise it says what
+     * can be done about the rest ({@link #stockState}).
      * <p>
      * While the craft order is open its items are on their way, partly in the crane's head and so neither here nor in
      * stock: those cells are drawn as plain ghosts rather than flickering to short, unless the order's last portion was
-     * refused for that very item.
+     * refused for that very item. Such a cell is never drawn makeable: its portion was just refused, no Fetch can be
+     * pressed while the order is open, and the cell marks the item as what the order is waiting for.
      */
     public List<CellState> cellStates() {
         Map<ItemKey, Long> here = hereCounts();
@@ -584,19 +623,38 @@ public final class TerminalCraftPanel {
                 states.add(CellState.UNKNOWN);
                 continue;
             }
-            if (order.locksGrid() && !refused.equals(Optional.of(key))) {
+            boolean refusedHere = order.locksGrid() && refused.equals(Optional.of(key));
+            if (order.locksGrid() && !refusedHere) {
                 states.add(CellState.AVAILABLE);
                 continue;
             }
-            if (view.noAisle() || described.available() <= 0L) {
+            if (view.noAisle()) {
                 states.add(CellState.MISSING);
                 continue;
             }
-            long needed = uses.getOrDefault(key, 0) * crafts;
-            states.add(here.getOrDefault(key, 0L) + described.available() < needed ? CellState.SHORT
-                    : CellState.AVAILABLE);
+            states.add(stockState(described, here.getOrDefault(key, 0L), uses.getOrDefault(key, 0) * crafts,
+                    refusedHere));
         }
         return List.copyOf(states);
+    }
+
+    /**
+     * What the warehouse says about a cell the buffer does not cover, for a fetch that takes {@code needed} of its item
+     * with {@code here} of it delivered: available when the racks hold the rest; otherwise, in this order, stopped,
+     * makeable or — by what the racks hold — short or missing. The safety stop comes first because a chain for a
+     * stopped item is refused whatever patterns the aisle has ({@link PlanRefusal#PAUSED}, the planner's first test).
+     * An item the open craft order's last portion was refused for ({@code refused}) is never makeable: the order is
+     * waiting for it, and there is no Fetch to ask.
+     */
+    private static CellState stockState(TerminalCraftViewPayload.KeyView described, long here, long needed,
+            boolean refused) {
+        if (described.available() > 0L && here + described.available() >= needed)
+            return CellState.AVAILABLE;
+        if (described.paused())
+            return CellState.STOPPED;
+        if (described.producible() && !refused)
+            return CellState.MAKEABLE;
+        return described.available() > 0L ? CellState.SHORT : CellState.MISSING;
     }
 
     // --- hit tests ---------------------------------------------------------------------------------------------------
@@ -683,11 +741,16 @@ public final class TerminalCraftPanel {
             ItemKey key = grid.cell(cell).orElse(null);
             if (key == null)
                 continue;
-            if (state == CellState.SHORT)
-                fillCell(graphics, x, y, COLOR_SHORT);
-            else if (state == CellState.MISSING)
-                fillCell(graphics, x, y, COLOR_MISSING);
+            int tint = tint(state);
+            if (tint != 0)
+                fillCell(graphics, x, y, tint);
             renderItem(graphics, font, key.toStack(), x + ITEM_INSET, y + ITEM_INSET, state != CellState.HERE, false);
+            if (state == CellState.MAKEABLE)
+                renderCornerMark(graphics, font, MAKEABLE_MARK, WarehouseTerminalScreen.COLOR_PRODUCIBLE,
+                        x + ITEM_INSET, y + ITEM_INSET);
+            else if (state == CellState.STOPPED)
+                renderCornerMark(graphics, font, STOPPED_MARK, WarehouseTerminalScreen.COLOR_ERROR, x + ITEM_INSET,
+                        y + ITEM_INSET);
         }
 
         // The tip, not the texture, is centred on the middle column, so it points at the middle of the result.
@@ -695,6 +758,40 @@ public final class TerminalCraftPanel {
         AllGuiTextures.JEI_DOWN_ARROW.render(graphics, arrowX, top + layout.craftArrowY());
         renderResult(graphics, font, left, top, mouseX, mouseY);
         renderProgress(graphics, font, left, top, mouseX, mouseY);
+    }
+
+    /**
+     * What is laid behind a cell's item, or 0 for nothing: gold for short, the stock list's faint blue for makeable
+     * (its cells look the same for the same meaning), a lighter red for stopped, and the recipe book's red for missing.
+     * Makeable and stopped also carry a mark in the count corner, so neither depends on telling two tints apart.
+     */
+    private static int tint(CellState state) {
+        return switch (state) {
+            case SHORT -> COLOR_SHORT;
+            case MAKEABLE -> WarehouseTerminalScreen.COLOR_PRODUCIBLE_CELL;
+            case STOPPED -> COLOR_STOPPED;
+            case MISSING -> COLOR_MISSING;
+            default -> 0;
+        };
+    }
+
+    /**
+     * A cell's mark, drawn as the stock list draws its "+" on an item the aisle can only make: at three quarters size,
+     * in the corner a stack's count is in — the blue "+" on a makeable cell, the red "!" on a stopped one.
+     *
+     * @param x the item's left edge
+     * @param y the item's top edge
+     */
+    private static void renderCornerMark(GuiGraphics graphics, Font font, String mark, int color, int x, int y) {
+        float scale = WarehouseTerminalScreen.COUNT_SCALE;
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(0.0F, 0.0F, MARK_Z);
+        pose.scale(scale, scale, 1.0F);
+        int right = Math.round((x + ITEM_SIZE) / scale) - font.width(mark);
+        int top = Math.round((y + ITEM_SIZE) / scale) - font.lineHeight;
+        graphics.drawString(font, mark, right, top, color, true);
+        pose.popPose();
     }
 
     /** The result cell, the result in it and the ready count under it; the cell alone while there is no result. */
@@ -840,8 +937,8 @@ public final class TerminalCraftPanel {
 
     /**
      * A grid cell's tooltip: how to fill it while it is empty; otherwise the item, what one craft takes of it and what
-     * is here, what the warehouse could grant of the rest for the fetch, and how to clear it — or, while a craft order
-     * locks the grid, how to change it.
+     * is here, what the warehouse could grant of the rest for the fetch and what can be done about what it cannot
+     * ({@link #stockLines}), and how to clear it — or, while a craft order locks the grid, how to change it.
      */
     public List<Component> cellTooltip(int cell) {
         boolean lockedGrid = screen.isCraftGridLocked();
@@ -859,7 +956,7 @@ public final class TerminalCraftPanel {
         long here = hereCounts().getOrDefault(key, 0L);
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_PER_CRAFT,
                 LangNumberFormat.format(need), LangNumberFormat.format(here)).withStyle(ChatFormatting.GRAY));
-        stockLine(key, need, here).ifPresent(tooltip::add);
+        tooltip.addAll(stockLines(key, need, here));
         tooltip.add(lockedGrid ? lockedLine()
                 : WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CELL_CLEAR)
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
@@ -872,30 +969,50 @@ public final class TerminalCraftPanel {
 
     /**
      * What the warehouse says about the part of the fetch's {@code key} the buffer does not hold — {@code need} per
-     * craft times the amount field's crafts — or nothing when the buffer holds all of it, when the server has not
-     * described the item yet, or while the craft order is bringing it (the progress row counts that), unless the
-     * order's last portion was refused for this very item.
+     * craft times the amount field's crafts — the way {@link #stockState} draws it: what is available, or the shortfall
+     * and then what can be done about it — a production station makes it, and the Fetch will ask first; the safety
+     * stop holds the making of it, in the very sentence a Fetch is refused with; or nothing here makes it. Nothing when
+     * the buffer holds all of it, when the server has not described the item yet, or while the craft order is bringing
+     * it (the progress row counts that), unless the order's last portion was refused for this very item. A producible
+     * item the open order was refused for gets that refusal's sentence instead of the makeable hint — the status row's
+     * "No free order for Oak Planks" — because no Fetch can ask anything while the order is open.
      */
-    private Optional<Component> stockLine(ItemKey key, int need, long here) {
+    private List<Component> stockLines(ItemKey key, int need, long here) {
         long lacking = (long) need * Math.max(1, screen.fetchCrafts()) - here;
         TerminalCraftViewPayload.KeyView described = view.keyView(key).orElse(null);
         if (lacking <= 0L || described == null)
-            return Optional.empty();
+            return List.of();
         TerminalCraftOrderState order = screen.craftOrderState();
-        if (order.locksGrid() && order.refusal().map(TerminalPortionRefusal::about).filter(key::equals).isEmpty())
-            return Optional.empty();
+        Optional<TerminalPortionRefusal> refusedHere = order.locksGrid()
+                ? order.refusal().filter(refusal -> refusal.about().equals(key)) : Optional.empty();
+        if (order.locksGrid() && refusedHere.isEmpty())
+            return List.of();
         if (view.noAisle())
-            return Optional.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE)
+            return List.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE)
                     .withStyle(ChatFormatting.RED));
-        if (described.available() <= 0L)
-            return Optional.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_MISSING)
-                    .withStyle(ChatFormatting.RED));
-        if (described.available() < lacking)
-            return Optional.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_SHORT,
-                    LangNumberFormat.format(described.available()), LangNumberFormat.format(lacking))
+        long available = described.available();
+        if (available >= lacking)
+            return List.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_AVAILABLE,
+                    LangNumberFormat.format(available)).withStyle(ChatFormatting.GRAY));
+        List<Component> lines = new ArrayList<>(2);
+        if (available > 0L)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_SHORT,
+                    LangNumberFormat.format(available), LangNumberFormat.format(lacking))
                     .withStyle(ChatFormatting.GOLD));
-        return Optional.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_AVAILABLE,
-                LangNumberFormat.format(described.available())).withStyle(ChatFormatting.GRAY));
+        if (described.paused())
+            lines.add(fitName(name -> WareworksLang.translateDirect(PlanRefusal.PAUSED.langKey(), name),
+                    key.toStack().getHoverName()).copy().withStyle(ChatFormatting.RED));
+        else if (described.producible())
+            // While the order is open there is no Fetch to ask anything: its own refusal says why the item is not being
+            // made, in the sentence the status row gives.
+            lines.add(refusedHere.isPresent()
+                    ? screen.portionRefusalLine(refusedHere.get()).copy().withStyle(ChatFormatting.RED)
+                    : WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_MAKEABLE)
+                            .withColor(WarehouseTerminalScreen.COLOR_PRODUCIBLE));
+        else if (available <= 0L)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_MISSING)
+                    .withStyle(ChatFormatting.RED));
+        return lines;
     }
 
     /**
@@ -930,10 +1047,11 @@ public final class TerminalCraftPanel {
      * The Fetch button's tooltip, which follows what the button does right now
      * ({@link WarehouseTerminalScreen#craftOrderAction()}): Answer, Resume or Cancel while the craft order is open, one
      * line each; otherwise {@code "Fetch the ingredients for Chest x3"} and one line per item the Fetch would ask for,
-     * topped up against the buffer — gold where the warehouse holds too few of it, red where it holds none — then how
-     * to set the number of crafts. A grid the server answered with no recipe, or with a locked one, shows only that
-     * refusal and the hint: the server refuses such a Fetch before it measures anything. Every line keeps to the
-     * window's row: an item's name gives way first.
+     * topped up against the buffer — in the colour of its cells: gold where the warehouse holds too few of it, blue
+     * where a production station would make up for it, red where it holds none or the safety stop holds the making
+     * of it — then how to set the number of crafts. A grid the server answered with no recipe, or with a locked one,
+     * shows only that refusal and the hint: the server refuses such a Fetch before it measures anything. Every line
+     * keeps to the window's row: an item's name gives way first.
      */
     public List<Component> fetchTooltip() {
         return switch (screen.craftOrderAction()) {
@@ -977,14 +1095,21 @@ public final class TerminalCraftPanel {
         return tooltip;
     }
 
-    /** Grey for an item the warehouse can supply; gold for one it holds too few of; red for one it holds none of. */
-    private ChatFormatting fetchLineStyle(ItemKey key, int amount) {
+    /**
+     * The colour of an item's line in the Fetch tooltip, the one its cells are drawn in ({@link #stockState}): grey for
+     * an item the warehouse can supply; for one it cannot, red while the safety stop holds the making of it, the stock
+     * list's blue while a production station would make it, gold while the racks hold some and red while they hold
+     * none.
+     */
+    private Style fetchLineStyle(ItemKey key, int amount) {
         TerminalCraftViewPayload.KeyView described = describesGrid() ? view.keyView(key).orElse(null) : null;
-        if (described == null)
-            return ChatFormatting.GRAY;
-        if (view.noAisle() || described.available() <= 0L)
-            return ChatFormatting.RED;
-        return described.available() < amount ? ChatFormatting.GOLD : ChatFormatting.GRAY;
+        if (described == null || described.available() >= amount)
+            return Style.EMPTY.withColor(ChatFormatting.GRAY);
+        if (view.noAisle() || described.paused())
+            return Style.EMPTY.withColor(ChatFormatting.RED);
+        if (described.producible())
+            return Style.EMPTY.withColor(WarehouseTerminalScreen.COLOR_PRODUCIBLE);
+        return Style.EMPTY.withColor(described.available() > 0L ? ChatFormatting.GOLD : ChatFormatting.RED);
     }
 
     /**
