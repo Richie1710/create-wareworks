@@ -1565,7 +1565,7 @@ public final class CraftVisualScenario implements VisualScenario {
     }
 
     /** Whether the panel shows the server's result for exactly {@code grid}. */
-    private static boolean previewShows(VisualContext context, CraftGrid<ItemKey> grid, Item result) {
+    static boolean previewShows(VisualContext context, CraftGrid<ItemKey> grid, Item result) {
         if (!(context.minecraft().screen instanceof WarehouseTerminalScreen screen))
             return false;
         TerminalCraftPanel panel = screen.craftPanel();
@@ -1780,7 +1780,7 @@ public final class CraftVisualScenario implements VisualScenario {
     }
 
     /** One item type per chest: several stacks of it, so every recipe has plenty in stock. */
-    private static void fillChest(ServerLevel level, BlockPos chest, ItemStack stack) {
+    static void fillChest(ServerLevel level, BlockPos chest, ItemStack stack) {
         IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, chest, null);
         if (handler == null)
             throw new VisualTestException("the chest at " + chest + " has no item handler");
@@ -2218,7 +2218,7 @@ public final class CraftVisualScenario implements VisualScenario {
     }
 
     /** The panel in one line: grid, ghost, the cells' states, the result and the last answer. */
-    private static String describePanel(WarehouseTerminalScreen screen) {
+    static String describePanel(WarehouseTerminalScreen screen) {
         TerminalCraftPanel panel = screen.craftPanel();
         StringBuilder cells = new StringBuilder();
         for (TerminalCraftPanel.CellState state : panel.cellStates())

@@ -2788,3 +2788,79 @@ you get tired of waiting, and put it back before judging check 160.
     moment, and Fetch offers the chain again (answer No, then repair the shaft; the log the saw was handed comes back as
     planks). **Can you tell a stopped cell from a missing one at a glance — is the red "!" visible at both scales — and
     the "+" on its faint blue from an available cell?**
+
+## AW. JEI's "+" at the terminal (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24), fourth part)
+
+> What the server does with JEI's "+" is measured: the pick — the buffer first, then the stock, then what a station
+> makes, plain items before worn ones, one item per candidate list, missing ingredients that still lay — every refusal,
+> the lock of a running fetch and the laid grid in the view, in `TerminalCraftLayGameTests` and `IngredientPickerTest`,
+> and in the `jei` scenario a real click on JEI's real "+" with JEI 19.8.4.110, 19.19.6.236, 19.21.0.247, 19.57.0.451
+> and 19.64.0.454, in English and German,
+> with the greyed-out "+" while a fetch runs and an item census around every lay. The scenario also checks that JEI's
+> every-tick check lays nothing, that a click lays exactly once and rings one bell, that the terminal comes back from
+> JEI already folded out, and that a fetch finishing behind JEI's open screen reaches the terminal: its stock list
+> updates and the "+" turns usable without JEI closing. What no gate can answer is a dedicated server in survival,
+> Shift on the "+" with a real Shift key, the German at the real scale 6, EMI, and
+> whether a laid recipe and a greyed-out "+" read right to a player.
+>
+> Setup: the warehouse of section AR, with these racks: about 200 spruce planks, 64 oak planks and 16 birch planks,
+> cobblestone, redstone, gunpowder, blaze powder, 32 charcoal and 4 coal, and **no iron ingots**. The client runs with
+> JEI (`./gradlew runClient -Pwareworks.jei`, or the JEI of your pack); the terminal's crafting grid is folded **in**.
+
+268. **The "+" in survival on a dedicated server.** Start `runServer` **without** `-Pwareworks.jei` (a server needs no
+    JEI), join with the JEI client and switch to survival. Open the terminal, hover the Chest in JEI's item list and
+    press **R**: the recipe shows a "+". Click it: JEI's screen closes, the panel folds out, the ring is laid in
+    **spruce planks** — the warehouse holds most of them, whichever planks JEI happened to show — the result shows a
+    Chest, and the status row says "Laid the recipe for Chest" in green with a bell. **Nothing moved**: the crane stands
+    still, "Delivered here" is unchanged and nothing is requested. Open JEI on the Crafting Table, hold a real **Shift**
+    key and click its "+": exactly the same — the table laid, nothing fetched, the amount field as it was. Set x1 and
+    press Fetch: four spruce planks arrive. Then the stock list behind JEI: note the spruce count, drop 64 spruce planks
+    into the warehouse input and at once open JEI on any item, so the crane stores them while JEI's screen is open;
+    close JEI after the crane is done: the stock list shows the new count without a click. If your JEI offers a recipe's
+    "+" from a bookmark beside the terminal (newer JEI versions do), use it once: it lays the same way. Read the server
+    and the client log for errors mentioning `wareworks`, and the client log for JEI's `Recipe transfer handler ...
+    threw an error`. **Does the spruce read as the warehouse being sensible, or as JEI's choice being ignored? Does
+    Shift on the "+" doing nothing more feel right?**
+269. **German at the real scale 6.** On the **5120x1440** monitor in fullscreen with the automatic GUI scale (6, so 854
+    × 240 GUI px) and the game in German, with the panel folded in: open JEI on **Truhe**. The recipe screen fits and
+    the "+" can be clicked. Click it: the panel folds out without the window moving, its title reads **"Werkbank"**, the
+    status row says "Rezept für Truhe gelegt" inside the row, and JEI's item list stays right of the panel. Lay the
+    **Feuerkugel** the same way ("Rezept für Feuerkugel gelegt", with Holzkohle in its coal cell), slow the crane down
+    (a low-speed motor), set x1 and press Fetch; while it runs, open JEI on Truhe: the "+" is greyed out, and hovering
+    it shows JEI's "Bewege Items" and, in red, "Zum Ändern erst das Holen abbrechen", every line on screen. Then on a
+    1280 × 960 window at GUI scale 4 (320 × 240 GUI px), with the panel folded in, use the "+" once more: the terminal
+    comes back from JEI already folded out, 27 px left of where it was before JEI opened, and **nothing moves after
+    JEI closes** — no window that pops open or slides under the cursor a moment later. **Does "gelegt" read right
+    beside "fertigen" (your craft) and "herstellen" (your machines)? Does the terminal coming back wider and 27 px to
+    the left at 320 px feel like the "+" did it, or like a jump?**
+270. **EMI without JEI.** Put EMI for NeoForge 1.21.1 into `run/mods` and start `./gradlew runClient` **without**
+    `-Pwareworks.jei` (take EMI out again afterwards). The game starts with no errors mentioning `wareworks`. Open the
+    terminal and fold the panel out: **does EMI's item list keep clear of the panel** at 1920 × 1080 at GUI scale 4 and
+    at the largest GUI scale? Look the Chest up in EMI: there is no working "+" for the terminal — EMI's fill button is
+    missing or greyed out, and pressing it changes nothing in the grid. Lay the chest by hand, press Fetch and craft:
+    everything works as without a recipe viewer. Only if you want to know more: add JEI next to EMI (`-Pwareworks.jei`)
+    and note whether EMI then offers a "+" for the terminal and what it does; nothing is promised there.
+271. **A recipe with a missing ingredient.** Look up the **Piston** in JEI and press its "+": it is usable — not greyed
+    out, no red slots — and the grid is laid with spruce planks, cobblestone, redstone and an iron ingot. The iron cell
+    is drawn on the recipe book's red with "None available, and nothing here makes it", the result shows a Piston, the
+    Fetch tooltip's iron line is red, and with x1 Fetch answers "Can't fetch: not enough Iron Ingot" and orders nothing.
+    Then empty "Delivered here", take every plank out of the racks and leave about 16 **birch** logs in them (no oak
+    logs), put the production station of section AV on the rack wall and set its pattern to **1 Birch Log → 4 Birch
+    Planks** instead of oak (its saw cuts any log), so that nothing holds or makes oak. Lay the Chest with "+": all
+    eight cells are **birch** planks with the blue **+**, because your saw makes birch — not oak, the tag's first
+    entry, which a "+" without this rule would lay — and Fetch for x1 offers "Birch Planks x8 will be made first."
+    (answer No). Last, a recipe JEI made up: look up a **Tipped Arrow** and press "+" on one of its recipes: eight
+    arrows around a lingering potion are laid, every cell the racks cannot cover is red, and the result shows the
+    tipped arrow, although the recipe JEI showed has an id the server does not know. Put the planks back and the
+    station's pattern back to 1 Oak Log → 4 Oak Planks afterwards. **Is it clear that the "+" laid a plan and fetched
+    nothing, and that the red cell is what you still need?**
+272. **The locked grid, and a "+" that comes back by itself.** Slow the crane down (a low-speed motor), with planks in
+    the racks. Lay a chest by hand, set x3 and press Fetch. While it runs, open JEI on the Chest: the "+" is shown but
+    greyed out, and hovering it reads "Move Items" and, in red, "Cancel the fetch to change the recipe". Click it, with
+    and without Shift: nothing happens and JEI's screen stays open. Keep JEI open until the fetch has finished: the "+"
+    turns usable **without closing JEI** (the `jei` scenario checks this too, with a fetch of one fire charge). Press
+    Escape: the progress row says "Delivered: click the result to craft" and the plank count in the stock list is the
+    current one. Press Fetch for a crafting table x4, give it up at once with
+    the red **x**, and open JEI on the Chest again: the "+" is usable, and a click lays the chest over the table. **Does
+    "Move Items" above the red reason read as if the "+" would move items, and is the red line enough to tell you what
+    to do?**

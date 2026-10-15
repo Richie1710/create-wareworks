@@ -81,6 +81,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * has a pattern for it — the stock list's blue "+", and a Fetch offers to have it made first — or the safety stop
  * holds the making of it, or nothing makes it at all ({@link CellState}). Only the ingredients are ever made, at the
  * player's own machines; the grid's recipe is crafted by the player and nobody else (ADR-024, ADR-059).
+ * <p>
+ * <b>A recipe from a recipe viewer</b> (slice 4, ADR-063). A viewer's transfer button hands its recipe over as nine
+ * lists of candidate items ({@link TerminalRecipeLay}); the server picks one item per cell, checks the grid against its
+ * own recipes and sends the grid it accepted back with the crafting view, which the panel then takes like an edit
+ * ({@link #adoptLay}). Laying moves nothing and orders nothing, exactly like laying a grid by hand.
  */
 public final class TerminalCraftPanel {
     /** Client ticks between a player's last edit of the grid and the preview that tells the server about it. */
@@ -212,6 +217,11 @@ public final class TerminalCraftPanel {
     /** The last Fetch this panel sent, or {@code null} before the first one. */
     @Nullable
     private SentFetch lastFetch;
+    /**
+     * The number of the last recipe a recipe viewer laid that this panel has seen ({@link #adoptLay}); 0 before the
+     * first. The menu numbers its lays from 1, and panel and menu live exactly as long as each other.
+     */
+    private int adoptedLay;
 
     /**
      * @param grid   the grid this player last laid at this terminal, or an empty one
@@ -306,6 +316,62 @@ public final class TerminalCraftPanel {
         }
         grid = cells;
         onEdit.accept(grid);
+        previewIn = NO_PREVIEW;
+        send(TerminalCraftPayload.Action.PREVIEW);
+    }
+
+    /**
+     * A recipe a recipe viewer laid into this panel, as the server accepted it (slice 4,
+     * {@link TerminalCraftViewPayload#lay()}): the grid becomes the one the server picked from the viewer's candidates,
+     * remembered like an edit, and is announced at once with the recipe the server matched as the hint, so the panel
+     * shows — and a click crafts — exactly that recipe, even for a grid two recipes match. The server already resolved
+     * it while laying, so that preview costs it no second lookup. A ghost on the cursor has nowhere to go any more and
+     * is dropped.
+     * <p>
+     * <b>Each lay is taken once.</b> Every view carries the menu's last accepted lay for as long as the menu is open,
+     * under a number that grows with each one, and the panel keeps the highest number it has seen. The lay is read from
+     * there and never from the view's own grid, which can still be an older one: a preview of this panel that reached
+     * the server after the lay is answered for its own grid.
+     * <p>
+     * <b>Not while a craft order locks the grid.</b> The order's grid is the one every screen at the terminal shows and
+     * the one its player is to craft, so the lay is not taken and the status row says why, as for any other edit of the
+     * locked grid. It counts as seen all the same, so it cannot replace the order's grid later, when the order ends.
+     *
+     * @return whether the grid became the laid one
+     */
+    boolean adoptLay(TerminalCraftViewPayload.Lay lay) {
+        Objects.requireNonNull(lay, "lay");
+        if (!lay.isPresent() || lay.number() <= adoptedLay)
+            return false;
+        adoptedLay = lay.number();
+        if (lay.cells().isEmpty() || refusedByLock())
+            return false;
+        ghost = null;
+        previewIn = NO_PREVIEW;
+        if (!lay.cells().equals(grid)) {
+            grid = lay.cells();
+            onEdit.accept(grid);
+        }
+        PacketDistributor.sendToServer(new TerminalCraftPayload(menu.containerId, TerminalCraftPayload.Action.PREVIEW,
+                grid, lay.recipe()));
+        return true;
+    }
+
+    /** The number of the last laid recipe this panel has seen, taken or not; 0 before the first (the dev harness). */
+    public int adoptedLay() {
+        return adoptedLay;
+    }
+
+    /**
+     * Sends a preview still waiting for its delay at once, and nothing when none waits: a recipe viewer is about to
+     * lay a recipe ({@link TerminalRecipeLay#lay}), and the server reads the grid this panel shows before the lay and
+     * not after it. Otherwise the waiting preview would follow the lay as soon as the screen ticks again, and the
+     * server would answer a grid the lay is about to replace; and a lay the server refuses still leaves the grid on
+     * screen with its answer.
+     */
+    void flushPreview() {
+        if (previewIn == NO_PREVIEW)
+            return;
         previewIn = NO_PREVIEW;
         send(TerminalCraftPayload.Action.PREVIEW);
     }

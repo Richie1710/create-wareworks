@@ -36,3 +36,11 @@ type = "required"
 versionRange = "[${ponder_version},)"
 ordering = "AFTER"
 side = "BOTH"
+
+# Optional and client only: with JEI installed, its "+" lays a crafting recipe into the warehouse terminal's grid.
+[[dependencies.${mod_id}]]
+modId = "jei"
+type = "optional"
+versionRange = "${jei_version_range}"
+ordering = "NONE"
+side = "CLIENT"

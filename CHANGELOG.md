@@ -51,6 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and two missing ingredients made from the same logs are never promised the same logs. When no chain can help, Fetch
   names the reason, for example "Oak Log is missing". Only the ingredients are made: the recipe in the grid is never
   made by the warehouse, and you still craft it by hand
+- **JEI's "+" lays a recipe into the grid.** With JEI installed, look a crafting recipe up in JEI while the terminal's
+  screen is open and press its **+**: the recipe is laid into the crafting grid, the grid folds out, and the status
+  line says "Laid the recipe for Chest". Nothing is ordered and nothing moves; press Fetch for the ingredients. Where an
+  ingredient may be any of several items, such as any planks, the terminal picks one: first what has already been
+  delivered into it, then what the warehouse holds most of, then what your machines can make, and never a damaged,
+  enchanted or renamed item while a plain one would do. Every cell of one ingredient gets the same item, so a chest is
+  eight planks of one kind. A missing ingredient never stops the **+**: the grid shows what is missing, as for a recipe
+  you lay by hand. While a fetch runs, the **+** is greyed out and says why, and Shift on it does the same as a plain
+  click. JEI is optional and only needed on the client: without it, everything works exactly as before. Every JEI
+  for Minecraft 1.21.1 works (19.8.4.110 or newer). EMI is not supported directly: without JEI, EMI's **+** does not
+  work at the terminal
 - **A note for servers running Create: Schematic Checker.** In mod-whitelist mode the checker removes Wareworks blocks
   that carry block data from uploaded schematics — every rack bay, in the report — so they show in the hologram but
   are missing from the Schematicannon's checklist and from the print. Whitelist mode is the checker's default. The
@@ -112,6 +123,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the list at once asked about its next entry, the other player's screen still showed the first question, and a
   Yes there was taken as a Yes to the new one. Every screen now gets the new question, and a Yes only ever counts for
   the question it was given to
+- **The terminal's screen stays up to date while JEI covers it.** With JEI installed, opening a recipe in JEI from the
+  terminal's screen and coming back could leave the stock list and the status line showing what they showed when JEI
+  opened, until each of them changed again. The terminal now keeps receiving the warehouse's updates behind JEI's
+  recipe screen
 
 ## [0.10.0-beta] - 2026-10-14
 

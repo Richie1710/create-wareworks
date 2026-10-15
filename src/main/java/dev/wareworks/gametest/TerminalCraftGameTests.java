@@ -1016,6 +1016,8 @@ public final class TerminalCraftGameTests {
             buffer.writeBoolean(false);
             buffer.writeBoolean(false);
             buffer.writeVarInt(0);
+            // The laid recipe (slice 4): none.
+            buffer.writeVarInt(0);
         });
         helper.assertTrue(eightCellView.cells().isEmpty(),
                 "a view of eight cells describes no grid that names an item");

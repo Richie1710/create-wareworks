@@ -110,10 +110,10 @@ teleported: every item you put in or take out is carried by the crane, where you
   delivers it into the terminal. Its grid is ordered by what there is most of, by what **you** request most often, or
   by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard — a Schematicannon's material
   checklist, or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks
-  each entry off as it delivers it. A **crafting grid** folds out beside the screen: lay a recipe with ghost items,
-  press **Fetch** and the crane brings exactly what is missing for the crafts you want — an ingredient the warehouse
-  lacks it offers to have **made first** at your own machines — then craft it by hand from what it delivered, without
-  walking to a crafting table.
+  each entry off as it delivers it. A **crafting grid** folds out beside the screen: lay a recipe with ghost items (or
+  in one click with **JEI**'s **+**, if you play with JEI), press **Fetch** and the crane brings exactly what is missing
+  for the crafts you want — an ingredient the warehouse lacks it offers to have **made first** at your own machines —
+  then craft it by hand from what it delivered, without walking to a crafting table.
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
@@ -183,6 +183,7 @@ mod in beta.
 | Minecraft | 1.21.1 |
 | NeoForge | 21.1.250 or newer |
 | Create | 6.0.10 |
+| JEI (optional, client only) | any JEI for 1.21.1 (19.8.4.110 or newer), if installed |
 
 ## Installation
 
@@ -304,6 +305,12 @@ recipe in it with **ghost** items — nothing is ordered and nothing moves while
   it stays on the cursor, so one pick fills the whole ring of a chest. **Esc** puts it down.
   **Shift + right-click** an item to drop it straight into the next free cell. Right-click a cell to clear it, or
   press **Clear** for the whole grid.
+* **With JEI**, look a crafting recipe up in JEI while the terminal is open and press its **+**: the whole recipe is
+  laid at once and the grid folds out, again without ordering anything. Where an ingredient may be any of several
+  items, such as any planks, the terminal prefers what has already been delivered into it, then what the warehouse
+  holds most of, then what your machines can make — never a damaged, enchanted or renamed item while a plain one would
+  do — and every cell of one ingredient gets the same item. A missing ingredient does not stop the **+**: the grid
+  shows what is missing. While a fetch runs, the **+** is greyed out.
 * The result appears under the grid, with **xN**: how many crafts the items delivered here allow right now. A cell
   drawn solid is here; a faded one is not, and its tooltip says how many the warehouse has.
 * **Fetch** the ingredients: set how many crafts you want in the amount field and press **Fetch**, the play button
@@ -628,6 +635,19 @@ its goggles.
 
 ## Compatibility
 
+### JEI and EMI
+
+Wareworks needs no recipe viewer. **JEI** is an optional extra: with any JEI for Minecraft 1.21.1 (19.8.4.110 or
+newer; tested with 19.8.4.110, 19.19.6.236, 19.21.0.247, 19.57.0.451 and 19.64.0.454), its **+** on a crafting recipe
+lays the recipe into a warehouse terminal's crafting grid while the terminal's screen is open (see **Craft at the
+terminal**). Create 6.0.10 is built against JEI 19.21.0.247, and with an older JEI Create's own JEI integration does
+not load; Wareworks' **+** works either way. Without JEI nothing changes. JEI is only needed on the client: a server needs none, and a player
+without it lays recipes by hand. Shift on the **+** does the same as a plain click, because laying a recipe moves no
+items; the amount field says how many crafts Fetch brings.
+
+**EMI** is not supported directly: Wareworks has no EMI plugin, so with EMI and no JEI, EMI's **+** does not work at
+the terminal, and the crafting grid works exactly as without a recipe viewer.
+
 ### Create: Schematic Checker (for server operators)
 
 A server that runs **Create: Schematic Checker** has to list Wareworks in `config/CSC/config.toml`. The checker's
@@ -672,6 +692,9 @@ Requires a JDK 21 (`JAVA_HOME` must point to it).
 ./gradlew runRobustnessTest  # chunk unload, save and rejoin, blocks broken mid-job
 ./gradlew runShowcase        # builds a playable showcase world into run/showcase/saves
 ```
+
+The development runs start without JEI. Add `-Pwareworks.jei` to run with the JEI the mod is compiled against, or
+`-Pwareworks.jei=<version>` for another JEI for Minecraft 1.21.1.
 
 On Windows use `gradlew.bat`. To play the showcase world, copy `run/showcase/saves/wareworks_showcase` into `run/saves`,
 start `./gradlew runClient` and pick **"Wareworks Showcase"**.

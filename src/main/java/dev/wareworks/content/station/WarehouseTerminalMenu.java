@@ -17,6 +17,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.crafting.IngredientPicker;
 import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
@@ -25,6 +26,7 @@ import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.StockDiff;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalCraftLayPayload;
 import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftPayload;
@@ -90,6 +92,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * state is pushed to every screen open at the terminal, grid and lock included, and the question one of its portions
  * raises goes out like the clipboard order's, with {@link RequestScope#CRAFT}.
  * <p>
+ * <b>A recipe laid from a recipe viewer</b> (issue #24, slice 4) arrives as {@code TerminalCraftLayPayload} through
+ * {@link #submitCraftLay}, under the same rules and the same budget, and at most {@value #MAX_LAYS_PER_TICK} per tick
+ * on top: the menu picks one item per cell
+ * ({@link IngredientPicker}, {@link TerminalCraftLay}), checks the grid against the recipe manager like a preview, and
+ * hands the grid it accepted back with the crafting view ({@link TerminalCraftViewPayload#lay()}).
+ * <p>
  * <b>Slot count.</b> The number of buffer slots is the one the server announced in the menu's extra data, on both
  * sides. The handler behind them is wrapped in a {@link FixedSlotsItemHandler} of exactly that size, because a
  * terminal's own buffer may have another one (grown past the config by save data, or shrunk by {@code /data merge}
@@ -106,10 +114,19 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     public static final int REFRESH_INTERVAL_TICKS = 10;
     /** Requests of one menu that are answered in the same tick; a player can click at most once per tick. */
     public static final int MAX_REQUESTS_PER_TICK = 8;
+    /**
+     * Recipes a recipe viewer may lay into one menu's grid per tick, on top of {@link #MAX_REQUESTS_PER_TICK}: a lay
+     * picks among up to nine times {@value IngredientPicker#MAX_CANDIDATES} candidates, and a player presses a
+     * viewer's button once per click.
+     */
+    public static final int MAX_LAYS_PER_TICK = 1;
     /** Slots of the terminal's list slot: one clipboard (M23, issue #19). */
     public static final int LIST_SLOTS = 1;
 
-    /** Game time of {@link #lastPushGameTime} and {@link #requestBudgetGameTime} before the first one. */
+    /**
+     * Game time of {@link #lastPushGameTime}, {@link #requestBudgetGameTime} and {@link #layBudgetGameTime} before the
+     * first one.
+     */
     private static final long NEVER = Long.MIN_VALUE;
 
     /** Set during the super constructor (see the class comment): no initializers here. */
@@ -125,6 +142,8 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     private boolean pushPending;
     private long requestBudgetGameTime;
     private int requestsThisTick;
+    private long layBudgetGameTime;
+    private int laysThisTick;
     @Nullable
     private TerminalScreenStatus lastStatus;
     @Nullable
@@ -172,6 +191,12 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     private TerminalCraftViewPayload lastCraftView;
     /** How often this menu has resolved a recipe for its preview: one per changed grid, for the GameTests. */
     private int craftPreviewLookups;
+    /**
+     * The last recipe a recipe viewer laid into this menu's grid and the server accepted, which every crafting view
+     * carries from then on (issue #24, slice 4), and how many were accepted. Transient like the grid.
+     */
+    private TerminalCraftViewPayload.Lay craftLay;
+    private int craftLays;
 
     /** Client: Registrate's menu factory, with the extra data the server wrote when the screen was opened. */
     public WarehouseTerminalMenu(MenuType<?> type, int id, Inventory inv, RegistryFriendlyByteBuf extraData) {
@@ -231,10 +256,14 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         // An empty grid is what the screen starts from, so a player who never opens the panel costs no packet for it.
         lastCraftView = TerminalCraftViewPayload.none(containerId);
         craftPreviewLookups = 0;
+        craftLay = TerminalCraftViewPayload.Lay.NONE;
+        craftLays = 0;
         lastPushGameTime = NEVER;
         pushPending = true;
         requestBudgetGameTime = NEVER;
         requestsThisTick = 0;
+        layBudgetGameTime = NEVER;
+        laysThisTick = 0;
     }
 
     @Override
@@ -670,6 +699,109 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         markDirty();
     }
 
+    // --- a recipe laid from a recipe viewer (issue #24, slice 4) ---------------------------------------------------
+
+    /**
+     * Server: a {@code TerminalCraftLayPayload} — a recipe viewer's transfer button — resolved against the menu
+     * {@code player} really has open (issue #24, slice 4, {@code docs/warehouse-system.md} §3.4.5).
+     * <p>
+     * Checked like {@link #submitCraft}, and empty (with nothing done) at the first check that fails: the payload has
+     * the one shape a decoder lets through ({@link TerminalCraftLayPayload#wellFormed()}: nine cells of at most
+     * {@value TerminalCraftLayPayload#MAX_CANDIDATES} candidates); the player has a terminal menu open whose id
+     * matches; that menu belongs to the terminal the payload names; the player is not a {@link FakePlayer}; this menu
+     * has not answered {@value #MAX_REQUESTS_PER_TICK} actions in the current tick, a lay counting as one; and it has
+     * taken no lay in the current tick ({@value #MAX_LAYS_PER_TICK} per tick, refused ones included).
+     * <p>
+     * <b>What a lay costs.</b> More than a preview: the pick reads up to nine times
+     * {@value IngredientPicker#MAX_CANDIDATES} candidate keys and asks the aisle about the ones it compares, before the
+     * one recipe lookup a preview also makes. The candidates are bounded on the way in — at most
+     * {@value TerminalCraftLayPayload#MAX_BYTES} bytes, so a client cannot make the keys large, and at most
+     * {@value IngredientPicker#MAX_SAME_HASH} distinct keys per hash code kept by the picker, so it cannot make them
+     * collide — and one lay per tick bounds how often it is paid. A player presses a viewer's button once per click.
+     * Everything else — reach, the lock of a running craft order, the grid — is checked by {@link #layRecipe}.
+     *
+     * @return what the lay became, for the acting player; empty for everything dropped
+     */
+    public static Optional<TerminalCraftOutcome> submitCraftLay(@Nullable Player player,
+            @Nullable TerminalCraftLayPayload payload) {
+        if (player == null || player.level() == null || player.level().isClientSide || payload == null
+                || !payload.wellFormed())
+            return Optional.empty();
+        if (!(player.containerMenu instanceof WarehouseTerminalMenu menu) || menu.containerId != payload.containerId())
+            return Optional.empty();
+        if (menu.contentHolder == null || !menu.contentHolder.getBlockPos().equals(payload.terminal()))
+            return Optional.empty();
+        if (player instanceof FakePlayer)
+            return Optional.empty();
+        if (!menu.takeRequestBudget() || !menu.takeLayBudget())
+            return Optional.empty();
+        return Optional.of(menu.layRecipe(player, payload.cells(), payload.hint(), payload.foldOut()));
+    }
+
+    /**
+     * Server: lays a recipe into this menu's crafting grid — one item per cell, picked from {@code cells}' candidates
+     * — and makes it the grid the panel shows (issue #24, slice 4).
+     * <p>
+     * In this order, and with nothing changed by any refusal:
+     * <ol>
+     * <li>the player must have this menu open and still be able to use the terminal, otherwise
+     * {@link TerminalCraftResult#OUT_OF_REACH};</li>
+     * <li>no craft order may be open at the terminal: its grid is the one every screen there shows, locked, until it
+     * ends or is given up ({@link TerminalCraftResult#ALREADY_RUNNING});</li>
+     * <li>at least one cell must name a candidate ({@link TerminalCraftResult#GRID_EMPTY});</li>
+     * <li>{@link IngredientPicker} picks one key per cell — what the buffer holds first, then what the aisle can hand a
+     * player here, then what its production stations make, a plain item before a worn one, cells of the same
+     * ingredient alike, and the recipe's first candidate where nothing tells them apart, so a missing ingredient
+     * still lays;</li>
+     * <li>the picked grid must match a crafting recipe of the server's ({@link TerminalCrafting#preview}, the panel's
+     * own lookup, with the viewer's recipe as the hint), otherwise {@link TerminalCraftResult#NOT_LAID}, the lay's
+     * own refusal, which says that the viewer's recipe was not laid rather than that the grid on screen makes nothing.
+     * A recipe id from the client is never trusted alone: a grid that matches nothing is refused whatever the hint
+     * names. Cells of another shape than a payload has, which only an in-process caller can hand over, are refused the
+     * same way.</li>
+     * </ol>
+     * The accepted grid becomes this menu's grid, with the recipe it matched as its hint and the preview already
+     * resolved, so the screen's preview of it costs no second lookup. It goes out with the next push as
+     * {@link TerminalCraftViewPayload#lay()} under a new number, together with {@code foldOut}. Nothing moves and
+     * nothing is requested or ordered: the buffer, the stock and the aisle's requests stay exactly as they were.
+     *
+     * @param cells   per cell, row-major, the candidates its ingredient accepts in the recipe's order
+     * @param hint    the recipe the viewer showed; a hint only
+     * @param foldOut whether the player asked for the panel to fold out
+     * @return {@link TerminalCraftResult#LAID} naming the result, or the refusal
+     */
+    public TerminalCraftOutcome layRecipe(Player player, List<? extends List<ItemKey>> cells,
+            Optional<ResourceLocation> hint, boolean foldOut) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(cells, "cells");
+        Objects.requireNonNull(hint, "hint");
+        if (contentHolder == null || contentHolder.isRemoved())
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        Level level = contentHolder.getLevel();
+        if (level == null || level.isClientSide || player.containerMenu != this || !contentHolder.canPlayerUse(player))
+            return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
+        if (contentHolder.hasOpenCraftOrder())
+            return TerminalCraftOutcome.of(TerminalCraftResult.ALREADY_RUNNING);
+        // A shape the payload decoder refuses never gets this far from the network; a caller in-process is held to it
+        // all the same, as a lay that matches nothing.
+        if (!TerminalCraftLayPayload.wellFormed(cells))
+            return TerminalCraftOutcome.of(TerminalCraftResult.NOT_LAID);
+        if (cells.stream().allMatch(List::isEmpty))
+            return TerminalCraftOutcome.of(TerminalCraftResult.GRID_EMPTY);
+        CraftGrid<ItemKey> picked = IngredientPicker.pick(cells,
+                TerminalCraftLay.supply(bufferHandler, bufferSlots, contentHolder.controller()));
+        TerminalCrafting.Preview preview = TerminalCrafting.preview(level, player, picked, hint);
+        craftPreviewLookups++;
+        if (preview.recipe().isEmpty())
+            return TerminalCraftOutcome.of(TerminalCraftResult.NOT_LAID);
+        craftCells = picked;
+        craftHint = preview.recipe();
+        craftPreview = preview;
+        craftLay = new TerminalCraftViewPayload.Lay(++craftLays, picked, preview.recipe(), foldOut);
+        markDirty(); // the laid grid goes out with the next tick instead of waiting for the interval
+        return new TerminalCraftOutcome(TerminalCraftResult.LAID, 0, ItemKey.fromStack(preview.result()));
+    }
+
     /** The server's reading of the grid as last resolved; {@link TerminalCrafting.Preview#NONE} for an empty grid. */
     public TerminalCrafting.Preview craftPreview() {
         return craftPreview;
@@ -687,13 +819,21 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      */
     public TerminalCraftViewPayload craftView() {
         if (contentHolder == null || contentHolder.isRemoved())
-            return TerminalCraftViewPayload.none(containerId);
+            return TerminalCraftViewPayload.none(containerId, craftLay);
         return craftView(contentHolder.producibleKeys());
     }
 
-    /** How often this menu has looked a recipe up for its preview (the GameTests: at most one per change). */
+    /**
+     * How often this menu has looked a recipe up for its preview (the GameTests: at most one per change), a laid
+     * recipe's check included.
+     */
     public int craftPreviewLookups() {
         return craftPreviewLookups;
+    }
+
+    /** The last recipe a recipe viewer laid into this menu's grid; {@link TerminalCraftViewPayload.Lay#NONE} before. */
+    public TerminalCraftViewPayload.Lay craftLay() {
+        return craftLay;
     }
 
     /** Resolves the preview for the current grid and hint, and pushes it with the next tick. */
@@ -727,6 +867,20 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             requestsThisTick = 0;
         }
         return ++requestsThisTick <= MAX_REQUESTS_PER_TICK;
+    }
+
+    /**
+     * Server: whether this menu may take another recipe viewer's lay in the current tick, counting it
+     * ({@value #MAX_LAYS_PER_TICK} per tick, {@link #submitCraftLay}). Without a level there is no tick to count in;
+     * such a lay is refused by {@link #layRecipe} anyway.
+     */
+    private boolean takeLayBudget() {
+        long now = gameTime();
+        if (now != layBudgetGameTime) {
+            layBudgetGameTime = now;
+            laysThisTick = 0;
+        }
+        return ++laysThisTick <= MAX_LAYS_PER_TICK;
     }
 
     // --- sync ------------------------------------------------------------------------------------------------------
@@ -854,7 +1008,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      */
     private TerminalCraftViewPayload craftView(Set<ItemKey> producible) {
         if (craftCells.isEmpty())
-            return TerminalCraftViewPayload.none(containerId);
+            return TerminalCraftViewPayload.none(containerId, craftLay);
         Optional<WarehouseControllerBlockEntity> controller = contentHolder.controller();
         List<TerminalCraftViewPayload.KeyView> keys = new ArrayList<>(CraftGrid.SIZE);
         for (ItemKey key : craftCells.perCraft().keySet()) {
@@ -864,7 +1018,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
                     .orElseGet(() -> new TerminalCraftViewPayload.KeyView(key, 0L, false, false)));
         }
         return new TerminalCraftViewPayload(containerId, craftCells, craftPreview.recipe(), craftPreview.result(),
-                craftPreview.locked(), controller.isEmpty(), keys);
+                craftPreview.locked(), controller.isEmpty(), keys, craftLay);
     }
 
     /**

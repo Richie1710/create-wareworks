@@ -13,15 +13,15 @@ import dev.wareworks.network.TerminalResultPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
 import dev.wareworks.network.TerminalUsagePayload;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.Screen;
 
 /**
  * Where the terminal payloads land on the client ({@code docs/architecture.md} ADR-019).
  * <p>
  * The server sends them to exactly one player, and only while that player has a terminal menu open, but a payload can
- * still arrive one tick after the screen was closed or replaced. Every update is therefore matched against the screen
- * that is open <b>right now</b> and its container id; anything else is dropped without a trace.
+ * still arrive one tick after the screen was closed or replaced. Every update is therefore matched against the terminal
+ * screen of the menu that is open <b>right now</b> and its container id; anything else is dropped without a trace.
+ * That screen may be covered by a recipe viewer's recipe screen, which leaves the menu open, and still gets its
+ * updates then ({@link WarehouseTerminalScreen#forMenu}, issue #24, slice 4).
  * <p>
  * Client only: this class is named from {@code network.WareworksNetwork} inside handler bodies that never run on a
  * dedicated server.
@@ -113,11 +113,12 @@ public final class TerminalScreenUpdates {
         screen(payload.containerId()).ifPresent(screen -> screen.onCraftOrder(payload));
     }
 
-    /** The open terminal screen of the menu {@code containerId}, if that is what the player is looking at. */
+    /**
+     * The terminal screen of the menu {@code containerId}: the one the player is looking at, or the one a recipe
+     * viewer's recipe screen covers while the menu stays open ({@link WarehouseTerminalScreen#forMenu}, issue #24,
+     * slice 4).
+     */
     private static Optional<WarehouseTerminalScreen> screen(int containerId) {
-        Screen screen = Minecraft.getInstance().screen;
-        if (screen instanceof WarehouseTerminalScreen terminal && terminal.getMenu().containerId == containerId)
-            return Optional.of(terminal);
-        return Optional.empty();
+        return WarehouseTerminalScreen.forMenu(containerId);
     }
 }

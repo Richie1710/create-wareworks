@@ -16,13 +16,18 @@ import org.junit.jupiter.api.Test;
  * button, which count as success, and that every one of them travels by its own name and has its own sentence.
  */
 class TerminalCraftResultTest {
-    /** What a craft click can end in (slice 1); four of them answer a Fetch too, with the same sentence. */
+    /**
+     * What a craft click can end in (slice 1), four of which answer a Fetch too, with the same sentence, and a recipe
+     * laid from a recipe viewer or refused (slice 4), which fetches nothing either.
+     */
     private static final Set<TerminalCraftResult> CRAFT = EnumSet.of(TerminalCraftResult.CRAFTED,
             TerminalCraftResult.NO_RECIPE, TerminalCraftResult.NOT_IN_BUFFER, TerminalCraftResult.NO_ROOM,
-            TerminalCraftResult.LOCKED, TerminalCraftResult.OUT_OF_REACH, TerminalCraftResult.GRID_EMPTY);
+            TerminalCraftResult.LOCKED, TerminalCraftResult.OUT_OF_REACH, TerminalCraftResult.GRID_EMPTY,
+            TerminalCraftResult.LAID, TerminalCraftResult.NOT_LAID);
     private static final Set<TerminalCraftResult> SUCCESS = EnumSet.of(TerminalCraftResult.CRAFTED,
             TerminalCraftResult.STARTED, TerminalCraftResult.NOTHING_TO_FETCH, TerminalCraftResult.ANSWERED,
-            TerminalCraftResult.DECLINED, TerminalCraftResult.RESUMED, TerminalCraftResult.CANCELLED);
+            TerminalCraftResult.DECLINED, TerminalCraftResult.RESUMED, TerminalCraftResult.CANCELLED,
+            TerminalCraftResult.LAID);
 
     @Test
     void fetchValuesAreExactlyTheOnesNoCraftEndsIn() {

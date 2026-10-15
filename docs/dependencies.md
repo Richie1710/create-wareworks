@@ -2,7 +2,8 @@
 
 Last verified: 2026-09-17 against Create 6.0.10 and NeoForge 21.1.250; the NeoForge chunk-ticket row was verified on
 2026-09-27 against the same NeoForge version, and the Create clipboard row on 2026-10-02 against Create 6.0.10-280, and the
-Create package rows on 2026-10-03 against the same Create build.
+Create package rows on 2026-10-03 against the same Create build, and the JEI rows on 2026-10-15 against the JEI API sources
+19.21.0.247, the JEI 19.57.0.451 binaries and runs on JEI 19.8.4.110 to 19.64.0.454.
 
 Update this file whenever a dependency version changes.
 
@@ -28,7 +29,8 @@ Update this file whenever a dependency version changes.
 | `dev.engine-room.flywheel:flywheel-neoforge-1.21.1` | 1.0.6 | localRuntime | `https://maven.createmod.net` |
 | `dev.engine-room.vanillin:vanillin-neoforge-1.21.1` | 1.1.3-41 | localRuntime | `https://maven.createmod.net` |
 
-Runtime dependency ranges declared in `neoforge.mods.toml`: `create [6.0.10,6.1)`, `ponder [1.0.82,)`.
+Runtime dependency ranges declared in `neoforge.mods.toml`: `create [6.0.10,6.1)`, `ponder [1.0.82,)`, and the optional,
+client-only `jei [19.8.4.110,)` (see [Optional integration: JEI](#optional-integration-jei)).
 
 ### How the Create version was determined
 
@@ -44,6 +46,62 @@ Runtime dependency ranges declared in `neoforge.mods.toml`: `create [6.0.10,6.1)
 The published Create POM declares its optional integrations as runtime dependencies: JEI, Curios, CC: Tweaked, Farmer's Delight, FTB Chunks/Teams/Library, JourneyMap, **Architectury**. Architectury is explicitly forbidden for this project, and none of the others are needed. Ponder's POM also pins Flywheel 1.0.4. Therefore Create and Ponder are non-transitive and the real requirements are listed explicitly.
 
 In production, Create's full jar bundles Registrate, Ponder and Flywheel via JarJar, so Wareworks does **not** JarJar them itself.
+
+## Optional integration: JEI
+
+| Artifact | Version | Scope | Repository |
+|---|---|---|---|
+| `mezz.jei:jei-1.21.1-common-api` | **19.21.0.247** (`jei_version`) | compileOnly | `https://maven.blamejared.com` (`includeGroup 'mezz.jei'`) |
+| `mezz.jei:jei-1.21.1-neoforge-api` | 19.21.0.247 | compileOnly | `https://maven.blamejared.com` |
+| `mezz.jei:jei-1.21.1-neoforge` (the whole mod) | `jei_version`, or any other with `-Pwareworks.jei=<version>` | localRuntime, **only** with `-Pwareworks.jei` | `https://maven.blamejared.com` |
+
+JEI is an **optional, client-only** integration (issue #24: JEI's "+" lays a crafting recipe into the warehouse terminal's
+grid). The mod compiles against JEI's API and never bundles or requires it:
+
+* **Version.** The mod compiles against 19.21.0.247, the JEI that Create 6.0.10-280's POM names (runtime scope). The
+  loader never reads a POM, and Create's own `neoforge.mods.toml` declares no `jei` dependency at all.
+  `neoforge.mods.toml` declares `jei` as `optional`, `side = "CLIENT"`, range `jei_version_range` (`[19.8.4.110,)`:
+  every JEI published for 1.21.1, 19.8.4.110 being the oldest on JEI's maven). An installed JEI outside the range would
+  be a **loading error**, not a warning: `ModSorter#verifyDependencyVersions` collects it,
+  `DependencyResolutionResult#buildErrorMessages` turns it into
+  `ModLoadingIssue.error("fml.modloadingissue.missingdependency.optional")` (read in the bytecode of FML loader 4.0.45).
+  That is why the floor is not Create's pin: the "+" works on older JEIs too (run on 19.8.4.110, 19.19.6.236,
+  19.21.0.247, 19.57.0.451 and 19.64.0.454), and a floor at 19.21.0.247 would have stopped every client with an older
+  JEI (ADR-063). Below 19.21.0.247 Create's own JEI plugin fails to load (`CreateJEI` needs `ISubtypeInterpreter`,
+  logged by JEI as `Failed to load`), which is Create's matter. Nothing is reported when JEI is absent, and the
+  `side = "CLIENT"` entry is not checked on a dedicated server. The CurseForge upload lists JEI as an optional relation
+  (`optional('jei')` in `publishMods`).
+* **Dev runs have no JEI by default**, because the `tooltips` scenario and every other gate assume a game without it.
+  `-Pwareworks.jei` (empty or `true`) adds JEI `jei_version` to every run; `-Pwareworks.jei=<version>` adds another
+  published JEI for 1.21.1 (tested: 19.8.4.110, 19.19.6.236, 19.57.0.451, 19.64.0.454); `-Pwareworks.jei=false` or no
+  property adds none. `localRuntime` is
+  neither in the jar nor in any published metadata.
+* **`transitive = false`**, like every Create artifact: JEI 19.57's NeoForge POM names `jei-1.21.1-common`, `-lib`, `-gui`
+  and the optional `mezz_config_gui` (19.21.0.247's declares no dependencies), but the NeoForge jar of either version
+  already contains all of JEI's packages; 19.57 jar-in-jars its required `mezz_config` library itself.
+* **Code boundary.** Only `client.compat.jei` may name a JEI type: `WareworksJeiPlugin`, `TerminalCraftTransferHandler`
+  and `JeiRuntimeAccess`, the only JEI-related classes in the jar. JEI finds `WareworksJeiPlugin` by its `@JeiPlugin`
+  annotation in NeoForge's scan data (`ModFileScanData`) and creates it reflectively; the mod itself never references
+  the package, so without JEI none of it is ever loaded. The one reference from outside is the dev-only `jei` visual
+  scenario (`dev`, not in the jar), which calls `JeiRuntimeAccess` only after checking that JEI is loaded. The
+  JEI-free half of the "+" (`client.gui.TerminalRecipeLay`, `TerminalCraftLayPayload`, the server's pick) names no JEI
+  type. Only `mezz.jei.api.*` is used, never `mezz.jei.common`/`library`/`gui` (ADR-063); the `jei` scenario finds
+  JEI's "+" by reflection over class simple names and names no JEI type either. Because the API is `compileOnly`, the
+  compiler would accept a JEI import anywhere; the JUnit text scan `client.compat.jei.JeiBoundaryTest` fails the build
+  on one outside `client.compat.jei`, on a use of that package outside it and the `jei` scenario, and on any import of
+  JEI below `mezz.jei.api`.
+* **Checked at runtime** by the `jei` visual scenario (`./gradlew runVisualTest -Pwareworks.visualTest=jei
+  -Pwareworks.jei`, or `-Pwareworks.jei=<version>`), with a real click on JEI's "+": passed with 19.8.4.110,
+  19.19.6.236, 19.21.0.247, 19.57.0.451 and 19.64.0.454. Below 19.21.0.247 it skips the recipe screen's parent check
+  (`IRecipesGui#getParentScreen` is younger) and the panel's exclusion area (it reaches JEI through Create's plugin),
+  and logs both. It fails at once in a run without JEI.
+* **API sources** for lookups: `scripts/extract-api-sources.sh` extracts the common and NeoForge API sources of
+  `jei_version` into `build/api-src/jei/`.
+* **19.21 against 19.57.** In the API the mod uses, 19.57 only adds members or turns abstract ones into defaults. One
+  deprecation matters: JEI 19.52.0 deprecated `IRecipeTransferHandler#transferRecipe(C, R, IRecipeSlotsView, Player,
+  boolean, boolean)` for removal and added a default `transferRecipe(IRecipeTransferContext, boolean)` that calls it.
+  19.57 calls the new method, 19.21 the old one, so a handler that implements the six-argument method works on both. A
+  future JEI that removes the old method would need the handler to move to the new one.
 
 ## Create / NeoForge APIs in use or planned
 
@@ -125,6 +183,13 @@ Classes in this table are verified only to exist. Method signatures must be chec
 * Expected `WARN` lines with stack traces (`IllegalStateException: test inventory fails at slot 2`) from `dev.wareworks.content.crane.head.TransferContexts` in the GameTest log (`Inventory at ... failed while extracting ...; keeping the N items it handed out before`, `... failed while inserting ...; N ... did not go in`): `craneheadsurvivesthrowinginventory` uses an inventory that throws part way through a transfer on purpose.
 * Expected `WARN` lines from `dev.wareworks.content.crane.head.InventoryGrabber` (`Handling head save holds more than 16 item types or 4096 items; the rest was not loaded`) and from `dev.wareworks.content.crane.CraneExecution` (`Stacker crane at ... held 4096 items that belong to no job; dropped them at the dock`, `job ... expected 32 held items but the head holds 12; following the head`) in the GameTest log: `cranecraftedheadisboundedandspilled` and `cranejobfollowsacraftedhead` load crafted head data on purpose (M5 release audit).
 * After a Wareworks update changes the config spec (new keys, but also only a changed comment), NeoForge logs once `Configuration file ...wareworks-server.toml is not correct. Correcting` and rewrites the file; existing values are kept. The line does not appear on the next start with the same spec.
+* Harmless with JEI 19.21.0.247 in a dev run (`-Pwareworks.jei`): `ItemStackListFactory: Item Group has no display items and no search tab display items. ... Operator Utilities` (vanilla's operator tab is empty while operator items are hidden).
+* Harmless in a dev run directory that ran JEI 19.21 before JEI 19.57 (`-Pwareworks.jei=19.57.0.451`): MezzConfig, the
+  config library 19.57 brings, reads the old `config/jei/jei-client.ini` and `jei-debug.ini` and logs
+  `[modloading-worker-0/ERROR] [net.mezzdev.config.file.ConfigSerializer/]: '<key>' is not a valid config key for config
+  category '<category>'` for keys 19.57 no longer has (`buttonNavigationVisibility`, `drawBackground`,
+  `crashingTestItemsEnabled`), then `[WARN] ... Legacy MezzConfig source '...' had N problem(s)`. Seen in `run/visual`
+  after switching versions; it is dev state under `run/`, not the mod's.
 * Create's version checker reports `OUTDATED Current: 6.0.10 Target: 6.0.10+mc1.21.1`. This is a version-string format mismatch, not an actual update.
 * A dev run whose world was last saved with a different `mod_version` logs once `CommonHooks/WP: The following mods have version differences that were not resolved: wareworks (version X -> Y)`. Seen in a `runServer` run, because `run/server/world` was created while `mod_version` was briefly `0.1.0` before it was reverted to `0.1.0-alpha`. It is a property of the saved dev world (`run/` is gitignored), not of the mod or the release jar; deleting the dev world removes it.
 * `runVisualTest` (dev tooling, ADR-014): the last pass leaves Flywheel's client config in `run/visual/config/flywheel-client.toml` at backend `off`; the next run selects `DEFAULT` again before its first pass, and other run directories are not affected. A failed run stops the game on purpose through a crash report (`run/visual/crash-reports/crash-*-client.txt`, description "Wareworks visual smoke test failed: ..."), so the Gradle task exits non-zero.

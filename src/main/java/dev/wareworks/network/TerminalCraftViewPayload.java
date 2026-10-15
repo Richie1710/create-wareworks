@@ -33,6 +33,14 @@ import net.minecraft.world.item.ItemStack;
  * it, whether a production station of the aisle makes it, and whether the safety stop holds it. What is already
  * <i>here</i> in the buffer the screen counts itself from the synced buffer slots, so that part reacts at once.
  * <p>
+ * <b>It answers a laid recipe</b> (issue #24, slice 4). When a recipe viewer lays a recipe into the panel
+ * ({@link TerminalCraftLayPayload}), the server picks one item per cell and checks the grid against its recipe manager;
+ * the grid it accepted comes back here, in {@link #lay()}, for the screen to adopt. It is a field of its own rather
+ * than {@link #cells()}, because the screen's next preview — sent when the viewer hands the screen back — may name the
+ * grid the panel showed before, and the view then answers that grid while the lay still has to be adopted. A lay
+ * carries a number that grows with every lay this menu accepted, so a screen adopts each one once, and a lay equal to
+ * an earlier one is still a new view and pushed.
+ * <p>
  * Pushed with the terminal's other screen updates and compared <b>by value</b>, so a panel whose grid and aisle did not
  * change costs no packet, and an empty grid costs no lookup at all. Reading is bounded at {@value CraftGrid#SIZE} cells
  * and {@value CraftGrid#SIZE} key entries whatever the length prefixes claim, which is also the most a grid can name.
@@ -47,9 +55,11 @@ import net.minecraft.world.item.ItemStack;
  *                    numbers are all zero, and crafting from the buffer still works
  * @param keys        one entry per distinct item of the grid, in the order the grid first names them; empty for an
  *                    empty grid
+ * @param lay         the last recipe a recipe viewer laid into this menu's grid and the server accepted;
+ *                    {@link Lay#NONE} until one was
  */
 public record TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells, Optional<ResourceLocation> recipe,
-                                       ItemStack result, boolean locked, boolean noAisle, List<KeyView> keys)
+                                       ItemStack result, boolean locked, boolean noAisle, List<KeyView> keys, Lay lay)
         implements CustomPacketPayload {
     /**
      * What the aisle says about one item of the grid.
@@ -64,6 +74,56 @@ public record TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells
         public KeyView {
             Objects.requireNonNull(key, "key");
             available = Math.max(0L, available);
+        }
+    }
+
+    /**
+     * A recipe a recipe viewer laid into the panel, as the server accepted it (issue #24, slice 4): the grid it picked
+     * from the viewer's candidates, which matches a crafting recipe of the server's.
+     * <p>
+     * The screen adopts {@link #cells()} as its grid when {@link #number()} is one it has not adopted yet, folds the
+     * panel out when {@link #foldOut()} asks for it, and previews the grid with {@link #recipe()} as the hint — which
+     * the server then answers without looking the recipe up again, because the lay already did.
+     *
+     * @param number  how many lays this menu has accepted, this one included; 0 for {@link #NONE}. It only grows, so a
+     *                screen tells a new lay from one it already adopted
+     * @param cells   the grid the server picked, row-major
+     * @param recipe  the crafting recipe that grid matched on the server
+     * @param foldOut whether the player asked for the panel to fold out ({@link TerminalCraftLayPayload#foldOut()})
+     */
+    public record Lay(int number, CraftGrid<ItemKey> cells, Optional<ResourceLocation> recipe, boolean foldOut) {
+        /** No recipe was laid into this menu's grid. */
+        public static final Lay NONE = new Lay(0, CraftGrid.empty(), Optional.empty(), false);
+
+        public Lay {
+            Objects.requireNonNull(cells, "cells");
+            Objects.requireNonNull(recipe, "recipe");
+            number = Math.max(0, number);
+        }
+
+        /** Whether this is a lay at all rather than {@link #NONE}. */
+        public boolean isPresent() {
+            return number > 0;
+        }
+
+        /** Writes the number, and the rest only for a lay that is present: no lay costs one byte. */
+        private void write(RegistryFriendlyByteBuf buffer) {
+            buffer.writeVarInt(number);
+            if (!isPresent())
+                return;
+            TerminalCraftPayload.writeCells(buffer, cells);
+            TerminalCraftPayload.writeRecipeId(buffer, recipe);
+            buffer.writeBoolean(foldOut);
+        }
+
+        /** Reads what {@link #write} wrote; a grid of another size reads as the empty grid, which nothing adopts. */
+        private static Lay read(RegistryFriendlyByteBuf buffer) {
+            int number = buffer.readVarInt();
+            if (number <= 0)
+                return NONE;
+            CraftGrid<ItemKey> cells = TerminalCraftPayload.readCells(buffer).orElseGet(CraftGrid::empty);
+            Optional<ResourceLocation> recipe = TerminalCraftPayload.readRecipeId(buffer);
+            return new Lay(number, cells, recipe, buffer.readBoolean());
         }
     }
 
@@ -83,12 +143,24 @@ public record TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells
         result = Objects.requireNonNull(result, "result").copy();
         Objects.requireNonNull(keys, "keys");
         keys = List.copyOf(keys.size() <= MAX_KEYS ? keys : keys.subList(0, MAX_KEYS));
+        Objects.requireNonNull(lay, "lay");
+    }
+
+    /** A view that answers no laid recipe: the shape of slices 1 to 3. */
+    public TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells, Optional<ResourceLocation> recipe,
+            ItemStack result, boolean locked, boolean noAisle, List<KeyView> keys) {
+        this(containerId, cells, recipe, result, locked, noAisle, keys, Lay.NONE);
     }
 
     /** The view of an empty grid: no recipe, nothing to say about any item. */
     public static TerminalCraftViewPayload none(int containerId) {
+        return none(containerId, Lay.NONE);
+    }
+
+    /** The view of an empty grid that still answers {@code lay}, the last recipe laid into this menu. */
+    public static TerminalCraftViewPayload none(int containerId, Lay lay) {
         return new TerminalCraftViewPayload(containerId, CraftGrid.empty(), Optional.empty(), ItemStack.EMPTY, false,
-                false, List.of());
+                false, List.of(), lay);
     }
 
     /**
@@ -98,7 +170,7 @@ public record TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells
     private TerminalCraftViewPayload(RegistryFriendlyByteBuf buffer) {
         this(buffer.readVarInt(), TerminalCraftPayload.readCells(buffer).orElseGet(CraftGrid::empty),
                 TerminalCraftPayload.readRecipeId(buffer), ItemStack.OPTIONAL_STREAM_CODEC.decode(buffer),
-                buffer.readBoolean(), buffer.readBoolean(), readKeys(buffer));
+                buffer.readBoolean(), buffer.readBoolean(), readKeys(buffer), Lay.read(buffer));
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
@@ -115,6 +187,8 @@ public record TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells
             buffer.writeBoolean(key.producible());
             buffer.writeBoolean(key.paused());
         }
+        // Appended in slice 4, after everything slices 1 to 3 wrote.
+        lay.write(buffer);
     }
 
     private static List<KeyView> readKeys(RegistryFriendlyByteBuf buffer) {
@@ -145,21 +219,23 @@ public record TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells
     }
 
     /**
-     * By value, including the cells and the result: {@link ItemStack} compares by identity, and a view rebuilt from an
-     * unchanged grid must equal the one already sent, or the menu would push it again on every refresh. A grid that
-     * changed always gives a view that differs, so the panel is told about every grid the server read.
+     * By value, including the cells, the result and the lay: {@link ItemStack} compares by identity, and a view
+     * rebuilt from an unchanged grid must equal the one already sent, or the menu would push it again on every refresh.
+     * A grid that changed always gives a view that differs, and so does every accepted lay, so the panel is told about
+     * every grid the server read and every recipe it laid.
      */
     @Override
     public boolean equals(Object other) {
         return this == other || other instanceof TerminalCraftViewPayload view && containerId == view.containerId
                 && locked == view.locked && noAisle == view.noAisle && cells.equals(view.cells)
-                && recipe.equals(view.recipe) && ItemStack.matches(result, view.result) && keys.equals(view.keys);
+                && recipe.equals(view.recipe) && ItemStack.matches(result, view.result) && keys.equals(view.keys)
+                && lay.equals(view.lay);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(containerId, cells, recipe, ItemStack.hashItemAndComponents(result), result.getCount(),
-                locked, noAisle, keys);
+                locked, noAisle, keys, lay);
     }
 
     @Override

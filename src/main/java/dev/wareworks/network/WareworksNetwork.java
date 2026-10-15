@@ -113,8 +113,15 @@ public final class WareworksNetwork {
      * {@link TerminalCraftAnswerPayload} gained two fields after its named lines — why no production chain makes up
      * for the ingredient that binds, by name, and the item that reason names — which a reader of the old shape would
      * stop before and leave in the buffer. No new payload type.
+     * <p>
+     * <b>{@code "12"} is slice 4 of issue #24</b> (a recipe viewer's transfer button lays a recipe into the crafting
+     * panel): the new {@link TerminalCraftLayPayload} (client → server), which an older server would not understand;
+     * one field appended to {@link TerminalCraftViewPayload} — the grid the server laid, with its number, recipe and
+     * whether to fold the panel out — which a reader of the old shape would stop before and leave in the buffer; and
+     * the values {@code LAID} and {@code NOT_LAID} of {@code TerminalCraftResult}, by name, which an older client
+     * would read as a plain refusal.
      */
-    public static final String VERSION = "11";
+    public static final String VERSION = "12";
 
     private WareworksNetwork() {
     }
@@ -154,6 +161,8 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalCraftOrder);
         registrar.playToClient(TerminalCraftOrderStatePayload.TYPE, TerminalCraftOrderStatePayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalCraftOrderState);
+        registrar.playToServer(TerminalCraftLayPayload.TYPE, TerminalCraftLayPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalCraftLay);
         registrar.playToClient(ProductionScreenPayload.TYPE, ProductionScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionScreen);
         registrar.playToServer(ProductionPatternPayload.TYPE, ProductionPatternPayload.STREAM_CODEC,
@@ -256,6 +265,24 @@ public final class WareworksNetwork {
     private static void onTerminalCraftOrder(TerminalCraftOrderPayload payload, IPayloadContext context) {
         Player player = context.player();
         Optional<TerminalCraftOutcome> outcome = WarehouseTerminalMenu.submitCraftOrder(player, payload);
+        if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
+            return;
+        PacketDistributor.sendToPlayer(serverPlayer, TerminalCraftAnswerPayload.of(payload.containerId(),
+                outcome.get()));
+    }
+
+    /**
+     * A recipe viewer laid a recipe into the crafting panel of the player's open terminal screen (issue #24, slice 4).
+     * <p>
+     * The payload is only a hint: the menu the player really has open decides which terminal is meant and must be the
+     * terminal the payload names, the terminal re-validates reach and the lock of a running craft order, the server
+     * picks one item per cell from the payload's candidates by its own buffer and stock, and the picked grid is checked
+     * against the server's recipe manager. Nothing moves and nothing is requested. The answer goes to the acting player
+     * only; the laid grid itself follows with the menu's next push ({@link TerminalCraftViewPayload#lay()}).
+     */
+    private static void onTerminalCraftLay(TerminalCraftLayPayload payload, IPayloadContext context) {
+        Player player = context.player();
+        Optional<TerminalCraftOutcome> outcome = WarehouseTerminalMenu.submitCraftLay(player, payload);
         if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
             return;
         PacketDistributor.sendToPlayer(serverPlayer, TerminalCraftAnswerPayload.of(payload.containerId(),

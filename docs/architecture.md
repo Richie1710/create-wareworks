@@ -145,7 +145,10 @@ dev.wareworks
 │   │                          chain offer also the search for the largest fetch whose chains hold, through its Chains
 │   │                          seam, and the item one craft more falls short of) and BufferFit (whether a demand still
 │   │                          fits the buffer once every open request has put its items down, and the most crafts
-│   │                          that do)
+│   │                          that do); for JEI's "+" (ADR-063): IngredientPicker (one key per cell out of a recipe
+│   │                          viewer's candidate lists: cells of one list alike, a plain item first, then the buffer,
+│   │                          the stock, what a station makes and the recipe's order, in whole crafts; never fails;
+│   │                          at most four distinct keys per hash code, so a client's keys cost linear work)
 │   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
@@ -323,7 +326,9 @@ dev.wareworks
 │                              second list order, with the grid it was started for, and its NBT form),
 │                              TerminalCraftOrderState (the bounded state every screen at the terminal and the goggles
 │                              get) and TerminalPortionRefusal (why either order's last portion was refused, never
-│                              saved)
+│                              saved); a recipe laid from JEI (ADR-063): TerminalCraftLay (what the terminal tells the
+│                              picker — its buffer read once, the aisle's player stock and producible items asked on
+│                              demand, and vanilla's plain-item rule; reads, never writes)
 │   └── display                the five Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -361,7 +366,10 @@ dev.wareworks
 │                              ADR-062): TerminalCraftOrderPayload (client → server: fetch, answer naming its
 │                              question, decline, resume or cancel; moves no item) and TerminalCraftOrderStatePayload
 │                              (server → client: the order's progress and the grid every screen at the terminal shows
-│                              and locks).
+│                              and locks); TerminalCraftLayPayload (client → server, ADR-063: a recipe viewer's recipe
+│                              as nine lists of at most 64 candidate items in at most 32 767 bytes, the terminal, a
+│                              recipe hint and the fold-out; the grid the server picked goes back as
+│                              TerminalCraftViewPayload#lay).
 │                              Everything else syncs through block entity update packets
 ├── client
 │   ├── gui                    WarehouseTerminalScreen (the terminal's screen) and TerminalScreenUpdates (where the
@@ -372,7 +380,17 @@ dev.wareworks
 │   │                          crafting panel: the client-owned ghost grid, the ghost cursor, the debounced preview,
 │   │                          the cell states and the hit tests, M32, issue #24, ADR-059; since ADR-062 also the
 │   │                          order button, its tooltip, the progress row with its cancel mark and the grid a
-│   │                          running fetch locks, and since its chain offer the makeable and stopped cells)
+│   │                          running fetch locks, and since its chain offer the makeable and stopped cells;
+│   │                          since ADR-063 the laid grid it adopts once per lay); TerminalRecipeLay (the
+│   │                          JEI-free client half of a recipe viewer's "+": whether it may be used, the candidate
+│   │                          lists, the lay payload) and WarehouseTerminalScreen#forMenu (the terminal screen a
+│   │                          payload belongs to, also while a recipe viewer's screen covers it, ADR-063)
+│   ├── compat                 integrations with optional mods
+│   │   └── jei                the optional JEI integration, the only package that names a JEI type (ADR-063):
+│   │                          WareworksJeiPlugin (@JeiPlugin, found by JEI, referenced by nothing in the mod),
+│   │                          TerminalCraftTransferHandler (JEI's "+" on a crafting recipe over the terminal) and
+│   │                          JeiRuntimeAccess (JEI's runtime behind methods that name no JEI type, for the dev
+│   │                          harness's jei scenario)
 │   ├── render                 StackerCraneRenderer (animated crane, SafeBlockEntityRenderer without Flywheel visual),
 │   │                          WareworksPartialModels (crane partials), CraneModelLayout (model dimensions, pose math) (M4);
 │   │                          WarehouseInterfaceRenderer (Create's filter renderer with the view distance the mod's
@@ -485,7 +503,12 @@ dev.wareworks
 │                              a saw until the craft works, an offer declined (and a portion's question declined),
 │                              a refusal naming the raw material, a stopped ingredient and the click that lifts it,
 │                              previews that change nothing, two chains sharing two logs, and a fence gate whose
-│                              chains follow its lines and never ask again after the Yes (M32, issue #24, ADR-062)
+│                              chains follow its lines and never ask again after the Yes (M32, issue #24, ADR-062);
+│                              TerminalCraftLayGameTests: a recipe laid from a recipe viewer — the buffer, then the
+│                              stock, then what a station makes, plain items first, a shapeless recipe in JEI's
+│                              cells, missing ingredients that still lay, refused while a craft order runs and
+│                              without side effects for every hostile case, the laid grid in the view and the
+│                              payload's codec (M32, issue #24, ADR-063)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -562,6 +585,12 @@ dev.wareworks
 │                              machine — a production station, a Mechanical Arm and a Mechanical Crafter — whose
 │                              nuggets the grid offers to have made, the makeable cells, the offer answered Yes and
 │                              the chain run at that machine, M32, issue #24),
+│                              JeiVisualScenario (JEI's "+" over the terminal with the real JEI and a real click, in
+│                              English and German: a stock-picked chest, a shapeless fire charge, the "+" greyed out
+│                              while a fetch locks the grid and usable again once it ends behind JEI's screen, a
+│                              buffer-picked chest, JEI's every-tick check laying nothing, one lay per click, the
+│                              terminal back from JEI already folded out, and JEI's window ending where the panel
+│                              does; it needs -Pwareworks.jei and fails at once without JEI, M32, ADR-063),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -4484,7 +4513,8 @@ while production keeps "herstellen").
    and two open menus with a chest laid in their grids, one of them broadcast every tick as a real player's would be.
    The item census never moves, nothing is requested, the crane stays idle and each menu resolved its recipe once.
 
-*Consequences:* `WareworksNetwork.VERSION` is `"9"` (`"10"` since ADR-062, `"11"` since its chain offer): three payloads
+*Consequences:* `WareworksNetwork.VERSION` is `"9"` (`"10"` since ADR-062, `"11"` since its chain offer, `"12"` since
+JEI's "+" of ADR-063): three payloads
 were added (`TerminalCraftPayload`, `TerminalCraftViewPayload`, `TerminalCraftAnswerPayload`), with their enums
 travelling by name. The terminal window is 298 GUI px wide while the crafting panel is folded out, inside the 320 px
 floor at every GUI scale, and no slot of the menu moved. Crafting saves nothing new (the craft order of ADR-062 does).
@@ -4494,7 +4524,7 @@ are still exactly true. The README and the manual checklist say instead that War
 at a terminal you can craft by hand from what the crane delivered. Fetching the ingredients for a laid recipe and
 offering to make a missing one first followed as the issue's next two slices (ADR-062 and its chain offer); neither adds
 a second place where a recipe runs, because both only ask for deliveries and for production of the ingredients at the
-player's own machines.
+player's own machines. JEI's "+" (ADR-063), the last slice, adds none either: its one lookup is the menu's preview.
 
 *Correction to ADR-024:* its sentence "Nothing in Wareworks executes a recipe" now reads "Nothing in Wareworks executes
 a recipe on its own", and its *Reason* paragraph stands as written: a station that crafts, a virtual crafting step and a
@@ -4804,10 +4834,10 @@ requests, both given up share-only.
   crafts and one question are what "fetch the ingredients" can honestly promise.
 * **A new job kind, queue or controller-side order**: the duplication ADR-036 already refused.
 
-*Consequences:* `WareworksNetwork.VERSION` is `"10"` (`"11"` since the chain offer, below). `TerminalCraftOrderPayload`
-(client → server: fetch, answer, decline, resume or cancel) and `TerminalCraftOrderStatePayload` (server → client) are
-new, and `TerminalCraftAnswerPayload` gained the fetch's measured question and a plan refusal, which the chain offer
-fills.
+*Consequences:* `WareworksNetwork.VERSION` is `"10"` (`"11"` since the chain offer, below, `"12"` since JEI's "+" of
+ADR-063). `TerminalCraftOrderPayload` (client → server: fetch, answer, decline, resume or cancel) and
+`TerminalCraftOrderStatePayload` (server → client) are new, and `TerminalCraftAnswerPayload` gained the fetch's
+measured question and a plan refusal, which the chain offer fills.
 `RequestScope` has a third value. The terminal saves one compound more (`CraftOrder`, see *Persistence & sync*), and
 its goggles show one line more while a fetch is open. The three config keys `terminalListOpenRequests`,
 `terminalListIntervalTicks` and `terminalListStallTicks` now govern both orders. At the defaults the two orders
@@ -4973,6 +5003,211 @@ tooltip became "None available, and nothing here makes it", and four lang keys w
 be made first", "Without making" and its hint), German keeping "herstellen" for production and "fertigen" for the
 player's craft.
 
+### ADR-063 — JEI is an optional, client-only, compile-only dependency, and its "+" only hands the server candidates (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24))
+
+*Context:* The last part of issue #24 is JEI's "+" on a crafting recipe: it lays that recipe into the terminal's
+crafting panel, so a player takes a recipe from where they already look recipes up instead of stamping ghosts cell by
+cell. Wareworks had no dependency on a recipe viewer, and four things made the "+" a decision rather than a handler:
+1. **Most Create packs run JEI, not all do.** Some run EMI, some nothing, and a dedicated server never shows a viewer's
+   screens. The mod must build, start, run and pass every gate without JEI, and the `tooltips` scenario even assumes a
+   game without it: it keeps a line free for the one JEI would add (ADR-057).
+2. **JEI names ingredients, the grid holds items.** A chest's ring is "any planks", eleven items in vanilla and many
+   more in a pack, while a grid cell is one exact `ItemKey` and never a tag (ADR-059).
+3. **A recipe id from JEI proves nothing.** JEI draws replacements for vanilla's special recipes (tipped arrows,
+   shulker box colouring, a banner on a shield) under ids it makes up, which no server's recipe manager knows; a
+   datapack or a `/reload` can make the server's recipes differ from what the client was sent; and a client can send
+   any id at all.
+4. **A missing ingredient is the normal case.** The panel is the plan a Fetch works from, and the recipes a player looks
+   up are mostly the ones they cannot make yet.
+
+The design study `run/i24-design-synthesis.md` (section 12, item 4) left every JEI name unverified. The project owner
+settled the scope on 2026-10-14: the "+" is slice 4 of the issue, compiled against JEI 19.21.0.247 only, with a JEI in
+the dev runs only on request (`-Pwareworks.jei`), and no EMI plugin. Before any code, `scripts/extract-api-sources.sh`
+was extended to extract JEI's API sources, every JEI name used was checked against them, the public API of JEI
+19.57.0.451 was diffed against them, and the behaviour that matters (slot order, when the handler is called, how the
+recipe screen hands the terminal back, where JEI's item list ends) was read in the bytecode of both full JEI jars.
+
+*Decision:*
+* **Compile-only, optional, client-only, never bundled.** The two API jars (`jei-1.21.1-common-api`, `-neoforge-api`)
+  are `compileOnly` and `transitive = false`, like every Create artifact, from JEI's own maven behind a content filter
+  that lets nothing but `mezz.jei` through (`dependencies.md`). `neoforge.mods.toml` declares `jei` as `optional`,
+  `side = "CLIENT"`, range `[19.8.4.110,)`, and the CurseForge upload names it as an optional relation. Only
+  `client.compat.jei` names a JEI type. JEI finds `WareworksJeiPlugin` by its `@JeiPlugin` annotation in NeoForge's scan
+  data and nothing in the mod references the package, so without JEI none of it is loaded; everything the "+" needs
+  that is not JEI's — the candidate lists, the payload, the server's pick, the adoption — lives outside it and names no
+  JEI type (`client.gui.TerminalRecipeLay`, `network.TerminalCraftLayPayload`, `core.crafting.IngredientPicker`). The
+  dev runs get the whole JEI only with `-Pwareworks.jei` (the compiled version) or `-Pwareworks.jei=<version>`. A
+  `compileOnly` API compiles a JEI import anywhere, and neither the GameTests nor a client that never loads the class
+  would notice, so `JeiBoundaryTest`, a JUnit text scan of the main sources, guards the boundary: no `mezz.jei` outside
+  `client.compat.jei`, that package reached from nowhere but the `jei` scenario, and no import below `mezz.jei.api`.
+* **Compiled against Create's pin, run against every end of 1.21.1's JEI line, and a floor at its start.**
+  19.21.0.247 is the JEI Create 6.0.10-280 is built against: its POM names it, but Create's `neoforge.mods.toml`
+  declares no JEI, so nothing in Create enforces it, and the loader never reads a POM. The range `[19.8.4.110,)` admits
+  every JEI published for 1.21.1 (19.8.4.110 is the oldest on JEI's maven). FML treats an installed JEI outside the
+  range as an error (`fml.modloadingissue.missingdependency.optional`, from
+  `ModSorter$DependencyResolutionResult#buildErrorMessages`, FML loader 4.0.45), not a warning, so a floor at Create's
+  pin would have refused to start every client with an older JEI although the "+" works there: the `jei` scenario
+  passed with 19.8.4.110, 19.19.6.236, 19.21.0.247, 19.57.0.451 and 19.64.0.454 (the owner's decision of 2026-10-15,
+  after a first build with the floor at 19.21.0.247). An API an older JEI lacked would not be contained — JEI's
+  `PluginCaller` catches a `LinkageError` only around a plugin's registration, while JEI 19.21 asks the transfer
+  handler from its recipe screen (`RecipeTransferUtil`) and catches only a `RuntimeException` there — which is why the
+  floor is the oldest JEI the "+" was run with and not lower. Below 19.21.0.247 Create's own JEI plugin does not load
+  (`CreateJEI` needs `ISubtypeInterpreter`), so the panel reaches JEI as no exclusion area; JEI's item list still ends
+  right of the folded-out window, whose `imageWidth` covers the panel. In the API the mod
+  uses, 19.57 only adds members or turns abstract ones into defaults, with one exception: 19.52.0 deprecated the
+  six-argument `IRecipeTransferHandler#transferRecipe` for removal and added an overload taking an
+  `IRecipeTransferContext`, whose default calls the old method. The handler implements the six-argument method, which
+  both versions reach; the context type does not exist in 19.21.
+* **JEI's public API only.** `mezz.jei.api.*`, never `mezz.jei.common`, `library` or `gui`. Those carry no
+  compatibility promise and did change between the two versions tested (`GuiProperties` moved from `gui` to `common`,
+  and the "+" moved from `RecipeTransferButton` into an `IconButton` with a controller), and the API covers everything
+  the mod needs. Their bytecode was read to learn behaviour, never compiled against. The dev harness's `jei` scenario
+  must reach the real "+", which is no widget of JEI's screen in either version: it walks JEI's recipe screen by
+  reflection over class simple names and names no JEI type, so a JEI that renames them fails the scenario with a
+  message, never the mod.
+* **The client sends candidates; the server picks and checks.** `TerminalCraftTransferHandler` maps JEI's nine INPUT
+  slot views to the nine cells in order — JEI's crafting category always creates nine input slots, row by row, and
+  shifts a smaller recipe inside them, which the server's lookup trims away as a crafting table does — and sends every
+  item JEI shows for a slot, in JEI's order, without counts, at most 64 distinct per cell
+  (`IngredientPicker.MAX_CANDIDATES`), ignoring which item JEI happens to display and its focus, as JEI's own transfer
+  into a crafting table does. The recipe's id goes along as a hint. The server picks one key per cell
+  (`IngredientPicker`, fed by `content.station.TerminalCraftLay`): cells with the same candidate list are one group and
+  get one key; within a group a plain item comes before a damaged, enchanted or renamed one (vanilla's rule for
+  placing a recipe, `Inventory#findSlotMatchingUnusedItem`), then more whole crafts already in the terminal's buffer,
+  then more whole crafts in the buffer and `availableTo(PLAYER)` together, then made by a station of the aisle, then a
+  key an earlier group took, then the recipe's own order; groups with fewer candidates go first, and each pick claims
+  one craft's worth from the counts the later groups see. The picked grid is then checked by the panel's own lookup
+  (`TerminalCrafting.preview`: `RecipeManager#getRecipeFor` with the hint tried first in the current manager). A grid
+  that matches nothing is refused whatever the id names; an id the server does not know only costs the hint. The pick
+  is the server's because the buffer, the stock and the producible set live there, while the client's stock list is
+  capped and a push behind, and because what the warehouse would hand out is never a client's choice (§3.6.6). The
+  check is the server's because the recipes the craft will run are the server's.
+* **What a lay costs the server is bounded, whatever a client sends.** The candidates are a client's choice, components
+  and hash codes included, and a lay reads up to nine times 64 of them on the server thread. Three bounds keep that
+  cheap. The payload is at most 32 767 bytes (`TerminalCraftLayPayload.MAX_BYTES`, vanilla's bound for a serverbound
+  custom payload it does not know), so no key can be made large; a lay of plain items takes about three kilobytes,
+  and the client cuts its lists from the end until they fit (`TerminalCraftLayPayload#fitted`). The picker keeps at
+  most four distinct candidates per hash code across the lay (`IngredientPicker.MAX_SAME_HASH`): `ItemKey`'s hash
+  code is a client's to choose (custom data whose tags hash alike), and every hash set and map of a pick compares keys
+  of one hash code one by one, so a lay of colliding keys would otherwise cost the square of its candidates. And a menu
+  takes one lay per tick (`WarehouseTerminalMenu.MAX_LAYS_PER_TICK`) on top of its eight actions: a player presses the
+  "+" once per click.
+* **The "+" never blocks on a missing ingredient.** Laying a recipe is not fetching it. A cell whose candidates the
+  warehouse holds none of gets its first candidate, and the panel tints and names what is missing exactly as for a grid
+  laid by hand; Fetch, a click, a clipboard or a production station brings it. JEI asks the handler on every client tick
+  with `doTransfer` false, so that path only reads, sends nothing and returns one of two errors made once. The "+" is
+  **hidden** (JEI's internal error) only where the panel cannot take the recipe: it does not fit 3 × 3, it is drawn with
+  other than nine input slots (another mod's crafting extension, whose cell order is not known), no slot names an item
+  (the same test the click's candidate lists pass, `TerminalRecipeLay#namesAnItem`, so a recipe whose slots hold only
+  fluids shows no "+" that its click would refuse), or the player's terminal menu or its block entity is gone. It is
+  **greyed out** with the panel's own sentence ("Cancel the fetch to change the recipe", in red) while a craft order
+  locks the grid, which the server would refuse anyway (`ALREADY_RUNNING`).
+* **Shift on the "+" (`maxTransfer`) is ignored.** JEI means "as many as possible" of the items a transfer moves, and a
+  lay moves none: the number of crafts is the window's amount field, which Fetch reads. A Shift that started a Fetch
+  would send the crane on trips from a click meant to look at a recipe, and one that set the amount field would change
+  the number a click in the stock list requests.
+* **A lay moves nothing, orders nothing and saves nothing.** The accepted grid becomes the menu's grid, with the
+  recipe it matched as the hint and the preview already resolved, and goes back appended to the crafting view as a
+  `Lay(number, cells, recipe, foldOut)`, numbered from 1 per menu and carried by every later view while the menu is
+  open. The panel takes each number once, and reads the lay rather than the view's own grid, because a preview of the
+  old grid can reach the server after the lay. It refuses the lay while a craft order locks the grid (the lay still
+  counts as seen, so it cannot replace the order's grid when the order ends); otherwise it takes the cells like an edit
+  and previews them with the lay's recipe, which costs the server no second lookup. The panel is folded out — the
+  player asked for it with the "+", unlike another player's Fetch (ADR-062), so their remembered fold choice stays as
+  it was — and a Fetch question about the grid the lay replaced is dropped. The fold is marked at the click, while
+  JEI's recipe screen still covers the terminal (`WarehouseTerminalScreen#foldOutForLay`), so the `setScreen(parent)`
+  JEI makes right after it lays the terminal out once and already folded out; the laid view folds it out only where
+  nothing was marked (a lay while the terminal is on top, from a bookmark of JEI 19.57). A refused lay leaves the panel
+  folded out with the grid it had; its refusal is `NOT_LAID` ("This recipe cannot be laid here"), which speaks of the
+  viewer's recipe and not of the grid on screen, as the craft's `NO_RECIPE` would.
+* **A covered terminal keeps its updates.** JEI's recipe screen opens over the terminal's without closing the menu and
+  hands the same screen instance back when it closes. The client used to route a terminal payload only to the screen
+  on top, and the menu sends a value only when it changes, so whatever arrived while JEI was open was lost for good:
+  the stock list and the status kept what they showed when JEI opened (read from the code, present since M6; nobody
+  reported it), and the craft order's lock, which the "+" reads, would have stayed stale too.
+  `WarehouseTerminalScreen#forMenu` finds the screen on top or the one laid out last, as long as the player's open menu
+  is still its menu; a closed screen is never found, because closing resets the open menu before the screen is
+  removed. A fold-out for a covered screen only marks it: laying out a screen nobody sees would tell JEI's overlay
+  about a window that is not there.
+* **No gui handler.** JEI keeps its item list right of `leftPos + imageWidth` in both versions, and the fold widens
+  `imageWidth` over the panel, so the panel needs no exclusion area. `getExtraAreas` names it all the same, for a
+  viewer or version that keeps clear only of the areas it is told; Create forwards it for every
+  `AbstractSimiContainerScreen`.
+* **ADR-059's boundary is unchanged.** The lay's one recipe lookup is the menu's `TerminalCrafting.preview`; the JEI
+  package never touches a recipe manager (`IJeiRuntime#getRecipeManager` is not used, and `RecipeExecutionBoundaryTest`
+  would refuse it), and a lay crafts nothing.
+
+*Alternatives rejected:*
+* **A required or bundled JEI** (`implementation`, JarJar): it would force one recipe viewer on every pack and tie
+  releases to JEI's, for a convenience.
+* **Compiling against the newest JEI**: its context overload and other new members would raise the floor above
+  Create's own pin and refuse the JEI most Create packs ship with, for nothing the "+" needs.
+* **The client picks the items** (JEI's displayed stack, or a pick against the screen's stock list): the displayed
+  stack cycles and follows JEI's focus, the client's list is capped at `maxTerminalStockEntries` and a push behind, and
+  a pick decides what the warehouse hands out. **Trusting JEI's recipe id**: JEI-made ids exist, and any client can
+  send any id.
+* **Refusing the "+" for a missing ingredient** (`createUserErrorForMissingSlots`, red slots): JEI's model of a
+  transfer moves items from the inventory into a grid, where a missing item is an error; here the grid holds ghosts and
+  the warehouse fetches, so red slots would forbid exactly the recipe the player wants Fetch to bring. A cosmetic
+  warning instead would paint the "+" orange on most recipes, which reads as a fault.
+* **One key per cell instead of per candidate list**: a ring of planks would be laid as a mix of whatever is stocked,
+  and Fetch would fetch a few of every kind. The price of grouping: a buffer holding one oak and one birch plank lays a
+  two-plank recipe in one kind, and Fetch brings the second plank, although the two would craft at once.
+* **A native EMI plugin**: out of scope by the owner's decision, and a second integration to maintain; a follow-up
+  issue if players ask. With EMI and no JEI, EMI has no working "+" at the terminal — none of its handlers is for
+  `WarehouseTerminalMenu` — and the panel works as before; that was not run (manual check 270). Whether EMI's JEI
+  bridge offers this "+" when both are installed is not verified either.
+* **Implementing the context overload** for a JEI that removes the old method: the type does not exist in 19.21.
+* **No version range on the `jei` entry**: a JEI that is not for 1.21.1 would then fail inside its recipe screen,
+  outside `PluginCaller`'s guard, at the first "+"; a loading screen that names the JEI version needed is clearer.
+* **A floor at Create's pin, 19.21.0.247** (the first build): it stopped every client with an older 1.21.1 JEI at the
+  loading screen, although the "+" works on all of them (run on 19.8.4.110 and 19.19.6.236).
+* **Fewer candidates per cell** (16, as the design study had): a pack's `#planks` or `#c:ingots` would be cut before the
+  stock could pick among it. The byte and hash bounds keep 64 cheap instead.
+
+*Verification:* `IngredientPickerTest` (19 JUnit tests: every ranking step, worn keys, grouping, overlapping lists,
+claims, the cap, lookups at most once per key, extreme counts, 500 seeded random rounds, nine cells of 64 keys sharing
+one hash code picked with a few comparisons per key instead of well over a hundred thousand, and the hash bound
+counting distinct keys only; each rule broken once on purpose was caught). `JeiBoundaryTest` (5 JUnit tests: the
+three scans, the allowed places still holding their uses, and every form the patterns must catch or pass over).
+`TerminalCraftLayGameTests` (9, the item census of blocks and players on every tick): a chest from the real `#planks`
+tag laid in spruce, the most stocked, though oak comes first, then in birch once eight are delivered but not with
+three; a shapeless fire charge in JEI's cells 0, 1 and 3 taking delivered charcoal over coal; plain items first;
+missing ingredients that still lay; producible before absent; a refusal while a craft order runs and a lay after
+Cancel; every hostile or foreign payload refused with grid, view and lay unchanged, one lay per tick through the
+payload's entry, a lay after the tick's eight actions dropped, and nine cells of 64 diamonds sharing one hash code
+answered `NOT_LAID` after one lookup; the laid grid in the view, its preview without a second lookup and the second
+lay numbered 2; and the payload's codec, with a lay over 32 767 bytes refused on decode and never written, an honest
+chest sent as it is and a heavy lay cut until it fits. The `jei` visual scenario (13 shots, English and German) drives
+the real JEI and clicks its real "+": the stock-picked chest, the shapeless fire charge, the greyed-out "+" whose click
+lays nothing while a fetch runs, the buffer-picked chest, an item census around every lay and JEI's window ending
+where the panel ends. Every time JEI's screen opens it stays open ten ticks, in which neither the server nor the
+covered terminal may see a lay (JEI's every-tick check), and every click lays exactly once on both sides, brings the
+terminal back already folded out and rings one success bell. With JEI's screen still open over the locked grid, the
+ticks run again: the covered terminal hears the fetch end, its stock list shows what the crane took, and the "+"
+turns usable without JEI closing. It passed with JEI 19.8.4.110, 19.19.6.236, 19.21.0.247, 19.57.0.451 and
+19.64.0.454 and fails at once without JEI; below 19.21.0.247 it skips two checks the older API cannot answer (the
+recipe screen's parent, and the panel as an exclusion area, which reaches JEI through Create's plugin) and says so;
+without JEI, every other gate passes as before.
+
+*Consequences:* `WareworksNetwork.VERSION` is `"12"`: the new `TerminalCraftLayPayload`, the `lay` field appended to
+`TerminalCraftViewPayload`, and `TerminalCraftResult.LAID` and `NOT_LAID`, which travel by name. A lay costs one of
+the menu's eight actions per tick and is the menu's one lay of that tick, and one refused as `NOT_LAID` costs one
+recipe lookup; while a world's ticks are frozen (`/tick freeze`) its game time stands still, so a menu then takes one
+lay in all until the ticks run again. The lay payload's decoder is strict — more than 32 767 bytes, a cell count other
+than nine, more than 64 candidates in a cell or an air candidate fails decoding, and NeoForge then closes that
+client's connection — stricter than `TerminalCraftPayload`, which reads a wrong cell count as no action; an honest
+client never sends such a payload. A candidate past four distinct keys of one hash code is dropped, so a hostile lay
+can lose whole cells; no real recipe comes near it. Every JEI for 1.21.1 is admitted; a JEI older than 19.8.4.110 is
+not one, and FML would refuse it with a loading error that names the version needed. A recipe
+`doLimitedCrafting` keeps from the player still lays, and the panel shows it locked as for a grid laid by hand. JEI
+draws its own "Move Items" line above the reason on a greyed-out "+". `JeiRuntimeAccess` ships in the jar, because the
+plugin hands it JEI's runtime, though only the dev harness reads it. A future 1.21.1 JEI that removes the six-argument
+`transferRecipe` would need the handler to move to the context overload. On a 320 GUI px screen the terminal comes back
+from JEI already folded out, 27 px left of where it was before JEI opened, and nothing moves after that. Not tested at
+runtime: Shift on the "+", JEI 19.57's transfer from bookmarked recipes, a crafting extension of another mod, a
+dedicated server, and EMI; the manual checklist covers what a person can (section AW).
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -5028,7 +5263,9 @@ player's craft.
   keys hold registry entries of the connection that decoded them, which no later connection can write into a
   packet); the server's copy of the grid lives
   in the open menu, serves the preview and is gone when the menu closes. What a craft changes is the terminal's buffer
-  and the player's inventory, which were saved and synced before M32 exactly as they are now.
+  and the player's inventory, which were saved and synced before M32 exactly as they are now. A recipe laid from JEI
+  (ADR-063) saves nothing either: the lay is the open menu's, numbered per menu, sent with the crafting view and gone
+  with the menu.
 * A terminal's **craft order** (M32, ADR-062) is saved beside its clipboard order, under `CraftOrder`:
   `{Order: <the clipboard order's format>, Cells: [{I: 0..8, Item}], Crafts, Recipe?}`, where `Order` is written and
   read by `TerminalListPersistence` under a tag name of its own (the old overloads keep `ListOrder`). It is the one

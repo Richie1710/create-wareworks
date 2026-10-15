@@ -36,6 +36,7 @@ final class VisualScenarios {
             Map.entry(ArmVisualScenario.NAME, ArmVisualScenario::new),
             Map.entry(TooltipsVisualScenario.NAME, TooltipsVisualScenario::new),
             Map.entry(CraftVisualScenario.NAME, CraftVisualScenario::new),
+            Map.entry(JeiVisualScenario.NAME, JeiVisualScenario::new),
             Map.entry(ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new));
 
     private VisualScenarios() {

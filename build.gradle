@@ -61,6 +61,13 @@ repositories {
             includeGroup 'com.tterrag.registrate'
         }
     }
+    maven {
+        name = 'JEI'
+        url = 'https://maven.blamejared.com'
+        content {
+            includeGroup 'mezz.jei'
+        }
+    }
 }
 
 neoForge {
@@ -152,6 +159,15 @@ configurations {
     runtimeClasspath.extendsFrom localRuntime
 }
 
+// JEI is an optional, client-only integration (client.compat.jei): compiled against its API and never bundled. The dev
+// runs only get the full JEI on request, because the tooltip scenario and every other gate assume a game without it:
+//   -Pwareworks.jei             the JEI of jei_version (gradle.properties)
+//   -Pwareworks.jei=<version>   any other published JEI for this Minecraft version (e.g. a newer one)
+// localRuntime is neither in the jar nor in any published metadata.
+var jeiRuntimeProperty = providers.gradleProperty('wareworks.jei').orNull
+var jeiRuntimeVersion = jeiRuntimeProperty == null || jeiRuntimeProperty == 'false' ? null
+        : (jeiRuntimeProperty.isEmpty() || jeiRuntimeProperty == 'true' ? project.jei_version : jeiRuntimeProperty)
+
 dependencies {
     // Create's published POM declares many optional integrations (Architectury, FTB, JourneyMap, JEI, ...)
     // as runtime dependencies. We never want those, so every Create-related artifact is non-transitive
@@ -163,6 +179,11 @@ dependencies {
     compileOnly("dev.engine-room.flywheel:flywheel-neoforge-api-${minecraft_version}:${flywheel_version}") { transitive = false }
     localRuntime("dev.engine-room.flywheel:flywheel-neoforge-${minecraft_version}:${flywheel_version}") { transitive = false }
     localRuntime("dev.engine-room.vanillin:vanillin-neoforge-${minecraft_version}:${vanillin_version}") { transitive = false }
+
+    compileOnly("mezz.jei:jei-${minecraft_version}-common-api:${jei_version}") { transitive = false }
+    compileOnly("mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}") { transitive = false }
+    if (jeiRuntimeVersion != null)
+        localRuntime("mezz.jei:jei-${minecraft_version}-neoforge:${jeiRuntimeVersion}") { transitive = false }
 
     testImplementation(platform('org.junit:junit-bom:5.11.4'))
     testImplementation('org.junit.jupiter:junit-jupiter')
@@ -178,6 +199,7 @@ var generateModMetadata = tasks.register('generateModMetadata', ProcessResources
             loader_version_range   : loader_version_range,
             create_version_range   : create_version_range,
             ponder_version         : ponder_version,
+            jei_version_range      : jei_version_range,
             mod_id                 : mod_id,
             mod_name               : mod_name,
             mod_license            : mod_license,
@@ -307,5 +329,6 @@ publishMods {
         client = true
         server = true
         requires('create')
+        optional('jei')
     }
 }

@@ -1,5 +1,6 @@
 package dev.wareworks.client.gui;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -130,6 +131,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * while it is open, and a Fetch that can bring fewer crafts than asked for puts its question up in this screen's one
  * dialog ({@link #craftConfirmation()}) — as does one that would have an ingredient made first at a production station
  * of the warehouse (slice 3), naming what would be made and what the racks alone could serve.
+ * <p>
+ * <b>Recipe viewers</b> (issue #24, slice 4, ADR-063). A recipe viewer's transfer button lays its recipe into the panel
+ * ({@link TerminalRecipeLay}): the server picks the items, and the grid it accepted arrives with the crafting view,
+ * which this screen hands to the panel before it folds the panel out ({@link #onCraftView}). The viewer's recipe screen
+ * opens over this one without closing the menu, so the server's pushes keep reaching this screen while it is covered
+ * ({@link #forMenu}), and the viewer hands this very screen back when it closes.
  */
 public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<WarehouseTerminalMenu> {
     /** How long the answer to a request stays in the status line. */
@@ -276,6 +283,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** The registries of the connection {@link #rememberedGrids} were laid under; {@code null} while there are none. */
     @Nullable
     private static RegistryAccess rememberedGridRegistries;
+    /**
+     * The terminal screen laid out last (issue #24, slice 4), which {@link #forMenu} finds while another screen covers
+     * it. Weak, so a screen nobody shows any more is never kept alive by it.
+     */
+    private static WeakReference<WarehouseTerminalScreen> laidOut = new WeakReference<>(null);
 
     private final StockListModel<ItemKey> model = new StockListModel<>();
     private TerminalScreenStatus status = TerminalScreenStatus.NONE;
@@ -460,6 +472,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     @Override
     protected void init() {
+        laidOut = new WeakReference<>(this);
         layout = menu.layout();
         // The crafting panel widens the window to the right (M32, issue #24), and the offset takes back the jump that
         // centring the wider window would make, as far as the screen allows (TerminalMenuLayout#foldOffset). Both must
@@ -1133,9 +1146,26 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /**
      * The server's reading of the grid this screen laid: the recipe, the result and what the aisle says about each
      * item (M32, issue #24). The panel draws from it.
+     * <p>
+     * It also carries the last recipe a recipe viewer laid (slice 4), which the panel takes once
+     * ({@link TerminalCraftPanel#adoptLay}). The panel is folded out by then as a rule, because the lay marked it at
+     * the click ({@link #foldOutForLay}); where it was not — a viewer that lays while this screen is on top, or a
+     * screen the lay did not find — a folded-in panel folds out now, so the player sees what was laid. They asked for
+     * it with the viewer's button, so the fold is their own move and not a remote start's ({@link #onCraftOrder}), and
+     * their remembered choice for the next screen stays what it was, as there. A Fetch question that is still up asks
+     * about the grid the lay replaced, so it goes, as when a craft order replaces the grid.
      */
     public void onCraftView(TerminalCraftViewPayload payload) {
         craftPanel.onView(payload);
+        if (!craftPanel.adoptLay(payload.lay()))
+            return;
+        if (craftConfirming != null) {
+            craftConfirming = null;
+            costChanged = false;
+            panel = null;
+        }
+        if (payload.lay().foldOut() && !craftOpen)
+            foldOutCraftPanel();
     }
 
     /**
@@ -1144,16 +1174,18 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * <p>
      * Green for a click that did everything it asked for; gold for a Shift-click that crafted some and then stopped,
      * because something <i>was</i> made — the trade an accepted request with a refused chain makes ({@link #onResult});
-     * red for a click that made nothing.
+     * red for a click that made nothing. A recipe laid from a recipe viewer (slice 4) made nothing either, by design,
+     * and is answered as the success it is.
      */
     public void onCraftAnswer(TerminalCraftAnswerPayload payload) {
         craftAnswer = payload;
         boolean made = payload.crafted() > 0;
+        boolean good = made || payload.result().isSuccess();
         feedback = craftAnswerLine(payload);
         feedbackColor = payload.result().isSuccess() ? COLOR_SUCCESS : made ? COLOR_LOST : COLOR_ERROR;
         feedbackTicks = FEEDBACK_TICKS;
-        playUiSound(made ? SoundEvents.NOTE_BLOCK_BELL.value() : SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F,
-                made ? 1.6F : 0.8F);
+        playUiSound(good ? SoundEvents.NOTE_BLOCK_BELL.value() : SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F,
+                good ? 1.6F : 0.8F);
     }
 
     /** The crafting view as last pushed; the empty view until the server sent one. */
@@ -1204,10 +1236,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // (issue #24 review fix). A player who folds it in afterwards keeps it folded in; their own choice for the next
         // screen stays what it was.
         if (craftOrderState.isOpen() && !before.isOpen() && !craftOpen
-                && (opening || TerminalMenuLayout.foldOffset(width) == TerminalMenuLayout.MAX_FOLD_OFFSET)) {
-            craftOpen = true;
-            rebuildWidgets();
-        }
+                && (opening || TerminalMenuLayout.foldOffset(width) == TerminalMenuLayout.MAX_FOLD_OFFSET))
+            foldOutCraftPanel();
         updateCraftButtons();
     }
 
@@ -1403,6 +1433,32 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     /**
+     * Folds the crafting panel out without the toggle — for a craft order that opened, or a recipe a recipe viewer laid
+     * — and lays the window out again. A screen a recipe viewer's recipe screen covers ({@link #forMenu}) is only
+     * marked: the viewer hands it back through {@code Minecraft#setScreen}, which lays it out anyway, and laying out a
+     * screen nobody sees would tell the viewer's overlay about a window that is not there ({@code ScreenEvent.Init}).
+     */
+    private void foldOutCraftPanel() {
+        craftOpen = true;
+        if (minecraft != null && minecraft.screen == this)
+            rebuildWidgets();
+    }
+
+    /**
+     * A recipe viewer is laying a recipe into this panel ({@link TerminalRecipeLay#lay}, slice 4) while its own recipe
+     * screen covers this one: the panel is marked folded out now, so the viewer's {@code Minecraft#setScreen}, right
+     * after the click, lays this screen out once and already as wide as the laid grid needs — nothing pops open or
+     * moves under the cursor when the grid arrives a tick later. Only marked, exactly as {@link #foldOutCraftPanel}
+     * does for a covered screen, and the remembered fold choice stays as it is. On top — a viewer that lays from a
+     * bookmark beside this screen — it does nothing: the laid view folds the panel out when it arrives
+     * ({@link #onCraftView}), outside the viewer's own input handling.
+     */
+    void foldOutForLay() {
+        if (!craftOpen && minecraft != null && minecraft.screen != this)
+            craftOpen = true;
+    }
+
+    /**
      * Folds the crafting panel out or in: the toggle's click. The window changes width, so the whole screen is laid out
      * again ({@code Screen#rebuildWidgets}, which also tells JEI about the new area); the panel itself — grid, ghost,
      * view — outlives it. Folding in drops a ghost, which has nowhere to go without the grid. The choice is remembered
@@ -1418,9 +1474,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     /**
-     * The crafting panel's rectangle while it is folded out, for JEI to keep clear of. It lies inside the window's own
-     * width, which JEI may already avoid, but nothing in this repository proves that, so the area is named anyway;
-     * Create hands it on for every {@link AbstractSimiContainerScreen} ({@code SlotMover}).
+     * The crafting panel's rectangle while it is folded out, for a recipe viewer's overlay to keep clear of. JEI needs
+     * none of it: it reads the window's {@code imageWidth}, which the fold widens over the panel, and crops its
+     * ingredient list at the window's right edge (read in the bytecode of JEI 19.21 and 19.57,
+     * {@code IngredientListOverlay}/{@code IngredientListOverlayLayout#createDisplayArea}). The area is named all the
+     * same, for a viewer or a version that only keeps clear of the areas it is told; Create hands it on for every
+     * {@link AbstractSimiContainerScreen} ({@code SlotMover}).
      */
     @Override
     public List<Rect2i> getExtraAreas() {
@@ -1428,6 +1487,31 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return List.of();
         return List.of(new Rect2i(leftPos + TerminalMenuLayout.PANEL_X, topPos, TerminalMenuLayout.PANEL_WIDTH,
                 layout.panelHeight()));
+    }
+
+    /**
+     * The terminal screen of the menu {@code containerId} (issue #24, slice 4): the one on screen, or — while another
+     * screen covers it — the one laid out last, as long as the player still has its menu open. Anything else is not
+     * found: a payload for a menu that was closed or replaced in the meantime, or one that arrives with another
+     * terminal's screen in front.
+     * <p>
+     * <b>Why a covered screen counts.</b> A recipe viewer's recipe screen opens over this one without closing the menu
+     * — the container stays open on both sides, and the server keeps pushing — and hands this very instance back when
+     * it closes ({@code Minecraft#setScreen}, which lays it out again). A push that only reached the screen on top
+     * would be lost in the meantime, and the server, which sends a value only when it changes, would not send it again:
+     * the stock list, the craft order's lock and the viewer's transfer button would stay as they were before the
+     * viewer opened. A closed screen is never found: closing sets the player's open menu back to the inventory's before
+     * the screen is removed ({@code LocalPlayer#clientSideCloseContainer}). Client thread.
+     */
+    public static Optional<WarehouseTerminalScreen> forMenu(int containerId) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.screen instanceof WarehouseTerminalScreen shown)
+            return shown.getMenu().containerId == containerId ? Optional.of(shown) : Optional.empty();
+        WarehouseTerminalScreen covered = laidOut.get();
+        if (covered == null || minecraft.player == null || minecraft.player.containerMenu != covered.getMenu()
+                || covered.getMenu().containerId != containerId)
+            return Optional.empty();
+        return Optional.of(covered);
     }
 
     /** {@link #playUiSound} for the crafting panel, which shares this screen's sounds. */

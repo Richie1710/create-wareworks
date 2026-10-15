@@ -671,6 +671,7 @@ public final class WareworksLangGen {
         // TERMINAL_CRAFT_PARTIAL, so each is a whole sentence of its own.
         // The Fetch button's answers (issue #24, slice 2) follow the same rule: an item as %1$s, a number of crafts as
         // %2$s. Every one of them fits the status row with the widest number (TerminalCraftTextWidthTest).
+        // A recipe laid from a recipe viewer (slice 4) names its result as %1$s, like a craft does.
         for (TerminalCraftResult result : TerminalCraftResult.values()) {
             lang.accept(WareworksLang.key(result.langKey()), switch (result) {
                 case CRAFTED -> "Crafted %1$s x%2$s";
@@ -693,6 +694,8 @@ public final class WareworksLangGen {
                 case RESUMED -> "Trying the rest of the fetch again";
                 case CANCELLED -> "The fetch was given up";
                 case NOT_RUNNING -> "No ingredients are being fetched here";
+                case LAID -> "Laid the recipe for %1$s";
+                case NOT_LAID -> "This recipe cannot be laid here";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_PATTERNS), "Patterns");

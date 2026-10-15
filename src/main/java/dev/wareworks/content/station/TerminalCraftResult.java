@@ -22,6 +22,13 @@ import java.util.Optional;
  * checked against the grid and its recipe exactly as a craft is, so it can also end in {@link #GRID_EMPTY},
  * {@link #NO_RECIPE}, {@link #LOCKED} or {@link #OUT_OF_REACH}.
  * <p>
+ * {@link #LAID} answers a recipe a recipe viewer laid into the grid (slice 4): the server picked one item per cell and
+ * the grid matches a crafting recipe. Laying moves nothing and orders nothing, so it counts as a craft's answer. Its
+ * own refusal is {@link #NOT_LAID} (the picked grid matches no recipe), which speaks of the viewer's recipe and not of
+ * the grid on screen, because the screen still shows the grid the lay would have replaced; the others are a craft's
+ * and a Fetch's: {@link #OUT_OF_REACH}, {@link #ALREADY_RUNNING} (a craft order locks the grid) and
+ * {@link #GRID_EMPTY} (no cell named an item).
+ * <p>
  * {@link #name()} is a wire name only inside one version's payload, which is why the payload carries it by name and an
  * unknown one reads as a plain refusal; {@link #langKey()} is the sentence.
  */
@@ -86,7 +93,21 @@ public enum TerminalCraftResult {
     /** The craft order was given up. Only its own share of its requests is given back; delivered items stay. */
     CANCELLED,
     /** No craft order is open here, so there is nothing to answer, resume or cancel. */
-    NOT_RUNNING;
+    NOT_RUNNING,
+
+    // --- a recipe laid from a recipe viewer (slice 4 of issue #24) -------------------------------------------------
+
+    /**
+     * A recipe viewer's recipe was laid into the grid: the outcome names its result. Nothing moved and nothing was
+     * requested; the grid itself reaches the screen with the next crafting view.
+     */
+    LAID,
+    /**
+     * A recipe viewer's recipe was not laid: the grid the server picked from its candidates matches no crafting recipe
+     * of this server (a recipe the viewer draws with items of its own, or one only the client knows). Nothing changed;
+     * the grid on screen stays what it was.
+     */
+    NOT_LAID;
 
     private static final String LANG_PREFIX = "gui.terminal.craft.result.";
 
@@ -97,7 +118,7 @@ public enum TerminalCraftResult {
      */
     public boolean isSuccess() {
         return switch (this) {
-            case CRAFTED, STARTED, NOTHING_TO_FETCH, ANSWERED, DECLINED, RESUMED, CANCELLED -> true;
+            case CRAFTED, STARTED, NOTHING_TO_FETCH, ANSWERED, DECLINED, RESUMED, CANCELLED, LAID -> true;
             default -> false;
         };
     }
@@ -105,11 +126,12 @@ public enum TerminalCraftResult {
     /**
      * Whether only the Fetch button or the craft order can end in this. Four refusals answer both kinds of action with
      * the same sentence — {@link #NO_RECIPE}, {@link #LOCKED}, {@link #OUT_OF_REACH} and {@link #GRID_EMPTY}, because a
-     * Fetch is checked against the same grid and recipe a craft is — and count as a craft's here.
+     * Fetch is checked against the same grid and recipe a craft is — and count as a craft's here, and so do
+     * {@link #LAID} and {@link #NOT_LAID}, which neither fetch nor order anything.
      */
     public boolean isFetch() {
         return switch (this) {
-            case CRAFTED, NO_RECIPE, NOT_IN_BUFFER, NO_ROOM, LOCKED, OUT_OF_REACH, GRID_EMPTY -> false;
+            case CRAFTED, NO_RECIPE, NOT_IN_BUFFER, NO_ROOM, LOCKED, OUT_OF_REACH, GRID_EMPTY, LAID, NOT_LAID -> false;
             case STARTED, ASKING, CHANGED, NOTHING_TO_FETCH, NOT_ENOUGH, NO_ROOM_FOR_ONE, ALREADY_RUNNING, NO_AISLE,
                     ANSWERED, DECLINED, RESUMED, CANCELLED, NOT_RUNNING -> true;
         };
