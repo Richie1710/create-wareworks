@@ -95,6 +95,19 @@ public final class TooltipsVisualScenario implements VisualScenario {
         // Tooltips are drawn by the GUI, never by Flywheel: one pass checks everything.
         if (pass != VisualPass.FLYWHEEL)
             return;
+        // Fullscreen goes to the monitor holding most of the window (ScreenManager#findBestMonitor), so a window that
+        // WindowPlacement opened on another monitor is first moved onto the one with the target size, if there is one.
+        script.client("tooltips: move the window to a " + TARGET_WIDTH + "x" + TARGET_HEIGHT + " monitor", context -> {
+            long monitor = WindowPlacement.monitorWithMode(TARGET_WIDTH, TARGET_HEIGHT);
+            Window window = context.minecraft().getWindow();
+            if (monitor != 0L && !window.isFullscreen() && !WindowPlacement.isOn(window, monitor))
+                WindowPlacement.moveTo(window, monitor);
+        });
+        script.until("tooltips: the window is on that monitor", context -> {
+            long monitor = WindowPlacement.monitorWithMode(TARGET_WIDTH, TARGET_HEIGHT);
+            return monitor == 0L || context.minecraft().getWindow().isFullscreen()
+                    || WindowPlacement.isOn(context.minecraft().getWindow(), monitor);
+        }, RESIZE_TIMEOUT_TICKS);
         script.client("tooltips: automatic GUI scale and fullscreen", context -> {
             context.minecraft().options.guiScale().set(0);
             Window window = context.minecraft().getWindow();

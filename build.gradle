@@ -76,6 +76,13 @@ neoForge {
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             logLevel = org.slf4j.event.Level.DEBUG
+            // Dev convenience: the monitor client windows open on (1 = primary, 2 = the next one GLFW lists), from the
+            // Gradle property wareworks.windowMonitor or the environment variable WAREWORKS_WINDOW_MONITOR. Unset, the
+            // game places its window itself. Read by dev.wareworks.dev.WindowPlacement, in dev runs only.
+            def windowMonitor = providers.gradleProperty('wareworks.windowMonitor')
+                    .orElse(providers.environmentVariable('WAREWORKS_WINDOW_MONITOR')).getOrNull()
+            if (windowMonitor)
+                systemProperty 'wareworks.windowMonitor', windowMonitor
         }
 
         client {

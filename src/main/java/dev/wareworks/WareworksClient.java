@@ -5,6 +5,7 @@ import dev.wareworks.client.ponder.WareworksPonderLang;
 import dev.wareworks.client.ponder.WareworksPonderPlugin;
 import dev.wareworks.client.render.WareworksPartialModels;
 import dev.wareworks.dev.VisualTestHarness;
+import dev.wareworks.dev.WindowPlacement;
 import net.createmod.ponder.foundation.PonderIndex;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.EventPriority;
@@ -33,6 +34,11 @@ public final class WareworksClient {
         // leaving the world or server forgets them, so none comes back in another world or reaches a connection whose
         // registries cannot write its item keys.
         NeoForge.EVENT_BUS.addListener(WareworksClient::onLoggingOut);
+        // Dev tooling (ADR-014), like the harness below: open the window on another monitor when build.gradle passes
+        // one (Gradle property wareworks.windowMonitor or the environment variable WAREWORKS_WINDOW_MONITOR).
+        String windowMonitor = System.getProperty(WindowPlacement.PROPERTY);
+        if (windowMonitor != null && !FMLLoader.isProduction())
+            placeWindow(modEventBus, windowMonitor);
         // Dev tooling (ADR-014): the visual smoke test runs only in a development environment and only when the system
         // property names a scenario (Gradle runVisualTest). Release jars do not contain the harness (build.gradle).
         // VisualTestHarness.PROPERTY is a compile-time constant, so reading it does not load the harness.
@@ -49,6 +55,11 @@ public final class WareworksClient {
     /** Separate method: the harness classes are resolved only when this runs, i.e. only in a dev run with the property. */
     private static void startVisualTest(String scenario) {
         VisualTestHarness.install(scenario);
+    }
+
+    /** Separate method for the same reason as {@link #startVisualTest}. */
+    private static void placeWindow(IEventBus modEventBus, String monitor) {
+        WindowPlacement.install(modEventBus, monitor);
     }
 
     private static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
