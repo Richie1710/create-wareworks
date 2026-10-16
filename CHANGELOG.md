@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1-beta] - 2026-10-16
+
 ### Changed
 
 - **JEI's "+" weighs at most four variants of one modded item per recipe when they differ only in that mod's own
@@ -1098,7 +1100,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.11.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.11.1-beta...HEAD
+[0.11.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.11.0-beta...v0.11.1-beta
 [0.11.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.10.0-beta...v0.11.0-beta
 [0.10.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.9.2-alpha...v0.10.0-beta
 [0.9.2-alpha]: https://github.com/Richie1710/create-wareworks/compare/v0.9.1-alpha...v0.9.2-alpha
