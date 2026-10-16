@@ -15,8 +15,9 @@ import net.neoforged.neoforge.registries.DeferredRegister;
  * tank item stores its fluid in.
  * <p>
  * <b>Dev runs only.</b> {@code Wareworks} calls {@link #register} from a method of its own, and only while
- * {@code FMLLoader#isProduction} is false, so this class is resolved in dev runs alone (the pattern of ADR-014); the
- * release jar does not contain it at all ({@code build.gradle} leaves out {@code dev/wareworks/gametest}). Every dev
+ * {@code FMLLoader#isProduction} is false and this class is present, so it is resolved in this project's dev runs
+ * alone (the pattern of ADR-014); the release jar does not contain it at all ({@code build.gradle} leaves out
+ * {@code dev/wareworks/gametest}), and another project's dev run that loads the release jar finds no class. Every dev
  * run registers both types — client, server, GameTest server, data and the visual runs — so {@code /test run} works in
  * {@code runClient} and {@code runServer} as well. The types are synced: a dev client joins a release server, but a
  * release client cannot join a dev server.

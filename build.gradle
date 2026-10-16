@@ -33,8 +33,9 @@ sourceSets.main.resources {
 //    data/<namespace>/structure is the vanilla structure-template path, so a shipped template would be live datapack
 //    content that /place template and any structure block could pull a bare test floor plate out of (M5 release audit).
 // All of them are loaded from the compiled classes and resources in dev runs (runVisualTest, runRobustnessTest,
-// runGameTestServer), never from this jar, and src/main reaches the classes only behind FMLLoader.isProduction():
-// WareworksClient starts the harness, and Wareworks registers the GameTests' data components (ADR-064).
+// runGameTestServer), never from this jar, and src/main reaches the classes only behind FMLLoader.isProduction() and a
+// second check: WareworksClient starts the harness only with its system property, and Wareworks registers the GameTests'
+// data components only when their class is present (ADR-064).
 tasks.named('jar', Jar) {
     exclude('dev/wareworks/dev/**')
     exclude('dev/wareworks/gametest/**')

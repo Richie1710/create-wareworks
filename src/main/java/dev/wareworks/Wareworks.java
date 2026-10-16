@@ -111,10 +111,23 @@ public final class Wareworks {
         AisleChunkTickets.registerHooks(NeoForge.EVENT_BUS);
         WareworksCommands.register(NeoForge.EVENT_BUS);
         // 6. Dev runs only (ADR-064): the data components the GameTests need and no release has. The release jar does
-        //    not contain their class (build.gradle), and this guard keeps a jar built without that exclusion from
-        //    registering them.
-        if (!FMLLoader.isProduction())
+        //    not contain their class (build.gradle), and isProduction() is false in every NeoForge dev launch, also in
+        //    another project's dev run that loads the release jar; so the class must be present as well.
+        if (!FMLLoader.isProduction() && hasGameTestClasses())
             registerGameTestComponents(modEventBus);
+    }
+
+    /**
+     * Whether this jar holds the GameTest classes: true in this project's own runs, false for the release jar, which
+     * leaves out {@code dev/wareworks/gametest} even when a dev run of another project loads it.
+     */
+    private static boolean hasGameTestClasses() {
+        try {
+            Class.forName("dev.wareworks.gametest.GameTestComponents", false, Wareworks.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
+        }
     }
 
     /** Separate method: GameTestComponents is resolved only when this runs, i.e. only in a dev run (ADR-014). */

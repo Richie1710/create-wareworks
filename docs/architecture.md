@@ -528,7 +528,7 @@ dev.wareworks
 │                              templates: scripts/gen_structures.py).
 │                              Excluded from the release jar together with dev (build.gradle, M5 review); src/main
 │                              reaches it only through Wareworks#registerGameTestComponents, behind
-│                              FMLLoader#isProduction (ADR-064)
+│                              FMLLoader#isProduction and a class-presence check (ADR-064)
 ├── dev                        dev-only visual smoke test, client side (ADR-014): VisualTestHarness (entry, step runner),
 │                              VisualContext, VisualStep / VisualScript (step builder), VisualWorld (title screen, flat
 │                              world), VisualPass (Flywheel on/off), VisualScenario / VisualScenarios, AisleVisualScenario
@@ -5377,9 +5377,12 @@ iteration order already changed with every run (the item's identity hash).
   `DeferredRegister.DataComponents`, together with `wareworks:fluid_content`, a component of NeoForge's
   `SimpleFluidContent` — the stock component a mod's tank item keeps its fluid in, which neither vanilla nor Create
   registers, so without it no item key could hold one. `Wareworks` calls the register from a separate method only when
-  `FMLLoader#isProduction` is false, the pattern `WareworksClient` follows for the visual harness (ADR-014). The jar
-  already leaves out `dev/wareworks/gametest/**`, so a release neither contains nor registers them, and the guard
-  keeps a jar built without that exclusion from registering them. Every dev run registers them (client, server,
+  `FMLLoader#isProduction` is false **and** the class is present (`Class.forName` without initialising), the pattern
+  `WareworksClient` follows for the visual harness (ADR-014), which also needs a second condition. The jar leaves out
+  `dev/wareworks/gametest/**`, so a release neither contains nor registers them. `isProduction` alone would not do:
+  it is false in every NeoForge dev launch, also in another project's dev run that loads the release jar (an addon
+  built against it), where the missing class would stop the mod from loading; the presence check makes that run skip
+  the registration. Every dev run registers them (client, server,
   GameTest server, data and the visual runs), so `/test run` works in `runClient` and `runServer` as well.
 
 *Alternatives considered:*
@@ -5494,7 +5497,7 @@ real world and a dedicated server are left to the manual checklist (section AX).
   release server. A world that holds an item with a test component loses that component in a release; only GameTest
   worlds hold one.
 * `build.gradle`'s note that nothing in `src/main` references `dev/wareworks/gametest` now reads "only behind
-  `FMLLoader#isProduction`", as for `dev/wareworks/dev`. `WareworksNetwork.VERSION` stays `"12"`: no payload's bytes
+  `FMLLoader#isProduction` and a second check", as for `dev/wareworks/dev`. `WareworksNetwork.VERSION` stays `"12"`: no payload's bytes
   change.
 
 ## Persistence & sync

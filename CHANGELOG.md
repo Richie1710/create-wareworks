@@ -13,17 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data.** Where a JEI slot lists more such variants, for example one tool part in many materials, the terminal now
   chooses among the first four in JEI's order: a later one is no longer preferred because it was delivered or is in
   stock, and the cell shows the first one as missing instead. Potions, tipped arrows, enchanted books, rockets,
-  banners, dyed and trimmed armour and the other vanilla variants are all weighed as before, and so is mod data kept
-  as plain NBT, numbers, text or registry ids
+  banners, dyed and trimmed armour and the other vanilla variants are all weighed as before, and so is mod data whose
+  component holds nothing but NBT (custom data included), a number, a string, an enum or a registry id. Data a mod
+  wraps in its own record or class still counts as that mod's own data, even when all it holds is such a value, for
+  example a material id
+- **Many variants of one modded item that differ only in that mod's own data take longer to keep apart.** The
+  warehouse now tells such variants apart by comparing them one by one, which is what makes items like Quark's Seed
+  Pouches retrievable. A storage location holding hundreds of them, such as a large vault full of spell scrolls or
+  tool parts in many materials, takes noticeably longer every time it is read, which happens in the background and
+  after every crane trip into or out of it, and so does a terminal listing them. A chest or barrel never holds enough
+  of them to notice. Vanilla and Create variants, and mod data kept as NBT, numbers, text or registry ids, are as fast
+  as before
 
 ### Fixed
 
-- **Items whose mod data is hashed by identity, such as Quark's filled Seed Pouches, can now be retrieved.** They could
-  be stored, but every request for one at the terminal answered "not in stock", and each one stored showed up in the
-  stock list on its own. They now appear once per content — two pouches holding the same seeds as one entry with 2, a
-  pouch of chestnuts as another — and can be requested and retrieved, also after a restart, on a server and when they
-  sit inside another item, such as a pouch in a shulker box. A fluid carrying such data is no longer split into several
-  fluids either. Every other item is stored, listed and requested as before
+- **Items whose mod data compares by its contents but is hashed by identity, such as Quark's filled Seed Pouches, can
+  now be retrieved.** They could be stored, but every request for one at the terminal answered "not in stock", and each
+  one stored showed up in the stock list on its own. They now appear once per content — two pouches holding the same
+  seeds as one entry with 2, a pouch of chestnuts as another — and can be requested and retrieved, also after a restart,
+  on a server and when they sit inside another item, such as a pouch in a shulker box. A fluid carrying such data is no
+  longer split into several fluids either. Every other item is stored, listed and requested as before, only slower when
+  a mod keeps many variants of it (see Changed). A Create Toolbox that has held items still cannot be requested back:
+  Create's toolbox data compares its compartment filters by identity, so it never equals the copy a request carries
 
 ## [0.11.0-beta] - 2026-10-15
 
