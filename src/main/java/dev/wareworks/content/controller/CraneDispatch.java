@@ -96,8 +96,8 @@ import net.minecraft.world.level.Level;
  * and never holds the crane with the items in its claw; a warehouse terminal still does, as before. That holds while the
  * world runs, because a port's room only grows between the plan and the drop. A trip planned before a restart that
  * lowered {@code outputBufferSlots}, or a crane saved waiting in front of a port before M27, finds less room at its
- * drop: {@code CraneExecution} then takes what the port does not take back into storage at the crane's next retry, and
- * the request, which stays open, is planned again once the port has room.
+ * drop: {@code CraneExecution} then drops what the port takes and takes the rest back into storage at the first retry
+ * where the port takes nothing, and the request, which stays open, is planned again once the port has room.
  * <p>
  * <b>Reservations are derived from the crane's job</b> ({@code docs/warehouse-system.md} §7.4): every report re-tracks
  * the reported job, and every dispatch interval the ledger is rebuilt from the dock's current job

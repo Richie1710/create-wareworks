@@ -32,8 +32,11 @@ import org.jetbrains.annotations.Nullable;
  * packet. The gap is a proof about the tray and must never exceed its cycle, which is why it is a constant of its own
  * and not the reporting time.</li>
  * </ul>
- * A look that sees no box at rest — none held, or the tray moving — ends the wait, and so does a game time that went
- * backwards. The box is kept only to be compared by identity: it is never read, changed or saved.
+ * A look that sees no box at rest — none held, or the tray moving — ends the wait. A game time that went backwards does
+ * not: a client's clock runs ahead of a server below 20 TPS, or behind a slow connection, and the server's time packet
+ * (every 20 server ticks) sets it back by a tick or a few. Such a step moves the wait's clock back with it, so the
+ * looks keep counting the ticks they saw; server time never goes back. The box is kept only to be compared by identity:
+ * it is never read, changed or saved.
  * <p>
  * Pure Java, no Minecraft: {@code core.*} is JUnit-testable.
  */
@@ -72,8 +75,12 @@ public final class BoxWait {
             box = null;
             return false;
         }
-        boolean sameWait = box != null && now >= lastLook
-                && (restingBox == box || now - lastLook < SAME_BOX_GAP_TICKS);
+        if (box != null && now < lastLook) {
+            // The client's clock was set back by the server's time sync: keep the wait and its count of ticks.
+            since -= lastLook - now;
+            lastLook = now;
+        }
+        boolean sameWait = box != null && (restingBox == box || now - lastLook < SAME_BOX_GAP_TICKS);
         if (!sameWait)
             since = now;
         box = restingBox;

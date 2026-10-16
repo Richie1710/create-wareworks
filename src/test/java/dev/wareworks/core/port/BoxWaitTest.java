@@ -105,13 +105,35 @@ class BoxWaitTest {
 
     /** A game time that went backwards cannot prove anything, so the wait starts again. */
     @Test
-    void aGameTimeThatWentBackStartsTheWaitAgain() {
+    void aGameTimeThatWentBackKeepsTheWait() {
         BoxWait wait = new BoxWait();
         Object box = new Object();
         assertFalse(wait.look(START, box), "the wait starts");
-        assertFalse(wait.look(START - 1, box), "time went back: a new wait");
-        assertFalse(wait.look(START - 1 + WAIT - 1, box), "which is one tick short");
-        assertTrue(wait.look(START - 1 + WAIT, box), "and reported once it is full");
+        assertFalse(wait.look(START + 10, box), "ten ticks of it");
+        assertFalse(wait.look(START + 8, box), "the clock was set back two ticks: the wait goes on");
+        assertFalse(wait.look(START + 8 + WAIT - 11, box), "one tick short of the ticks the looks saw");
+        assertTrue(wait.look(START + 8 + WAIT - 10, box), "and reported once they add up");
+    }
+
+    /**
+     * A goggle tooltip on a client behind a server below 20 TPS: a new box object at every look, one look per client
+     * tick, and the server's time packet setting the clock back a few ticks every twenty. The wait still fills.
+     */
+    @Test
+    void aClientWhoseClockIsSetBackEverySecondStillReports() {
+        BoxWait wait = new BoxWait();
+        long now = START;
+        int looks = 0;
+        boolean reported = false;
+        while (!reported && looks <= 3 * WAIT) {
+            looks++;
+            now++;
+            if (looks % 20 == 0)
+                now -= 1 + looks % 3;
+            reported = wait.look(now, new Object());
+        }
+        assertTrue(reported, "a waiting box is reported despite the clock steps");
+        assertTrue(looks >= WAIT, "but not before the looks saw " + WAIT + " ticks: " + looks);
     }
 
     /** Nothing but looks without a box never reports anything. */

@@ -445,9 +445,11 @@ gold, because they are the three ways a door goes quiet:
   door simply never opens again. Take the link off and it works. While the link is on, this line stands **instead of**
   the address line: a linked Packager never reads the sign, so promising you an address there would be a lie.
 * *"A box has been waiting at the Packager: is anything taking it?"*. A Packager that holds a box makes no other, so a
-  door whose funnel you forgot, or whose belt stopped, stands still after its first box. The line appears once the box
-  has waited ten seconds, longer than a working belt funnel waits for a belt turning at 3 RPM or more, and goes as soon
-  as something takes it.
+  door whose funnel you forgot, or whose belt stopped, stands still after its first box. The line appears once you have
+  watched the box wait ten seconds, longer than a working belt funnel waits for a belt turning at 3 RPM or more, and
+  goes as soon as something takes it. Nothing watches the door while nobody looks, so keep your goggles on the port
+  for ten seconds before you trust that no box is stuck (the terminal's door list counts the same way, from when a
+  screen of the warehouse is open).
 
 **What to expect of it.** One box holds up to nine stacks and a door sends about one box a second, so a big order
 leaves as several boxes. A stray item standing in the port rides along in the box. An input opens a package **whole or
@@ -471,8 +473,9 @@ own redstone, because requests have no owner: a click for the item on the door's
 request, and a large one can make the door's own pulses refused as *request full*. A door set to *while powered* or
 *unless powered* does not top itself up while any order to it is open, and a chain ordered to the door holds back the
 door's own chains until it is done. In a warehouse with very many outputs the list looks at no more than 64 of them,
-in rack order and leaving out accepting and collecting ports, and its tooltip says so when it stopped before the
-last one.
+in rack order and leaving out accepting and collecting ports, and the door button's tooltip says so when it stopped
+before the last one; a warehouse with no door among those 64 shows no door button at all. The button offers at most
+16 doors, the first in rack order; any further doors are only counted in its tooltip's "+N more" and cannot be chosen.
 
 The crane carries the goods into the door's port, never more than the port can take, and your own redstone has the
 Packager box them with the sign's address; the warehouse never packs anything itself, and what happens after the

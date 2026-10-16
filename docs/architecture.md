@@ -5546,7 +5546,7 @@ in the way of sending a player's order to a door, and they are fixed first, befo
   held the crane, and with it the whole aisle, until somebody emptied, broke or turned the port.
 * **The controller accepted a request to a port of any direction.** `request()` checked for an aligned
   `LocationKind.OUTPUT` member and nothing else. A request to an **accepting** port was served into the port's export
-  stream (the notes written for M26 called such a request "born dead"; it is not, it is delivered), and one to a
+  stream (so it was delivered, not lost), and one to a
   **collecting** port could never be served, because the collect transfer context refuses every insert. No block
   of the mod ever made such a request in a loaded warehouse, but a terminal that can name another station would.
 
@@ -5613,8 +5613,11 @@ that teaches the whole of it. With this milestone issue #18 is done: M26 built t
     position the drop just resolved as loaded. The state machine retracts and reroutes the held items with the port
     excluded; the reroute detaches the job from its request (`CraneExecution#reportRerouted`), so the request stays
     open with what was delivered credited and is planned again, by the room, once the port has some. A partial drop
-    still waits one `retryTicks` as at any output, and the retry that finds the port taking nothing reroutes, so a
-    crane waits in front of a port for one retry at most. A terminal and a `SUPPLY` keep the wait. The state machine
+    still waits one `retryTicks` as at any output, and the retry that finds the port taking nothing reroutes, so each
+    wait in front of a port lasts one retry. A port that something drains between retries takes some items at every
+    retry, so a crane brought there by a restart or a pre-M27 save keeps dropping and waiting, as before M27, until its
+    carry is delivered or a retry finds the port taking nothing; this happens once per such crane and only after an
+    upgrade or a lowered `outputBufferSlots`. A terminal and a `SUPPLY` keep the wait. The state machine
     itself is unchanged.
   * **The minimum carry** answers the case that sizing alone would create. A port drained slowly — a hopper takes
     one item every 8 ticks — with a large open request would be served one item per trip, and because requests are
@@ -5920,7 +5923,7 @@ The box that waits (D14): JUnit `core.port.BoxWaitTest` (nine cases: the gap is 
 waits longer; reported exactly after 200 ticks of looks in every tick; the same object at two sparse looks has waited
 between them; another box at a look a full wait later starts again; another object less than 20 ticks later
 continues, all the way to the report; another object 20 ticks later starts again, well inside the reporting time; a
-look without a box ends the wait; a game time that went back starts again; no box is never reported), `LangConsistencyTest#thePackageDoorRowsFitAGoggleTooltip` with the new
+look without a box ends the wait; a game time set back by the client's time sync keeps the wait, also for a client set back every second; no box is never reported), `LangConsistencyTest#thePackageDoorRowsFitAGoggleTooltip` with the new
 row among the eight, and `PackageOrderBoundaryTest`, which now also refuses a write to `animationTicks` or
 `animationInward`. GameTests `PackageDoorGameTests#doorRowSaysNothingTakesTheBox` (a Packager boxes its port with
 nothing below it; the rows a real open screen is told turn to `BOX_WAITING`, checked on every tick never to say so

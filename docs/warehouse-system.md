@@ -744,7 +744,10 @@ no-wait rule also holds at the drop: when a `RETRIEVE`'s target is a warehouse p
 `CraneExecution#performDrop` answers `JobCancelled` instead of `OutputFull`. The crane retracts and reroutes what it holds
 into storage; the reroute detaches the job from its request, which stays open with what was already delivered credited
 and is planned again, by the room, once the port has some. A partial drop still waits one `retryTicks` as at any output,
-and the retry that finds the port taking nothing reroutes — so a crane waits in front of a port for one retry at most.
+and the retry that finds the port taking nothing reroutes — so each wait in front of a port lasts one retry. A port
+that something drains between retries takes some items at every retry, so a crane brought there by a restart or a
+pre-M27 save keeps dropping and waiting, as before M27, until its carry is delivered or a retry finds the port taking
+nothing; this happens once per such crane and only after an upgrade or a lowered `outputBufferSlots`.
 A warehouse terminal and a production station keep the wait. GameTest `aportfilledunderacarryingcranegetstherestlater`
 fills a port by a test-only insert under a carrying crane: one partial drop, one retry, the rest back into storage, the
 request still open, and the rest delivered in one trip once the port is emptied.
@@ -1323,8 +1326,8 @@ way. So an **unaddressed** box can only ever be delivered to a Package Port that
 `*`, the catch-all the bullet above covers — and a chain conveyor carries it past every other named one, which is why
 the port's "No address" goggle line is gold rather than grey.
 
-One citation that is easy to get backwards, and the reason the issue's own text needed correcting
-(`docs/api/_gaps-and-corrections.md` §5.30): **a Package Port's filter is its own name.** The matching is in
+One citation that is easy to get backwards, and the reason the issue's own text needed correcting: **a Package
+Port's filter is its own name.** The matching is in
 `PackagePortAutomationInventoryWrapper`, not in `PackagePortBlockEntity`, and for the item-capability path it is the
 mirror image of the obvious reading — `insertItem` **refuses** a package whose address matches the port's own filter
 and accepts only one addressed elsewhere, while `extractItem` hands out **only** matching ones.

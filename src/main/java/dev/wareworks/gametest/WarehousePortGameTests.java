@@ -91,7 +91,7 @@ import net.neoforged.neoforge.items.IItemHandler;
  * Five tests pin the two guarantees M27 adds (issue #18, ADR-065): a retrieve into a port carries at most what the port
  * takes and sets off only for a whole trip, so the crane never waits in front of one
  * ({@link #craneNeverWaitsAtAFullPort}, {@link #aPortThatTakesLittleWaitsForAFullTrip}), and a port that fills up under
- * a carrying crane all the same gets its leftovers back into storage at the crane's next retry
+ * a carrying crane all the same gets its leftovers back into storage at the first retry where the port takes nothing
  * ({@link #aPortFilledUnderACarryingCraneGetsTheRestLater}); and a request only ever goes to a port that requests
  * ({@link #controllerRefusesARequestToAPortThatDoesNotRequest}, {@link #aPortTurnedSilentlyLosesItsRequestsOnRelink}).
  * <p>
