@@ -11,6 +11,7 @@ import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.production.PlanRefusal;
@@ -401,6 +402,10 @@ public final class WareworksLangGen {
         // The one failure nothing else in the game diagnoses, so the longest line of the feature earns its words.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGER_LINKED),
                 "The Packager is linked to a logistics network and ignores redstone");
+        // The door that may stand still with a box nobody takes (M27). It says what was seen and asks, because a taker
+        // that works can be slower than the wait it is reported after (a belt funnel waits while its belt is busy).
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_BOX_WAITING),
+                "A box has been waiting at the Packager: is anything taking it?");
         // Packages at the in door (M26, issue #18). The refusal names both numbers, because the cliff is the pair:
         // Create consumes a package whole, so a package of three stacks needs room for all three at once. Both counts
         // come last in their phrase, because 1 is an ordinary value for either and no plural may disagree with it.
@@ -539,6 +544,51 @@ public final class WareworksLangGen {
                 "Making it starts a production order; %1$s would be made in total.");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_BUFFER), "Delivered here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_NOT_SHOWN), "+%1$s not shown");
+        // Package doors (M27, issue #18, ADR-065): what a door row says. The state words are short on purpose, because a
+        // row also has to hold the door's name; what to do about each state is said once, in the door's detail line.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_HERE), "Here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_UNNAMED), "Door %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_MORE), "+%1$s more");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_UNCHECKED), "More outputs were not checked");
+        for (DoorState state : DoorState.values()) {
+            state.langKey().ifPresent(key -> lang.accept(WareworksLang.key(key), switch (state) {
+                case READY -> throw new IllegalStateException("a ready door names its rack address, not a state");
+                case NO_ADDRESS -> "no address";
+                case PORT_FULL -> "port full";
+                case BOX_WAITING -> "box waiting";
+                case IGNORES_REDSTONE -> "ignores redstone";
+                case NOT_LOADED -> "not loaded";
+            }));
+            // What to do about the state, said once, in the chosen door's detail line of the button's tooltip.
+            state.detailKey().ifPresent(key -> lang.accept(WareworksLang.key(key), switch (state) {
+                case READY -> throw new IllegalStateException("a ready door needs no advice");
+                case NO_ADDRESS -> "No sign: the box leaves unaddressed";
+                case PORT_FULL -> "Full: is the Packager running?";
+                case BOX_WAITING -> "A box waits: is anything taking it?";
+                case IGNORES_REDSTONE -> "Stock Link: the door never sends";
+                case NOT_LOADED -> "Not loaded: come closer to choose it";
+            }));
+        }
+        // The screen's door choice (M27): one button left of the inventory, a gold label in the title row while a door
+        // is chosen, a line on the stock cells and in the question, and the status row's answers naming the door.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_TITLE), "Deliver to: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_HINT), "Click: next door, right-click: here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_INDICATOR), "→ %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_CELL), "A click sends it to %1$s");
+        // Short frames, because a door answer names an item and a door in one row: "to" says where it goes, and the
+        // two names keep 156 px between them at the widest numbers (83 beside a production order's count).
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_REQUESTED), "%1$s x%2$s to %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_PRODUCING), "%1$s x%2$s to %3$s, making %4$s");
+        // An accepted door click whose chain was refused: the chain's own sentence, behind the door it was for.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_SHORTFALL), "To %1$s: %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_STANDING), "%1$s: waiting for %2$s, delivered %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_STANDING_SHORT), "%1$s: waiting for %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_UNAVAILABLE), "Door unavailable: clicks deliver here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_REFUSED_FULL),
+                "that door waits for too many item types");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_LIST_HERE), "A list always comes here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_FETCH_HERE), "The ingredients always come here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_CONFIRM), "Goes to %1$s");
         // The clipboard order (M23, issue #19): a whole list ordered at once, worked off in portions and ticked off on
         // the clipboard as it is delivered.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_LIST),
@@ -897,6 +947,8 @@ public final class WareworksLangGen {
                 case INVALID_AMOUNT -> "the requested amount must be at least 1";
                 case RESERVED -> "a stock rule keeps the rest of it in reserve";
                 case PRODUCTION_PAUSED -> "the warehouse has stopped making it; check the machine and resume it";
+                case NOT_A_DOOR -> "not a package door of this warehouse";
+                case DOOR_IGNORES_REDSTONE -> "that door ignores redstone";
             });
         }
 

@@ -100,9 +100,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *       catches and the belt's own inventory confirms;</li>
  *   <li><b>the other warehouse takes it apart and stores it</b> — the belt funnel hands the box to the second
  *       Packager, the warehouse input counts one package opened, and the second crane puts the iron into its racks;</li>
- *   <li><b>both doors say what they are doing</b> — five goggle tooltips: the address, the missing address, the
- *       {@code LINKED} dead end, the in door's counter, and the refusal nothing else in the game diagnoses;</li>
- *   <li><b>and they say it in German too</b> — four more shots after a real language switch, because
+ *   <li><b>both doors say what they are doing</b> — six goggle tooltips: the address, a box left waiting at the
+ *       Packager with nothing under it (M27), the missing address, the {@code LINKED} dead end, the in door's counter,
+ *       and the refusal nothing else in the game diagnoses;</li>
+ *   <li><b>and they say it in German too</b> — five more shots after a real language switch, because
  *       {@code de_de.json} is hand-written and nothing else in the build ever renders these rows.</li>
  * </ol>
  * An {@link SceneItemCensus} spanning <b>both</b> warehouses and the belt between them is taken around every move. It is
@@ -206,6 +207,12 @@ public final class PackagesVisualScenario implements VisualScenario {
     /** Following camera for the frozen moments. */
     private static final double BLOCK_CENTER = 0.5;
 
+    /**
+     * What is put into the out door's port for the box that is left waiting at the Packager (M27), and how much: an
+     * item nothing else in the scene holds, so the census follows it exactly.
+     */
+    private static final ItemKey LEFT_WAITING = ItemKey.of(Items.AMETHYST_SHARD);
+    private static final int LEFT_WAITING_AMOUNT = 8;
     /** Distinct, storable items that fill the second input's buffer for the refusal shot. */
     private static final List<Item> FILLERS = List.of(Items.COBBLESTONE, Items.DIRT, Items.SAND, Items.GRAVEL,
             Items.OAK_LOG, Items.STONE, Items.GLASS, Items.BRICK, Items.CLAY_BALL, Items.FLINT, Items.COAL,
@@ -636,6 +643,7 @@ public final class PackagesVisualScenario implements VisualScenario {
      */
     private void goggles(VisualScript script) {
         reach(script, GoggleShots.vanillaReach());
+        boxLeftWaiting(script, "goggles-door-box-waiting");
         fly(script);
         GoggleShots.shot(script, NAME, AT_PORT, "goggles-door", PackagesVisualScenario::portPos,
                 PackagesVisualScenario::doorReadable, PackagesVisualScenario::checkAddressedDoor);
@@ -704,6 +712,13 @@ public final class PackagesVisualScenario implements VisualScenario {
         GoggleShots.shot(script, NAME, AT_PORT, "goggles-door-de", PackagesVisualScenario::portPos,
                 PackagesVisualScenario::doorOnRedstone, PackagesVisualScenario::checkAddressedDoor);
 
+        // The Stock Link stood where the wire from the Smart Observer ran, so the wire goes back before the observer
+        // has the Packager box anything again.
+        script.server("packages: put the wire from the Smart Observer back on the Packager",
+                (server, context) -> server.overworld().setBlockAndUpdate(senderPackagerPos(context.origin()).above(),
+                        Blocks.REDSTONE_WIRE.defaultBlockState()));
+        boxLeftWaiting(script, "goggles-door-box-waiting-de");
+
         script.server("packages: take the sign off once more",
                 (server, context) -> server.overworld().setBlockAndUpdate(signPos(context.origin()),
                         Blocks.AIR.defaultBlockState()));
@@ -712,6 +727,110 @@ public final class PackagesVisualScenario implements VisualScenario {
                 PackagesVisualScenario::doorOnRedstone, PackagesVisualScenario::checkUnaddressedDoor);
 
         language.switchTo(script, "packages: ", ENGLISH);
+    }
+
+    /**
+     * A box left waiting at the out door's Packager (M27, ADR-065 D14), and the gold goggle row that says so: the
+     * hopper that takes the boxes is taken away and a stack put into the port, which the Smart Observer has the
+     * Packager box at once, so the box rests in the tray with nothing under it. The goggle row is decided on the client
+     * from Create's own packet, in every frame the tooltip is built, so the shot waits until the client's own decision
+     * says so ({@code WarehouseOutputBlockEntity#boxWaitingShown}), which takes the reporting time of
+     * {@code BoxWait#REPORT_AFTER_TICKS} ticks of looking. Then the box is taken out of the tray through the Packager's
+     * capability, as a hopper would, and the hopper is put back.
+     */
+    private void boxLeftWaiting(VisualScript script, String label) {
+        script.server("packages: take the hopper away from under the out door's Packager",
+                        PackagesVisualScenario::takeTheDrainAway)
+                .server("packages: put " + LEFT_WAITING_AMOUNT + " " + LEFT_WAITING + " into the out door's port, "
+                        + "which its Smart Observer has the Packager box", this::fillThePortForTheWait)
+                .serverUntil("packages: wait until the box rests in the Packager's tray, with nothing under it",
+                        PackagesVisualScenario::boxResting, MOMENT_TIMEOUT_TICKS)
+                .server("packages: census with a box left waiting",
+                        (server, context) -> census(server, "with a box left waiting (" + label + ")"));
+        fly(script);
+        GoggleShots.shot(script, NAME, AT_PORT, label, PackagesVisualScenario::portPos,
+                PackagesVisualScenario::boxWaitingShownOnTheClient, PackagesVisualScenario::checkBoxWaitingDoor);
+        script.server("packages: take the box out of the tray as a hopper would, and put the hopper back",
+                        this::takeTheWaitingBox)
+                .server("packages: census once the box has left the scene",
+                        (server, context) -> census(server, "after the waiting box was taken (" + label + ")"));
+    }
+
+    /** Takes the hopper under the out door's Packager away; it must be empty, so nothing leaves the scene with it. */
+    private static void takeTheDrainAway(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos drain = drainPos(context.origin());
+        IItemHandler hopper = level.getCapability(Capabilities.ItemHandler.BLOCK, drain, null);
+        if (hopper == null)
+            throw new VisualTestException("no hopper under the out door's Packager at " + drain);
+        for (int slot = 0; slot < hopper.getSlots(); slot++) {
+            if (!hopper.getStackInSlot(slot).isEmpty())
+                throw new VisualTestException("the hopper under the out door's Packager still holds "
+                        + hopper.getStackInSlot(slot));
+        }
+        level.setBlockAndUpdate(drain, Blocks.AIR.defaultBlockState());
+    }
+
+    /** Puts the stack the waiting box will hold into the out door's port, as a crane's drop would, and counts it in. */
+    private void fillThePortForTheWait(MinecraftServer server, VisualContext context) {
+        WarehouseOutputBlockEntity port = port(server.overworld(), context.origin());
+        if (!port.insert(LEFT_WAITING.toStack(LEFT_WAITING_AMOUNT), false).isEmpty())
+            throw new VisualTestException("the out door's port refused " + LEFT_WAITING_AMOUNT + " " + LEFT_WAITING);
+        expected = SceneItemCensus.plus(expected, LEFT_WAITING, LEFT_WAITING_AMOUNT);
+    }
+
+    /** The out door's Packager holds a box with its tray at rest, and nothing is under it to take the box. */
+    private static boolean boxResting(MinecraftServer server, VisualContext context) {
+        PackagerBlockEntity packager = AllBlockEntityTypes.PACKAGER.getNullable(server.overworld(),
+                senderPackagerPos(context.origin()));
+        return packager != null && !packager.heldBox.isEmpty() && packager.animationTicks == 0;
+    }
+
+    /** The client's own decision, the one the goggle row is drawn from, says that the box has waited long enough. */
+    private static boolean boxWaitingShownOnTheClient(VisualContext context) {
+        ClientLevel level = context.minecraft().level;
+        if (level == null)
+            return false;
+        return level.getBlockEntity(portPos(context.origin())) instanceof WarehouseOutputBlockEntity port
+                && port.boxWaitingShown(level.getGameTime());
+    }
+
+    /** The gold row about the waiting box, beside the address rows, in the language that is loaded. */
+    private static void checkBoxWaitingDoor(VisualContext context) {
+        List<String> lines = GoggleShots.lines(context, portPos(context.origin()));
+        LOGGER.info(PREFIX + "packages: out door goggles with a box left waiting {}", lines);
+        GoggleShots.requireLine(lines,
+                WareworksLang.translateDirect(WareworksLang.GOGGLES_PORT_PACKAGE_HANDOVER).getString());
+        GoggleShots.requireLine(lines, WareworksLang.packageAddress(ADDRESS).component().getString());
+        GoggleShots.requireLine(lines,
+                WareworksLang.translateDirect(WareworksLang.GOGGLES_PORT_BOX_WAITING).getString());
+    }
+
+    /**
+     * Takes the waiting box out of the tray through the Packager's own item capability, which is what a hopper below
+     * does ({@code PackagerItemHandler#extractItem}), checks that it is the stack that was put in, counts it out of the
+     * scene and puts the hopper back.
+     */
+    private void takeTheWaitingBox(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        IItemHandler tray = level.getCapability(Capabilities.ItemHandler.BLOCK, senderPackagerPos(dock), null);
+        if (tray == null)
+            throw new VisualTestException("the out door's Packager offers no item handler");
+        ItemStack box = tray.extractItem(0, 1, false);
+        if (!PackageItem.isPackage(box))
+            throw new VisualTestException("the waiting box is not a package: " + box);
+        List<ItemStack> contents = box.getOrDefault(AllDataComponents.PACKAGE_CONTENTS, ItemContainerContents.EMPTY)
+                .nonEmptyStream().toList();
+        if (contents.size() != 1 || !ItemKey.of(contents.getFirst()).equals(LEFT_WAITING)
+                || contents.getFirst().getCount() != LEFT_WAITING_AMOUNT)
+            throw new VisualTestException("the waiting box should hold " + LEFT_WAITING_AMOUNT + " " + LEFT_WAITING
+                    + ": " + contents);
+        expected = SceneItemCensus.plus(expected, LEFT_WAITING, -LEFT_WAITING_AMOUNT);
+        level.setBlockAndUpdate(drainPos(dock),
+                Blocks.HOPPER.defaultBlockState().setValue(HopperBlock.FACING, laneDirection()));
+        LOGGER.info(PREFIX + "packages: took the waiting box with {} {} out of the tray, and put the hopper back",
+                LEFT_WAITING_AMOUNT, LEFT_WAITING);
     }
 
     /** A goggle tooltip of a door is read from the world on the client, so there is nothing to wait for but the block. */

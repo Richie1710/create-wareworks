@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import org.jetbrains.annotations.Nullable;
@@ -26,6 +27,8 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftResult;
+import dev.wareworks.content.station.TerminalDoorRow;
+import dev.wareworks.content.station.TerminalDoors;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalListState;
 import dev.wareworks.content.station.TerminalMenuLayout;
@@ -35,10 +38,12 @@ import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.CountFormat;
+import dev.wareworks.core.terminal.DoorSelection;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.PlanCancelCost;
@@ -61,6 +66,7 @@ import dev.wareworks.network.TerminalCraftAnswerPayload;
 import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
+import dev.wareworks.network.TerminalDoorsPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
@@ -83,11 +89,13 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.renderer.Rect2i;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
@@ -137,6 +145,15 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * which this screen hands to the panel before it folds the panel out ({@link #onCraftView}). The viewer's recipe screen
  * opens over this one without closing the menu, so the server's pushes keep reaching this screen while it is covered
  * ({@link #forMenu}), and the viewer hands this very screen back when it closes.
+ * <p>
+ * <b>Package doors</b> (M27, issue #18, ADR-065). One button left of the player inventory chooses where a click on a
+ * stock cell delivers: here, or one of the warehouse's package doors the server listed ({@link #onDoors}). The choice
+ * is this screen object's alone ({@link #doorSelection}): it starts at here every time the screen opens, outlives a
+ * re-layout, and is never sent anywhere but in the click it applies to. While a door is chosen the button is green,
+ * the title row names the door in gold, the stock cell under the mouse is tinted gold and its tooltip says where the
+ * click goes; every accepted answer names the door the server echoed, never the one the button shows by then (a
+ * refusal keeps its reason). The clipboard
+ * list and the crafting panel's Fetch always deliver here, and their tooltips say so.
  */
 public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<WarehouseTerminalMenu> {
     /** How long the answer to a request stays in the status line. */
@@ -176,6 +193,13 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static final int COLOR_SCROLLBAR_TRACK = 0x40000000;
     private static final int COLOR_SCROLLBAR_KNOB = 0xFF9A7B4F;
     static final int COLOR_CELL_HOVER = 0x60FFFFFF;
+    /**
+     * A stock cell under the mouse while a click there delivers to a package door (M27): the gold of the door's name in
+     * the title row. Stock cells only: the crafting panel's cells share {@link #COLOR_CELL_HOVER} and never deliver.
+     */
+    static final int COLOR_CELL_HOVER_DOOR = 0x60FFAA00;
+    /** The chosen door's name in the title row: {@code ChatFormatting.GOLD}, the colour of every door cue. */
+    private static final int COLOR_DOOR = 0xFFFFAA00;
     /**
      * An item that is not in stock but can be produced here (M11, ADR-024); the crafting panel marks an ingredient a
      * Fetch would have made first with it too (issue #24, slice 3).
@@ -243,6 +267,28 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * a length ({@link ProductionScreenState#MAX_DEPTH} bounds the number, this bounds the string).
      */
     private static final int MAX_STEP_INDENT = 2 * MAX_STEP_ROWS;
+
+    // --- the door choice (M27, issue #18, ADR-065) -------------------------------------------------------------------
+    /** Lines the door button's tooltip has at most: title, five entries, two detail lines, the hint and Create's. */
+    public static final int MAX_DOOR_TOOLTIP_LINES = 10;
+    /** Entry lines the door button's tooltip shows, the "+N more" and the "not checked" lines included. */
+    private static final int DOOR_ENTRY_LINES = 5;
+    /**
+     * Pixels of an item's name a door answer keeps before the door's name gives way ({@link #fitDoorLine}): a few
+     * letters, enough to recognize the item by, where a bare ellipsis would say nothing about what was ordered. The
+     * door's full name stands in gold in the title row in any case.
+     */
+    private static final int MIN_ITEM_PREFIX = 30;
+    /** The marks of Create's own selection inputs ({@code SelectionScrollInput}): the current entry and the others. */
+    private static final String DOOR_CURRENT_MARK = "-> ";
+    private static final String DOOR_OTHER_MARK = "> ";
+    /** Between a door's name and its rack address or state word in a tooltip entry. */
+    private static final String DOOR_GAP = "  ";
+    /**
+     * Door names this screen keeps for its answers, least recently pushed out first: an answer names the door it was
+     * for even when that door has left the list since, and a list the server bounds at 16 rows never fills it.
+     */
+    private static final int MAX_DOOR_NAMES = 64;
 
     /**
      * Search and filter survive closing the screen, like a storage mod's terminal — for this client session only, as
@@ -379,6 +425,33 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     private RequestScope confirmScope = RequestScope.CLICK;
     /**
+     * The package door {@link #confirming} was measured for, as the server echoed it (M27, issue #18, ADR-065 D8);
+     * empty for here. The Yes sends exactly this door back, never whatever the screen would choose by then.
+     */
+    private Optional<BlockPos> confirmingDoor = Optional.empty();
+    /**
+     * The package doors a click may deliver to, as the server last pushed them (M27, issue #18, ADR-065 D9). The screen
+     * holds them only; where a click goes is its own choice, and the server holds none.
+     */
+    private TerminalDoors doors = TerminalDoors.NONE;
+    /**
+     * Where a click on a stock cell delivers: here, or one of {@link #doors} (M27, ADR-065 D8). A field of this screen
+     * object and nothing else, set to here when the screen is built and never reset by {@link #init()}: a resize, a
+     * fold of the crafting panel and a recipe viewer's round trip lay the same object out again and keep it, while the
+     * next screen starts at here. The server never learns it except in the click it applies to.
+     */
+    private final DoorSelection<BlockPos> doorSelection = new DoorSelection<>();
+    /**
+     * Every door row this screen was told about, by position, so an answer can name the door it was for even when that
+     * door has left the list since; at most {@value #MAX_DOOR_NAMES}, the least recently pushed out first.
+     */
+    private final Map<BlockPos, TerminalDoorRow> doorNames = new LinkedHashMap<>(16, 0.75F, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<BlockPos, TerminalDoorRow> eldest) {
+            return size() > MAX_DOOR_NAMES;
+        }
+    };
+    /**
      * What the <b>whole clipboard list</b> would cost, while that one dialog is up (M23, issue #19): the partial case
      * ("the list wants 2000 cobblestone and the warehouse holds 1300") and the production case, measured over the
      * whole list on the server before anything was requested. {@code null} while nothing is being asked.
@@ -447,6 +520,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private Label amountLabel;
     /** The toggle that folds the crafting panel out and in, in the free column right of the inventory (M32). */
     private IconButton craftToggle;
+    /**
+     * The button that chooses where a click delivers, in the free column left of the inventory (M27); laid out with
+     * every other widget and hidden while the warehouse has no door.
+     */
+    @Nullable
+    private IconButton doorButton;
     /** The panel's Clear button; {@code null} while the panel is folded in. */
     @Nullable
     private IconButton craftClear;
@@ -552,6 +631,13 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         craftToggle.getToolTip().add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_TOGGLE_HINT)
                 .withStyle(ChatFormatting.GRAY));
         addRenderableWidget(craftToggle);
+        // The door button (M27, issue #18), the toggle's mirror left of the inventory. Its clicks and its scroll wheel
+        // are taken in mouseClicked and mouseScrolled, like the toggle's, so the widget itself only draws and holds the
+        // tooltip; it is shown only while the warehouse has a door, and the choice it shows outlives this re-layout.
+        doorButton = new IconButton(leftPos + layout.doorButtonX(), topPos + layout.doorButtonY(),
+                AllIcons.I_SEND_ONLY);
+        addRenderableWidget(doorButton);
+        updateDoorButton();
         craftClear = null;
         craftFetch = null;
         if (craftOpen) {
@@ -655,17 +741,47 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // chain behind it was refused, and that sentence is what a player can act on, while "Requested Chest x1" is
         // already confirmed by the chest arriving. The row holds one line, so the surprising half wins it — in gold,
         // because something *was* ordered, and with the sound of an accepted click.
-        Component planned = payload.isAccepted() ? planRefusalLine(payload) : null;
+        // The door the server used, never the one the button shows by now (M27, ADR-065 D8): a click and its answer
+        // are a tick or more apart, and the player may have moved the choice in between. A door click whose chain was
+        // refused names that door before the chain's sentence, because the part that was accepted goes there.
+        Optional<BlockPos> door = payload.door();
+        Component planned = !payload.isAccepted() ? null
+                : door.isPresent() ? doorPlanRefusalLine(payload, door.get()) : planRefusalLine(payload);
         if (payload.isAccepted()) {
-            feedback = planned != null ? planned : acceptedLine(payload);
+            feedback = planned != null ? planned
+                    : door.isPresent() ? acceptedDoorLine(payload, door.get()) : acceptedLine(payload);
             feedbackColor = planned != null ? COLOR_LOST : COLOR_SUCCESS;
             playUiSound(SoundEvents.NOTE_BLOCK_BELL.value(), 0.8F, 1.6F);
         } else {
             feedback = refusedLine(payload);
             feedbackColor = COLOR_ERROR;
             playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
+            // A refusal that says the chosen door is no door any more puts the choice back to here at once, so the next
+            // click is not refused the same way; the red line says why.
+            if (door.isPresent() && door.equals(doorSelection.selected()) && isAboutTheDoor(payload)
+                    && doorSelection.here())
+                doorChoiceChanged();
         }
         feedbackTicks = FEEDBACK_TICKS;
+    }
+
+    /** Whether a refusal is about the door itself rather than about the item or the warehouse. */
+    private static boolean isAboutTheDoor(TerminalResultPayload payload) {
+        RequestRejection rejection = payload.rejection().orElse(null);
+        return rejection == RequestRejection.NOT_A_DOOR || rejection == RequestRejection.DOOR_IGNORES_REDSTONE;
+    }
+
+    /**
+     * {@code "Iron Ingot x64 to Base North"} for a click a door accepted, or {@code "Oak Planks x64 to Base North,
+     * making 32"} when a production order was started for part of it, the item's name giving way first
+     * ({@link #fitDoorLine}). A door's answer has no merged form: what the door is still owed in all is the standing
+     * line's, under it once this line has gone ({@link #doorStatusLine}).
+     */
+    private Component acceptedDoorLine(TerminalResultPayload payload, BlockPos door) {
+        Component item = payload.key().toStack().getHoverName();
+        return fitDoorLine((name, doorName) -> payload.producing() > 0
+                ? doorProducingText(name, payload.amount(), doorName, payload.producing())
+                : doorRequestedText(name, payload.amount(), doorName), item, doorName(door));
     }
 
     /**
@@ -703,7 +819,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         Component planned = planRefusalLine(payload);
         if (planned != null)
             return planned;
-        return refusedLine(WareworksLang.translateDirect(payload.rejection().orElseThrow().langKey()));
+        RequestRejection rejection = payload.rejection().orElseThrow();
+        // A door's OUTPUT_FULL is its fifth item type, not a full port: the door's own sentence (M27).
+        if (rejection == RequestRejection.OUTPUT_FULL && payload.door().isPresent())
+            return refusedLine(doorRefusedFullText());
+        return refusedLine(WareworksLang.translateDirect(rejection.langKey()));
     }
 
     /**
@@ -722,6 +842,23 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     public Component refusedLine(Component reason) {
         Component framed = WareworksLang.translateDirect(WareworksLang.TERMINAL_REFUSED, reason);
         return fitsStatusRow(framed) ? framed : reason;
+    }
+
+    /**
+     * The chain's refusal of an accepted <b>door</b> click behind the door it was for: {@code "To Base North: Oak Log
+     * is missing"}, or {@code null} when this answer walked no plan. The accepted part goes to the door, so the one line
+     * the player gets names it as every other accepted door answer does; the item's name gives way first and the
+     * door's last ({@link #fitDoorLine}).
+     */
+    @Nullable
+    private Component doorPlanRefusalLine(TerminalResultPayload payload, BlockPos door) {
+        PlanRefusal refusal = payload.refusal().orElse(null);
+        ItemKey about = payload.about().orElse(null);
+        if (refusal == null || about == null)
+            return null;
+        return fitDoorLine((name, doorName) -> doorShortfallText(doorName,
+                WareworksLang.translateDirect(refusal.langKey(), name)), about.toStack().getHoverName(),
+                doorName(door));
     }
 
     /**
@@ -860,13 +997,386 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // server and only reported here (M11, ADR-024): the screen knows neither the patterns nor their promises.
         int amount = TerminalAmounts.amountFor(click, selectedAmount, line.key().getMaxStackSize(), line.available(),
                 line.producibleAmount(), maxRequestAmount());
-        send(line.key(), amount, skipQuestion ? RequestAcknowledgement.ANY : RequestAcknowledgement.NONE);
+        // To the door the button shows, or here (M27): the click carries the choice, and nothing else ever does.
+        send(line.key(), amount, skipQuestion ? RequestAcknowledgement.ANY : RequestAcknowledgement.NONE,
+                doorSelection.selected());
     }
 
-    /** Sends a request with what the player has accepted for it; the server decides what that is worth. */
-    private void send(ItemKey key, int amount, RequestAcknowledgement acknowledged) {
-        PacketDistributor.sendToServer(new TerminalRequestPayload(menu.containerId, key, amount, acknowledged));
+    /**
+     * Sends a request with what the player has accepted for it, delivered to {@code door} or here (M27, issue #18); the
+     * server decides what that is worth. The door is a position and nothing else, and the server checks it against its
+     * own warehouse first.
+     */
+    private void send(ItemKey key, int amount, RequestAcknowledgement acknowledged, Optional<BlockPos> door) {
+        PacketDistributor.sendToServer(new TerminalRequestPayload(menu.containerId, key, amount, door, acknowledged));
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+    }
+
+    /**
+     * The server sent the package doors a click may deliver to (M27, issue #18, ADR-065 D9): with every full sync and
+     * whenever a door, its state or its counts changed.
+     */
+    public void onDoors(TerminalDoorsPayload payload) {
+        doors = payload.doors();
+        List<DoorSelection.Door<BlockPos>> choice = new ArrayList<>(doors.rows().size());
+        for (TerminalDoorRow row : doors.rows()) {
+            doorNames.put(row.pos(), row);
+            choice.add(new DoorSelection.Door<>(row.pos(), row.state().selectable()));
+        }
+        // The chosen door is gone or can no longer be chosen (a Stock Link, an unloaded chunk, a broken Packager): the
+        // next click delivers here, and the row says so before the player makes it.
+        if (doorSelection.update(choice)) {
+            feedback = doorUnavailableText();
+            feedbackColor = COLOR_LOST;
+            feedbackTicks = FEEDBACK_TICKS;
+            playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
+        }
+        doorChoiceChanged();
+    }
+
+    /** The package doors as the server last pushed them, for the dev harness and the tests of the client side. */
+    public TerminalDoors doors() {
+        return doors;
+    }
+
+    // --- the door choice (M27, issue #18, ADR-065) -------------------------------------------------------------------
+
+    /** Where the next click on a stock cell delivers: a door's position, or empty for here. */
+    public Optional<BlockPos> chosenDoor() {
+        return doorSelection.selected();
+    }
+
+    /** Whether a click on a stock cell delivers to a door right now, rather than here. */
+    public boolean isDoorChosen() {
+        return !doorSelection.isHere();
+    }
+
+    /** Whether the door button is on screen: exactly while the warehouse has a door to choose. */
+    public boolean isDoorButtonShown() {
+        return doorButton != null && doorButton.visible;
+    }
+
+    /** Whether the door button is drawn green, which it is while a door is chosen. */
+    public boolean isDoorButtonGreen() {
+        return doorButton != null && doorButton.green;
+    }
+
+    /** The door button's tooltip as a player reads it; the visual harness reads it instead of photographing it. */
+    public List<Component> doorTooltip() {
+        return doorButton == null ? List.of() : List.copyOf(doorButton.getToolTip());
+    }
+
+    /**
+     * Whether the cues of a chosen door are on the stock cells right now: the gold tint under the mouse and the line in
+     * the cell's tooltip. Not while a ghost is on the cursor, because a click then picks the item rather than
+     * requesting it ({@link #mouseClicked}).
+     */
+    public boolean doorCueShown() {
+        return isDoorChosen() && !craftPanel.hasGhost();
+    }
+
+    /**
+     * The title row's right-hand label as it is drawn: the warehouse, or, while a door is chosen, the door's name in
+     * gold behind an arrow, its name cut to the room the screen's title leaves.
+     */
+    public Component titleRowLabel() {
+        Optional<TerminalDoorRow> chosen = chosenRow();
+        if (chosen.isPresent()) {
+            int room = ROW_WIDTH - font.width(title) - TEXT_GAP;
+            return fitArgument(WarehouseTerminalScreen::doorIndicatorText, doorName(chosen.get()), room);
+        }
+        return status.hasAisle()
+                ? WareworksLang.translateDirect(WareworksLang.GOGGLES_WAREHOUSE_LETTER,
+                        String.valueOf(status.aisleLetter()))
+                : WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE);
+    }
+
+    /** The row of the chosen door in the last push; empty for here. */
+    private Optional<TerminalDoorRow> chosenRow() {
+        BlockPos chosen = doorSelection.selected().orElse(null);
+        if (chosen == null)
+            return Optional.empty();
+        for (TerminalDoorRow row : doors.rows()) {
+            if (row.pos().equals(chosen))
+                return Optional.of(row);
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Moves the choice one entry on (a click or the wheel down) or back (the wheel up), skipping doors that cannot be
+     * chosen and wrapping round through here, and plays the click a changed choice makes.
+     */
+    private void stepDoor(boolean forward) {
+        if (forward ? doorSelection.next() : doorSelection.previous())
+            doorChosen();
+    }
+
+    /** Goes back to here: the door button's right-click. */
+    private void doorHere() {
+        if (doorSelection.here())
+            doorChosen();
+    }
+
+    private void doorChosen() {
+        doorChoiceChanged();
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F, 1.0F);
+    }
+
+    /** Everything that shows the choice: the button and its tooltip, and the list button's tooltip. */
+    private void doorChoiceChanged() {
+        updateDoorButton();
+        updateListButton();
+    }
+
+    /** The door button as the doors and the choice stand: shown while there is a door, green while one is chosen. */
+    private void updateDoorButton() {
+        if (doorButton == null)
+            return;
+        doorButton.visible = doorSelection.visible();
+        doorButton.green = isDoorChosen();
+        List<Component> tooltip = doorButton.getToolTip();
+        tooltip.clear();
+        if (doorButton.visible)
+            tooltip.addAll(doorTooltipLines());
+    }
+
+    /**
+     * The door button's tooltip, at most {@value #MAX_DOOR_TOOLTIP_LINES} lines, each inside the window's row width in
+     * every language: where a click delivers now ({@code "Deliver to: Base North A-12-03R"}); up to five entries in the
+     * style of Create's own selection inputs, here first and the doors in rack order around the current one, a ready
+     * door with its rack address and every other one with its state word in colour, "+N more" for the rest, and "More
+     * outputs were not checked" when the server stopped looking before the warehouse's last output; for the chosen door
+     * what to do about its state and what the warehouse still owes it; then how the button is used, and Create's own
+     * "Scroll to Select".
+     */
+    private List<Component> doorTooltipLines() {
+        List<Component> lines = new ArrayList<>(MAX_DOOR_TOOLTIP_LINES);
+        TerminalDoorRow chosen = chosenRow().orElse(null);
+        lines.add(doorTitleLine(chosen));
+
+        List<TerminalDoorRow> rows = doors.rows();
+        int entries = 1 + rows.size();
+        int current = chosen == null ? 0 : 1 + rows.indexOf(chosen);
+        // A server that stopped looking before the warehouse's last output says so in the last entry line, so the
+        // entries keep one line less.
+        int room = DOOR_ENTRY_LINES - (doors.unchecked() ? 1 : 0);
+        int shown = entries <= room && doors.notListed() == 0 ? entries : Math.min(entries, room - 1);
+        int first = Math.max(0, Math.min(current - 1, entries - shown));
+        for (int entry = first; entry < first + shown; entry++)
+            lines.add(doorEntryLine(entry == 0 ? null : rows.get(entry - 1), entry == current));
+        int more = entries - shown + doors.notListed();
+        if (more > 0)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_MORE, LangNumberFormat.format(more))
+                    .withStyle(ChatFormatting.GRAY));
+        if (doors.unchecked())
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_UNCHECKED)
+                    .withStyle(ChatFormatting.GRAY));
+
+        if (chosen != null) {
+            DoorState state = chosen.state();
+            state.detailKey().ifPresent(key -> lines.add(WareworksLang.translateDirect(key)
+                    .withStyle(doorStateStyle(state))));
+            if (chosen.waiting() > 0L)
+                lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_WAITING,
+                        LangNumberFormat.format(chosen.waiting()), LangNumberFormat.format(chosen.delivered()))
+                        .withStyle(ChatFormatting.GRAY));
+        }
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_HINT).withStyle(ChatFormatting.GRAY));
+        lines.add(Component.translatable(WareworksLang.CREATE_SCROLL_TO_SELECT_KEY)
+                .withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC));
+        return lines;
+    }
+
+    /** {@code "Deliver to: Base North A-12-03R"}: the name gives way, the rack address of a named door stays. */
+    private Component doorTitleLine(@Nullable TerminalDoorRow chosen) {
+        Component name = chosen == null ? WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_HERE)
+                : doorName(chosen);
+        Component rack = chosen == null || chosen.label().isEmpty() ? null
+                : Component.literal(" " + chosen.rackAddress()).withStyle(ChatFormatting.DARK_GRAY);
+        int room = ROW_WIDTH - (rack == null ? 0 : font.width(rack));
+        MutableComponent line = fitArgument(WarehouseTerminalScreen::doorTitleText, name, room).copy();
+        return rack == null ? line : line.append(rack);
+    }
+
+    /**
+     * One entry of the door button's tooltip: {@code "-> Here"}, {@code "> Base North  A-12-03R"} for a ready door,
+     * {@code "> Outpost  ignores redstone"} for any other, the state word in its colour and the name of a door that
+     * cannot be chosen greyed out. The name gives way, the word does not.
+     */
+    private Component doorEntryLine(@Nullable TerminalDoorRow row, boolean current) {
+        String mark = current ? DOOR_CURRENT_MARK : DOOR_OTHER_MARK;
+        Component name = row == null ? WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_HERE) : doorName(row);
+        Component suffix = row == null ? null : doorEntrySuffix(row);
+        int room = ROW_WIDTH - font.width(mark) - (suffix == null ? 0 : font.width(DOOR_GAP) + font.width(suffix));
+        ChatFormatting colour = row != null && !row.state().selectable() ? ChatFormatting.DARK_GRAY
+                : current ? ChatFormatting.WHITE : ChatFormatting.GRAY;
+        MutableComponent line = Component.empty().withStyle(colour).append(mark).append(fitTo(name, room));
+        return suffix == null ? line : line.append(DOOR_GAP).append(suffix);
+    }
+
+    /** What follows a door's name in its entry: its rack address while it is ready and named, else its state word. */
+    @Nullable
+    private static Component doorEntrySuffix(TerminalDoorRow row) {
+        DoorState state = row.state();
+        Optional<String> word = state.langKey();
+        if (word.isPresent())
+            return WareworksLang.translateDirect(word.get()).withStyle(doorStateStyle(state));
+        // An unnamed door's name already is its rack address ("Door A-12-03R").
+        return row.label().isEmpty() ? null
+                : Component.literal(row.rackAddress()).withStyle(ChatFormatting.DARK_GRAY);
+    }
+
+    /** Gold for a door that works but needs a look, red for one that never sends, dark grey for one not loaded. */
+    private static ChatFormatting doorStateStyle(DoorState state) {
+        return switch (state) {
+            case IGNORES_REDSTONE -> ChatFormatting.RED;
+            case NOT_LOADED -> ChatFormatting.DARK_GRAY;
+            case READY -> ChatFormatting.GRAY;
+            default -> ChatFormatting.GOLD;
+        };
+    }
+
+    /**
+     * A door's name as every line of this screen shows it: the sign's address, marked with an ellipsis where the server
+     * cut it, or {@code "Door A-12-03R"} for a door without a sign.
+     */
+    private static Component doorName(TerminalDoorRow row) {
+        if (row.label().isEmpty())
+            return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_UNNAMED, row.rackAddress());
+        return Component.literal(row.labelCut() ? row.label() + CommonComponents.ELLIPSIS.getString() : row.label());
+    }
+
+    /**
+     * The name of the door at {@code pos} for an answer about it: from any push of this screen, so a door that has
+     * left the list since is still named; its position only if this screen was never told about it.
+     */
+    private Component doorName(BlockPos pos) {
+        TerminalDoorRow row = doorNames.get(pos);
+        return row == null ? Component.literal(pos.toShortString()) : doorName(row);
+    }
+
+    /**
+     * The name of the door at {@code pos} with the rack address after it, which tells two doors with one sign apart:
+     * {@code "Base North (A-12-03R)"}; a door without a sign is named by its rack address already.
+     */
+    private Component doorNameWithRack(BlockPos pos) {
+        TerminalDoorRow row = doorNames.get(pos);
+        if (row == null || row.label().isEmpty())
+            return doorName(pos);
+        return doorName(row).copy().append(" (" + row.rackAddress() + ")");
+    }
+
+    /**
+     * The line {@code build} makes of {@code name}, with the name cut until the line is no wider than {@code width}:
+     * every door text that names one thing gives way at that thing.
+     */
+    private Component fitArgument(Function<Component, Component> build, Component name, int width) {
+        Component line = build.apply(name);
+        int over = font.width(line) - width;
+        if (over <= 0)
+            return line;
+        return build.apply(shorten(name.getString(), font.width(name) - over - font.width(CommonComponents.ELLIPSIS)));
+    }
+
+    /**
+     * A door answer that names an item and a door, cut to the status row: the <b>item's</b> name gives way first,
+     * because the door is what this answer is about and the item stands in the grid under the cursor — but only down
+     * to {@value #MIN_ITEM_PREFIX} px of it, so the line still says what was ordered; then the door's name gives way,
+     * which stands whole in gold in the title row anyway. Whatever is still too wide is cut by {@link #fitToRow}, the
+     * backstop every status line passes through.
+     */
+    private Component fitDoorLine(BiFunction<Component, Component, Component> build, Component item, Component door) {
+        Component line = build.apply(item, door);
+        int over = font.width(line) - ROW_WIDTH;
+        if (over <= 0)
+            return line;
+        int ellipsis = font.width(CommonComponents.ELLIPSIS);
+        int itemRoom = font.width(item) - over - ellipsis;
+        if (itemRoom >= MIN_ITEM_PREFIX)
+            return build.apply(shorten(item.getString(), itemRoom), door);
+        // The item keeps a prefix it can be recognized by (a name hardly wider than that stays whole), and the door's
+        // name gives way for the rest.
+        Component cutItem = font.width(item) <= MIN_ITEM_PREFIX + ellipsis ? item
+                : shorten(item.getString(), MIN_ITEM_PREFIX);
+        line = build.apply(cutItem, door);
+        over = font.width(line) - ROW_WIDTH;
+        if (over <= 0)
+            return line;
+        int doorRoom = font.width(door) - over - font.width(CommonComponents.ELLIPSIS);
+        return doorRoom <= 0 ? line : build.apply(cutItem, shorten(door.getString(), doorRoom));
+    }
+
+    /**
+     * The status row's standing line about the chosen door while the warehouse still owes it something:
+     * {@code "Base North: waiting for 64, delivered 0"}, or the short form without the delivered count when the door's
+     * name leaves no room for it, and only then the short form with the name cut. The numbers give way first.
+     */
+    @Nullable
+    private Component doorStatusLine() {
+        TerminalDoorRow row = chosenRow().orElse(null);
+        if (row == null || row.waiting() <= 0L)
+            return null;
+        Component name = doorName(row);
+        Component full = doorStandingText(name, row.waiting(), row.delivered());
+        if (fitsStatusRow(full))
+            return full;
+        Component brief = doorStandingShortText(name, row.waiting());
+        if (fitsStatusRow(brief))
+            return brief;
+        return fitArgument(cut -> doorStandingShortText(cut, row.waiting()), name, ROW_WIDTH);
+    }
+
+    /** {@code "Deliver to: %1$s"}: the door button's tooltip title. Public and static for the visual run. */
+    public static Component doorTitleText(Component name) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_TITLE, name);
+    }
+
+    /** {@code "→ Base North"}: the title row's label while a door is chosen, in gold. */
+    public static Component doorIndicatorText(Component name) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_INDICATOR, name);
+    }
+
+    /** {@code "Iron Ingot x64 to Base North"}, uncut; the visual run measures the row through it. */
+    public static Component doorRequestedText(Component item, int amount, Component door) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_REQUESTED, item,
+                LangNumberFormat.format(amount), door);
+    }
+
+    /** {@code "Oak Planks x64 to Base North, making 32"}, uncut: a door click that started a production order. */
+    public static Component doorProducingText(Component item, int amount, Component door, int producing) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_PRODUCING, item,
+                LangNumberFormat.format(amount), door, LangNumberFormat.format(producing));
+    }
+
+    /**
+     * {@code "To Base North: Oak Log is missing"}, uncut: an accepted door click whose chain was refused, with the
+     * chain's own sentence as {@code reason}.
+     */
+    public static Component doorShortfallText(Component door, Component reason) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_SHORTFALL, door, reason);
+    }
+
+    /** {@code "Base North: waiting for 64, delivered 0"}, uncut: the standing line about the chosen door. */
+    public static Component doorStandingText(Component door, long waiting, long delivered) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_STANDING, door,
+                LangNumberFormat.format(waiting), LangNumberFormat.format(delivered));
+    }
+
+    /** {@code "Base North: waiting for 64"}, uncut: the standing line when the long one does not fit. */
+    public static Component doorStandingShortText(Component door, long waiting) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_STANDING_SHORT, door,
+                LangNumberFormat.format(waiting));
+    }
+
+    /** {@code "Door unavailable: clicks deliver here"}: the chosen door went, and the choice with it. */
+    public static Component doorUnavailableText() {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_UNAVAILABLE);
+    }
+
+    /** {@code "that door waits for too many item types"}: a door click's {@code OUTPUT_FULL}, as a bare reason. */
+    public static Component doorRefusedFullText() {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_REFUSED_FULL);
     }
 
     private void onSearchChanged(String text) {
@@ -1040,6 +1550,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             case CANCEL -> WareworksLang.TERMINAL_LIST_CANCEL;
             default -> WareworksLang.TERMINAL_LIST_FETCH;
         }));
+        // A list order always delivers to the terminal (M27, ADR-065 D10), whichever door the clicks go to.
+        if (isDoorChosen())
+            listButton.getToolTip().add(WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_LIST_HERE)
+                    .withStyle(ChatFormatting.GRAY));
+    }
+
+    /** The list button's tooltip as a player reads it (the dev harness and the tests of the client side). */
+    public List<Component> listButtonTooltip() {
+        return listButton == null ? List.of() : List.copyOf(listButton.getToolTip());
     }
 
     /** What the list button would do right now; the dev harness and the tests of the client side read it too. */
@@ -1936,6 +2455,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         int order = orderAt(mouseX, mouseY);
         if (order >= 0 && button == 0 && clickOrderLine(order, mouseX))
             return true;
+        // The door button (M27): a click for the next door, a right-click for here. Taken here like the toggle's, so
+        // a right-click, which a widget never gets, works as well.
+        if ((button == 0 || button == 1) && doorButton != null && doorButton.isMouseOver(mouseX, mouseY)) {
+            if (button == 0)
+                stepDoor(true);
+            else
+                doorHere();
+            return true;
+        }
         // Taken here and not through the button's own callback: folding lays the screen out again, and a widget that
         // rebuilt its own screen from inside the widget loop would be handed the keyboard focus afterwards, taking it
         // from the search box.
@@ -2009,6 +2537,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        // A dialog owns the wheel as it owns every click: nothing behind a question or the step panel moves, neither
+        // the grid nor the door choice a Yes would not follow anyway (M27 fix).
+        if (isAskingSomething() || openPlan != null)
+            return true;
+        // The door button, inverted like Create's selection inputs: the wheel down goes to the next entry.
+        if (scrollY != 0 && doorButton != null && doorButton.isMouseOver(mouseX, mouseY)) {
+            stepDoor(scrollY < 0);
+            return true;
+        }
         if (isOverGrid(mouseX, mouseY) && scrollY != 0) {
             scrollRow = model.clampScrollRow(scrollRow - (int) Math.signum(scrollY), TerminalMenuLayout.GRID_COLUMNS,
                     layout.gridRows());
@@ -2099,9 +2636,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             if (visible.get(cell).isProducibleOnly())
                 graphics.fill(itemX - ITEM_INSET, itemY - ITEM_INSET, itemX - ITEM_INSET + TerminalMenuLayout.SLOT,
                         itemY - ITEM_INSET + TerminalMenuLayout.SLOT, COLOR_PRODUCIBLE_CELL);
+            // Gold while a click here delivers to a door (M27): the cue is on the very cell the player is about to click.
             if (cell == hovered)
                 graphics.fill(itemX - ITEM_INSET, itemY - ITEM_INSET, itemX - ITEM_INSET + TerminalMenuLayout.SLOT,
-                        itemY - ITEM_INSET + TerminalMenuLayout.SLOT, COLOR_CELL_HOVER);
+                        itemY - ITEM_INSET + TerminalMenuLayout.SLOT,
+                        doorCueShown() ? COLOR_CELL_HOVER_DOOR : COLOR_CELL_HOVER);
             renderEntry(graphics, visible.get(cell), itemX, itemY);
         }
         renderScrollbar(graphics);
@@ -2192,11 +2731,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         int x = leftPos;
         int y = topPos;
         graphics.drawString(font, title, x + TerminalMenuLayout.MARGIN, y + TITLE_Y, COLOR_HEADER, false);
-        Component aisle = status.hasAisle()
-                ? WareworksLang.translateDirect(WareworksLang.GOGGLES_WAREHOUSE_LETTER, String.valueOf(status.aisleLetter()))
-                : WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE);
-        graphics.drawString(font, aisle, x + TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - font.width(aisle),
-                y + TITLE_Y, COLOR_DIM, false);
+        // The warehouse, or the chosen door in gold (M27): where the next click goes, on the row a player reads first.
+        Component label = titleRowLabel();
+        graphics.drawString(font, label, x + TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - font.width(label),
+                y + TITLE_Y, chosenRow().isPresent() ? COLOR_DOOR : COLOR_DIM, false);
 
         graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.TERMINAL_BUFFER),
                 x + TerminalMenuLayout.MARGIN, y + layout.bufferLabelY(), COLOR_DIM, false);
@@ -2511,6 +3049,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             Component list = listStatusLine();
             if (list != null)
                 return list;
+            // What the chosen door is still owed (M27), once the answer to the click has gone from the row.
+            Component door = doorStatusLine();
+            if (door != null)
+                return door;
         }
         if (status.requestsHere() > 0)
             return WareworksLang.translateDirect(WareworksLang.TERMINAL_WAITING,
@@ -2730,6 +3272,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     public void onConfirm(TerminalConfirmPayload payload) {
         RequestConfirmation<ItemKey> question = payload.question();
+        // The door the server measured the click for; a list order's and a craft order's question always deliver here.
+        confirmingDoor = payload.scope() == RequestScope.CLICK ? payload.door() : Optional.empty();
         // The same item asked about again in the same place: the warehouse moved between the Yes and the re-check. The
         // other order asking about that item is a first question of its own (issue #24 review fix).
         costChanged = confirmed != null && confirmedScope == payload.scope() && confirmed.key().equals(question.key());
@@ -2795,7 +3339,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         }
         RequestConfirmation<ItemKey> question = confirming;
         RequestScope scope = confirmScope;
+        Optional<BlockPos> door = confirmingDoor;
         confirming = null;
+        confirmingDoor = Optional.empty();
         costChanged = false;
         panel = null;
         if (question == null)
@@ -2818,7 +3364,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
             return;
         }
-        send(question.key(), (int) Math.min(Integer.MAX_VALUE, question.amount()), question.acknowledgement());
+        // To the door the question was measured for, which the server echoed (M27, ADR-065 D8).
+        send(question.key(), (int) Math.min(Integer.MAX_VALUE, question.amount()), question.acknowledgement(), door);
     }
 
     /**
@@ -2828,6 +3375,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     private void dropConfirmation() {
         confirming = null;
+        confirmingDoor = Optional.empty();
         confirmed = null;
         costChanged = false;
         panel = null;
@@ -2847,6 +3395,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // Both list orders stand in ASKING until they are told no; a click's question needs no word to the server.
         RequestScope declining = confirming != null && confirmScope.asksAboutProduction() ? confirmScope : null;
         confirming = null;
+        confirmingDoor = Optional.empty();
         listConfirming = null;
         listConfirmed = null;
         // A Fetch's question started nothing, so a no to it needs no word to the server either.
@@ -2876,6 +3425,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (costChanged)
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
                     .withStyle(ChatFormatting.GOLD));
+        // Where a Yes delivers (M27, ADR-065 D8): the door the server measured the click for, which is the one the Yes
+        // sends back, whatever the button shows by then.
+        if (confirmScope == RequestScope.CLICK)
+            confirmingDoor.ifPresent(door -> lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_CONFIRM,
+                    doorNameWithRack(door)).copy().withStyle(ChatFormatting.GOLD)));
         // A portion of a clipboard order is nothing the player clicked, so the panel has to say which item and how many
         // it is about before it names what that costs (M23 review fix): without it a question that only crosses
         // "something would be made" drew the title and the Alt hint and nothing else at all.
@@ -3126,6 +3680,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PRODUCIBLE_AMOUNT,
                         LangNumberFormat.format(line.producibleAmount())).copy().withStyle(ChatFormatting.AQUA));
         }
+        // Where a click on this cell delivers while a door is chosen (M27), right above how to click, the door's name
+        // giving way.
+        chosenRow().filter(row -> doorCueShown()).ifPresent(row -> tooltip.add(fitArgument(
+                name -> WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_CELL, name), doorName(row),
+                ROW_WIDTH).copy().withStyle(ChatFormatting.GOLD)));
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_AMOUNT_HINT).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         // While the crafting panel is out a right-click lays the item into its grid (M32), which nothing else shows.

@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.DecoderException;
 
 import com.simibubi.create.AllBlocks;
 
@@ -25,6 +26,8 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.StationBuffer;
+import dev.wareworks.content.station.TerminalDoorRow;
+import dev.wareworks.content.station.TerminalDoors;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalScreenStatus;
 import dev.wareworks.content.station.TerminalStockEntry;
@@ -38,10 +41,18 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.port.DoorState;
+import dev.wareworks.core.port.PackagerSignAddress;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.RequestAcknowledgement;
+import dev.wareworks.core.terminal.RequestConfirmation;
+import dev.wareworks.core.terminal.RequestScope;
 import dev.wareworks.core.terminal.StockCount;
 import dev.wareworks.core.terminal.TerminalAmounts;
+import dev.wareworks.network.TerminalConfirmPayload;
+import dev.wareworks.network.TerminalDoorsPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
 import dev.wareworks.network.TerminalRequestPayload;
 import dev.wareworks.network.TerminalResultPayload;
@@ -688,7 +699,142 @@ public final class WarehouseTerminalMenuGameTests {
         helper.succeed();
     }
 
+    /**
+     * The four payloads M27 touched, with a package door and without (issue #18, ADR-065 D12): the door survives the
+     * request, the question and the answer, and is read before the acknowledgement and before the scope, which both
+     * stay last — an unknown acknowledgement tag and an unknown scope still leave nothing unread. The new door list
+     * round-trips every state and the cut label, reads a state name this build does not know as "not loaded", and
+     * refuses a claim of more rows than it may carry. The two appended refusals survive their ordinal.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void terminalDoorPayloadsRoundTrip(GameTestHelper helper) {
+        BlockPos door = new BlockPos(-12, 64, 345);
+
+        // The request: with and without a door, and with an acknowledgement that names amounts after the door.
+        RequestAcknowledgement amounts = new RequestAcknowledgement(false, 3L, 0L, 1L);
+        for (TerminalRequestPayload request : List.of(new TerminalRequestPayload(3, DIAMOND, 42),
+                new TerminalRequestPayload(3, DIAMOND, 42, Optional.of(door), RequestAcknowledgement.NONE),
+                new TerminalRequestPayload(3, DIAMOND, 42, Optional.of(door), amounts),
+                new TerminalRequestPayload(3, DIAMOND, 42, Optional.of(door), RequestAcknowledgement.ANY)))
+            helper.assertValueEqual(roundTrip(helper, request, TerminalRequestPayload.STREAM_CODEC), request,
+                    "request round trip: " + request);
+        helper.assertValueEqual(new TerminalRequestPayload(3, DIAMOND, 42).door(), Optional.empty(),
+                "the old shapes deliver here");
+        // An acknowledgement tag a future build sends is still the last field: it reads as "nothing accepted" and
+        // leaves nothing in the buffer, door or no door.
+        RegistryFriendlyByteBuf unknownTag = buffer(helper);
+        unknownTag.writeVarInt(3);
+        ItemKey.STREAM_CODEC.encode(unknownTag, DIAMOND);
+        unknownTag.writeVarInt(42);
+        unknownTag.writeBoolean(true);
+        unknownTag.writeBlockPos(door);
+        unknownTag.writeVarInt(99);
+        TerminalRequestPayload future = TerminalRequestPayload.STREAM_CODEC.decode(unknownTag);
+        helper.assertValueEqual(future.door(), Optional.of(door), "the door is read before the acknowledgement");
+        helper.assertValueEqual(future.acknowledged(), RequestAcknowledgement.NONE, "an unknown tag accepts nothing");
+        helper.assertValueEqual(unknownTag.readableBytes(), 0, "and leaves nothing unread");
+
+        // The question: the door before the scope, which stays last and by name.
+        RequestConfirmation<ItemKey> question = new RequestConfirmation<>(DIAMOND, 10L, 4L, 6L, 0L, 0L,
+                StockRule.UNSET, List.of());
+        for (TerminalConfirmPayload confirm : List.of(new TerminalConfirmPayload(3, question),
+                new TerminalConfirmPayload(3, question, Optional.of(door), RequestScope.CLICK),
+                new TerminalConfirmPayload(3, question, RequestScope.LIST)))
+            helper.assertValueEqual(roundTrip(helper, confirm, TerminalConfirmPayload.STREAM_CODEC), confirm,
+                    "question round trip: " + confirm);
+        RegistryFriendlyByteBuf unknownScope = buffer(helper);
+        TerminalConfirmPayload.STREAM_CODEC.encode(unknownScope,
+                new TerminalConfirmPayload(3, question, Optional.of(door), RequestScope.CRAFT));
+        // Replace the scope's name, the last field, by one this build does not know.
+        int scopeBytes = 1 + RequestScope.CRAFT.name().length();
+        unknownScope.writerIndex(unknownScope.writerIndex() - scopeBytes);
+        unknownScope.writeUtf("FROM_A_NEWER_BUILD");
+        TerminalConfirmPayload newer = TerminalConfirmPayload.STREAM_CODEC.decode(unknownScope);
+        helper.assertValueEqual(newer.door(), Optional.of(door), "the door is read before the scope");
+        helper.assertValueEqual(newer.scope(), RequestScope.CLICK, "an unknown scope reads as a click");
+        helper.assertValueEqual(unknownScope.readableBytes(), 0, "and the scope is still the last field");
+
+        // The answer: the door after the rejection, the two new reasons by ordinal, and the plan refusal still last.
+        for (RequestRejection rejection : List.of(RequestRejection.NOT_A_DOOR, RequestRejection.DOOR_IGNORES_REDSTONE)) {
+            TerminalResultPayload refused = roundTrip(helper, TerminalResultPayload.of(3, DIAMOND,
+                    RequestResult.rejected(rejection), Optional.of(door)), TerminalResultPayload.STREAM_CODEC);
+            helper.assertValueEqual(refused.rejection(), Optional.of(rejection), "the reason " + rejection);
+            helper.assertValueEqual(refused.door(), Optional.of(door), "and the door it is about");
+        }
+        helper.assertValueEqual(RequestRejection.values()[RequestRejection.values().length - 1],
+                RequestRejection.DOOR_IGNORES_REDSTONE, "the door reasons were appended, so no ordinal moved");
+        helper.assertValueEqual(roundTrip(helper, TerminalResultPayload.of(3, DIAMOND,
+                RequestResult.rejected(RequestRejection.QUEUE_FULL)), TerminalResultPayload.STREAM_CODEC).door(),
+                Optional.empty(), "an answer about here names no door");
+
+        // The door list: every state, a cut label, the counts, and the rows beyond the list.
+        List<TerminalDoorRow> rows = new ArrayList<>();
+        for (DoorState state : DoorState.values())
+            rows.add(new TerminalDoorRow(door.offset(state.ordinal(), 0, 0), "A-0" + state.ordinal() + "-01R",
+                    "Base " + state.name(), false, state, 64L + state.ordinal(), state.ordinal()));
+        String longSign = "x".repeat(384);
+        TerminalDoorRow cut = new TerminalDoorRow(door, "A-very-long-rack-address-indeed", longSign, false,
+                DoorState.READY, 0L, 0L);
+        helper.assertValueEqual(cut.label().length(), PackagerSignAddress.DISPLAY_LENGTH,
+                "a sign line of 384 characters is cut to the goggles' length");
+        helper.assertTrue(cut.labelCut(), "and the row says so");
+        helper.assertValueEqual(cut.rackAddress().length(), TerminalDoorRow.MAX_RACK_ADDRESS_LENGTH,
+                "and the rack address is bounded too");
+        rows.add(cut);
+        TerminalDoorsPayload doors = new TerminalDoorsPayload(3, rows, 5, false);
+        TerminalDoorsPayload decodedDoors = roundTrip(helper, doors, TerminalDoorsPayload.STREAM_CODEC);
+        helper.assertValueEqual(decodedDoors, doors, "door list round trip");
+        helper.assertValueEqual(decodedDoors.doors(), new TerminalDoors(rows, 5), "the value the menu compares");
+        TerminalDoorsPayload cutShort = new TerminalDoorsPayload(3, new TerminalDoors(rows, 0, true));
+        helper.assertValueEqual(roundTrip(helper, cutShort, TerminalDoorsPayload.STREAM_CODEC).doors(),
+                new TerminalDoors(rows, 0, true), "a list whose build left outputs unchecked says so on the client");
+        helper.assertValueEqual(roundTrip(helper, new TerminalDoorsPayload(3, TerminalDoors.NONE),
+                TerminalDoorsPayload.STREAM_CODEC).doors(), TerminalDoors.NONE, "an empty list");
+
+        List<TerminalDoorRow> tooMany = new ArrayList<>();
+        for (int i = 0; i <= TerminalDoors.MAX_ROWS; i++)
+            tooMany.add(new TerminalDoorRow(door.above(i), "A-01-01R", "", false, DoorState.READY, 0L, 0L));
+        TerminalDoorsPayload bounded = new TerminalDoorsPayload(3, tooMany, 0, false);
+        helper.assertValueEqual(bounded.rows().size(), TerminalDoors.MAX_ROWS, "a payload never carries more rows");
+        helper.assertValueEqual(bounded.notListed(), 1, "and counts the rest");
+
+        RegistryFriendlyByteBuf unknownState = buffer(helper);
+        unknownState.writeVarInt(3);
+        unknownState.writeVarInt(1);
+        unknownState.writeBlockPos(door);
+        unknownState.writeUtf("A-01-01R", TerminalDoorRow.MAX_RACK_ADDRESS_LENGTH);
+        unknownState.writeUtf("Base North", TerminalDoorRow.MAX_LABEL_LENGTH);
+        unknownState.writeBoolean(false);
+        unknownState.writeUtf("A_STATE_FROM_LATER");
+        unknownState.writeVarLong(8L);
+        unknownState.writeVarLong(0L);
+        unknownState.writeVarInt(0);
+        unknownState.writeBoolean(false);
+        TerminalDoorsPayload later = TerminalDoorsPayload.STREAM_CODEC.decode(unknownState);
+        helper.assertValueEqual(later.rows().getFirst().state(), DoorState.NOT_LOADED,
+                "an unknown state reads as not loaded");
+        helper.assertFalse(later.rows().getFirst().state().selectable(), "which nobody can choose");
+        helper.assertValueEqual(unknownState.readableBytes(), 0, "and nothing is left unread");
+
+        RegistryFriendlyByteBuf claim = buffer(helper);
+        claim.writeVarInt(3);
+        claim.writeVarInt(TerminalDoors.MAX_ROWS + 1);
+        boolean refused = false;
+        try {
+            TerminalDoorsPayload.STREAM_CODEC.decode(claim);
+        } catch (DecoderException expected) {
+            refused = true;
+        }
+        helper.assertTrue(refused, "a claim of " + (TerminalDoors.MAX_ROWS + 1) + " rows is refused");
+        helper.succeed();
+    }
+
     // --- helpers ---------------------------------------------------------------------------------------------------
+
+    private static RegistryFriendlyByteBuf buffer(GameTestHelper helper) {
+        return new RegistryFriendlyByteBuf(Unpooled.buffer(), helper.getLevel().registryAccess(),
+                ConnectionType.NEOFORGE);
+    }
 
     /** Controller, dock with motor, rails, a chest of diamonds behind an interface and an aligned terminal. */
     private static AisleFixture buildAisle(GameTestHelper helper) {

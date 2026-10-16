@@ -102,7 +102,9 @@ import net.neoforged.neoforge.items.ItemStackHandler;
  * <li>{@link #stockSnapshot()} — the aisle's stock as a bounded, ordered list of {@link TerminalStockEntry};</li>
  * <li>{@link #bufferedItems()} (inherited) — what already arrived here;</li>
  * <li>{@link #status()} — controller link, totals, this terminal's requests and the crane's state;</li>
- * <li>{@link #requestFromTerminal(Player, ItemKey, int)} — the request itself;</li>
+ * <li>{@link #requestFromTerminal(Player, ItemKey, int)} — the request itself, delivered here or, since M27, to one of
+ * the warehouse's package doors ({@link #requestFromTerminal(Player, ItemKey, int, RequestAcknowledgement, Optional)},
+ * with the doors a screen may offer from {@link #doorRows()});</li>
  * <li>{@link #craftFromBuffer} — a player's craft from what was delivered here (M32, issue #24, ADR-059);</li>
  * <li>{@link #fetchCraft} — the crafting panel's Fetch: the grid's ingredients brought here by a <b>craft order</b>,
  * the second list order a terminal can run beside its clipboard's (issue #24, slice 2, ADR-062).</li>
@@ -581,9 +583,57 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      */
     public TerminalRequestOutcome requestFromTerminal(Player player, ItemKey key, int amount,
             RequestAcknowledgement acknowledged) {
+        return requestFromTerminal(player, key, amount, acknowledged, Optional.empty());
+    }
+
+    /**
+     * Server: {@link #requestFromTerminal(Player, ItemKey, int, RequestAcknowledgement)} delivered to a <b>package
+     * door</b> of this terminal's warehouse instead of here (M27, issue #18, ADR-065, {@code docs/warehouse-system.md}
+     * §3.4.6): a requesting warehouse port with a plain Create Packager at its back, which boxes what the crane hands it
+     * when the player's own redstone fires it.
+     * <p>
+     * <b>The door is a position and nothing else.</b> No address is sent, stored, matched or trusted, and the request
+     * that is made is an ordinary request with that port as its destination — the very request the port's own redstone
+     * makes, with the same clamping, merging, reserves, chains, questions and caps. The crane carries into the port only
+     * what the port can take (ADR-065 D5), and the request is credited at the drop into the port's buffer, which is the
+     * last point Wareworks sees.
+     * <p>
+     * Checked in this order, each a refusal of its own:
+     * <ol>
+     * <li>server side and not removed, otherwise {@link RequestRejection#NO_CONTROLLER};</li>
+     * <li>{@link #canPlayerUse(Player)}, otherwise {@link RequestRejection#OUT_OF_REACH};</li>
+     * <li>{@code amount >= 1}, otherwise {@link RequestRejection#INVALID_AMOUNT};</li>
+     * <li>a loaded controller, otherwise {@link RequestRejection#NO_CONTROLLER};</li>
+     * <li><b>the door</b> ({@link PackageDoors#refusal}, the rule the screen's door rows are built by):
+     * {@link RequestRejection#NOT_A_DOOR} or {@link RequestRejection#DOOR_IGNORES_REDSTONE};</li>
+     * <li>the item in stock or producible, otherwise {@link RequestRejection#NOT_IN_STOCK};</li>
+     * <li>the controller's own request, which checks the destination once more (G-dest).</li>
+     * </ol>
+     * The door comes <b>before</b> the stock, so a click to something that is no door is answered as such and not as a
+     * missing item. <b>Nothing about a door is remembered</b> (ADR-065 D6): every refusal of a click that named one is
+     * answered and never stored in this terminal's {@code lastRejection}, which its goggles show and its save carries —
+     * the choice of door is the player's, not the terminal's — and the door's own {@code lastRejection} belongs to its
+     * redstone and is never touched either. A door equal to this terminal's own position is here.
+     *
+     * @param door the package door to deliver to; empty for here
+     * @return the resolved request or the question, echoing the door the click was really measured for
+     */
+    public TerminalRequestOutcome requestFromTerminal(Player player, ItemKey key, int amount,
+            RequestAcknowledgement acknowledged, Optional<BlockPos> door) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(acknowledged, "acknowledged");
+        Optional<BlockPos> target = door == null ? Optional.empty()
+                : door.filter(pos -> !pos.equals(worldPosition)).map(BlockPos::immutable);
+        return requestTo(player, key, amount, acknowledged, target).withDoor(target);
+    }
+
+    /**
+     * The checks and the request of
+     * {@link #requestFromTerminal(Player, ItemKey, int, RequestAcknowledgement, Optional)}, for {@code door} or here.
+     */
+    private TerminalRequestOutcome requestTo(Player player, ItemKey key, int amount, RequestAcknowledgement acknowledged,
+            Optional<BlockPos> door) {
         if (level == null || level.isClientSide || isRemoved())
             return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
         // Player-scoped refusals are answered, not remembered: they say nothing about this terminal (see above).
@@ -593,14 +643,21 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.INVALID_AMOUNT));
         Optional<WarehouseControllerBlockEntity> found = controller();
         if (found.isEmpty())
-            return TerminalRequestOutcome.of(rememberRejection(RequestResult.rejected(RequestRejection.NO_CONTROLLER)));
+            return TerminalRequestOutcome.of(rememberHere(door, RequestResult.rejected(RequestRejection.NO_CONTROLLER)));
         WarehouseControllerBlockEntity controller = found.get();
+        // G-door (ADR-065 D4): the one rule the screen's door rows are built by, before the stock is looked at, and
+        // answered rather than remembered (D6).
+        if (door.isPresent()) {
+            Optional<RequestRejection> notADoor = PackageDoors.refusal(level, controller, door.get());
+            if (notADoor.isPresent())
+                return TerminalRequestOutcome.of(RequestResult.rejected(notADoor.get()));
+        }
         // Resolve against the server's own state: a key the aisle neither holds nor can produce is refused before it
         // reaches the queue, whatever the client claimed. ItemKey compares item and components, so a matching key is
         // the indexed one. A producible key is allowed through here and the controller decides how much of it can
         // really be promised (M11, ADR-024).
         if (controller.countOf(key) <= 0 && !controller.producibleKeys().contains(key))
-            return TerminalRequestOutcome.of(rememberRejection(RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
+            return TerminalRequestOutcome.of(rememberHere(door, RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
         // One call for the question and the request: the controller measures what this click would cross from the very
         // snapshot it would then start the order against, so what the player is told and what happens cannot differ and
         // a click walks the aisle's patterns once (M15 review fix). It is also the re-check of an answer that was given
@@ -609,9 +666,14 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // merged into the open one and the cap must bound the merged total, not this click (§7.2, ADR-020).
         // A terminal request is a player's own: a stock rule's reserve does not hold it back, and the row tells them
         // that they are going below it (M15, issue #3).
-        TerminalRequestOutcome outcome = controller.request(worldPosition, key, amount,
+        // A door click is the same request with the door as its destination: the same cap on the merged amount, the same
+        // reserves and questions. The controller checks the destination itself as well (G-dest), so a door that stopped
+        // requesting between the check above and here is still no destination.
+        TerminalRequestOutcome outcome = controller.request(door.orElse(worldPosition), key, amount,
                 Math.max(1, WareworksConfig.maxTerminalRequestAmount()), StockAccess.PLAYER, acknowledged);
-        outcome.result().ifPresent(this::rememberRejection);
+        // What a door's answer says ("that door waits for too many item types", or anything else) is about the door the
+        // player chose, and the door's own refusal belongs to its redstone (ADR-065 D6).
+        outcome.result().filter(result -> door.isEmpty()).ifPresent(this::rememberRejection);
         // One accepted click counts once towards this player's "most used" order, whatever amount it asked for
         // (M24, issue #17, ADR-037). A question and a refusal count nothing: the question made no request at all, and
         // a mis-click is not a habit. This is the whole of the counting on the click path: it moves no item, it changes
@@ -619,6 +681,30 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         if (outcome.result().filter(RequestResult::isAccepted).isPresent())
             TerminalPreferences.countRequest(player, key);
         return outcome;
+    }
+
+    /**
+     * Stores the refusal of a click that delivers here, and never one of a click that named a package door (ADR-065
+     * D6), then returns {@code result} unchanged.
+     */
+    private RequestResult rememberHere(Optional<BlockPos> door, RequestResult result) {
+        return door.isEmpty() ? rememberRejection(result) : result;
+    }
+
+    /**
+     * Server: the package doors of this terminal's warehouse a click may deliver to, with what each still waits for
+     * (M27, issue #18, ADR-065 D9); {@link TerminalDoors#NONE} without a warehouse.
+     * <p>
+     * Called by the menu's push only, i.e. only while a player has this terminal's screen open. The rows themselves come
+     * from the controller's {@code DoorDirectory}, which every screen of the warehouse shares and which builds at most
+     * once per {@value dev.wareworks.content.controller.DoorDirectory#MAX_AGE_TICKS} ticks; the two counts per row are
+     * read from the request queue in memory on every call.
+     */
+    public TerminalDoors doorRows() {
+        if (level == null)
+            return TerminalDoors.NONE;
+        long now = level.getGameTime();
+        return controller().map(found -> found.doorDirectory().terminalRows(now)).orElse(TerminalDoors.NONE);
     }
 
     // --- crafting at the terminal (M32, issue #24, ADR-059) --------------------------------------------------------

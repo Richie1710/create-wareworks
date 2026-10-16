@@ -258,8 +258,8 @@ class LangConsistencyTest {
     }
 
     /**
-     * The goggle rows of a package door — <b>both</b> doors, all seven — fit a goggle tooltip <b>in both
-     * languages</b>, with the longest address a row can draw already in them (M26, issue #18).
+     * The goggle rows of a package door — <b>both</b> doors, all eight — fit a goggle tooltip <b>in both
+     * languages</b>, with the longest address a row can draw already in them (M26 and M27, issue #18).
      * <p>
      * A goggle line is <b>never wrapped</b>: Create's overlay passes {@code maxTextWidth = -1}, so an over-long row is
      * drawn past the edge of the box — and because the box is placed at
@@ -272,7 +272,7 @@ class LangConsistencyTest {
      * Characters are a crude stand-in for pixels — this suite runs without Minecraft, so it has no font — but a
      * conservative {@value #GOGGLE_PIXELS_PER_CHARACTER} px per character is the advance of a plain lowercase glyph in
      * the default font, which is what these rows are made of. German is where a row runs out of room first, and the
-     * row this bound is really about is the {@code LINKED} warning: at 73 characters it is the widest of the seven,
+     * row this bound is really about is the {@code LINKED} warning: at 73 characters it is the widest of the eight,
      * and the one row a player must be able to read whole, because nothing else in the game diagnoses that failure.
      * <p>
      * <b>The budget is stricter than what the mod already ships</b>, deliberately: the widest existing goggle row is
@@ -498,17 +498,17 @@ class LangConsistencyTest {
                 "display_source.throughput.line_items", "display_source.throughput.line_busy",
                 "display_source.throughput.line_turning", "display_source.throughput.measuring",
                 "display_source.throughput.no_crane");
-        /** The address row, the only one of the seven below whose argument is text from the world rather than a count. */
+        /** The address row, the only one of the eight below whose argument is text from the world rather than a count. */
         private static final String PACKAGE_ADDRESS_KEY = "gui.goggles.port_package_address";
         /**
-         * Every goggle row a package handover adds, at <b>either</b> door (M26, issue #18): four at the out door on a
-         * warehouse port, three at the in door on a warehouse input. The in door's refusal row is the only one with
-         * two arguments, and it is the longest of its three.
+         * Every goggle row a package handover adds, at <b>either</b> door (M26, issue #18): five at the out door on a
+         * warehouse port — the fifth, a box nothing takes away, since M27 — and three at the in door on a warehouse
+         * input. The in door's refusal row is the only one with two arguments, and it is the longest of its three.
          */
         private static final List<String> PACKAGE_DOOR_GOGGLE_KEYS = List.of("gui.goggles.port_package_handover",
                 PACKAGE_ADDRESS_KEY, "gui.goggles.port_package_no_address", "gui.goggles.port_packager_linked",
-                "gui.goggles.input_package_unpacking", "gui.goggles.input_packages_opened",
-                "gui.goggles.input_package_refused");
+                "gui.goggles.port_box_waiting", "gui.goggles.input_package_unpacking",
+                "gui.goggles.input_packages_opened", "gui.goggles.input_package_refused");
         /** The header row of a rack bay, whose one argument is the block's own name (M28, issue #20). */
         private static final String RACK_BAY_HEADER_KEY = "gui.goggles.rack_bay";
         /** The one rack bay row whose argument is a count rather than an item name. */

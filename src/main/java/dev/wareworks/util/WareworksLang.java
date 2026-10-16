@@ -753,6 +753,16 @@ public final class WareworksLang {
      */
     public static final String GOGGLES_PORT_PACKAGER_LINKED = "gui.goggles.port_packager_linked";
     /**
+     * {@code "A box has been waiting at the Packager: is anything taking it?"} — a door that may stand still because
+     * the box it made is not taken (M27, issue #18, ADR-065 D14): the funnel was forgotten, or whatever takes the boxes
+     * stopped, and a Packager that holds a box makes no other. Drawn once the box has rested for
+     * {@code BoxWait#REPORT_AFTER_TICKS} ticks ({@code WarehouseOutputBlockEntity#boxWaitingShown}). It says what was
+     * seen and asks, rather than claiming that nothing takes the box: a taker that works can be slower than that, such
+     * as a belt funnel whose belt is still busy. Gold, beside the address rows rather than instead of them, because it
+     * is true however the box was made; a terminal's door row says the same as {@code box waiting}.
+     */
+    public static final String GOGGLES_PORT_BOX_WAITING = "gui.goggles.port_box_waiting";
+    /**
      * {@code "Takes packages apart"}: a warehouse input a Create Packager's back touches, i.e. an in door for
      * addressed packages (M26, issue #18). The whole handover works without a line of Wareworks code in the item path,
      * so this line is the only thing in the game that says the build is a feature and not a coincidence.
@@ -1001,6 +1011,66 @@ public final class WareworksLang {
     public static final String TERMINAL_BUFFER = "gui.terminal.buffer";
     /** {@code "+%1$s not shown"}: item types the aisle holds beyond {@code maxTerminalStockEntries}. */
     public static final String TERMINAL_NOT_SHOWN = "gui.terminal.not_shown";
+    // --- package doors (M27, issue #18, ADR-065) ---------------------------------------------------------------------
+    // A door row names the door and how it stands; the state words are DoorState#langKey, one short word group each, so
+    // a row keeps room for the door's name in both languages.
+    /** {@code "Here"}: the terminal itself, the first entry of the door choice and where every screen starts. */
+    public static final String TERMINAL_DOOR_HERE = "gui.terminal.door.here";
+    /** {@code "Door %1$s"}: a door without a sign, named by its rack address. */
+    public static final String TERMINAL_DOOR_UNNAMED = "gui.terminal.door.unnamed";
+    /** {@code "+%1$s more"}: doors beyond the ones a list shows. */
+    public static final String TERMINAL_DOOR_MORE = "gui.terminal.door.more";
+    /**
+     * {@code "More outputs were not checked"}: the server stopped looking for doors before the warehouse's last output
+     * ({@code DoorDirectory#MAX_DOOR_CANDIDATES}), so doors behind that cut are neither listed nor counted.
+     */
+    public static final String TERMINAL_DOOR_UNCHECKED = "gui.terminal.door.unchecked";
+    // The screen's door choice: the button's tooltip, the title row, the stock cells, the status row and the question.
+    // Every text is measured against the room it is drawn in, in English and German (TerminalDoorTextWidthTest); a
+    // door's name is an argument everywhere, and it is what gives way.
+    /** {@code "Deliver to: %1$s"}: the door button's tooltip title, naming where a click delivers right now. */
+    public static final String TERMINAL_DOOR_TITLE = "gui.terminal.door.title";
+    /** {@code "Click: next door, right-click: here"}: how the door button is used. */
+    public static final String TERMINAL_DOOR_HINT = "gui.terminal.door.hint";
+    /** {@code "→ %1$s"}: the title row's right label while a door is chosen, in gold. */
+    public static final String TERMINAL_DOOR_INDICATOR = "gui.terminal.door.indicator";
+    /** {@code "A click sends it to %1$s"}: a stock cell's tooltip line while a door is chosen. */
+    public static final String TERMINAL_DOOR_CELL = "gui.terminal.door.cell";
+    /** {@code "%1$s x%2$s to %3$s"}: an accepted click for a door (item, amount, door). */
+    public static final String TERMINAL_DOOR_REQUESTED = "gui.terminal.door.requested";
+    /** {@code "%1$s x%2$s to %3$s, making %4$s"}: the same, with a production order started for part of it. */
+    public static final String TERMINAL_DOOR_PRODUCING = "gui.terminal.door.producing";
+    /**
+     * {@code "To %1$s: %2$s"}: an accepted click for a door whose production chain was refused (door, the chain's own
+     * sentence), e.g. {@code "To Base North: Oak Log is missing"}, so the line that names what stopped the chain names
+     * the door the accepted part goes to as well.
+     */
+    public static final String TERMINAL_DOOR_SHORTFALL = "gui.terminal.door.shortfall";
+    /** {@code "%1$s: waiting for %2$s, delivered %3$s"}: the status row's line about the chosen door. */
+    public static final String TERMINAL_DOOR_STANDING = "gui.terminal.door.standing";
+    /** {@code "%1$s: waiting for %2$s"}: that line when the full one does not fit beside the door's name. */
+    public static final String TERMINAL_DOOR_STANDING_SHORT = "gui.terminal.door.standing_short";
+    /** {@code "Door unavailable: clicks deliver here"}: the chosen door went, so the choice went back to here. */
+    public static final String TERMINAL_DOOR_UNAVAILABLE = "gui.terminal.door.unavailable";
+    /**
+     * {@code "that door waits for too many item types"}: {@code OUTPUT_FULL} for a click to a door, a bare reason like
+     * the goggles' own refusals.
+     */
+    public static final String TERMINAL_DOOR_REFUSED_FULL = "gui.terminal.door.refused_full";
+    /** {@code "A list always comes here"}: the list button's tooltip line while a door is chosen. */
+    public static final String TERMINAL_DOOR_LIST_HERE = "gui.terminal.door.list_here";
+    /** {@code "The ingredients always come here"}: the crafting panel's Fetch tooltip line while a door is chosen. */
+    public static final String TERMINAL_DOOR_FETCH_HERE = "gui.terminal.door.fetch_here";
+    /**
+     * {@code "Goes to %1$s"}: the question's line naming the door it was asked for, a named door with its rack address
+     * after it ({@code "Base North (A-12-03R)"}), which tells two doors with one sign apart.
+     */
+    public static final String TERMINAL_DOOR_CONFIRM = "gui.terminal.door.confirm";
+    /**
+     * The <b>full</b> key of Create's own {@code "Scroll to Select"} (not a relative one: Create ships and translates
+     * it), reused for the door button the way Create's selection inputs show it ({@code SelectionScrollInput}).
+     */
+    public static final String CREATE_SCROLL_TO_SELECT_KEY = "create.gui.scrollInput.scrollToSelect";
     // --- crafting at the terminal (M32, issue #24, ADR-059) ---------------------------------------------------------
     // The panel itself holds numbers and one title word only; every sentence goes to a tooltip or to the status row,
     // and each of them fits that row's 216 px in both languages (TerminalCraftTextWidthTest). What a click ends in is

@@ -3,6 +3,7 @@ package dev.wareworks.network;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
@@ -10,6 +11,7 @@ import dev.wareworks.core.production.ProductionPattern;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -34,13 +36,19 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * {@link TerminalListActionPayload}. Nothing else about the question differs. Since issue #24 the terminal's second
  * list order, the crafting panel's craft order, raises it too, with {@link RequestScope#CRAFT}, and its answer goes to
  * that order as a {@link TerminalCraftOrderPayload}.
+ * <p>
+ * <b>The door the question was measured for</b> (M27, issue #18, ADR-065 D8): a click to a package door is asked about
+ * like any other, and the question names the door the server measured it for. The screen's Yes sends exactly that door
+ * back, whatever its own door button shows by then, so what a player confirms is where it goes. Only a click's question
+ * ever carries one; a list order's and a craft order's always deliver here.
  *
  * @param containerId the menu the question belongs to; the screen ignores one for another menu
  * @param question    what the request would cross
+ * @param door        the package door the click was for; empty for here
  * @param scope       who the request was for, i.e. where the answer goes back to
  */
-public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKey> question, RequestScope scope)
-        implements CustomPacketPayload {
+public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKey> question, Optional<BlockPos> door,
+                                     RequestScope scope) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<TerminalConfirmPayload> TYPE =
             new CustomPacketPayload.Type<>(Wareworks.asResource("terminal_confirm"));
 
@@ -49,8 +57,14 @@ public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKe
 
     public TerminalConfirmPayload {
         Objects.requireNonNull(question, "question");
+        door = door == null ? Optional.empty() : door.map(BlockPos::immutable);
         if (scope == null)
             scope = RequestScope.CLICK;
+    }
+
+    /** A question about a request that delivers here: a list order's, a craft order's, or a click's before M27. */
+    public TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKey> question, RequestScope scope) {
+        this(containerId, question, Optional.empty(), scope);
     }
 
     /** The question a player's own click raised, which is every question before M23. */
@@ -59,12 +73,15 @@ public record TerminalConfirmPayload(int containerId, RequestConfirmation<ItemKe
     }
 
     private TerminalConfirmPayload(RegistryFriendlyByteBuf buffer) {
-        this(buffer.readVarInt(), readQuestion(buffer), readScope(buffer));
+        this(buffer.readVarInt(), readQuestion(buffer), buffer.readOptional(in -> in.readBlockPos()),
+                readScope(buffer));
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
         buffer.writeVarInt(containerId);
         writeQuestion(buffer, question);
+        // Before the scope, which stays the last field (M27): an absent door is one zero byte.
+        buffer.writeOptional(door, (out, pos) -> out.writeBlockPos(pos));
         // Last, and by name: a scope a build does not know reads as a plain click, which is the answer that can only
         // ever be refused by the server rather than acted on in the wrong place (M23).
         buffer.writeUtf(scope.name());

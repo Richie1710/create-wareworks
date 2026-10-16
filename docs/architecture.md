@@ -137,7 +137,9 @@ dev.wareworks
 │   │                          per-player store — one count per item type, one request counted once, the weakest
 │   │                          entry evicted when it is full, counts fading by use and never by a clock, and a
 │   │                          save/restore surface that re-applies every bound) and TerminalUsageCounts (the
-│   │                          read-only half a comparator and a screen need)
+│   │                          read-only half a comparator and a screen need); DoorSelection (M27, issue #18,
+│   │                          ADR-065: the screen's choice of door — here at the start, the next and previous door
+│   │                          that can be chosen, back to here when the chosen door goes)
 │   ├── crafting               crafting at the terminal (M32, issue #24, ADR-059): CraftGrid (the nine ghost cells of
 │   │                          a player's grid, the per-craft multiset in first-cell order, how many crafts a count
 │   │                          map holds and what a top-up would still need) and SlotPlan (one craft planned over
@@ -175,7 +177,15 @@ dev.wareworks
 │   │                          PackagerSignAddress (the address a Create Packager reads off the signs around it,
 │   │                          as three pure functions — one per loop of Create's own rule, mirrored byte-exactly
 │   │                          rather than tidily, plus the 25-character display cut a row that cannot wrap needs;
-│   │                          the only addition to core.* in M26, issue #18, ADR-040)
+│   │                          the only addition to core.* in M26, issue #18, ADR-040);
+│   │                          the package door a terminal click delivers to (M27, issue #18 second half, ADR-065):
+│   │                          DoorFacts (the seven facts that make a door and its state, most actionable first),
+│   │                          DoorState (ready, no address, port full, box waiting, ignores redstone, not loaded;
+│   │                          which can be chosen, sent by name), DoorRows (the bounded door list: at most 64
+│   │                          candidates looked at, an unloaded one costing no look, 16 rows listed, a spent bound
+│   │                          said, a door seen earlier remembered while its chunk is not loaded) and BoxWait (when a
+│   │                          box resting in a Packager's tray has waited long enough to say so, ten seconds, counted
+│   │                          from looks, never from a tick)
 │   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
 │                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
 │                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
@@ -256,7 +266,10 @@ dev.wareworks
 │   │                          their lang keys) and AisleChunkTickets (the one NeoForge TicketController
 │   │                          `wareworks:aisle`, the per-level hold record, the load-path validation with its testable
 │   │                          `validate` seam, the seed watchdog and the queries the command uses) — server only,
-│   │                          server thread only, nothing of it saved by the mod
+│   │                          server thread only, nothing of it saved by the mod;
+│   │                          DoorDirectory (M27, issue #18, ADR-065 D9: the package doors a terminal screen may
+│   │                          offer, pulled by the terminal menus' pushes and nothing else, one build per 20 ticks
+│   │                          per controller plus one per change a hook reports, never saved)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock (since M21 four derived cosmetic
 │   │   │                      connection booleans and a CLOSED state the topology really reads; the wrench toggles
 │   │   │                      CLOSED instead of turning the now cosmetic AXIS), RailNetworkScan (M2 as RailScan,
@@ -324,6 +337,12 @@ dev.wareworks
 │                              a refused package can be read somewhere) and PackageUnpackSummary (the three numbers
 │                              that carries, written as nothing at all for every station no package was offered to and
 │                              deliberately not saved);
+│                              ordering to a door (M27, issue #18 second half, ADR-065): PackageDoors (whether a
+│                              position is a door of a controller, its state and the refusal a click to it gets — the
+│                              one rule the rows and the server's answer share), TerminalDoorRow / TerminalDoors (the
+│                              rows a screen is sent, with the live counts of what each door waits for and has had
+│                              delivered), the door on TerminalRequestOutcome, and PackageHandover#restingBox (the
+│                              box a Packager holds at rest, read and never written);
 │                              crafting at the terminal (M32, issue #24, ADR-059): TerminalCrafting (the one class of
 │                              the mod that runs a recipe: the server preview and one craft as a transaction that
 │                              refuses before anything moves) and TerminalCraftResult / TerminalCraftOutcome (what a
@@ -342,7 +361,10 @@ dev.wareworks
 │                              ADR-039), CraneThroughputDisplaySource. Common code, server side only
 ├── network                    WareworksNetwork (payload registration), the terminal screen payloads:
 │                              TerminalStockPayload, TerminalStatusPayload (server → client),
-│                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019),
+│                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019; since
+│                              M27 both carry the package door a click names, ADR-065), TerminalDoorsPayload (server →
+│                              client: the doors the screen may offer, at most 16 rows, M27) and TerminalRequestAnswers
+│                              (the question or result a click is answered with, echoing the door the server used),
 │                              TerminalOrdersPayload (server → client: the aisle's production orders, M11),
 │                              and the three production station payloads: ProductionScreenPayload (server → client),
 │                              ProductionPatternPayload, ProductionCancelPayload (client → server) (M11, ADR-024),
@@ -378,9 +400,11 @@ dev.wareworks
 │                              TerminalCraftViewPayload#lay).
 │                              Everything else syncs through block entity update packets
 ├── client
-│   ├── gui                    WarehouseTerminalScreen (the terminal's screen) and TerminalScreenUpdates (where the
-│   │                          terminal payloads land on the client) (M6, ADR-019); WarehouseProductionScreen (the
-│   │                          pattern grid), ClientProductionStations, ProductionScreenUpdates (M11, ADR-024);
+│   ├── gui                    WarehouseTerminalScreen (the terminal's screen; since M27 also its door button, the
+│   │                          gold cues of a chosen door and the door's lines in the status row, ADR-065 D13) and
+│   │                          TerminalScreenUpdates (where the terminal payloads land on the client) (M6, ADR-019);
+│   │                          WarehouseProductionScreen (the pattern grid), ClientProductionStations,
+│   │                          ProductionScreenUpdates (M11, ADR-024);
 │   │                          WarehouseStockKeeperScreen (the rule rows), ClientStockKeepers,
 │   │                          StockKeeperScreenUpdates (M15, ADR-027); TerminalCraftPanel (the terminal's folding
 │   │                          crafting panel: the client-owned ghost grid, the ghost cursor, the debounced preview,
@@ -433,7 +457,9 @@ dev.wareworks
 │                              and PackageScenes (warehouse/packages_at_the_door: a Create Packager's back against a
 │                              port packs what the warehouse hands over and the same block at an input opens what
 │                              arrives, with the sign that is the address and the Smart Observer that empties the
-│                              door; registered last on both stations, M26, issue #18, ADR-040)
+│                              door; registered last on both stations, M26, issue #18, ADR-040;
+│                              warehouse/ordering_to_a_door: the terminal's door button sends a click to that door,
+│                              registered last on the terminal and the output, M27, ADR-065 D15)
 ├── data                       WareworksDatagen (GatherDataEvent hooks), WareworksLangGen (English lang),
 │                              WareworksBlockStateGen (the blockstate generators Create's BlockStateGen does not cover:
 │                              the terminal's multipart state, M10, ADR-022; the stock keeper's three lamp models over
@@ -599,6 +625,11 @@ dev.wareworks
 │                              machine — a production station, a Mechanical Arm and a Mechanical Crafter — whose
 │                              nuggets the grid offers to have made, the makeable cells, the offer answered Yes and
 │                              the chain run at that machine, M32, issue #24),
+│                              DoorVisualScenario (ordering to a package door the whole way, in English and German:
+│                              the door chosen on the real screen with real clicks, a click on a stock cell, the
+│                              crane carrying into the door's port while the terminal stays empty, the player's lever
+│                              firing the Packager, the box with the sign's address and no order data, and the goods
+│                              stored by a second warehouse behind its in door, M27, issue #18, ADR-065),
 │                              JeiVisualScenario (JEI's "+" over the terminal with the real JEI and a real click, in
 │                              English and German: a stock-picked chest, a shapeless fire charge, the "+" greyed out
 │                              while a fetch locks the grid and usable again once it ends behind JEI's screen, a
@@ -830,6 +861,7 @@ iron sheets already require a press and its brass casing already requires brass.
   * *Extended in M22 to sixteen scenes* (`warehouse/junction`, "Rails That Split"), rails that split; registered for the **same two components** and last again, so the rail and the crane now show overview → corner → junction. It is a storyboard of its own rather than beats added to `warehouse/corner` for the reason M20 gave: inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files, and a comb needs a third aisle, a second junction and three crane trips — more than the corner's stage and pacing hold. Its stage is `PonderNetwork#COMB` on the same square nine as the corner's, and `PonderNetwork#requireTwinOf` asserts the ownership claim its closing beats make against the layout itself, so the storyboard fails to compile rather than captioning a picture that stopped being true. Its captions each idle **longer** than they are shown (`NetworkScenes#SAY_IDLE`): `showText` does not block, and a scene whose captions all point at the same junction otherwise draws the next one on top of the one still fading out (found by looking at the shots of the first cut).
   * *Extended in M26 to seventeen scenes* (`warehouse/packages_at_the_door`, “Packages at a Warehouse Door”), Create packages at a warehouse door; registered for the **warehouse output and the warehouse input**, and last in both cases, so each block still opens on the scene it always did (ADR-040). Both stations show it because the build is the same Packager on either side of the warehouse and which station its back touches is the whole lesson, so a player who meets one door finds the other. It is a storyboard of its own for the reason M20 and M22 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because its build (two Packagers, a sign, a Smart Observer, a funnel) fits neither port schematic. Its stage is a new 9x7x9 plate in `scripts/gen_ponder_schematics.py`. Two things the plate itself taught, worth knowing before the next scene: a **standing sign** shows a scene its blank back unless `ROTATION` is set (6 points the writing at the plate's fixed camera), and a block's place on the plate is worth computing rather than guessing (screen-right ≈ −0.819·X + 0.574·Z, screen-up ≈ 0.329·X + 0.470·Z + 0.819·Y, from `PonderScene.SceneTransform`'s yRotation 145 / xRotation −35) — which is what shows, before any run, that a Packager on the **far** rack plane hides behind its own station. A ticking Create Packager in a scene is safe, which was doubted while this was being planned: `PackagerBlockEntity#lazyTick` returns at `if (level.isClientSide()) return;` before `recheckIfLinksPresent`, so the `setBlockAndUpdate` that worried it is unreachable from a `PonderLevel` — with or without a Stock Link beside it.
   * *Extended in M28 to twenty scenes* (`warehouse/rack_bay`, `warehouse/rack_wall`, `warehouse/bays_in_an_aisle`), the rack bay's three, in `client.ponder.scenes.RackBayScenes` and registered for **all three tiers** (ADR-048). They are the one block of this mod whose scenes are deliberately **not** in warehouse-first order: a wooden bay needs no machine to craft, so its first audience owns no crane, and the standalone block comes first, the wall second and the aisle last. Three things they had to learn, each of which the next aisle-free scene will need as well. A `PonderLevel` is **client-side**, so it derives neither of a bay's flags (`FILL`, `OVERLOADED`) and cannot spawn a pallet at all — the scenes write both flags into the block state and build the pallet through `createEntity` plus the new display hook `PalletEntity#showClientLoad`, the counterpart of `showClientPose`. A third thing, added in **M29 step 14** once a bay drew the item it stores (ADR-049): the goods have to be put in by hand as well, or a scene teaches "a bay keeps the first item type that lands in it" over anonymous cartons. `RackBayScenes#store` does it with `modifyBlockEntity` and the bay's own `insert`, which needs no hook at all — the change callback behind it returns at once on anything that is not a `ServerLevel`, so nothing is sent, no controller is told and the scene's own `FILL` stands. Ponder renders at **`30 * scaleFactor` units per block whatever the base plate is** (`PonderScene.SceneTransform#refreshMatrix`), so the plate only centres a scene and a single-block scene is made legible by `scaleSceneView` — `RackBayScenes.SINGLE_SCALE` is 2.0 on a square **3** plate, the largest scale and smallest plate in the mod. And the M22 caption rule is now written down rather than remembered (`RackBayScenes`' class comment): applying it found `warehouse/packages_at_the_door` still shipping the defect in one of its two trip beats, a caption shown 150 ticks longer than the scene then idled, drawn on top of the next one.
+  * *Extended in M27* (`warehouse/ordering_to_a_door`, “Delivering to a Package Door”), the twenty-second scene, after M30's `warehouse/fluid_bay`: ordering goods to a package door at the terminal (ADR-065 D15). It is registered for the **warehouse terminal and the warehouse output**, because the door is chosen at the one and is the other, and **last** for both, so each block still opens on the scene it always did. It is a storyboard of its own for the reason M20, M22 and M26 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because it needs a terminal beside the door, which the `packages_at_the_door` stage has no room for; its own stage is another empty 9x7x9 plate. Like the terminal's own scenes it represents the screen it cannot open: `InputElementBuilder#showing` draws any Create icon in a control bubble, so the door button appears as itself (`AllIcons.I_SEND_ONLY`) on the terminal's display face.
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
@@ -3251,7 +3283,7 @@ the correct backpressure. **Fluids**, which the data model rules out rather than
 `packageaddressedelsewhereisstillunpacked` asserts it on purpose so nobody silently "fixes" it. **Routing a clipboard
 list order to a door**, which is sequenced rather than dropped: the tick-mark credit requires the delivery target to be
 the terminal's own block entity, and generalising that hook means deciding what a half-delivered build-site list
-means. And **anything touching `LogisticsNetwork` or the Stock Ticker** in either direction: the whole package system
+means (sequencing amended by ADR-065 D10: list orders to a door are a milestone of their own). And **anything touching `LogisticsNetwork` or the Stock Ticker** in either direction: the whole package system
 is network-free except `submitNewArrivals`, whose two `Create.LOGISTICS` calls are guarded by a Stock Link the player
 physically placed on the Packager. Staying out is the player's build, not our code — and while such a link is there it
 publishes the station's **9-slot buffer**, never the racks and never the stock index, because that buffer is the only
@@ -5499,6 +5531,430 @@ real world and a dedicated server are left to the manual checklist (section AX).
 * `build.gradle`'s note that nothing in `src/main` references `dev/wareworks/gametest` now reads "only behind
   `FMLLoader#isProduction` and a second check", as for `dev/wareworks/dev`. `WareworksNetwork.VERSION` stays `"12"`: no payload's bytes
   change.
+
+### ADR-065 — A terminal order names a package door by its position; the crane never carries more into a warehouse port than the port can take; the choice of door lives only in the open screen (M27, [issue #18](https://github.com/Richie1710/create-wareworks/issues/18), second half)
+
+*Context:* M26 made a warehouse port with a Create Packager at its back a package door and left ordering to a door at
+the terminal to this milestone (ADR-040), with two things already settled there: the request picks the **door** and
+carries a `BlockPos`, and the sign on the door's Packager is the address. Two properties of the existing code stood
+in the way of sending a player's order to a door, and they are fixed first, before any of the terminal is built:
+
+* **A crane could park in front of a port.** A retrieve into any output station was planned against a one-item probe:
+  the target had to accept one item, and the trip carried up to the carry limit. A port with room for 32 was handed a
+  trip of 64; the crane dropped 32 and waited in front of it (`WAITING_FOR_TARGET`) with the other 32 in its claw. A
+  door is exactly a port that is emptied by redstone the player wires, or not at all, so a Packager nobody triggered
+  held the crane, and with it the whole aisle, until somebody emptied, broke or turned the port.
+* **The controller accepted a request to a port of any direction.** `request()` checked for an aligned
+  `LocationKind.OUTPUT` member and nothing else. A request to an **accepting** port was served into the port's export
+  stream (the notes written for M26 called such a request "born dead"; it is not, it is delivered), and one to a
+  **collecting** port could never be served, because the collect transfer context refuses every insert. No block
+  of the mod ever made such a request in a loaded warehouse, but a terminal that can name another station would.
+
+*Decision:* D1 to D3 fix the door model the terminal half of this milestone builds on; D4 and D5 are in force from
+the first step of the milestone on, before a door can be chosen anywhere; D6 to D12 are the terminal half, D13 is its
+screen, D14 the door that says when a box waits at its Packager with nothing taking it away, and D15 the Ponder scene
+that teaches the whole of it. With this milestone issue #18 is done: M26 built the door, M27 delivers to it.
+
+* **D1. What a door is.** A position is a door of controller `C` if and only if it is a request destination of `C`
+  (D4: an aligned, loaded `OUTPUT` member which, if it is a port, requests); its block entity is a
+  `WarehouseOutputBlockEntity` that is not removed and whose `portDirection()` is `REQUEST`, read from the block
+  entity and never from the `AislePorts` cache, where "not read yet" means the default; and
+  `PackageHandover#packagerFor` finds a plain Create Packager whose back touches it (a Repackager is refused there).
+  A warehouse terminal is never a door, even with a Packager behind it: "here" already is one. An accepting port is
+  not a door, because M17's rule is that it must never receive items somebody requested, and neither is a port of
+  another controller.
+* **D2. A request names a door by its position and nothing else.** No address string is sent, stored, matched or
+  trusted. The sign is display only: read on the server and cut to the goggles' 25 characters
+  (`PackagerSignAddress.DISPLAY_LENGTH`), so a door reads the same on both. ComputerCraft's address override is not
+  modelled, because nothing in this repository can exercise it: without ComputerCraft, Create installs
+  `FallbackComputerBehaviour`, whose `hasAttachedComputer()` is `false`.
+* **D3. Wareworks never writes order data and never packs.** No `create:package_order_data`, no
+  `PackageItem.setOrder` or `addAddress`, no `attemptToSend`, `activate` or `updateSignAddress`, and no Create
+  logistics network: the player's own redstone fires the Packager, exactly as in ADR-040. A stored Create package
+  that is retrieved to a door is forwarded by the Packager as itself, with its own order data, and only re-addressed.
+* **D4. Two layers of validation, and the controller's comes first (G-dest).** `WarehouseControllerBlockEntity` asks
+  `isRequestDestination` (until now `isOutputStation`), which adds one rule to the same single block entity lookup: a
+  member that is a `WarehouseOutputBlockEntity` must request. So
+  * `request()` refuses an accepting or a collecting port with `NO_CONTROLLER`, the answer every position that is no
+    destination already got, and queues nothing;
+  * `pruneRequests`, which runs on every relink and every membership pass, also cancels a request to a **loaded**
+    port that stopped requesting without telling the controller. A wrench and a data command already reach
+    `onPortChanged`, which cancels at once (`WarehouseOutputBlockEntity#readStationData` announces an in-place data
+    change); what only this pass catches is a port turned while its controller was not loaded, which announces itself
+    to nobody, and a request of that kind carried in a save. Since no block ever made one in a loaded warehouse, this
+    is a no-op on every real world and needs no migration.
+
+  The second layer is the terminal's own door check, which answers before the stock check and comes with the
+  terminal half. A third layer in dispatch was considered and dropped: it would read the `AislePorts` cache and add
+  no guarantee beyond these two.
+* **D5. A retrieve into a warehouse port carries at most what the port takes, and sets off only for the whole trip
+  or a full stack of it (G-room).** `PlannerInput` gains `roomBound` (by default no location) and `stackSize` (by
+  default `Integer.MAX_VALUE`), so every planner input built without them plans exactly as before. In
+  `JobPlanner#planOutOfStorage`, for a `RETRIEVE` whose target is room-bound, the one live simulation of the target
+  asks for the whole trip instead of one item; the trip is planned only when that room is at least
+  `min(trip, max(1, stackSize))`, and then carries `min(trip, room)`. Below that the request reports `OUTPUT_FULL`,
+  which arms no back-off, and is asked again at the next dispatch, while the planner serves younger requests,
+  supplies and storing. `CraneDispatch` answers `roomBound` with "the block entity at the target is a
+  `WarehouseOutputBlockEntity`" — one lookup, asked only for the target of a retrieve after the planner found it
+  available, so never for an unloaded position — and `stackSize` with `ItemKey#getMaxStackSize`.
+  * **Why the crane then never waits in front of a port.** Between the plan and the drop a port's room can only grow:
+    only the controller's one crane puts items into a port's `StationBuffer` (its capability is extract-only on every
+    side, and its Mechanical Arm point refuses inserts); the crane is planned for only while it has no job and an
+    empty head (`StackerCraneBlockEntity#canAcceptJob`), and a job's amount is fixed when it is planned, with a pick
+    that can only be lower; a buffer never shrinks under a live block entity (`bufferSlots()` is the configured
+    count or more); and the live simulation is exact across slots (`StationBuffer#insert` is `insertItemStacked`). So
+    while the world runs, a crane does not reach `WAITING_FOR_TARGET` in front of a port any more.
+  * **The drop gate holds the rule where planning cannot.** Two things bring a crane to a port with less room than
+    its trip all the same: a trip planned before a restart that lowered `outputBufferSlots` (`StationBuffer#load` sizes
+    the buffer to the new count), and a crane saved in `WAITING_FOR_TARGET` in front of a port before this milestone,
+    which resumes into that wait and, with `canAcceptJob` false, would never be planned for again. So the gate in
+    `CraneExecution#performDrop` answers a `RETRIEVE` whose target is a warehouse port that takes nothing at all with
+    `JobCancelled` instead of `OutputFull` — the same `WarehouseOutputBlockEntity` lookup `roomBound` makes, on a
+    position the drop just resolved as loaded. The state machine retracts and reroutes the held items with the port
+    excluded; the reroute detaches the job from its request (`CraneExecution#reportRerouted`), so the request stays
+    open with what was delivered credited and is planned again, by the room, once the port has some. A partial drop
+    still waits one `retryTicks` as at any output, and the retry that finds the port taking nothing reroutes, so a
+    crane waits in front of a port for one retry at most. A terminal and a `SUPPLY` keep the wait. The state machine
+    itself is unchanged.
+  * **The minimum carry** answers the case that sizing alone would create. A port drained slowly — a hopper takes
+    one item every 8 ticks — with a large open request would be served one item per trip, and because requests are
+    planned before storing, those trips would starve every input station. With the default `grabberStacks = 1` a
+    trip is at most one stack, so the rule reads "go when the whole trip fits"; with more stacks per trip the crane
+    goes as soon as one stack fits.
+  * **Ports only.** A warehouse terminal keeps the one-item probe and its wait: a player stands at it, and
+    `TerminalCrafting` puts recipe remainders into the terminal's buffer after the plan, so its room can shrink and
+    the argument above does not hold there. A production station keeps it as well, because a `SUPPLY` has the
+    production timeout and the safety stop. Every warehouse port is in scope, and after D4 the only ports a request
+    can reach are requesting ones.
+  * **The crane's `BLOCKED` share (ADR-039) drops at ports** for the same reason: the ticks a crane used to spend in
+    `WAITING_FOR_TARGET` in front of a port are now ticks of other work, or idle ones.
+* **D6. A door click is checked before the stock, and its refusals are answered and never remembered (G-door).**
+  `WarehouseTerminalBlockEntity#requestFromTerminal` takes an optional door and checks, in this order: server side,
+  reach, amount, a controller, **the door**, the stock, and then the controller's own `request(door, …,
+  StockAccess.PLAYER, …)`, which checks the destination once more (D4). The door check is
+  `content.station.PackageDoors#refusal`, which is the very rule the door rows are built by (`PackageDoors#look` over
+  the pure `core.port.DoorFacts#state`), so the list a player picks from and the server's answer cannot disagree. It
+  gives one of two new reasons, **appended** to `RequestRejection`: `NOT_A_DOOR` (everything that is no door: an
+  unloaded position, another warehouse's port, a terminal, an accepting or collecting port, a port without a
+  Packager or with a Repackager) and `DOOR_IGNORES_REDSTONE` (a door whose Packager carries a Stock Link). The door
+  comes first so that a click to something that is no door is told so, and not that an item is missing. **Nothing a
+  door click ends in is remembered**: not the two door reasons, not `NOT_IN_STOCK` and not a door's `OUTPUT_FULL` —
+  the terminal's `lastRejection` is saved and shown on its goggles and is about the terminal, and the door's own
+  `lastRejection` belongs to its redstone. A refusal of a click to here is remembered exactly as before. A door equal
+  to the terminal's own position is here.
+* **D7. A Stock Link makes a door unselectable and refused; a blank sign is a warning; open requests survive.** A
+  `LINKED` Packager ignores redstone (`redstoneModeActive()` is `!LINKED`), so the door would never send, and its link
+  publishes the port's buffer to the network besides: the row is red, cannot be chosen, and a click is refused with
+  `DOOR_IGNORES_REDSTONE`. A Packager without a sign boxes unaddressed, which belt-only builds and an unnamed Package Port
+  take legitimately: the row says "no address" and the door may be chosen. A port without an empty slot says "port
+  full" and may be chosen: the order waits and, by D5, the crane does not. Requests that are open when a door changes
+  stay open unless the port stops requesting or leaves the warehouse (D4 and the existing cancellation, which aborts a
+  job before its pick and reroutes the carry into storage after it); a Packager removed or linked later leaves them
+  waiting in the port's buffer, where its goggles show them, so a player can put the Packager back.
+* **D8. Here on every open, and the server echoes the door.** The choice of door lives only in the open screen, starts
+  at here every time the screen opens and is never saved or shared; the server holds no selected door at all, so two
+  players at one terminal choose without interfering, and the terminal's saved tag does not change with a click. Every
+  answer names the door the server really measured: `TerminalRequestOutcome#door` carries it,
+  `network.TerminalRequestAnswers#answer` copies it into the `TerminalConfirmPayload` of a question and the
+  `TerminalResultPayload` of a result, and the screen's Yes sends the echoed door back — so what a player confirms is
+  where it goes, whatever the door button shows by then. Create's Stock Ticker remembers its previously used address;
+  Wareworks deliberately does not.
+* **D9. Door rows are pulled, bounded and transient (`content.controller.DoorDirectory`).** One directory per
+  controller, never saved, used on the server thread only. Its only caller is a terminal menu's push
+  (`WarehouseTerminalBlockEntity#doorRows` from `WarehouseTerminalMenu#pushUpdates`), so with no terminal screen of the
+  warehouse open nothing runs at all. A build is reused for `MAX_AGE_TICKS` (20) unless a hook marked it dirty
+  (`onMemberChanged`, `onPortChanged`, `applyLayout`, a membership pass that changed something: one boolean each, no
+  world read), and there is never more than one build in a tick; every screen of the warehouse shares it. A build walks
+  the membership's own output records in rack order, looks at most `MAX_DOOR_CANDIDATES` (64) of them, never loads a
+  chunk — a door seen earlier whose chunk is not loaded is listed again from memory as `NOT_LOADED`, grey and
+  unselectable, and anything else unloaded is skipped — and lists at most `MAX_DOOR_ROWS` (16), counting the doors it
+  found beyond them (what it did not look at, it cannot count; below). A
+  sign edit or a Packager placed or broken fires no warehouse event; it shows within the 20 ticks. The live counts per
+  row (what the door's open requests wait for and have delivered) are read from the request queue in memory on every
+  push and never cached. Rows travel in the new `TerminalDoorsPayload`, compared by value like the order lines and sent
+  with every full sync; a state travels by name, and a name a build does not know reads as `NOT_LOADED`.
+  * **The bound is spent on looks, and a cut is said.** The candidates are the output records the controller's port
+    cache does not already know to be no door: an accepting or a collecting port is left out without a look (as
+    `CraneDispatch#rerouteOutputs` asks the same cache), while an unread port counts as requesting and a terminal
+    cannot be told apart there, so both stay candidates and are refused by their look. Only a look spends one of the 64:
+    an unloaded candidate, skipped or listed grey from memory, costs none. A build that spends its 64 looks before the
+    last candidate says so (`DoorRows.Built#unchecked`, `TerminalDoors#unchecked`, one boolean at the end of
+    `TerminalDoorsPayload`), and the button's tooltip then ends its entries with "More outputs were not checked": doors
+    behind the 64th looked-at candidate in rack order are neither listed nor counted, and a warehouse without a door
+    among the first 64 shows no button at all.
+* **D10. Only stock-cell clicks travel.** A click on a stock cell, plain, Shift, Ctrl or Alt, may name a door; the
+  crafting panel's Fetch, a recipe viewer's lay and a clipboard list order have payloads of their own without a door
+  field and always deliver to the terminal. The Fetch exists to fill this buffer for a hand craft. A **clipboard list to
+  a door** is its own milestone, and it must bring: a persisted optional door offset on the terminal (absent means here,
+  written only while a routed order is open, read only from a full save per ADR-061) and the door on the list's Fetch
+  action; a re-check of the door on every pass with a named park instead of looping on `NO_CONTROLLER`; a delivery
+  credit switched on the target, which offers a door drop to the list terminals routed to it, exactly once; a saved,
+  bounded owed-credit ledger on the controller for a door drop while the list's terminal is unloaded, without which a
+  list would ship twice; the rule that a tick means "handed into the door's buffer", never "arrived"; and its own ADR
+  clause, robustness leg and migration test.
+* **D11. What is not built.** A typed address and any address matching (Create's match is a byte-exact glob); anything
+  that stamps order data, triggers, packs or unpacks (D3); a remembered door, custom door names or another warehouse's
+  doors; a cancel for door orders — requests have no owner, so it would also drop the door's own redstone requests, and
+  the escape is to turn the door out of Request with the wrench; an extra confirmation for a Ctrl-click to a door; the
+  ComputerCraft address; a comparator or "order complete" output; and new config keys, blocks or saved state. **Kept
+  as it was:** a retrieve's leftovers whose request was lost go back into storage first and into another output station
+  only as the last resort (`JobPlanner#planReroute`, `docs/warehouse-system.md` §7.4 and §8), and a door is such a
+  station, so a stray can ride along in a door's box. Taking doors out of that last resort would leave a full
+  warehouse's crane holding a carry with nowhere to go; the door's goggles list what it holds, and the reroute never
+  asks `roomBound` (D5), so it does not wait at the door either.
+* **D12. One version, two appended reasons, nothing saved.** `WareworksNetwork.VERSION` goes from `"12"` to `"13"`
+  once for the milestone: the door field in `TerminalRequestPayload` before the acknowledgement (which stays last, so
+  an unknown acknowledgement tag still leaves nothing unread), echoed in `TerminalConfirmPayload` before the scope
+  (which stays last and by name) and in `TerminalResultPayload` right after the rejection; the new
+  `TerminalDoorsPayload`; and the two constants appended to `RequestRejection`, which travels by ordinal. They are saved
+  by name wherever a rejection is saved, and never are, because they are never remembered. No save format changes:
+  a request's destination already is a saved offset, a crane job carries its request's id, and reservations are rebuilt.
+* **D13. The screen costs no layout: one button and cues where the player clicks.** The window is 230 × 234 pixels
+  (238 with a large buffer) against vanilla's 240 pixel floor, so there is no row for a strip of doors. The choice is
+  one 18 × 18 Create `IconButton` (`AllIcons.I_SEND_ONLY`) in the free column left of the player inventory, the fold
+  toggle's mirror (`TerminalMenuLayout#doorButtonX`/`#doorButtonY`), shown only while the warehouse has a door: a
+  click picks the next door that can be chosen, the wheel cycles both ways inverted like Create's selection inputs, a
+  right-click goes back to here. Its tooltip, at most ten lines inside the window's 216 pixel row, lists here and the
+  doors in Create's `SelectionScrollInput` style with each door's state in colour, the chosen door's advice and what it
+  is owed, and Create's own "Scroll to Select". While a door is chosen the button is green, the title row's right label
+  is the door's name in gold, the stock cell under the mouse is tinted gold and its tooltip names the door; the cues
+  stay off while a crafting ghost is on the cursor. Every accepted answer names the door the server echoed, in short
+  frames that leave an item's name and a typical sign room side by side (`"Iron Ingot x64 to Base North"`), and an
+  accepted click whose chain was refused puts the chain's sentence behind the door (`"To Base North: Oak Log is
+  missing"`); where a line is too wide the item's name gives way first, down to a 30-pixel prefix, and then the
+  door's, whose whole name stands gold in the title row. A refusal keeps its reason: the door's `OUTPUT_FULL` is its own
+  sentence and the two door rejections stand bare. A standing line in the status row says what the chosen door is
+  still owed, the question names the door it was measured for, and when the chosen door goes the choice falls back to
+  here and the row says so.
+  The list button and the crafting panel's Fetch say, while a door is chosen, that they always deliver here. A dialog
+  now owns the mouse wheel as it owns every click, so nothing behind a question or the step panel moves.
+* **D14. A box that has waited is a state of the door, read and never touched (`BOX_WAITING`).** It is the one way
+  a working door stands still that nothing in the game reports: the Packager boxed the port and nothing takes the box
+  — the funnel was forgotten, or the belt behind it stopped — and a Packager that holds a box makes no other
+  (`attemptToSend` returns while `heldBox` is not empty). A door whose Packager holds a box with its tray **at rest**
+  (`heldBox` not empty and `animationTicks` 0, Create's two public fields, read by `PackageHandover#restingBox` and
+  never written) for at least `BoxWait#REPORT_AFTER_TICKS`, 200 ticks or ten seconds (`core.port.BoxWait`), stands in
+  `BOX_WAITING`: after a Stock Link and before a full port, because it is why the port is full; gold, selectable, and
+  an order to it waits like one to a full port, with the crane free (D5). **Ten seconds, and words that ask.** Nothing
+  can take a box while the tray moves (`PackagerItemHandler#extractItem`), but a taker that works is not always quick:
+  a hopper below pulls every 8 ticks, yet a belt funnel takes nothing while its belt's input is occupied
+  (`FunnelBlockEntity#activateExtractingBeltFunnel`, `DirectBeltInputBehaviour#isOccupied`), about `480 / RPM` ticks
+  per box on a slow belt; a hopper with full slots takes as fast as its next stage, a Frogport as fast as its chain.
+  Ten seconds covers a belt funnel down to 3 RPM, so a door that ships is not reported, and one that is forgotten is
+  after ten seconds; and the texts state the wait and ask — "box waiting", "A box has been waiting at the Packager: is
+  anything taking it?" — rather than claim that nothing takes the box.
+  * **Measured by looks, not by a tick.** Every look at the door records what it saw in a memory on the port's block
+    entity (`WarehouseOutputBlockEntity#boxWaitingShown`): transient, never saved or synced, one per door, so it needs
+    no map, no pruning and no bound of its own, and a box nobody looks at costs nothing. The wait goes on only when
+    two looks provably saw the same box waiting: the very same object — Create makes every box as a new object, and a
+    client replaces it with every block entity packet the Packager sends, which a take always does — or two looks less
+    than `BoxWait#SAME_BOX_GAP_TICKS` (20) ticks apart, because a box that was taken can only be followed by one at rest
+    after the 20-tick tray animation. That gap is a proof about the tray, so it is a constant of its own and never
+    grows with the reporting time: two looks 50 ticks apart could have seen two different boxes. A look that sees no box
+    at rest ends the wait.
+  * **Two lookers, one decision.** The door rows look once per build (D9), so a row turns gold at a build that still
+    sees the same box ten seconds after an earlier one. A port's goggles look in every frame on the client and add a
+    gold row, "A box has been waiting at the Packager: is anything taking it?", beside the address rows (for a
+    requesting and an accepting port, like every handover row). Both are drawn from `boxWaitingShown`, which is also what the GameTests ask, because a goggle
+    tooltip cannot be built on a server.
+  * **Nothing on the wire changes.** The state already travels by name (D12), and the goggle row is read off Create's
+    own client packet (`PackagerBlockEntity#write` writes `HeldBox` and `AnimationTicks` before its client return), so
+    `WareworksNetwork.VERSION` stays `"13"`.
+* **D15. One new Ponder scene teaches the door from the terminal's side: `warehouse/ordering_to_a_door`, "Delivering
+  to a Package Door"** (`client.ponder.scenes.PackageScenes#orderingToADoor`). It is registered for the warehouse
+  terminal, where the door is chosen, and the warehouse output, which is the door, and **last** for both, so neither
+  block changes the scene it opens on and no shipped `text_n` key moves (ADR-016). Its stage is a new empty 9 × 7 × 9
+  plate from `scripts/gen_ponder_schematics.py`. Nine beats: a requesting port with a Packager at its back is a door;
+  the sign names it and addresses its boxes; the terminal's door button chooses where a click delivers; a chosen door
+  turns gold and a click on an item goes there; the crane fills the door with no more than its port takes (D5); the
+  player's own redstone sends the box with the sign's address (D3); lists and fetched ingredients always come to the
+  terminal (D10); every new screen starts on Here (D8); and a Stock Link makes the door red and unselectable (D7). A
+  `PonderLevel` cannot open a menu, so the screen is represented the way the terminal's own scenes represent it: the
+  door button's own icon (`AllIcons.I_SEND_ONLY`) in a control bubble on the terminal's display face, a click with a
+  Packager in the bubble for choosing a door, and a gold line from the terminal to the chosen door. The Stock Link
+  hangs on the Packager's side, which Create's `PackagerBlockEntity#getLinkPos` accepts, and the beat sets the
+  Packager's `LINKED` state itself, as Create's own scenes do, because a client level derives nothing. A scene of its
+  own rather than beats added to `warehouse/packages_at_the_door`: inserting a text there would renumber every later
+  key in both lang files, and that stage has no room for a terminal.
+
+*Alternatives considered:*
+* **A typed address at the terminal**, or the terminal stamping the box: ruled out by D2 and D3; the sign is the
+  address because it is the one channel Create applies on the redstone branch.
+* **Remembering the chosen door** on the terminal or the player: a door chosen by one player would deliver another
+  player's next click somewhere they never chose; here on every open costs a click and surprises nobody.
+* **Scanning for doors** on a cadence or keeping a registered list: either costs work with nobody looking, or a second
+  saved list that every block-loading order can put out of step; pulled rows cost nothing while no screen is open.
+* **Sizing the trip by the room without a minimum.** Never parks the crane, but turns a port that a hopper drains
+  into a stream of one-item trips, which starve storing (above).
+* **Rerouting what a partial drop at a port leaves over back into storage**, as a store into an accepting port does
+  (M17). The crane would no longer park, but every slot the player's Packager freed would cost a round trip with a
+  partial delivery, and the request would be served in fragments. Sized trips make the case rare instead, and the drop
+  gate reroutes only when a port takes nothing at all at a retry — a trip from before a restart that lowered the
+  buffer, or a crane saved waiting before this milestone — so a port that drains keeps getting what fits.
+* **A time-out for the wait at a port.** Either strands the carry or brings it back after the aisle has already stood
+  still; sized trips never carry anything that has nowhere to go.
+* **Sizing every delivery target, terminals included.** Not true for a terminal (remainders), and a terminal's wait
+  is what a player standing there expects.
+* **A strip of door rows, a second fold-out or a fourth button in the search row** for the choice: the first costs
+  half the stock grid or a production line, the second another 68 pixels the 320 pixel floor does not have, and the
+  third pushes the German search hint into the amount field. A modal door picker costs a click every time and is a
+  wall of text at GUI scale 6.
+* **Refusing a request while its port has no room.** A request to a full port is not a mistake — the Packager may
+  simply not have been triggered yet — so it stays open, its stock stays promised and visible on the port's goggles,
+  and the crane is free in the meantime: wait, never refuse.
+* **Watching a door's box on a tick** (the port's own server tick, or the controller's pass) for D14. It would work
+  with nobody looking, which is exactly what the rows avoid (D9), and the goggles are drawn on the client anyway. A
+  map of sightings on the controller's door directory was the other place for the memory; the port's own block entity
+  has the door's lifetime, so it needs no pruning, and the rows and the goggles then ask one method.
+* **Counting a box as waiting the moment its tray stops**, or comparing boxes by their contents. The first reports
+  every box of a working door for the tick before the hopper takes it; the second reports a door that sends identical
+  boxes as stuck whenever two sparse looks happen to catch one at rest each.
+* **Reporting after one tray cycle (20 ticks), in words that say "nothing takes it away".** A belt funnel on a slow or
+  backed-up belt leaves a working door's box at rest for longer than that, so a door that ships would turn gold now and
+  then and be told it was broken. And one constant for both jobs cannot be raised: the proof that two looks saw the
+  same box holds only up to the tray cycle, hence the two constants.
+
+*Verification:* JUnit `JobPlannerTest`, ten new cases: room 10 for a trip of 64 gives no job, `OUTPUT_FULL`, one
+live call for the whole trip and none at a source; room 64 gives the whole trip; with two stacks per trip a request
+of 200 against room 100 gives a trip of 100, and room 63 none; a request of 10 needs a room of 10 only; a stack size
+below 1 still needs one item of room; a terminal, a `SUPPLY` and the default builder keep the one-item probe; a port
+too full for its trip blocks neither a younger request nor storing; and `roomBound` is never asked for an unavailable
+target, for a store or on a reroute. GameTests `WarehousePortGameTests`, each with the item census on every tick:
+`craneneverwaitsatafullport` (a port with one free slot takes the first of four trips, then half of that stack is
+taken out through its capability, as a hopper would, so it has room for half a trip, and on no tick is the crane in
+`WAITING_FOR_TARGET` in front of the port; every trip to the port fits the room it finds; a crane without a job
+holds nothing and has nothing in transit; a terminal request and an input are served meanwhile, with `OUTPUT_FULL`
+reported and no back-off; once the port is emptied the rest follows in whole trips), `aportthattakeslittlewaitsforafulltrip` (room 10 against a request of 64: no trip until
+54 are taken out, then exactly one of 64), `controllerrefusesarequesttoaportthatdoesnotrequest` (an accepting and a
+collecting port refused, nothing queued, a requesting port beside them served) and
+`aportturnedsilentlylosesitsrequestsonrelink` (the rank changed in the behaviour's own data, which runs no callback,
+to an accepting and then to a collecting port; the request survives the change and the next relink cancels it), and
+`aportfilledunderacarryingcranegetstherestlater` (a port filled by a test-only insert while the crane carries a whole
+trip into it, as only an older world can bring about: one partial drop that counts for the request, one retry, and
+then the rest back into storage with the request still open, never longer in `WAITING_FOR_TARGET` than one retry; the
+rest delivered in one trip once the port is emptied). `CraneJobGameTests#craneWaitsForFullOutput` keeps covering the
+wait where it stays, at a **warehouse terminal**: before the drop gate, it filled a port by a test-only insert under
+the carrying crane, and that is now the case the port's own test above pins. Of the first four port tests, the two
+about room fail without `roomBound` and the two about direction without the direction rule, while every other GameTest
+of that run passed either way (601 GameTests, before the terminal half added the door GameTests and the drop gate its test; the
+faults were not injected again later).
+
+The terminal half: JUnit `core.port.DoorFactsTest` (the whole truth table of `DoorFacts#state` over its seven facts,
+the precedence, `selectable()` false only for a Stock Link and an unloaded door, a state name this build does not know
+read as `NOT_LOADED`), `core.terminal.DoorSelectionTest` (here at the start; next and previous skip what cannot be
+chosen and wrap through here; `update` keeps a door by identity and falls back to here, saying so),
+`core.port.DoorRowsTest` (D9, ten cases: doors listed in candidate order; a door seen earlier whose chunk is not loaded
+listed grey as `NOT_LOADED` without being looked at, and itself again once loaded; an unloaded candidate never seen
+skipped; a door that stopped being one, or a candidate that left, forgotten; at most the bound of candidates looked at
+and of rows listed, with the rest counted and a spent bound said; a door behind the bound neither listed nor counted
+but the cut said; an unloaded candidate spending none of the bound; duplicates counted once) — the only pin for the
+grey row, because a GameTest area is force-loaded and in the robustness run the door always unloads together with its
+controller — and `content.station.PackageOrderBoundaryTest` (a source scan for the code shapes of D3 on non-comment
+lines, with the GameTests, the dev harness and the Ponder scene of packages exempt for reasons it asserts, and a request
+payload that carries no text). GameTests `PackageDoorGameTests`, each with the item census on every tick: `doorOrderFromTheTerminal`
+(the click through the real codec, the door echoed, the terminal's buffer empty on every tick, the credit at the first
+drop into the port, and a box with the sign's address and neither `create:package_order_data` nor
+`create:package_order_context`), `storedPackageLeavesADoorAsItself` (a stored package with order data leaves equal
+to itself but for the address), `doorOrderWithoutAnAddressLeavesUnaddressed` (a door without a sign is `NO_ADDRESS`,
+may be ordered to, and its box leaves with the empty address and no order data), `aDoorAtTheTerminalsOwnPositionIsHere`
+(the click is a click to here, its echo names no door, and the iron arrives in the terminal),
+`doorOrderRefusedForWhatIsNotADoor` (no Packager, a Repackager, a collecting port, a terminal, the storage interface,
+and two positions outside the warehouse, one of them far away and not loaded, which the look does not load; a door's
+`NOT_IN_STOCK` is not remembered, a click naming the terminal's own position is answered and remembered as a click to
+here, and so is the plain click to here), `doorWaitsForAtMostFourItemTypes` (four types at a door, a merge that takes
+no slot, a fifth refused by the controller with `OUTPUT_FULL` and remembered by neither the terminal nor the door, and
+a refusal of a click to here that the terminal remembers through every accepted door click and loses only to an
+accepted click to here), `doorOrderRefusedForAnAcceptingPort`,
+`doorOrderRefusedWhenTheDoorIgnoresRedstone` (a real Stock Link; the row says so; without it the door is orderable
+again), `doorOrderRefusedForAnotherWarehousesPort`, `confirmedDoorRequestGoesToTheEchoedDoor`,
+`doorTurnedMidOrderSendsTheCarryBack`, `doorBrokenMidOrderSendsTheCarryBack`, `doorOrderSurvivesASave`,
+`twoPlayersOrderToTwoDoors` (the terminal's saved tag unchanged by three clicks, both screens told the same rows),
+`doorRowsAreBuiltOnlyWhileAScreenIsOpen` (no build in 200 ticks without a screen, at most eleven per 200 ticks with
+one or two, one more for a port change and never two in a tick), `doorRowsNameTheirState` (three doors on real
+blocks, a port filled to its last slot as `PORT_FULL`, a door without a sign as `NO_ADDRESS` with an empty label, a
+ready one whose 384-character sign is cut to 25 and flagged, in rack order, without the plain port and the terminal;
+both warnings selectable; the full port ready again once a stack is taken out) and `fetchNeverGoesToADoor`; and
+`WarehouseTerminalMenuGameTests#terminalDoorPayloadsRoundTrip` (with the "not checked" flag). The rule that an
+unloaded rack position of the warehouse is never a destination, checked before any block entity lookup that would load
+its chunk (`isRequestDestination`'s `level.isLoaded` before `Level#getBlockEntity`), has no automated test: a GameTest
+area is force-loaded and no test warehouse reaches into another chunk, and `DoorRowsTest` covers only the directory's
+own loaded check of its candidates.
+
+The screen (D13): JUnit `data.TerminalDoorTextWidthTest` (every `gui.terminal.door.*` key assigned to its room — the
+status row, the title row, the question and the tooltip — and measured in English and German with the font's real glyph
+advances, the names empty and the numbers at their widest, each frame leaving its names a floor — 120 pixels for an
+item and a door in the plain answer, 70 beside a production count, 50 for the chain's refusal behind a door; the two
+door rejections bare against the row) and
+`content.station.TerminalMenuLayoutTest#theDoorButtonSitsInTheWindowOverNoSlotOrLabelRow`
+(buffers 1 to 27: inside the margins, over no slot, row or the fold toggle, x 11, level with the inventory's first row
+of cells). The visual `terminal` scenario measures the status row's door lines through the screen's own methods and the
+button's tooltip in both languages, and then drives a door with real input: a click, a right-click and the wheel on the
+button the screen's own hit test finds; the gold title row and cell cue; the choice kept through two folds of the
+crafting panel and a re-layout; a click on a reserved item for the door, whose question names the door and over which
+the wheel changes nothing, answered Yes and delivered into the door's port; a click while the crane's motor stands,
+whose answer names the door, whose request the server holds for the door and none for the terminal, and whose standing
+line takes the row once the answer has gone; here on the next screen; and the fallback to here with its gold line when
+the Packager is broken. The visual `door` scenario follows one order the whole way, in English and then in German
+after a real language switch: a requesting port with nothing set on it, a Create Packager at its back, a sign "Base
+North" and a lever on the Packager; the door chosen on the real screen through the button's own hit test, 16 iron
+ordered with a click on the stock cell, the answer and the standing line naming the door, the server holding one
+request for the door and none for the terminal; the crane carrying the iron into the port while the terminal's buffer
+stays empty on every poll; the lever, flipped the way its own use flips it, making the Packager box the port with the
+sign's address and no order data; the box on the belt and the iron stored by a second warehouse behind its in door.
+The answer must stand uncut in both languages ("Iron Ingot x16 to Base North", "Eisenbarren x16 an Base North"), or
+the run fails. The English round also lays the screen out at the 320 x 240 floor, folded in and out, with the button
+inside the window, on no slot and its tooltip inside the screen. Each round ends with a box left waiting at the
+Packager: the hopper under it is taken away, a stack is put into the port and the lever flipped, and once the box has
+rested the screen's row reads "box waiting" in gold with its advice line (shots `door-box-waiting`,
+`door-box-waiting-de`); the hopper put back, the box leaves for the other warehouse and the row turns ready again. The
+`packages` scenario shoots the port's gold goggle row for such a box in both languages. An item census of both
+warehouses and the belt, a package counting as its contents, brackets every move.
+
+The Ponder scene (D15): the `ponder` visual scenario asserts six registered scenes for the warehouse output and five
+for the terminal, compiles the new storyboard against a real `PonderLevel` from both blocks and shoots it at 20, 60
+and 90 per cent of its length, which catches a missing schematic, a crashing instruction and a raw lang key;
+`py scripts/gen_ponder_schematics.py --verify` checks its stage, and `LangConsistencyTest` its title and nine texts in
+both languages.
+
+The box that waits (D14): JUnit `core.port.BoxWaitTest` (nine cases: the gap is the 20-tick tray cycle and the report
+waits longer; reported exactly after 200 ticks of looks in every tick; the same object at two sparse looks has waited
+between them; another box at a look a full wait later starts again; another object less than 20 ticks later
+continues, all the way to the report; another object 20 ticks later starts again, well inside the reporting time; a
+look without a box ends the wait; a game time that went back starts again; no box is never reported), `LangConsistencyTest#thePackageDoorRowsFitAGoggleTooltip` with the new
+row among the eight, and `PackageOrderBoundaryTest`, which now also refuses a write to `animationTicks` or
+`animationInward`. GameTests `PackageDoorGameTests#doorRowSaysNothingTakesTheBox` (a Packager boxes its port with
+nothing below it; the rows a real open screen is told turn to `BOX_WAITING`, checked on every tick never to say so
+before the box has rested 200 ticks, after two builds at least; the goggles agree, and the door may still be ordered
+to) and `#doorRowClearsOnceTheBoxIsTaken` (the goggles' decision equals the truth on every tick; a hopper put under the
+Packager takes the box, the goggles stop at once and the rows turn back to ready; the port filled again, the still
+powered Packager makes a second box, the hopper takes it at rest, and neither ever reports it). Each fault was put in
+once and caught: rows that never say so fail both tests, a box reported as soon as its tray stops fails both, and a
+report that outlives the box fails the second.
+
+*Consequences:* `WareworksNetwork.VERSION` goes from `"12"` to `"13"` once for the whole milestone (D12), so a client
+of an earlier build no longer passes the handshake with a server of this one, or the other way round, instead of
+misreading the request, confirm and result payloads; the first step (D4, D5) changed nothing on the wire, and the box
+that waits (D14) adds nothing to it. Nothing in the milestone is saved, so every world loads as it was and there is no
+migration. A port too full for its next trip costs one live simulation of its buffer per open request per dispatch
+(`dispatchIntervalTicks`, default 5), the same call the one-item probe made. For such a port the goggles say nothing
+new: the port still lists its open request, the controller reads "Last planning: an output is full", and the crane reads
+"Waiting for a job" instead of "Waiting for space at the output". A request to an accepting or collecting port is
+refused, which nothing in the game asked for until now.
+
+The terminal half adds no saved state and no tick work. A door click costs the same budget slot as any click, and its
+check one controller lookup, one block entity and a Packager's six neighbours plus up to six signs. With a terminal
+screen of the warehouse open, the door rows cost at most one build per 20 ticks per controller — at most 64 such
+looks — plus one per change a hook reports. After a server restart a door whose chunk is not loaded is unknown until
+the chunk has been loaded once while a screen was open. The terminal's goggles never show a door's refusal. The screen
+holds its choice, the last rows and at most 64 door names per open screen object and nothing else; a warehouse
+without a door shows the screen it always had. The Ponder scene (D15) adds a title and nine texts to both lang files
+and one schematic, and moves no scene of any block.
+
+The box that waits (D14) costs one block entity read per look at a door, the Packager's, which the look has found
+already, and one small memory per port; nothing while nobody looks. The goggles add the one gold row, and nothing is
+saved or sent. Because the wait is counted from looks, a door whose box has been stuck for minutes says so once a
+screen's builds have seen the same box ten seconds apart, or about ten seconds after a player starts looking at the
+port — at once when the same box was already seen waiting at a look ten seconds earlier.
 
 ## Persistence & sync
 

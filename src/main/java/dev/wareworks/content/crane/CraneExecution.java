@@ -20,6 +20,7 @@ import dev.wareworks.content.crane.head.HandlingHead;
 import dev.wareworks.content.crane.head.TransferContext;
 import dev.wareworks.content.crane.head.TransferContexts;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.BranchGeometry;
 import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
@@ -528,7 +529,15 @@ final class CraneExecution {
                 // rather than "not a store" (M18, issue #13): a COLLECT job never has a delivery target either.
                 if (job.type().waitsAtAFullTarget() && job.targetKind().isDeliveryTarget()
                         && simulateInsert(target, job.key()) < 1) {
-                    events.add(CraneEvent.outputFull());
+                    // A warehouse port is never waited at (M27, ADR-065 D5): a retrieve is planned for no more than the
+                    // port takes, so a running world never gets here with a port. A crane that does — saved waiting in
+                    // front of a port before that rule, or carrying a trip planned before a restart that lowered
+                    // outputBufferSlots — takes what it holds back into storage instead of holding the whole aisle.
+                    // The reroute detaches the job from its request, which stays open with what was delivered
+                    // credited, and the planner sends the rest once the port has room for it. A terminal and a
+                    // production station keep the wait: somebody stands at the one, and the other's machine empties it.
+                    events.add(job.type() == JobType.RETRIEVE && isWarehousePort(level, target.position())
+                            ? CraneEvent.jobCancelled() : CraneEvent.outputFull());
                     return;
                 }
                 int delivered = head.drop(target, job.key(), drop.amount());
@@ -589,6 +598,15 @@ final class CraneExecution {
                     e);
             return null;
         }
+    }
+
+    /**
+     * Whether the delivery target at {@code pos} is a warehouse port, the one kind of output station the crane never
+     * waits at — the same rule {@code CraneDispatch} plans retrieves by ({@code PlannerInput#roomBound}). Asked only
+     * for a target that just resolved as available, so the position is loaded: one block entity lookup.
+     */
+    private static boolean isWarehousePort(Level level, BlockPos pos) {
+        return level.getBlockEntity(pos) instanceof WarehouseOutputBlockEntity;
     }
 
     private static int simulateInsert(TransferContext target, ItemKey key) {

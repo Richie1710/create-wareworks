@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.jetbrains.annotations.Nullable;
+
 import com.simibubi.create.content.logistics.packager.PackagerBlock;
 import com.simibubi.create.content.logistics.packager.PackagerBlockEntity;
 import com.simibubi.create.content.logistics.packager.repackager.RepackagerBlockEntity;
@@ -13,6 +15,7 @@ import net.createmod.catnip.data.Iterate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.entity.SignText;
@@ -20,7 +23,8 @@ import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * What a Create <b>Packager</b> standing at a warehouse station means for that station (M26, issue #18): whether one is
- * there at all, what address its signs spell, and whether it has stopped listening to redstone.
+ * there at all, what address its signs spell, whether it has stopped listening to redstone, and (M27) which box it
+ * holds ready to be taken.
  * <p>
  * <b>Wareworks adds no packing of its own.</b> Create's Packager is the only thing in the game that makes a package
  * (ADR-040), and the geometry alone decides the direction: a Packager's target inventory is the block its <b>back</b>
@@ -117,6 +121,29 @@ public final class PackageHandover {
         if (level == null || !level.isLoaded(packagerPos))
             return false;
         return level.getBlockState(packagerPos).getOptionalValue(PackagerBlock.LINKED).orElse(false);
+    }
+
+    /**
+     * The box this Packager holds with its tray <b>at rest</b>, i.e. one that anything may take away right now — or
+     * {@code null} when it holds none or the tray is moving (M27, issue #18, ADR-065 D14).
+     * <p>
+     * Read off two public fields and nothing else: {@code heldBox} is the one box a Packager holds after packing
+     * ({@code attemptToSend} sets it and starts the {@code CYCLE} of 20 ticks), and {@code animationTicks} counts that
+     * cycle down to 0; only then does {@code PackagerItemHandler#extractItem} hand the box out. Both are written into
+     * the client packet before its return ({@code PackagerBlockEntity#write}), and a client counts the animation down
+     * in its own tick, so a client reads the same thing a server does. A Repackager is refused like everywhere here.
+     * <p>
+     * The stack is returned <b>as it is</b>, not copied, because the one caller compares it by identity
+     * ({@link dev.wareworks.core.port.BoxWait}): it must never be changed or kept for anything else.
+     */
+    @Nullable
+    public static ItemStack restingBox(Level level, BlockPos packagerPos) {
+        if (level == null || !level.isLoaded(packagerPos)
+                || !(level.getBlockEntity(packagerPos) instanceof PackagerBlockEntity packager)
+                || packager instanceof RepackagerBlockEntity)
+            return null;
+        ItemStack held = packager.heldBox;
+        return held == null || held.isEmpty() || packager.animationTicks != 0 ? null : held;
     }
 
     /**

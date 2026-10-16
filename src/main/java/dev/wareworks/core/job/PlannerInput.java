@@ -95,6 +95,23 @@ import dev.wareworks.core.inventory.StockView;
  *                             The store plan is untouched — it sizes a job by what the location answers, so a bay with
  *                             room for one bucket legitimately gets a job of one bucket. The default is {@code false}
  *                             for every location, which makes the planner the function it was before M30
+ * @param roomBound            whether a {@code RETRIEVE} into a target is sized by the target's room <b>when it is
+ *                             planned</b> (M27, issue #18, ADR-065): the trip carries at most what the target takes at
+ *                             that moment, and it sets off only when the target takes the whole trip or at least one full
+ *                             stack ({@code stackSize}) of a larger one; otherwise the request reports
+ *                             {@link NoJobReason#OUTPUT_FULL} and waits. The content layer answers {@code true} for
+ *                             exactly the warehouse ports, because only there the room never shrinks between the plan
+ *                             and the drop while the world runs, so a crane planned that way never waits in front of
+ *                             one (the content layer's drop gate takes the leftovers of an older trip back into
+ *                             storage instead). Consulted only for
+ *                             the target of a retrieve, after {@code available} said it is usable, and never for a
+ *                             {@code SUPPLY} or a reroute. The default is {@code false} for every location, the 1-item
+ *                             probe the planner made before M27
+ * @param stackSize            one full stack of a key, the smallest trip a {@code roomBound} target may be given when the
+ *                             request is larger than its room (M27): without it a port drained slowly, by a hopper for
+ *                             example, would be served one item at a time, and because requests are planned before
+ *                             storing, those trips would starve every input station. The default is {@link Integer#MAX_VALUE}, which
+ *                             makes the rule "the whole trip fits or nothing is planned"
  * @param storeFilter          what a storage location's store filter says about a key ({@link FilterMatch}, §3.1):
  *                             {@link FilterMatch#REJECTED} skips the location before the estimate and before any live
  *                             call, {@link FilterMatch#DEDICATED} ranks it above every unfiltered location, and
@@ -140,6 +157,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         JobPlanner.InsertEstimate<K, L> insertEstimate, JobPlanner.LiveExtract<K, L> liveExtract,
         JobPlanner.LiveInsert<K, L> liveInsert, BiPredicate<? super L, ? super K> insertRefused,
         BiPredicate<? super L, ? super K> extractRefused, Predicate<? super L> allOrNothing,
+        Predicate<? super L> roomBound, ToIntFunction<? super K> stackSize,
         BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
         ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, int liveSimulationBudget) {
     /**
@@ -226,6 +244,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Objects.requireNonNull(insertRefused, "insertRefused");
         Objects.requireNonNull(extractRefused, "extractRefused");
         Objects.requireNonNull(allOrNothing, "allOrNothing");
+        Objects.requireNonNull(roomBound, "roomBound");
+        Objects.requireNonNull(stackSize, "stackSize");
         Objects.requireNonNull(storeFilter, "storeFilter");
         Objects.requireNonNull(storePriority, "storePriority");
         Objects.requireNonNull(portRank, "portRank");
@@ -284,7 +304,9 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
     /**
      * A builder with safe defaults: crane at (0, 0), stopped, no transfer time, no requests or locations, everything
      * available, every key its own item type, unknown capacity estimates, live callbacks that accept and give nothing, no
-     * known refusals, no store filters ({@link FilterMatch#UNFILTERED} everywhere), no storage priorities
+     * known refusals, no location that takes a carry whole or not at all, no retrieve target sized by its room (and
+     * no stack size, so a room-bound target would have to take a whole trip), no store filters
+     * ({@link FilterMatch#UNFILTERED} everywhere), no storage priorities
      * ({@link #NO_PRIORITY}, i.e. 0 everywhere), no accepting ports (an empty {@link #ports()} and
      * {@link #NO_PORT_RANK}), unlimited store headroom ({@link #UNLIMITED_HEADROOM}, i.e. no stock rule) and
      * {@link JobPlanner#DEFAULT_LIVE_SIMULATION_BUDGET}, no collecting ports (an empty {@link #collectSources()} and
@@ -323,6 +345,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private BiPredicate<? super L, ? super K> insertRefused = (location, key) -> false;
         private BiPredicate<? super L, ? super K> extractRefused = (location, key) -> false;
         private Predicate<? super L> allOrNothing = location -> false;
+        private Predicate<? super L> roomBound = location -> false;
+        private ToIntFunction<? super K> stackSize = key -> Integer.MAX_VALUE;
         private BiFunction<? super L, ? super K, FilterMatch> storeFilter = (location, key) -> FilterMatch.UNFILTERED;
         private ToIntFunction<? super L> storePriority = NO_PRIORITY;
         private ToIntFunction<? super L> portRank = NO_PORT_RANK;
@@ -478,6 +502,24 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * Which retrieve targets are sized by their room when the trip is planned ({@link PlannerInput#roomBound()}).
+         * Left out, none is, which is the input the planner received before M27.
+         */
+        public Builder<K, L> roomBound(Predicate<? super L> roomBound) {
+            this.roomBound = roomBound;
+            return this;
+        }
+
+        /**
+         * One full stack of a key ({@link PlannerInput#stackSize()}), the smallest trip a room-bound target is given
+         * when it cannot take the whole one. Left out, it is {@link Integer#MAX_VALUE}: the whole trip or nothing.
+         */
+        public Builder<K, L> stackSize(ToIntFunction<? super K> stackSize) {
+            this.stackSize = stackSize;
+            return this;
+        }
+
         public Builder<K, L> storeFilter(BiFunction<? super L, ? super K, FilterMatch> storeFilter) {
             this.storeFilter = storeFilter;
             return this;
@@ -523,8 +565,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     reservations,
                     requests, supplies, storageLocations, inputs, outputs, ports, collectSources, collectBuffers,
                     inputBuffers, inputCursor, LocationAvailability.of(available),
-                    insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, storeFilter,
-                    storePriority,
+                    insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, roomBound,
+                    stackSize, storeFilter, storePriority,
                     portRank, storeHeadroom, liveSimulationBudget);
         }
     }

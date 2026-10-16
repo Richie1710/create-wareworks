@@ -240,6 +240,39 @@ class TerminalMenuLayoutTest {
         assertEquals(156, new TerminalMenuLayout(MAX_BUFFER).craftToggleY());
     }
 
+    // --- the door button (M27, issue #18) ----------------------------------------------------------------------------
+
+    /**
+     * The door button is inside the window and its margins, in the free column left of the player inventory, level
+     * with the inventory's first row of cells, and over no slot, no row of text and not the fold toggle: it costs the
+     * window no layout at all.
+     */
+    @Test
+    void theDoorButtonSitsInTheWindowOverNoSlotOrLabelRow() {
+        for (int buffer = 1; buffer <= MAX_BUFFER; buffer++) {
+            TerminalMenuLayout layout = new TerminalMenuLayout(buffer);
+            Box door = new Box("door button", layout.doorButtonX(), layout.doorButtonY(), TerminalMenuLayout.SLOT,
+                    TerminalMenuLayout.SLOT);
+            String where = "buffer " + buffer + ": ";
+            Box margins = new Box("window margins", TerminalMenuLayout.MARGIN, FRAME,
+                    TerminalMenuLayout.WIDTH - 2 * TerminalMenuLayout.MARGIN, layout.height() - 2 * FRAME);
+            assertTrue(door.inside(margins), where + door + " is inside the window");
+            for (Box slot : slots(layout))
+                assertFalse(door.overlaps(slot), where + "the door button covers " + slot);
+            for (Box row : rows(layout))
+                assertFalse(door.overlaps(row), where + "the door button covers " + row);
+            assertFalse(door.overlaps(toggle(layout)), where + "the door button covers the fold toggle");
+            assertEquals(11, door.x(), where + "the free column");
+            assertTrue(door.right() <= layout.playerSlotsX() - 1, where + "left of the player inventory's cells");
+            assertEquals(4, layout.playerSlotsX() - 1 - door.right(), where + "4 px from the first inventory cell");
+            assertEquals(4, door.x() - TerminalMenuLayout.MARGIN, where + "4 px from the margin");
+            assertEquals(layout.playerSlotsY() - 1, door.y(), where + "level with the first inventory row's cells");
+            assertEquals(layout.craftToggleY(), door.y(), where + "level with the fold toggle");
+        }
+        assertEquals(152, new TerminalMenuLayout(9).doorButtonY());
+        assertEquals(156, new TerminalMenuLayout(MAX_BUFFER).doorButtonY());
+    }
+
     // --- the fold offset ---------------------------------------------------------------------------------------------
 
     /**

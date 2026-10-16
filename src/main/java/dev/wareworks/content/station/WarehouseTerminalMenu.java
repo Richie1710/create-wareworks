@@ -31,6 +31,7 @@ import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftPayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
+import dev.wareworks.network.TerminalDoorsPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
@@ -97,6 +98,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * on top: the menu picks one item per cell
  * ({@link IngredientPicker}, {@link TerminalCraftLay}), checks the grid against the recipe manager like a preview, and
  * hands the grid it accepted back with the crafting view ({@link TerminalCraftViewPayload#lay()}).
+ * <p>
+ * <b>Package doors</b> (M27, issue #18, ADR-065): a click may name one, and it costs the same click of the budget. The
+ * doors a screen may offer are pushed with everything else ({@code TerminalDoorsPayload}), from a build the whole
+ * warehouse shares and that nothing but these pushes ever asks for. The menu holds no chosen door: the choice lives in
+ * the player's screen, and a request names the door it is for.
  * <p>
  * <b>Slot count.</b> The number of buffer slots is the one the server announced in the menu's extra data, on both
  * sides. The handler behind them is wrapped in a {@link FixedSlotsItemHandler} of exactly that size, because a
@@ -173,6 +179,12 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     /** The craft order's state as last pushed, so a terminal whose craft order did not move costs no packet. */
     @Nullable
     private TerminalCraftOrderState lastCraftOrder;
+    /**
+     * The package doors as last pushed (M27, issue #18, ADR-065 D9), so a warehouse whose doors and their counts did
+     * not change costs no packet. Transient per-menu state like every field here.
+     */
+    @Nullable
+    private TerminalDoors lastDoors;
     /** The question the craft order is waiting on goes out with the next push: its order button's <b>Answer</b>. */
     private boolean craftQuestionPending;
     /** The craft order's question as last pushed; see {@link #lastListQuestion}. */
@@ -248,6 +260,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         listQuestionPending = false;
         lastListQuestion = null;
         lastCraftOrder = null;
+        lastDoors = null;
         craftQuestionPending = false;
         lastCraftQuestion = null;
         craftCells = CraftGrid.empty();
@@ -359,6 +372,23 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      */
     public static Optional<TerminalRequestOutcome> submitRequest(@Nullable Player player, int containerId, ItemKey key,
             int amount, RequestAcknowledgement acknowledged) {
+        return submitRequest(player, containerId, key, amount, acknowledged, Optional.empty());
+    }
+
+    /**
+     * Server: {@link #submitRequest(Player, int, ItemKey, int, RequestAcknowledgement)} delivered to the package door
+     * the click named (M27, issue #18, ADR-065), or here for an empty {@code door}. This is the path the payload handler
+     * takes.
+     * <p>
+     * The door is only a hint like everything else in the payload: the terminal checks it against its own warehouse
+     * after reach, amount and controller and before the stock is looked at
+     * ({@link WarehouseTerminalBlockEntity#requestFromTerminal(Player, ItemKey, int, RequestAcknowledgement,
+     * Optional)}), and checking it costs the same one click of the per-tick budget as the
+     * request itself, so a crafted flood of door positions cannot make the server look at the world more often than a
+     * clicking player could.
+     */
+    public static Optional<TerminalRequestOutcome> submitRequest(@Nullable Player player, int containerId, ItemKey key,
+            int amount, RequestAcknowledgement acknowledged, Optional<BlockPos> door) {
         if (player == null || player.level() == null || player.level().isClientSide || key == null
                 || acknowledged == null)
             return Optional.empty();
@@ -366,7 +396,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             return Optional.empty();
         if (!menu.takeRequestBudget())
             return Optional.empty();
-        return Optional.of(menu.request(player, key, amount, acknowledged));
+        return Optional.of(menu.request(player, key, amount, acknowledged, door == null ? Optional.empty() : door));
     }
 
     /** Server: asks this menu's terminal for items, accepting every boundary; every check happens in the terminal. */
@@ -377,9 +407,18 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     /** Server: asks this menu's terminal for items; every check, and the question, happens in the terminal. */
     public TerminalRequestOutcome request(Player requester, ItemKey key, int amount,
             RequestAcknowledgement acknowledged) {
+        return request(requester, key, amount, acknowledged, Optional.empty());
+    }
+
+    /**
+     * Server: asks this menu's terminal for items delivered to {@code door}, or here for an empty one (M27, ADR-065);
+     * every check, the door's included, happens in the terminal.
+     */
+    public TerminalRequestOutcome request(Player requester, ItemKey key, int amount,
+            RequestAcknowledgement acknowledged, Optional<BlockPos> door) {
         if (contentHolder == null || contentHolder.isRemoved())
-            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
-        TerminalRequestOutcome outcome = contentHolder.requestFromTerminal(requester, key, amount, acknowledged);
+            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER)).withDoor(door);
+        TerminalRequestOutcome outcome = contentHolder.requestFromTerminal(requester, key, amount, acknowledged, door);
         if (outcome.result().filter(RequestResult::isAccepted).isPresent())
             markDirty(); // the availability changed: push it with the next tick instead of waiting for the interval
         return outcome;
@@ -996,6 +1035,25 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
                     RequestScope.CRAFT));
         craftQuestionPending = false;
         lastCraftQuestion = craftQuestion;
+
+        // The package doors a click may deliver to (M27, issue #18, ADR-065 D9): the warehouse's shared build, which
+        // this push is the only thing that ever asks for, with each door's counts read live. Compared by value like
+        // everything above, and sent on every full sync, so a screen always knows whether it has a choice to offer.
+        TerminalDoors doors = contentHolder.doorRows();
+        if (reset || !doors.equals(lastDoors)) {
+            lastDoors = doors;
+            PacketDistributor.sendToPlayer(target, new TerminalDoorsPayload(containerId, doors));
+        }
+    }
+
+    /**
+     * Server: the package doors this menu last pushed to its screen (M27, issue #18), or {@code null} before the first
+     * push. For the GameTests: a fake player's connection sends nothing, so this is where a test reads what the screen
+     * was told.
+     */
+    @Nullable
+    public TerminalDoors lastDoorRows() {
+        return lastDoors;
     }
 
     /**

@@ -171,8 +171,7 @@ What beta promises:
 * Features may still grow and their screens change before 1.0.
 
 Still to come before 1.0: requesting fluids at the terminal
-([#21](https://github.com/Richie1710/create-wareworks/issues/21)) and ordering packages to a door
-([#18](https://github.com/Richie1710/create-wareworks/issues/18)). Please report problems on the
+([#21](https://github.com/Richie1710/create-wareworks/issues/21)). Please report problems on the
 [issue tracker](https://github.com/Richie1710/create-wareworks/issues), and keep a backup of your world, as with any
 mod in beta.
 
@@ -251,7 +250,10 @@ hand. The twenty-first, **Fluids Travel in Containers**, belongs to both **fluid
 teaches the one thing about fluids you could not guess: a bucket in the hand and a pipe at the back, then a bucket of
 lava dropped into a warehouse input, the bay draining the whole container, and the **empty bucket coming back as
 ordinary stock** — ending on the two things a fluid bay is deliberately worse at than its item sibling, that a funnel
-cannot fill one and that breaking a full one loses the fluid.
+cannot fill one and that breaking a full one loses the fluid. The twenty-second, **Delivering to a Package Door**,
+belongs to the terminal and the output: the port with a Packager at its back that is a door, the sign that names it,
+the terminal's door button that sends a click there, the crane filling the door and your redstone sending the box,
+what always comes to the terminal instead, and the Stock Link that takes a door out of the choice.
 
 ## Requesting items
 
@@ -282,6 +284,8 @@ to place a block against it.
   available. Holding **Alt** skips the confirmation a stock rule would ask for (see **Stock rules**), and combines with
   either of the other two.
 * Repeated clicks on the same item are merged into one request and one crane trip.
+* A warehouse with a **package door** (see **Packages at the door**) shows one more button, left of your inventory:
+  it chooses whether a click delivers **here** or to one of the doors. Every screen opens on here.
 * An item whose **ingredients have to be made first** is ordered as a whole chain; it appears as one line with the step
   that is working, and a click on that line lists every step with the address of its machine (see **Production**).
 * Delivered items land in the terminal's own slots. Take them by hand, or let a funnel, chute or Mechanical Arm pull
@@ -362,7 +366,9 @@ anything else to set the filter, so the two never get in each other's way:
 
 * **Request** (the default): the crane brings what the filter names. Set to *while powered*, the port asks again by
   itself as soon as the last load has arrived, with **never more than one trip in flight** — so a machine behind it stays
-  supplied without you building a clock.
+  supplied without you building a clock. The crane never brings more than the port can take: it sets off once the whole
+  trip fits, or a full stack of a larger request, and while nothing empties the port it gets on with the rest of the
+  warehouse instead of waiting in front of it.
 * **Accept** with a rank: the crane brings the items that arrived at a **warehouse input** and would otherwise be stored.
   A **negative** rank makes the port an **overflow** — every storage location wins over it, so it only ever gets what the
   warehouse cannot keep. A **positive** rank makes it a **diversion** — it takes incoming items *before* they are stored.
@@ -403,7 +409,8 @@ before this feature existed is a port that requests on a pulse, which is exactly
 
 A warehouse can hand its goods over as addressed **Create packages**, and take packages in — with a **Create Packager**
 and a plain **sign**, and nothing else. Hold **W** over a Warehouse Output or a Warehouse Input for the Ponder scene
-*"Packages at a Warehouse Door"*, which builds both doors in front of you.
+*"Packages at a Warehouse Door"*, which builds both doors in front of you, and over a Warehouse Terminal or a Warehouse
+Output for *"Delivering to a Package Door"*, which orders goods to one (see **Ordering to a door** below).
 
 **The out door.** Put a Packager one block behind a **Warehouse Output** so its **back** touches the block — which is
 how it faces itself when you place it against the port. Hang a sign on the Packager, write `Base North` on it, and
@@ -427,8 +434,8 @@ there can only pack; an input only ever takes items *in*, so a Packager there ca
 configure and no way to wire a door the wrong way round.
 
 **Put the goggles on and the door tells you what it is doing.** A port says *"Hands over as a package"* and
-*"Addressed to: Base North"*; an input says *"Takes packages apart"* and *"Packages opened: 12"*. Two lines are gold,
-because they are the two ways a door goes quiet:
+*"Addressed to: Base North"*; an input says *"Takes packages apart"* and *"Packages opened: 12"*. Three lines are
+gold, because they are the three ways a door goes quiet:
 
 * *"No address — hang a sign on the Packager"*. A box with no address is only ever delivered to a Package Port with no
   name of its own — or to one named `*`, which Create treats as a catch-all — so a chain conveyor will carry it past
@@ -437,6 +444,10 @@ because they are the two ways a door goes quiet:
   network, and from that moment it ignores every pulse and every lever — Create says nothing about it anywhere, and the
   door simply never opens again. Take the link off and it works. While the link is on, this line stands **instead of**
   the address line: a linked Packager never reads the sign, so promising you an address there would be a lie.
+* *"A box has been waiting at the Packager: is anything taking it?"*. A Packager that holds a box makes no other, so a
+  door whose funnel you forgot, or whose belt stopped, stands still after its first box. The line appears once the box
+  has waited ten seconds, longer than a working belt funnel waits for a belt turning at 3 RPM or more, and goes as soon
+  as something takes it.
 
 **What to expect of it.** One box holds up to nine stacks and a door sends about one box a second, so a big order
 leaves as several boxes. A stray item standing in the port rides along in the box. An input opens a package **whole or
@@ -445,6 +456,31 @@ already holding that very item with space left. Until it has that, the box waits
 *"Last package refused: stacks in it 4, free slots 1"* — which means wait for the crane, not rebuild the door. A box
 addressed somewhere else is opened anyway: the sign on a door is for the boxes that **leave** it. And a box that
 reaches an input with no Packager behind it is simply stored as an item, one stock row per address.
+
+**Ordering to a door.** A requesting Warehouse Output with a Packager at its back is a **door** the terminal can
+deliver to, named by the sign on its Packager. In the terminal's screen, the button left of your inventory chooses
+where a click in the stock list goes: **click** it for the next door, **scroll** over it, or **right-click** it to go
+back to **here**. Its tooltip lists the doors, each with its rack address or what is wrong with it: *no address*,
+*port full* and *box waiting* in gold (you can still order, but look at the door), *ignores redstone* in red for a
+Packager with a Stock Link, which can never send and cannot be chosen. While a door is chosen its name stands in gold
+at the top right of the screen, the item under your mouse is tinted gold, and its tooltip says where a click sends it.
+The answer names the door — *"Iron Ingot x64 to Base North"*, or *"To Base North: Oak Log is missing"* when part of the
+order had to be made and could not be — and the status line then counts what the door is still waiting for. A
+question about a stock rule names the door too, and a Yes delivers there. Orders to a door share it with the door's
+own redstone, because requests have no owner: a click for the item on the door's filter merges into the door's own
+request, and a large one can make the door's own pulses refused as *request full*. A door set to *while powered* or
+*unless powered* does not top itself up while any order to it is open, and a chain ordered to the door holds back the
+door's own chains until it is done. In a warehouse with very many outputs the list looks at no more than 64 of them,
+in rack order and leaving out accepting and collecting ports, and its tooltip says so when it stopped before the
+last one.
+
+The crane carries the goods into the door's port, never more than the port can take, and your own redstone has the
+Packager box them with the sign's address; the warehouse never packs anything itself, and what happens after the
+port is your build. The screen opens on *here* every time, so nobody ends up sending goods somewhere they did not
+choose, and a door that breaks or gets a Stock Link while it is chosen sends your clicks back here and says so.
+**Clipboard lists** and the crafting panel's **Fetch** always deliver to the terminal. There is no cancel button for
+an order to a door: turn the door out of *Request* with the wrench, which cancels what it waits for, the door's own
+request included, and sends anything the crane is carrying to it back into storage.
 
 Two notes if you build with the rest of Create's logistics. A **Frogport** will not pull a box out of the port itself,
 but it will out of the Packager — so sit it on the Packager, or use a funnel or chute. And a storage location you

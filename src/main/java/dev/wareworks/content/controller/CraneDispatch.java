@@ -21,6 +21,7 @@ import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.crane.head.TransferContexts;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.inventory.InventorySnapshot;
@@ -88,6 +89,15 @@ import net.minecraft.world.level.Level;
  * then walks covers the input stations and the collecting ports as one list from one cursor
  * ({@link PlanResult#nextArrivalCursor()}), so neither starves the other while a player's request and a production order's
  * ingredients are still planned first.
+ * <p>
+ * <b>A retrieve into a warehouse port</b> (M27, issue #18, ADR-065) is sized by the port's live room when it is planned
+ * ({@code roomBound}, {@code stackSize}): it carries at most what the port takes and sets off only for the whole trip or
+ * one full stack of it. A port nobody empties therefore reports {@link NoJobReason#OUTPUT_FULL}, which arms no back-off,
+ * and never holds the crane with the items in its claw; a warehouse terminal still does, as before. That holds while the
+ * world runs, because a port's room only grows between the plan and the drop. A trip planned before a restart that
+ * lowered {@code outputBufferSlots}, or a crane saved waiting in front of a port before M27, finds less room at its
+ * drop: {@code CraneExecution} then takes what the port does not take back into storage at the crane's next retry, and
+ * the request, which stays open, is planned again once the port has room.
  * <p>
  * <b>Reservations are derived from the crane's job</b> ({@code docs/warehouse-system.md} §7.4): every report re-tracks
  * the reported job, and every dispatch interval the ledger is rebuilt from the dock's current job
@@ -234,6 +244,8 @@ final class CraneDispatch {
             // machine that hands nothing out is answered by a map lookup and at most one live extract per item type,
             // before any candidate is ranked — and it is the resting state of every production loop, so backing off would
             // suspend storing from every input station of the aisle for as long as a machine is empty.
+            // NoJobReason.OUTPUT_FULL stays out as well (M27, ADR-065): a warehouse port too full for a whole trip costs
+            // one live simulation per open request, and storing has to go on while it waits to be emptied.
             if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
                     || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
                     || result.reasons().contains(NoJobReason.PORT_FULL))
@@ -354,6 +366,15 @@ final class CraneDispatch {
                 // the head already, so the planner must not offer a bay part of it — the crane would arrive, be
                 // refused and be sent to the next bay, and with two of them that never ends (M30 review fix).
                 .allOrNothing(controller::takesFluidContainers)
+                // A retrieve into a warehouse port carries at most what the port takes when the trip is planned, and
+                // only sets off for the whole trip or a full stack of it (M27, issue #18, ADR-065). Only this crane ever
+                // puts items into a port and a port's buffer never shrinks while the world runs, so its room can only
+                // grow until the drop and the crane never waits in front of one (an older trip that finds less room is
+                // sent back into storage by CraneExecution's drop gate). A terminal is left out on purpose: a craft
+                // puts remainders into its buffer after the plan. Asked only for the target of a retrieve the planner
+                // already found loaded, so it is one block entity lookup beside the live simulation that follows it.
+                .roomBound(rack -> level.getBlockEntity(layout.rackPos(rack)) instanceof WarehouseOutputBlockEntity)
+                .stackSize(ItemKey::getMaxStackSize)
                 // Store filters decide before the estimate and before any live call, so a location that may not take the
                 // item costs neither a live simulation nor a remembered refusal (ADR-021).
                 .storeFilter(controller::storeFilterMatch)

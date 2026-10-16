@@ -3,18 +3,21 @@ package dev.wareworks.gametest;
 import static dev.wareworks.gametest.WareworksGameTests.AISLE_16X10X7;
 import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
 import static dev.wareworks.gametest.WareworksGameTests.EMPTY_7X5X7;
+import static dev.wareworks.gametest.PackageDoorFixture.contentsOf;
+import static dev.wareworks.gametest.PackageDoorFixture.loadCopy;
+import static dev.wareworks.gametest.PackageDoorFixture.packageOf;
+import static dev.wareworks.gametest.PackageDoorFixture.packagerAt;
+import static dev.wareworks.gametest.PackageDoorFixture.placePackager;
+import static dev.wareworks.gametest.PackageDoorFixture.writeSign;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
-import com.simibubi.create.AllDataComponents;
 import com.simibubi.create.AllEntityTypes;
 import com.simibubi.create.content.logistics.box.PackageEntity;
 import com.simibubi.create.content.logistics.box.PackageItem;
-import com.simibubi.create.content.logistics.box.PackageStyles;
 import com.simibubi.create.content.logistics.packager.PackagerBlock;
 import com.simibubi.create.content.logistics.packager.PackagerBlockEntity;
 
@@ -37,8 +40,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Player;
@@ -46,15 +47,11 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FaceAttachedHorizontalDirectionalBlock;
-import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.HopperBlockEntity;
-import net.minecraft.world.level.block.entity.SignBlockEntity;
-import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.AttachFace;
 import net.minecraft.world.phys.BlockHitResult;
@@ -904,14 +901,6 @@ public final class PackageHandoverGameTests {
     }
 
     /**
-     * A Create Packager at {@code pos} facing {@code facing} — so its <b>back</b> touches the block at
-     * {@code pos - facing}, which is the station it serves.
-     */
-    private static void placePackager(GameTestHelper helper, BlockPos pos, Direction facing) {
-        helper.setBlock(pos, AllBlocks.PACKAGER.getDefaultState().setValue(PackagerBlock.FACING, facing));
-    }
-
-    /**
      * Places the block of {@code item} at {@code pos} the way a player does: a mock player uses the block below it, so
      * the item's own {@code BlockItem#place} runs with a real {@code BlockPlaceContext} and the block's
      * {@code getStateForPlacement} decides the state.
@@ -928,31 +917,6 @@ public final class PackageHandoverGameTests {
         BlockPos absolute = helper.absolutePos(support);
         Vec3 hit = Vec3.atCenterOf(absolute).add(0, 0.5, 0);
         helper.useBlock(support, player, new BlockHitResult(hit, Direction.UP, absolute, false));
-    }
-
-    /**
-     * Writes {@code lines} on the front or back of the sign at {@code pos}, placing a standing sign first if there is
-     * none. Lines beyond {@code SignText.LINES} are a programming error in the test, not a case to handle.
-     */
-    private static void writeSign(GameTestHelper helper, BlockPos pos, boolean front, String... lines) {
-        if (!(helper.getBlockState(pos).getBlock() instanceof SignBlock))
-            helper.setBlock(pos, Blocks.OAK_SIGN);
-        BlockEntity be = helper.getLevel().getBlockEntity(helper.absolutePos(pos));
-        if (!(be instanceof SignBlockEntity sign)) {
-            helper.fail("missing sign block entity", pos);
-            return;
-        }
-        SignText text = new SignText();
-        for (int line = 0; line < lines.length && line < SignText.LINES; line++)
-            text = text.setMessage(line, Component.literal(lines[line]));
-        helper.assertTrue(sign.setText(text, front), "the sign took the text");
-    }
-
-    /** A deterministic Create package holding {@code contents}, built from the component and never through Create. */
-    private static ItemStack packageOf(ItemStack... contents) {
-        ItemStack box = PackageStyles.getDefaultBox();
-        box.set(AllDataComponents.PACKAGE_CONTENTS, ItemContainerContents.fromItems(List.of(contents)));
-        return box;
     }
 
     /** A {@link #packageOf} box addressed to {@code address}, as a Packager with a sign would have addressed it. */
@@ -988,14 +952,6 @@ public final class PackageHandoverGameTests {
     // --- reading -----------------------------------------------------------------------------------------------------
 
     /**
-     * What {@code box} holds, in the terms the conservation census uses: a package counts as its contents, so this is
-     * also exactly what the census reports for a box standing anywhere in the test.
-     */
-    private static Map<ItemKey, Long> contentsOf(ItemStack box) {
-        return ItemCensus.of(ItemKey.of(box), 1);
-    }
-
-    /**
      * The input's package summary through the real goggle path: the numbers are plain server fields and
      * {@code summary()} only answers what the last observation built, which is the discipline that keeps a funnel
      * retrying every tick from sending a packet every tick.
@@ -1029,15 +985,6 @@ public final class PackageHandoverGameTests {
             if (PackageItem.isPackage(handler.getStackInSlot(slot)))
                 boxes += handler.getStackInSlot(slot).getCount();
         return boxes;
-    }
-
-    private static PackagerBlockEntity packagerAt(GameTestHelper helper, BlockPos pos) {
-        PackagerBlockEntity be = AllBlockEntityTypes.PACKAGER.getNullable(helper.getLevel(), helper.absolutePos(pos));
-        if (be == null) {
-            helper.fail("missing Create packager block entity", pos);
-            throw new IllegalStateException("unreachable");
-        }
-        return be;
     }
 
     /** The Packager's own item capability: the call a funnel, a chute or a Frogport makes. */
@@ -1078,16 +1025,5 @@ public final class PackageHandoverGameTests {
             throw new IllegalStateException("unreachable");
         }
         return hopper;
-    }
-
-    /** A fresh block entity of the same type loaded from {@code tag}, standing in for a chunk load. */
-    private static <T extends BlockEntity> T loadCopy(GameTestHelper helper, T live, CompoundTag tag, Class<T> type) {
-        BlockEntity loaded = BlockEntity.loadStatic(live.getBlockPos(), live.getBlockState(), tag,
-                helper.getLevel().registryAccess());
-        if (!type.isInstance(loaded)) {
-            helper.fail("a saved " + type.getSimpleName() + " must load again as one");
-            return live;
-        }
-        return type.cast(loaded);
     }
 }

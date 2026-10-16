@@ -8,6 +8,7 @@ import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.production.PlanRefusal;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -34,10 +35,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * @param about       the item {@link #refusal()} is about, regularly <b>not</b> {@link #key()}: a click on a chest is
  *                    refused because three oak logs are missing, and naming them is the whole point. Present exactly
  *                    when {@link #refusal()} is ({@code RequestResult})
+ * @param door        the package door the click was for, as the server used it (M27, issue #18, ADR-065 D8); empty for
+ *                    here. Every feedback line names this door, never the one the screen's button shows by then, and a
+ *                    refusal about it tells the screen that its chosen door is no door any more
  */
 public record TerminalResultPayload(int containerId, ItemKey key, int amount, int pending, int producing,
                                     Optional<RequestRejection> rejection, Optional<PlanRefusal> refusal,
-                                    Optional<ItemKey> about) implements CustomPacketPayload {
+                                    Optional<ItemKey> about, Optional<BlockPos> door) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<TerminalResultPayload> TYPE =
             new CustomPacketPayload.Type<>(Wareworks.asResource("terminal_result"));
 
@@ -55,6 +59,7 @@ public record TerminalResultPayload(int containerId, ItemKey key, int amount, in
         Objects.requireNonNull(rejection, "rejection");
         Objects.requireNonNull(refusal, "refusal");
         Objects.requireNonNull(about, "about");
+        door = door == null ? Optional.empty() : door.map(BlockPos::immutable);
         amount = Math.max(0, amount);
         pending = Math.max(0, pending);
         producing = Math.max(0, producing);
@@ -66,16 +71,27 @@ public record TerminalResultPayload(int containerId, ItemKey key, int amount, in
         }
     }
 
+    /** The answer to a request that delivers here, i.e. every shape this payload had before M27. */
+    public TerminalResultPayload(int containerId, ItemKey key, int amount, int pending, int producing,
+            Optional<RequestRejection> rejection, Optional<PlanRefusal> refusal, Optional<ItemKey> about) {
+        this(containerId, key, amount, pending, producing, rejection, refusal, about, Optional.empty());
+    }
+
     /** The answer to a request that never walked a production plan, i.e. every shape this payload had before M20. */
     public TerminalResultPayload(int containerId, ItemKey key, int amount, int pending, int producing,
             Optional<RequestRejection> rejection) {
         this(containerId, key, amount, pending, producing, rejection, Optional.empty(), Optional.empty());
     }
 
-    /** The answer to a request for {@code key} made in the menu {@code containerId}. */
+    /** The answer to a request for {@code key} made in the menu {@code containerId}, delivering here. */
     public static TerminalResultPayload of(int containerId, ItemKey key, RequestResult result) {
+        return of(containerId, key, result, Optional.empty());
+    }
+
+    /** The answer to a request for {@code key} made in the menu {@code containerId}, for {@code door} (M27). */
+    public static TerminalResultPayload of(int containerId, ItemKey key, RequestResult result, Optional<BlockPos> door) {
         return new TerminalResultPayload(containerId, key, result.granted(), result.pending(), result.producing(),
-                result.rejection(), result.refusal(), result.about());
+                result.rejection(), result.refusal(), result.about(), door);
     }
 
     /**
@@ -89,6 +105,7 @@ public record TerminalResultPayload(int containerId, ItemKey key, int amount, in
         int pending = buffer.readVarInt();
         int producing = buffer.readVarInt();
         Optional<RequestRejection> rejection = readRejection(buffer);
+        Optional<BlockPos> door = buffer.readOptional(in -> in.readBlockPos());
         // The item is read from what was *written*, not from what this build understands: a refusal constant a future
         // server has and this client has not still leaves the item's bytes in the stream, and skipping them would
         // desynchronise the rest of the connection rather than lose one sentence.
@@ -96,7 +113,7 @@ public record TerminalResultPayload(int containerId, ItemKey key, int amount, in
         Optional<PlanRefusal> refusal = refusalOf(encodedRefusal);
         Optional<ItemKey> about = encodedRefusal.isEmpty() ? Optional.empty()
                 : Optional.of(ItemKey.STREAM_CODEC.decode(buffer));
-        return new TerminalResultPayload(containerId, key, amount, pending, producing, rejection, refusal, about);
+        return new TerminalResultPayload(containerId, key, amount, pending, producing, rejection, refusal, about, door);
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
@@ -106,6 +123,9 @@ public record TerminalResultPayload(int containerId, ItemKey key, int amount, in
         buffer.writeVarInt(pending);
         buffer.writeVarInt(producing);
         buffer.writeVarInt(rejection.map(reason -> reason.ordinal() + 1).orElse(0));
+        // The door right after the rejection and before the refusal name (M27), so the conditional item stays last: an
+        // answer about here costs one zero byte more.
+        buffer.writeOptional(door, (out, pos) -> out.writeBlockPos(pos));
         // Appended after everything M15 sent. The refusal travels by *name*, exactly as a StoppedProduct's cause does, so
         // the declaration order of PlanRefusal stays free — it is a derived, unsaved enum whose order says what the planner
         // tests, and reordering it must not shift a sentence on another build. The item is written only behind a refusal,

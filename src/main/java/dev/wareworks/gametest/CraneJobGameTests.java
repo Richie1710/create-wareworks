@@ -26,6 +26,7 @@ import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.crane.head.TransferContexts;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
+import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
@@ -628,12 +629,20 @@ public final class CraneJobGameTests {
     /**
      * The output fills up while the crane travels: it drops what fits (the request counts only that), retracts and waits,
      * retries without moving anything, and completes once automation empties the buffer.
+     * <p>
+     * The output here is a <b>warehouse terminal</b>, the one output station the crane still waits at. Since M27
+     * (issue #18, ADR-065) a retrieve into a warehouse port is planned for no more than the port takes, and a crane
+     * that finds a port full at its drop all the same takes what it holds back into storage instead of waiting
+     * ({@code WarehousePortGameTests#craneNeverWaitsAtAFullPort},
+     * {@code WarehousePortGameTests#aPortFilledUnderACarryingCraneGetsTheRestLater}). A terminal keeps the wait: a
+     * player stands at it, and a craft can put remainders into its buffer after the plan, so its room can shrink
+     * between the plan and the drop — which a test-only {@code insert} while the crane travels stands in for here.
      */
     @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
     public static void craneWaitsForFullOutput(GameTestHelper helper) {
         buildAisle(helper, true);
         storage(helper, FAR, DIAMOND.toStack(STOCKED_DIAMONDS));
-        placeOutput(helper);
+        aisle(helper).terminal(OUTPUT);
         AtomicLong expected = new AtomicLong(STOCKED_DIAMONDS);
         helper.onEachTick(() -> assertConserved(helper, DIAMOND, expected.get(), FAR));
 
@@ -643,17 +652,17 @@ public final class CraneJobGameTests {
                     helper.assertValueEqual(controllerAt(helper).countOf(DIAMOND), (long) STOCKED_DIAMONDS, "indexed");
                 })
                 .thenExecute(() -> {
-                    WarehouseOutputBlockEntity output = outputAt(helper);
-                    for (int slot = 0; slot < output.bufferSlots() - 1; slot++)
-                        helper.assertTrue(output.insert(COBBLE.toStack(STACK), false).isEmpty(), "buffer pre-filled");
+                    WarehouseTerminalBlockEntity terminal = terminalAt(helper);
+                    for (int slot = 0; slot < terminal.bufferSlots() - 1; slot++)
+                        helper.assertTrue(terminal.insert(COBBLE.toStack(STACK), false).isEmpty(), "buffer pre-filled");
                     motorAt(helper).generatedSpeed.setValue(TEST_RPM);
                     helper.assertTrue(controllerAt(helper).request(absRack(helper, OUTPUT), DIAMOND, REQUESTED_DIAMONDS)
                             .isAccepted(), "request accepted with one free slot");
                 })
                 .thenWaitUntil(() -> assertCarrying(helper, CranePhase.TRAVEL_TO_TARGET, DIAMOND, REQUESTED_DIAMONDS))
                 .thenExecute(() -> {
-                    helper.assertTrue(outputAt(helper).insert(DIAMOND.toStack(OUTPUT_PLAYER_DIAMONDS), false).isEmpty(),
-                            "last slot nearly filled");
+                    helper.assertTrue(terminalAt(helper).insert(DIAMOND.toStack(OUTPUT_PLAYER_DIAMONDS), false)
+                            .isEmpty(), "last slot nearly filled");
                     expected.addAndGet(OUTPUT_PLAYER_DIAMONDS);
                 })
                 .thenWaitUntil(() -> {
@@ -668,15 +677,17 @@ public final class CraneJobGameTests {
                     helper.assertValueEqual(controller.deliveredFor(outputPos), (long) OUTPUT_ROOM, "delivered so far");
                     helper.assertValueEqual(controller.reservations().inTransit(DIAMOND),
                             (long) (REQUESTED_DIAMONDS - OUTPUT_ROOM), "leftovers in transit");
-                    WarehouseOutputBlockEntity output = outputAt(helper);
-                    output.onGoggleObserved();
-                    helper.assertValueEqual(output.summary().requestedItems(), (long) (REQUESTED_DIAMONDS - OUTPUT_ROOM),
-                            "output goggles: remaining");
-                    helper.assertValueEqual(output.summary().deliveredItems(), (long) OUTPUT_ROOM,
-                            "output goggles: delivered so far");
+                    WarehouseTerminalBlockEntity terminal = terminalAt(helper);
+                    terminal.onGoggleObserved();
+                    helper.assertValueEqual(terminal.summary().requestedItems(),
+                            (long) (REQUESTED_DIAMONDS - OUTPUT_ROOM), "terminal goggles: remaining");
+                    helper.assertValueEqual(terminal.summary().deliveredItems(), (long) OUTPUT_ROOM,
+                            "terminal goggles: delivered so far");
                 })
                 .thenIdle(WAITING_IDLE_TICKS)
                 .thenExecute(() -> {
+                    helper.assertValueEqual(dockAt(helper).craneState().phase(), CranePhase.WAITING_FOR_TARGET,
+                            "the crane still waits at the terminal");
                     helper.assertValueEqual(dockAt(helper).heldItems().count(DIAMOND), REQUESTED_DIAMONDS - OUTPUT_ROOM,
                             "retries move nothing into a full output");
                     helper.assertValueEqual(controllerAt(helper).requestedFor(absRack(helper, OUTPUT)),
@@ -1309,6 +1320,10 @@ public final class CraneJobGameTests {
 
     private static WarehouseOutputBlockEntity outputAt(GameTestHelper helper) {
         return aisle(helper).outputAt(OUTPUT);
+    }
+
+    private static WarehouseTerminalBlockEntity terminalAt(GameTestHelper helper) {
+        return aisle(helper).terminalAt(OUTPUT);
     }
 
     private static CreativeMotorBlockEntity motorAt(GameTestHelper helper) {

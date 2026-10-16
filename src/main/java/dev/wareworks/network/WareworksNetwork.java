@@ -2,14 +2,12 @@ package dev.wareworks.network;
 
 import java.util.Optional;
 
-import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.StockKeeperMenu;
 import dev.wareworks.content.station.TerminalCraftOutcome;
 import dev.wareworks.content.station.TerminalListOutcome;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
-import dev.wareworks.core.terminal.RequestConfirmation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.neoforged.fml.loading.FMLEnvironment;
@@ -120,8 +118,17 @@ public final class WareworksNetwork {
      * whether to fold the panel out — which a reader of the old shape would stop before and leave in the buffer; and
      * the values {@code LAID} and {@code NOT_LAID} of {@code TerminalCraftResult}, by name, which an older client
      * would read as a plain refusal.
+     * <p>
+     * <b>{@code "13"} is M27</b> (order to a package door from the warehouse terminal, issue #18, ADR-065 D12): the
+     * package door a click delivers to, as an optional block position, in {@link TerminalRequestPayload} before the
+     * acknowledgement — which a reader of the old shape would take for the acknowledgement's tag — echoed in
+     * {@link TerminalConfirmPayload} before the scope and in {@link TerminalResultPayload} right after the rejection,
+     * both of which a reader of the old shape would misread from there on; the new {@link TerminalDoorsPayload} (server →
+     * client), which an older client would not understand; and the two constants {@code NOT_A_DOOR} and
+     * {@code DOOR_IGNORES_REDSTONE} appended to {@code RequestRejection}, which travels by ordinal and which an older
+     * client would read as no reason at all. Nothing is saved for any of it.
      */
-    public static final String VERSION = "12";
+    public static final String VERSION = "13";
 
     private WareworksNetwork() {
     }
@@ -139,6 +146,8 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalOrders);
         registrar.playToClient(TerminalConfirmPayload.TYPE, TerminalConfirmPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalConfirm);
+        registrar.playToClient(TerminalDoorsPayload.TYPE, TerminalDoorsPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalDoors);
         registrar.playToServer(TerminalRequestPayload.TYPE, TerminalRequestPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalRequest);
         registrar.playToClient(TerminalListPayload.TYPE, TerminalListPayload.STREAM_CODEC,
@@ -180,26 +189,22 @@ public final class WareworksNetwork {
     // --- server --------------------------------------------------------------------------------------------------
 
     /**
-     * A player asked their open terminal screen for items. The payload is only a hint: the menu the player really has
-     * open decides, and the terminal validates player, amount, aisle and item against the server's own state.
+     * A player asked their open terminal screen for items, delivered here or to one of the warehouse's package doors
+     * (M27, issue #18, ADR-065). The payload is only a hint: the menu the player really has open decides, and the
+     * terminal validates player, amount, aisle, door and item against the server's own state.
+     * <p>
+     * A cost the player has not accepted is answered with the question and nothing else: no request was made (M15
+     * part 2, docs/warehouse-system.md §3.6.6). The screen puts it up, and a confirmation comes back as another request
+     * payload, which is measured again. Either answer names the door the server measured the click for
+     * ({@link TerminalRequestAnswers}).
      */
     private static void onTerminalRequest(TerminalRequestPayload payload, IPayloadContext context) {
         Player player = context.player();
         Optional<TerminalRequestOutcome> outcome = WarehouseTerminalMenu.submitRequest(player, payload.containerId(),
-                payload.key(), payload.amount(), payload.acknowledged());
+                payload.key(), payload.amount(), payload.acknowledged(), payload.door());
         if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
             return;
-        // A cost the player has not accepted is answered with the question and nothing else: no request was made
-        // (M15 part 2, docs/warehouse-system.md §3.6.6). The screen puts it up, and a confirmation comes back as
-        // another request payload — which is measured again.
-        Optional<RequestConfirmation<ItemKey>> question = outcome.get().question();
-        if (question.isPresent()) {
-            PacketDistributor.sendToPlayer(serverPlayer,
-                    new TerminalConfirmPayload(payload.containerId(), question.get()));
-            return;
-        }
-        PacketDistributor.sendToPlayer(serverPlayer, TerminalResultPayload.of(payload.containerId(), payload.key(),
-                outcome.get().result().orElseThrow()));
+        PacketDistributor.sendToPlayer(serverPlayer, TerminalRequestAnswers.answer(payload, outcome.get()));
     }
 
     /**
@@ -362,6 +367,12 @@ public final class WareworksNetwork {
     private static void onTerminalConfirm(TerminalConfirmPayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.TerminalScreenUpdates.onConfirm(payload);
+    }
+
+    /** The package doors a click at the open screen may deliver to (M27, issue #18). */
+    private static void onTerminalDoors(TerminalDoorsPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onDoors(payload);
     }
 
     private static void onTerminalList(TerminalListPayload payload, IPayloadContext context) {

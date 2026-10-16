@@ -32,6 +32,7 @@ final class VisualScenarios {
             Map.entry(ChainVisualScenario.NAME, ChainVisualScenario::new),
             Map.entry(DisplayVisualScenario.NAME, DisplayVisualScenario::new),
             Map.entry(PackagesVisualScenario.NAME, PackagesVisualScenario::new),
+            Map.entry(DoorVisualScenario.NAME, DoorVisualScenario::new),
             Map.entry(ShowcaseVisualScenario.NAME, ShowcaseVisualScenario::new),
             Map.entry(ArmVisualScenario.NAME, ArmVisualScenario::new),
             Map.entry(TooltipsVisualScenario.NAME, TooltipsVisualScenario::new),

@@ -3,8 +3,13 @@ package dev.wareworks.gametest;
 import static dev.wareworks.gametest.WareworksGameTests.AISLE_16X10X7;
 import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+
+import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.AllItems;
@@ -16,7 +21,9 @@ import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollVa
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.RequestRejection;
+import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.PortRankBehaviour;
 import dev.wareworks.content.station.StockKeeperRules;
@@ -29,7 +36,9 @@ import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
@@ -56,6 +65,7 @@ import net.neoforged.neoforge.common.util.FakePlayer;
 import net.neoforged.neoforge.common.util.FakePlayerFactory;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
+import net.neoforged.neoforge.items.IItemHandler;
 
 /**
  * GameTests of the warehouse <b>port</b> settings (M17, issue #12, {@code docs/warehouse-system.md} §3.2): the warehouse
@@ -78,6 +88,13 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * spend the same pulse token) and {@link #portDataReplacedInPlaceIsReRead} (a command, a schematic or the zapper
  * overwriting the block entity, which runs no callback and no {@code onLoad}).
  * <p>
+ * Five tests pin the two guarantees M27 adds (issue #18, ADR-065): a retrieve into a port carries at most what the port
+ * takes and sets off only for a whole trip, so the crane never waits in front of one
+ * ({@link #craneNeverWaitsAtAFullPort}, {@link #aPortThatTakesLittleWaitsForAFullTrip}), and a port that fills up under
+ * a carrying crane all the same gets its leftovers back into storage at the crane's next retry
+ * ({@link #aPortFilledUnderACarryingCraneGetsTheRestLater}); and a request only ever goes to a port that requests
+ * ({@link #controllerRefusesARequestToAPortThatDoesNotRequest}, {@link #aPortTurnedSilentlyLosesItsRequestsOnRelink}).
+ * <p>
  * Layout: the {@link AisleFixture} aisle on {@code aisle_16x10x7} (controller x = 0, dock x = 1 at z = 3 along +X,
  * {@value #RAILS} rails), a chest behind an interface on the left rack plane, the port on the right with a redstone
  * trigger block south of it. Every test that moves items asserts the item conservation invariant on each tick
@@ -90,6 +107,8 @@ public final class WarehousePortGameTests {
     private static final int RAILS = 5;
     private static final int TEST_RPM = 128;
     private static final int TIMEOUT_TICKS = 1200;
+    /** For a test of six trips and two waits. */
+    private static final int LONG_TIMEOUT_TICKS = 2400;
     /** Long enough for several dispatch intervals and a retry back-off: proof that nothing happens any more. */
     private static final int SETTLE_TICKS = 60;
 
@@ -100,12 +119,17 @@ public final class WarehousePortGameTests {
     private static final RackPosition SECOND_PORT_RACK = new RackPosition(2, 0, Side.RIGHT);
     private static final RackPosition INPUT_RACK = new RackPosition(3, 0, Side.RIGHT);
     private static final RackPosition KEEPER_RACK = new RackPosition(4, 0, Side.RIGHT);
+    /** A warehouse terminal on the left rack plane, between the chests and the far end (M27). */
+    private static final RackPosition TERMINAL_RACK = new RackPosition(2, 0, Side.LEFT);
+    /** A plain requesting port on the left rack plane, beside ports of the other two directions (M27). */
+    private static final RackPosition REQUESTING_RACK = new RackPosition(4, 0, Side.LEFT);
     /** A warehouse output outside the aisle geometry: a valid block, and a member of nothing (test-relative). */
     private static final BlockPos OUTSIDE_PORT = new BlockPos(6, BASE_Y, 0);
 
     private static final ItemKey IRON = ItemKey.of(Items.IRON_INGOT);
     private static final ItemKey DIAMOND = ItemKey.of(Items.DIAMOND);
     private static final ItemKey COBBLESTONE = ItemKey.of(Items.COBBLESTONE);
+    private static final ItemKey GOLD = ItemKey.of(Items.GOLD_INGOT);
     /** One item per port buffer slot, so as many of them as the buffer has slots fill it completely. */
     private static final ItemKey FILLER_ITEM = ItemKey.of(Items.WATER_BUCKET);
 
@@ -125,6 +149,17 @@ public final class WarehousePortGameTests {
     private static final int IRON_FED = 24;
     /** What one trip carries of a stackable item ({@code grabberStacks} × one stack, the config default). */
     private static final int CARRY_LIMIT = 64;
+    /** Four whole trips of diamonds, more than a port with one free slot takes (M27). */
+    private static final int DIAMONDS_ORDERED = 4 * CARRY_LIMIT;
+    /** What a terminal asks for while the port is full (M27). */
+    private static final int TERMINAL_IRON = 16;
+    /** Iron left in a port's last slot, so it has room for ten more: less than a trip (M27). */
+    private static final int IRON_LEFT_IN_PORT = 54;
+    /** Half a trip a hopper takes out of a full port, which leaves it room for less than the next trip (M27). */
+    private static final int DIAMONDS_TAKEN_FROM_PORT = 32;
+    /** Room a port's last slot keeps for a trip of diamonds after a test-only insert under the carrying crane (M27). */
+    private static final int ROOM_LEFT_IN_PORT = 10;
+    private static final int DIAMONDS_LEFT_IN_PORT = CARRY_LIMIT - ROOM_LEFT_IN_PORT;
 
     /** Create's clipboard keys, as a funnel writes them. */
     private static final String FILTER_TAG = "Filter";
@@ -1409,6 +1444,318 @@ public final class WarehousePortGameTests {
                 .thenSucceed();
     }
 
+    // --- a crane never waits at a port, and only a requesting port is a destination (M27, issue #18, ADR-065) ------
+
+    /**
+     * <b>The crane never waits in front of a port.</b> A requesting port with one free slot is asked for four trips of
+     * diamonds and takes the first whole trip. Then something under it takes half of that stack out, as a hopper does
+     * that nobody keeps up with, so the port has room for 32 and the next trip is 64. Before M27 the crane set off with
+     * those 64 because the port took one item, dropped 32 and waited in front of it with the other 32 in its claw until
+     * somebody emptied the port. Now it does not set off at all: it serves the rest of the warehouse — a terminal's
+     * request and an input's items — while the port's request reports {@link NoJobReason#OUTPUT_FULL} without backing
+     * the aisle off, and once the port is emptied the rest follows in whole trips.
+     * <p>
+     * Checked on every tick: the crane is never in {@link CranePhase#WAITING_FOR_TARGET} on a trip to the port, every
+     * trip to the port fits the port's room when it is first seen (the room can only grow until the drop, because only
+     * this crane puts items into a port), and a crane without a job holds nothing and has nothing in transit.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void craneNeverWaitsAtAFullPort(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STORAGE_RACK, DIAMOND.toStack(CARRY_LIMIT), DIAMOND.toStack(CARRY_LIMIT),
+                DIAMOND.toStack(CARRY_LIMIT), DIAMOND.toStack(CARRY_LIMIT), IRON.toStack(TERMINAL_IRON));
+        aisle.input(INPUT_RACK);
+        aisle.output(PORT_RACK);
+        aisle.terminal(TERMINAL_RACK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(DIAMOND, DIAMONDS_ORDERED, IRON, TERMINAL_IRON);
+        Set<UUID> portTrips = new HashSet<>();
+        helper.onEachTick(() -> {
+            ItemCensus.assertEquals(helper, conserved, "while a port has room for less than the next trip");
+            assertNeverWaitsAtThePort(helper, aisle, portTrips);
+        });
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 1, 2))
+                .thenExecute(() -> {
+                    fillAllButOneSlot(helper, aisle, conserved);
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    helper.assertTrue(aisle.controller().request(aisle.absoluteRackPos(PORT_RACK), DIAMOND,
+                            DIAMONDS_ORDERED).isAccepted(), "four trips of diamonds are requested at the port");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, DIAMOND), (long) CARRY_LIMIT,
+                            "one whole trip into the one free slot");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> takeFromPort(aisle, conserved, DIAMOND, DIAMONDS_TAKEN_FROM_PORT))
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, DIAMOND),
+                            (long) (CARRY_LIMIT - DIAMONDS_TAKEN_FROM_PORT),
+                            "no trip into room for half of one");
+                    helper.assertValueEqual(controller.requestedFor(aisle.absoluteRackPos(PORT_RACK)),
+                            (long) (DIAMONDS_ORDERED - CARRY_LIMIT), "the rest of the request stays open");
+                    helper.assertValueEqual(controller.lastPlanReason(), Optional.of(NoJobReason.OUTPUT_FULL),
+                            "and says why it waits");
+                    helper.assertFalse(controller.isBackingOff(helper.getLevel().getGameTime()),
+                            "a port waiting for room backs nothing off");
+                    aisle.assertIdleAndEmpty();
+                    // The rest of the warehouse meanwhile: a player at the terminal, and items at the input.
+                    helper.assertTrue(controller.request(aisle.absoluteRackPos(TERMINAL_RACK), IRON, TERMINAL_IRON)
+                            .isAccepted(), "a terminal request is accepted");
+                    feed(aisle, conserved, GOLD.toStack(PER_TRIP));
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(TERMINAL_RACK, IRON), (long) TERMINAL_IRON,
+                            "the terminal is served while the port waits for room");
+                    helper.assertValueEqual(aisle.storedAt(STORAGE_RACK, GOLD), (long) PER_TRIP,
+                            "and the input is stored");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> {
+                    helper.assertValueEqual(portTrips.size(), 1, "still one trip to the port");
+                    takeFromPort(aisle, conserved, null, Integer.MAX_VALUE);
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, DIAMOND),
+                            (long) (DIAMONDS_ORDERED - CARRY_LIMIT), "the rest follows once the port is emptied");
+                    helper.assertValueEqual(openRequests(aisle), 0, "and the request is complete");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> helper.assertValueEqual(portTrips.size(), DIAMONDS_ORDERED / CARRY_LIMIT,
+                        "in whole trips"))
+                .thenSucceed();
+    }
+
+    /**
+     * The minimum carry: a port with room for ten iron is not served a trip of ten out of a request for 64, which would
+     * turn a port drained slowly into one tiny trip after another. Nothing is planned while it has less room than the
+     * whole trip, and once it has room the whole trip goes, exactly once.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void aPortThatTakesLittleWaitsForAFullTrip(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STORAGE_RACK, IRON.toStack(CARRY_LIMIT));
+        aisle.output(PORT_RACK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(IRON, CARRY_LIMIT);
+        Set<UUID> portTrips = new HashSet<>();
+        helper.onEachTick(() -> {
+            ItemCensus.assertEquals(helper, conserved, "while a port has room for less than a trip");
+            assertNeverWaitsAtThePort(helper, aisle, portTrips);
+        });
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenExecute(() -> {
+                    fillAllButOneSlot(helper, aisle, conserved);
+                    WarehouseOutputBlockEntity port = aisle.outputAt(PORT_RACK);
+                    helper.assertTrue(port.insert(IRON.toStack(IRON_LEFT_IN_PORT), false).isEmpty(),
+                            "the last slot holds iron nobody took");
+                    ItemCensus.change(conserved, IRON, IRON_LEFT_IN_PORT);
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    helper.assertTrue(aisle.controller().request(aisle.absoluteRackPos(PORT_RACK), IRON, CARRY_LIMIT)
+                            .isAccepted(), "a whole trip of iron is requested");
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(portTrips.size(), 0, "no trip for ten of room");
+                    helper.assertValueEqual(aisle.storedAt(STORAGE_RACK, IRON), (long) CARRY_LIMIT,
+                            "the iron stays in the chest");
+                    helper.assertValueEqual(aisle.controller().lastPlanReason(), Optional.of(NoJobReason.OUTPUT_FULL),
+                            "the request says the port is full");
+                    helper.assertFalse(aisle.controller().isBackingOff(helper.getLevel().getGameTime()),
+                            "which backs nothing off");
+                    aisle.assertIdleAndEmpty();
+                    takeFromPort(aisle, conserved, IRON, Integer.MAX_VALUE);
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, IRON), (long) CARRY_LIMIT,
+                            "the whole trip, once the port has room for it");
+                    helper.assertValueEqual(openRequests(aisle), 0, "and the request is complete");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> helper.assertValueEqual(portTrips.size(), 1, "in exactly one trip"))
+                .thenSucceed();
+    }
+
+    /**
+     * <b>A port that fills up under a carrying crane is not waited at either.</b> In a running world nothing but the
+     * crane puts items into a port and its trips fit the port, so this is what only an older world can bring: a crane
+     * saved waiting in front of a port before M27, or a trip planned before a restart that lowered
+     * {@code outputBufferSlots}. A test-only insert stands in for both: while the crane travels with a whole trip, the
+     * port's last slot is filled up to leave room for ten.
+     * <p>
+     * The crane drops those ten, which count for the request, and waits once, as at any output; at its retry the port
+     * takes nothing, and instead of waiting on it takes the other 54 back into storage. The request stays open with the
+     * ten credited and reports {@link NoJobReason#OUTPUT_FULL} without backing the aisle off, and once the port is
+     * emptied the rest follows in one whole trip. Checked on every tick: the item census, and that the crane never
+     * stands in {@link CranePhase#WAITING_FOR_TARGET} in front of the port for longer than one retry.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void aPortFilledUnderACarryingCraneGetsTheRestLater(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STORAGE_RACK, DIAMOND.toStack(CARRY_LIMIT));
+        aisle.output(PORT_RACK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(DIAMOND, CARRY_LIMIT);
+        // Ticks of the current wait in front of the port, and how many waits there were.
+        int[] waiting = {0, 0};
+        helper.onEachTick(() -> {
+            ItemCensus.assertEquals(helper, conserved, "while a port fills up under a carrying crane");
+            StackerCraneBlockEntity dock = aisle.dock();
+            boolean atThePort = dock.craneState().phase() == CranePhase.WAITING_FOR_TARGET
+                    && dock.currentJob().map(job -> job.target().equals(PORT_RACK)).orElse(false);
+            if (!atThePort)
+                waiting[0] = 0;
+            else if (waiting[0]++ == 0)
+                waiting[1]++;
+            helper.assertTrue(waiting[0] <= WareworksConfig.retryTicks() + 1,
+                    "the crane never waits in front of a port for longer than one retry");
+        });
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenExecute(() -> {
+                    fillAllButOneSlot(helper, aisle, conserved);
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    helper.assertTrue(aisle.controller().request(aisle.absoluteRackPos(PORT_RACK), DIAMOND, CARRY_LIMIT)
+                            .isAccepted(), "a whole trip of diamonds is requested at the port");
+                })
+                .thenWaitUntil(() -> aisle.assertCarrying(CranePhase.TRAVEL_TO_TARGET, DIAMOND, CARRY_LIMIT))
+                .thenExecute(() -> {
+                    helper.assertTrue(aisle.outputAt(PORT_RACK).insert(DIAMOND.toStack(DIAMONDS_LEFT_IN_PORT), false)
+                            .isEmpty(), "the port's last slot fills up under the crane");
+                    ItemCensus.change(conserved, DIAMOND, DIAMONDS_LEFT_IN_PORT);
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.storedAt(STORAGE_RACK, DIAMOND),
+                            (long) (CARRY_LIMIT - ROOM_LEFT_IN_PORT), "the rest went back into storage");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    BlockPos port = aisle.absoluteRackPos(PORT_RACK);
+                    helper.assertValueEqual(waiting[1], 1, "one wait after the drop, and none after the retry");
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, DIAMOND), (long) CARRY_LIMIT,
+                            "the port took what fitted");
+                    helper.assertValueEqual(controller.deliveredFor(port), (long) ROOM_LEFT_IN_PORT,
+                            "which counts for the request");
+                    helper.assertValueEqual(controller.requestedFor(port), (long) (CARRY_LIMIT - ROOM_LEFT_IN_PORT),
+                            "which stays open for the rest");
+                    helper.assertValueEqual(controller.reservations().totalInTransit(), 0L,
+                            "and nothing is in transit any more");
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(aisle.controller().lastPlanReason(), Optional.of(NoJobReason.OUTPUT_FULL),
+                            "the request says the port is full");
+                    helper.assertFalse(aisle.controller().isBackingOff(helper.getLevel().getGameTime()),
+                            "which backs nothing off");
+                    aisle.assertIdleAndEmpty();
+                    takeFromPort(aisle, conserved, null, Integer.MAX_VALUE);
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, DIAMOND),
+                            (long) (CARRY_LIMIT - ROOM_LEFT_IN_PORT), "the rest follows once the port is emptied");
+                    helper.assertValueEqual(openRequests(aisle), 0, "and the request is complete");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> helper.assertValueEqual(waiting[1], 1, "without another wait"))
+                .thenSucceed();
+    }
+
+    /**
+     * <b>A request only ever goes to something that requests.</b> An accepting port must never receive items somebody
+     * asked for, and a collecting port takes no delivery at all, so the controller refuses a request to either — with
+     * the answer it gives every position that is no destination — and queues nothing. A requesting port beside them is
+     * still served, so the refusal is about the direction and nothing else.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void controllerRefusesARequestToAPortThatDoesNotRequest(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STORAGE_RACK, DIAMOND.toStack(DIAMONDS_IN_STOCK));
+        aisle.output(PORT_RACK);
+        aisle.output(SECOND_PORT_RACK);
+        aisle.output(REQUESTING_RACK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(DIAMOND, DIAMONDS_IN_STOCK);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while requests to ports are refused"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 3))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertTrue(aisle.outputAt(PORT_RACK).setPortRank(OVERFLOW_RANK), "one port accepts");
+                    helper.assertTrue(aisle.outputAt(SECOND_PORT_RACK).setPortRank(PortSettings.COLLECT_RANK),
+                            "one port collects");
+                    for (RackPosition rack : new RackPosition[] {PORT_RACK, SECOND_PORT_RACK}) {
+                        RequestResult refused = controller.request(aisle.absoluteRackPos(rack), DIAMOND, PER_TRIP);
+                        helper.assertFalse(refused.isAccepted(), "a request to the port at " + rack + " is refused");
+                        helper.assertValueEqual(refused.rejection(), Optional.of(RequestRejection.NO_CONTROLLER),
+                                "with the answer every position that is no destination gets");
+                        helper.assertTrue(controller.requestsFor(aisle.absoluteRackPos(rack)).isEmpty(),
+                                "and nothing is queued for it");
+                    }
+                    helper.assertValueEqual(controller.openRequestCount(), 0, "nothing is queued at all");
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    helper.assertTrue(controller.request(aisle.absoluteRackPos(REQUESTING_RACK), DIAMOND, PER_TRIP)
+                            .isAccepted(), "a requesting port beside them is a destination");
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(REQUESTING_RACK, DIAMOND),
+                        (long) PER_TRIP, "and is served"))
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, DIAMOND), 0L,
+                            "the accepting port received nothing");
+                    helper.assertValueEqual(aisle.stationCount(SECOND_PORT_RACK, DIAMOND), 0L,
+                            "and neither did the collecting one");
+                    helper.assertValueEqual(aisle.controller().openRequestCount(), 0, "no request is left");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A port can stop requesting without telling the controller: turned while the controller's chunk was not loaded, or
+     * carried in an old save. The direction is changed here in the rank behaviour's own data, which runs no callback, so
+     * the request survives the change — and the next relink, which every controller runs on its geometry cadence,
+     * cancels it because the port is no destination any more. Both other directions, one after the other, and nothing
+     * leaves the chest.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void aPortTurnedSilentlyLosesItsRequestsOnRelink(GameTestHelper helper) {
+        // No motor: the crane cannot take a job, so the request stays open until something cancels it.
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        aisle.storage(STORAGE_RACK, DIAMOND.toStack(DIAMONDS_IN_STOCK));
+        aisle.output(PORT_RACK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(DIAMOND, DIAMONDS_IN_STOCK);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while a port is turned silently"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenExecute(() -> {
+                    for (int rank : new int[] {OVERFLOW_RANK, PortSettings.COLLECT_RANK}) {
+                        WarehouseControllerBlockEntity controller = aisle.controller();
+                        WarehouseOutputBlockEntity port = aisle.outputAt(PORT_RACK);
+                        turnSilently(helper, port, PortSettings.REQUEST_RANK);
+                        helper.assertTrue(controller.request(aisle.absoluteRackPos(PORT_RACK), DIAMOND, PER_TRIP)
+                                .isAccepted(), "the port requests");
+                        helper.assertValueEqual(openRequests(aisle), 1, "one open request");
+
+                        turnSilently(helper, port, rank);
+                        helper.assertFalse(port.portDirection() == PortDirection.REQUEST,
+                                "the port no longer requests (rank " + rank + ")");
+                        helper.assertValueEqual(openRequests(aisle), 1, "and nothing told the controller");
+
+                        controller.relinkNow();
+                        helper.assertValueEqual(openRequests(aisle), 0, "the relink cancels the request");
+                        helper.assertTrue(controller.reservations().isEmpty(), "and nothing stays reserved");
+                    }
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(aisle.storedAt(STORAGE_RACK, DIAMOND), (long) DIAMONDS_IN_STOCK,
+                            "the diamonds never left the chest");
+                    helper.assertValueEqual(aisle.stationCount(PORT_RACK, DIAMOND), 0L, "and the port got nothing");
+                    helper.assertValueEqual(openRequests(aisle), 0, "no request came back");
+                })
+                .thenSucceed();
+    }
+
     // --- helpers ------------------------------------------------------------------------------------------------------
 
     /** The redstone trigger block south of the port. */
@@ -1505,6 +1852,78 @@ public final class WarehousePortGameTests {
             return live;
         }
         return type.cast(loaded);
+    }
+
+    /**
+     * The per-tick half of "the crane never waits in front of a port" (M27, ADR-065): never
+     * {@link CranePhase#WAITING_FOR_TARGET} on a trip to {@link #PORT_RACK}; every such trip, the first time it is seen,
+     * fits the port's room (which can only have grown since it was planned); and an idle crane holds nothing and has
+     * nothing in transit. Each trip to the port is recorded once in {@code portTrips}.
+     */
+    private static void assertNeverWaitsAtThePort(GameTestHelper helper, AisleFixture aisle, Set<UUID> portTrips) {
+        StackerCraneBlockEntity dock = aisle.dock();
+        Optional<TransportJob<ItemKey, RackPosition>> job = dock.currentJob();
+        if (job.isEmpty()) {
+            if (dock.craneState().phase() == CranePhase.IDLE) {
+                helper.assertTrue(dock.heldItems().isEmpty(), "a crane without a job holds nothing");
+                helper.assertValueEqual(aisle.controller().reservations().totalInTransit(), 0L,
+                        "and has nothing in transit");
+            }
+            return;
+        }
+        if (!job.get().target().equals(PORT_RACK))
+            return;
+        helper.assertFalse(dock.craneState().phase() == CranePhase.WAITING_FOR_TARGET,
+                "the crane never waits in front of the port");
+        if (portTrips.add(job.get().id())) {
+            int planned = job.get().plannedAmount();
+            helper.assertTrue(aisle.outputAt(PORT_RACK).insert(job.get().key().toStack(planned), true).isEmpty(),
+                    "a trip of " + planned + " fits the port's room");
+        }
+    }
+
+    /**
+     * Fills every slot of the port at {@link #PORT_RACK} but the last with a stack of cobblestone, so it takes exactly one
+     * more stack of anything. That is a port whose Packager stopped being triggered, one trip before it is full.
+     */
+    private static void fillAllButOneSlot(GameTestHelper helper, AisleFixture aisle, Map<ItemKey, Long> conserved) {
+        WarehouseOutputBlockEntity port = aisle.outputAt(PORT_RACK);
+        for (int slot = 0; slot < port.bufferSlots() - 1; slot++) {
+            helper.assertTrue(port.insert(COBBLESTONE.toStack(CARRY_LIMIT), false).isEmpty(),
+                    "the port took a stack of cobblestone");
+            ItemCensus.change(conserved, COBBLESTONE, CARRY_LIMIT);
+        }
+    }
+
+    /**
+     * Takes up to {@code max} items of {@code key} (of everything for {@code null}) out of the port at
+     * {@link #PORT_RACK} through its extract-only capability, the side its Packager, a funnel or a hopper uses, and keeps
+     * the item census in step.
+     */
+    private static void takeFromPort(AisleFixture aisle, Map<ItemKey, Long> conserved, @Nullable ItemKey key, int max) {
+        IItemHandler pull = aisle.handlerAt(aisle.rackPos(PORT_RACK));
+        int left = max;
+        for (int slot = 0; slot < pull.getSlots() && left > 0; slot++) {
+            ItemStack inSlot = pull.getStackInSlot(slot);
+            if (inSlot.isEmpty() || key != null && !key.matches(inSlot))
+                continue;
+            ItemStack taken = pull.extractItem(slot, Math.min(left, inSlot.getCount()), false);
+            left -= taken.getCount();
+            ItemCensus.change(conserved, ItemKey.of(taken), -taken.getCount());
+        }
+    }
+
+    /**
+     * Changes the direction of {@code port} in its rank behaviour's own data, which is read without any callback: the
+     * port's settings change and nothing announces it, which is what a port turned while its controller was not loaded
+     * looks like to that controller.
+     */
+    private static void turnSilently(GameTestHelper helper, WarehouseOutputBlockEntity port, int rank) {
+        CompoundTag data = new CompoundTag();
+        if (rank != PortSettings.REQUEST_RANK)
+            data.putInt(PortRankBehaviour.RANK_TAG, rank);
+        rankOf(helper, port).read(data, helper.getLevel().registryAccess(), false);
+        helper.assertValueEqual(port.portRank(), rank, "the port holds the new rank");
     }
 
     private static PortRankBehaviour rankOf(GameTestHelper helper, WarehouseOutputBlockEntity port) {

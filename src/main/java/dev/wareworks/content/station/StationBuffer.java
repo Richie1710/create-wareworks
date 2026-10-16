@@ -183,6 +183,15 @@ public class StationBuffer extends ItemStackHandler {
         return true;
     }
 
+    /** Whether at least one slot is empty. Reads the slots in memory and nothing else. */
+    public boolean hasEmptySlot() {
+        for (ItemStack stack : stacks) {
+            if (stack.isEmpty())
+                return true;
+        }
+        return false;
+    }
+
     /** Sum of the counts of all slots. */
     public long totalItems() {
         long total = 0;

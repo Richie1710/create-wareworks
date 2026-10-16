@@ -69,7 +69,23 @@ public enum RequestRejection {
      * Unlike every other reason here it is not about the requested item alone — a chest can be refused because the
      * warehouse has stopped making the planks it would need ({@code PlanRefusal#PAUSED} names which one).
      */
-    PRODUCTION_PAUSED;
+    PRODUCTION_PAUSED,
+    /**
+     * A terminal click named a <b>package door</b> that is none (M27, issue #18, ADR-065): not a requesting warehouse
+     * port of this terminal's own warehouse with a plain Create Packager at its back — an accepting or collecting port,
+     * a port without a Packager or with a Repackager, a terminal, another warehouse's port, or a position that is not
+     * loaded. Only terminals can produce this, and only for a click that named a door.
+     * <p>
+     * <b>Answered, never remembered</b> (ADR-065 D6): it is about the player's choice, not about the terminal, so it
+     * never reaches a station's {@code lastRejection} and its goggles.
+     */
+    NOT_A_DOOR,
+    /**
+     * A terminal click named a package door whose Packager carries a Stock Link, so the Packager ignores redstone and
+     * the door would never send what the crane hands it (M27, issue #18, ADR-065 D7). Answered, never remembered, like
+     * {@link #NOT_A_DOOR}.
+     */
+    DOOR_IGNORES_REDSTONE;
 
     private static final String LANG_PREFIX = "gui.goggles.request_rejection.";
 

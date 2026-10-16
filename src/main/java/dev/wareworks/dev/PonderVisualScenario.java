@@ -82,13 +82,16 @@ public final class PonderVisualScenario implements VisualScenario {
             // of the warehouse, and which station its back touches is what decides the direction.
             new Subject("input", WareworksBlocks.WAREHOUSE_INPUT, 2),
             // M17: retrieving, plus the two port scenes (the second of which the keeper shows as well). M18 adds the
-            // third direction, which the production station shows as well, and M26 the package door.
-            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 5),
+            // third direction, which the production station shows as well, and M26 the package door. M27 (issue #18,
+            // second half) adds ordering to a door, which the terminal shows as well.
+            new Subject("output", WareworksBlocks.WAREHOUSE_OUTPUT, 6),
             // M20 (issue #4) adds the chain, which both of these blocks show: the plan is made by a click at a
             // terminal and run at the stations.
             // M30 (issue #21) adds the fluid bay scene to the terminal as well: a player holding a stocked
             // warehouse looks for a fluid row and finds buckets, and that scene is where the answer is.
-            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 4),
+            // M27 (issue #18, second half) adds ordering to a door: the door is chosen at the terminal and is the
+            // output, so both blocks show it.
+            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 5),
             new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 3),
             new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3),
             // M28 (issue #20): all three tiers carry the same three scenes, and all three are toured rather than only

@@ -2593,4 +2593,205 @@ class JobPlannerTest {
 
         assertTrue(planner.plan(builder.build()).hasJob(), "the next pass sees the rails that were laid in between");
     }
+
+    // --- requesting warehouse ports sized by their room (M27, issue #18, ADR-065) ---------------------------------------
+
+    /** A requesting warehouse port: an output station whose retrieves are sized by its room. */
+    private static final RackPosition DOOR = RackPosition.of(6, 0, Side.LEFT);
+
+    /** Every amount the live insert was asked for, in call order. */
+    private final List<Integer> insertAsked = new ArrayList<>();
+
+    /** {@link #input()} with {@link #DOOR} as the only room-bound target and one stack of {@value #STACK}. */
+    private PlannerInput.Builder<String, RackPosition> doorInput() {
+        return input()
+                .roomBound(DOOR::equals)
+                .stackSize(key -> STACK)
+                .liveInsert((location, key, amount) -> {
+                    insertAsked.add(amount);
+                    return live.simulateInsert(location, key, amount);
+                });
+    }
+
+    /** One chest near the crane holding {@code count} diamonds, all of them extractable. */
+    private RackPosition diamondsInStock(int count) {
+        RackPosition chest = rack(2, 0, Side.LEFT);
+        stock.update(chest, slots(0, DIAMOND, count));
+        live.extractable.put(chest, count);
+        return chest;
+    }
+
+    /**
+     * A port with room for 10 is not served a trip of 64: the crane would arrive, drop 10 and wait in front of the port
+     * with 54 in its claw. The request reports {@link NoJobReason#OUTPUT_FULL} instead, the port is asked once for the
+     * whole trip, and no source is asked at all.
+     */
+    @Test
+    void aPortWithRoomForLessThanTheTripGetsNoJob() {
+        diamondsInStock(STACK);
+        live.insertable.put(DOOR, 10);
+        PlanResult<String, RackPosition> result = planner.plan(doorInput()
+                .requests(List.of(request(id(1), DIAMOND, STACK, DOOR))).build());
+        assertFalse(result.hasJob());
+        assertEquals(Set.of(NoJobReason.OUTPUT_FULL), result.reasons());
+        assertEquals(List.of(STACK), insertAsked, "the port is asked for the whole trip, once");
+        assertEquals(List.of(), live.extractCalls, "and no source is asked for a trip that cannot go");
+    }
+
+    @Test
+    void aPortThatTakesTheWholeTripGetsIt() {
+        RackPosition chest = diamondsInStock(STACK);
+        live.insertable.put(DOOR, STACK);
+        TransportJob<String, RackPosition> job = planner.plan(doorInput()
+                .requests(List.of(request(id(1), DIAMOND, STACK, DOOR))).build()).job().orElseThrow().job();
+        assertEquals(TransportJob.retrieve(job.id(), chest, DOOR, DIAMOND, STACK, id(1)), job);
+    }
+
+    /**
+     * The minimum carry: with two stacks per trip a request larger than the port's room goes as soon as one full stack
+     * fits, and carries exactly the room — never more, so the drop takes all of it, and never a trickle.
+     */
+    @Test
+    void aLargerRequestGoesOnceOneFullStackFitsAndCarriesTheRoom() {
+        diamondsInStock(4 * STACK);
+        live.insertable.put(DOOR, 100);
+        PlannerInput.Builder<String, RackPosition> twoStacks = doorInput().carryLimit(key -> 2 * STACK);
+        List<PlannerInput.OpenRequest<String, RackPosition>> requests = List.of(request(id(1), DIAMOND, 200, DOOR));
+        assertEquals(100, planner.plan(twoStacks.requests(requests).build()).job().orElseThrow().job().plannedAmount(),
+                "min(200 needed, 128 carried, 100 of room)");
+
+        live.insertable.put(DOOR, STACK - 1);
+        PlanResult<String, RackPosition> tooLittle = planner.plan(twoStacks.requests(requests).build());
+        assertFalse(tooLittle.hasJob(), "63 of room is less than one full stack");
+        assertEquals(Set.of(NoJobReason.OUTPUT_FULL), tooLittle.reasons());
+    }
+
+    /** A request smaller than a stack needs only its own room, so a nearly full port still gets a small delivery. */
+    @Test
+    void aSmallRequestNeedsOnlyItsOwnRoom() {
+        diamondsInStock(STACK);
+        live.insertable.put(DOOR, 40);
+        assertEquals(10, planner.plan(doorInput().requests(List.of(request(id(1), DIAMOND, 10, DOOR))).build())
+                .job().orElseThrow().job().plannedAmount());
+
+        live.insertable.put(DOOR, 9);
+        assertFalse(planner.plan(doorInput().requests(List.of(request(id(1), DIAMOND, 10, DOOR))).build()).hasJob(),
+                "nine of room is not the whole trip of ten");
+    }
+
+    /**
+     * A stack size that answers nothing sensible (0) still asks for one item at least, so a broken content layer can
+     * never plan a trip of zero, and the room still bounds the trip.
+     */
+    @Test
+    void aStackSizeBelowOneStillNeedsOneItemOfRoom() {
+        diamondsInStock(STACK);
+        live.insertable.put(DOOR, 5);
+        assertEquals(5, planner.plan(doorInput().stackSize(key -> 0)
+                        .requests(List.of(request(id(1), DIAMOND, STACK, DOOR))).build())
+                .job().orElseThrow().job().plannedAmount());
+
+        live.insertable.put(DOOR, 0);
+        assertFalse(planner.plan(doorInput().stackSize(key -> 0)
+                .requests(List.of(request(id(1), DIAMOND, STACK, DOOR))).build()).hasJob());
+    }
+
+    /**
+     * A terminal is no room-bound target: a craft can put remainders into its buffer after the plan, so the old 1-item
+     * probe stays and a player standing at it still gets the whole trip (and the crane waits there, as before).
+     */
+    @Test
+    void aTerminalKeepsTheOneItemProbe() {
+        diamondsInStock(STACK);
+        live.insertable.put(OUT_A, 1);
+        assertEquals(STACK, planner.plan(doorInput().requests(List.of(request(id(1), DIAMOND, STACK, OUT_A))).build())
+                .job().orElseThrow().job().plannedAmount());
+        assertEquals(List.of(1), insertAsked, "one item, as before M27");
+    }
+
+    /** A production station's ingredients are never sized by room, even where the predicate would say so. */
+    @Test
+    void aSupplyIsNeverSizedByRoom() {
+        diamondsInStock(STACK);
+        live.insertable.put(IN_C, 1);
+        TransportJob<String, RackPosition> job = planner.plan(doorInput().roomBound(location -> true)
+                .supplies(List.of(new PlannerInput.SupplyNeed<>(id(2), DIAMOND, 30, IN_C))).build())
+                .job().orElseThrow().job();
+        assertEquals(JobType.SUPPLY, job.type());
+        assertEquals(30, job.plannedAmount());
+        assertEquals(List.of(1), insertAsked);
+    }
+
+    /** Without {@code roomBound} every target takes the 1-item probe, which is the planner every other test here runs. */
+    @Test
+    void theDefaultBuilderSizesNoTripByRoom() {
+        diamondsInStock(STACK);
+        live.insertable.put(DOOR, 1);
+        List<Integer> asked = new ArrayList<>();
+        TransportJob<String, RackPosition> job = planner.plan(input()
+                .liveInsert((location, key, amount) -> {
+                    asked.add(amount);
+                    return live.simulateInsert(location, key, amount);
+                })
+                .requests(List.of(request(id(1), DIAMOND, STACK, DOOR))).build()).job().orElseThrow().job();
+        assertEquals(STACK, job.plannedAmount());
+        assertEquals(List.of(1), asked);
+    }
+
+    /**
+     * A port too full for a trip blocks nothing: the younger request is served, and with no other request the input is
+     * stored. {@link NoJobReason#OUTPUT_FULL} is reported alongside, which is not a reason that backs the aisle off.
+     */
+    @Test
+    void aFullPortBlocksNeitherYoungerRequestsNorStoring() {
+        diamondsInStock(STACK);
+        live.insertable.put(DOOR, 10);
+        live.insertable.put(OUT_A, STACK);
+        PlanResult<String, RackPosition> younger = planner.plan(doorInput().requests(List.of(
+                request(id(1), DIAMOND, STACK, DOOR), request(id(2), DIAMOND, 5, OUT_A))).build());
+        assertEquals(OUT_A, younger.job().orElseThrow().job().target());
+        assertEquals(Set.of(NoJobReason.OUTPUT_FULL), younger.reasons());
+
+        RackPosition empty = rack(3, 0, Side.LEFT);
+        stock.update(empty, slots(27));
+        live.insertable.put(empty, STACK);
+        PlanResult<String, RackPosition> storing = planner.plan(doorInput()
+                .requests(List.of(request(id(1), DIAMOND, STACK, DOOR)))
+                .storageLocations(List.of(empty)).inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, IRON, 12))
+                .build());
+        assertEquals(JobType.STORE, storing.job().orElseThrow().job().type(), "the input is stored meanwhile");
+        assertTrue(storing.reasons().contains(NoJobReason.OUTPUT_FULL));
+    }
+
+    /**
+     * The predicate is asked only for the target of a retrieve the planner may use: never for an unavailable one (the
+     * content layer answers it with a block entity lookup), never for a store, and never on a reroute.
+     */
+    @Test
+    void roomBoundIsAskedOnlyForAnAvailableRetrieveTarget() {
+        diamondsInStock(STACK);
+        RackPosition empty = rack(3, 0, Side.LEFT);
+        stock.update(empty, slots(27));
+        live.insertable.put(DOOR, STACK);
+        List<RackPosition> asked = new ArrayList<>();
+        PlannerInput.Builder<String, RackPosition> watched = doorInput().roomBound(location -> {
+            asked.add(location);
+            return location.equals(DOOR);
+        });
+
+        assertFalse(planner.plan(watched.available(location -> !location.equals(DOOR))
+                .requests(List.of(request(id(1), DIAMOND, STACK, DOOR))).build()).hasJob());
+        assertEquals(List.of(), asked, "an unavailable port is not looked at");
+
+        live.insertable.put(empty, STACK);
+        watched.available(location -> true).requests(List.of());
+        assertEquals(JobType.STORE, planner.plan(watched.storageLocations(List.of(empty)).inputs(List.of(IN_A))
+                .inputBuffers(location -> slots(0, IRON, 12)).build()).job().orElseThrow().job().type());
+        live.insertable.put(empty, 0);
+        assertEquals(Optional.of(DOOR), planner.planReroute(watched.outputs(List.of(DOOR)).build(), DIAMOND, 30,
+                JobType.RETRIEVE, null).map(RerouteTarget::location),
+                "a retrieve reroute still finds the port as its last resort");
+        assertEquals(List.of(), asked, "neither a store nor a reroute asks it");
+    }
 }

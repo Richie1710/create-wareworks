@@ -44,9 +44,9 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_input</td><td>warehouse/storing, warehouse/packages_at_the_door</td></tr>
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting,
- *       warehouse/port_collecting, warehouse/packages_at_the_door</td></tr>
+ *       warehouse/port_collecting, warehouse/packages_at_the_door, warehouse/ordering_to_a_door</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting,
- *       warehouse/production_chain, warehouse/fluid_bay</td></tr>
+ *       warehouse/production_chain, warehouse/fluid_bay, warehouse/ordering_to_a_door</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
  *       warehouse/production_chain</td></tr>
  *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
@@ -183,5 +183,14 @@ public final class WareworksPonderScenes {
                         WareworksBlocks.WAREHOUSE_TERMINAL)
                 .addStoryBoard("warehouse/fluid_bay", FluidBayScenes::fluidsTravelInContainers,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.FLUIDS);
+
+        // Ordering to a package door (M27, issue #18 second half, ADR-065), and last for the same reason as every scene
+        // above: a player meets "requesting at a terminal" and "a Packager at a port" first, and "and a click can go to
+        // that door" after both. It belongs to <b>both</b> the terminal, where the door is chosen, and the output, which
+        // is the door, so a player who met either half finds the other. Registered after warehouse/fluid_bay, so no
+        // scene of either block changes its place (ADR-016).
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_TERMINAL, WareworksBlocks.WAREHOUSE_OUTPUT)
+                .addStoryBoard("warehouse/ordering_to_a_door", PackageScenes::orderingToADoor,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

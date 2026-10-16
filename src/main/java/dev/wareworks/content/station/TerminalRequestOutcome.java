@@ -9,6 +9,7 @@ import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
+import net.minecraft.core.BlockPos;
 
 /**
  * What became of a click on a warehouse terminal's item ({@code docs/warehouse-system.md} §3.4.2, §3.6.6): either the
@@ -29,21 +30,37 @@ import dev.wareworks.core.terminal.RequestScope;
  *                 pay for portion after portion ({@code ListOrder#spend}). Present only where a caller asked for it —
  *                 the list path — because measuring it is only free there, where the request path has to measure the
  *                 question anyway
+ * @param door     the package door the click was for, as the terminal used it (M27, issue #18, ADR-065 D8); empty for
+ *                 a click that delivers here. The answer and the question echo it, so what a player confirms and what
+ *                 every feedback line names is the door the server really measured, whatever the screen shows by then
  */
 public record TerminalRequestOutcome(Optional<RequestResult> result,
                                      Optional<RequestConfirmation<ItemKey>> question,
-                                     Optional<RequestConfirmation<ItemKey>> cost) {
+                                     Optional<RequestConfirmation<ItemKey>> cost,
+                                     Optional<BlockPos> door) {
     public TerminalRequestOutcome {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(question, "question");
         Objects.requireNonNull(cost, "cost");
+        door = door == null ? Optional.empty() : door.map(BlockPos::immutable);
         if (result.isPresent() == question.isPresent())
             throw new IllegalArgumentException("exactly one of result and question must be present");
+    }
+
+    /** The form every caller from before M27 builds: a click that delivers here. */
+    public TerminalRequestOutcome(Optional<RequestResult> result, Optional<RequestConfirmation<ItemKey>> question,
+            Optional<RequestConfirmation<ItemKey>> cost) {
+        this(result, question, cost, Optional.empty());
     }
 
     /** The two-field form every caller from before M23 builds: a resolved request or a question, and no cost. */
     public TerminalRequestOutcome(Optional<RequestResult> result, Optional<RequestConfirmation<ItemKey>> question) {
         this(result, question, Optional.empty());
+    }
+
+    /** This outcome, for a click that named {@code door} (M27, ADR-065 D8); empty for one that delivers here. */
+    public TerminalRequestOutcome withDoor(Optional<BlockPos> next) {
+        return new TerminalRequestOutcome(result, question, cost, next);
     }
 
     /** The request was resolved: accepted or refused. */

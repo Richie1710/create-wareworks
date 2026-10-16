@@ -6,6 +6,7 @@ import dev.wareworks.network.TerminalConfirmPayload;
 import dev.wareworks.network.TerminalCraftAnswerPayload;
 import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
+import dev.wareworks.network.TerminalDoorsPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
@@ -57,6 +58,15 @@ public final class TerminalScreenUpdates {
      */
     public static void onConfirm(TerminalConfirmPayload payload) {
         screen(payload.containerId()).ifPresent(screen -> screen.onConfirm(payload));
+    }
+
+    /**
+     * The package doors a click at the open screen may deliver to (M27, issue #18): with every full sync and whenever
+     * one of them, its state or its counts changed. A late payload is dropped like every other one; the next screen is
+     * sent its own.
+     */
+    public static void onDoors(TerminalDoorsPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onDoors(payload));
     }
 
     /**

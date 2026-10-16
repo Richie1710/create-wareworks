@@ -29,10 +29,14 @@ import dev.wareworks.core.warehouse.LocationKind;
  * <ol>
  *   <li><b>RETRIEVE first</b>, for the open requests oldest first. A request's need is its remaining amount minus what
  *       its jobs already cover ({@link ReservationView#committedToRequest}); a covered request is skipped. The output
- *       must be available and accept at least 1 (live). Candidates are the locations holding the key per index,
- *       available and not fully reserved, ranked by travel time crane → source → output. Amount =
- *       {@code min(need, carryLimit, liveExtractable − reservedStock)}. <b>Store filters never restrict retrieval</b>
- *       (§3.1): items already inside a location can always be fetched, even when its filter no longer accepts them.</li>
+ *       must be available and accept at least 1 (live). A <b>warehouse port</b> ({@link PlannerInput#roomBound()}, M27,
+ *       ADR-065) must take the whole trip, or at least one full stack of a larger one, and the trip is bounded by its
+ *       live room, so the crane never waits in front of a port while the world runs. Candidates are the locations
+ *       holding the key per index, available and not fully reserved, ranked by travel time crane → source → output.
+ *       Amount =
+ *       {@code min(need, carryLimit, liveExtractable − reservedStock)}, and for a port also its room. <b>Store filters
+ *       never restrict retrieval</b> (§3.1): items already inside a location can always be fetched, even when its
+ *       filter no longer accepts them.</li>
  *   <li><b>SUPPLY</b> next, for the ingredients open production orders still owe their production stations
  *       ({@code docs/warehouse-system.md} §3.5, ADR-024). Planned exactly like a retrieve — same candidates, same
  *       ranking, same live validation — with the production station as the target and
@@ -495,9 +499,20 @@ public final class JobPlanner<K, L> {
     /**
      * The shared body of {@link #planRetrieve} and {@link #planSupply}: take {@code need} items of {@code key} out of
      * storage and bring them to {@code target}, which must accept at least one item right now.
+     * <p>
+     * <b>A retrieve into a room-bound target</b> ({@link PlannerInput#roomBound()}, a warehouse port; M27, issue #18,
+     * ADR-065) is sized by that room instead: the one live simulation asks for the whole trip rather than for one item,
+     * the trip carries at most what the port takes now, and it is planned only when the port takes the whole trip or
+     * at least one full stack ({@link PlannerInput#stackSize()}) of a larger one. Below that the request reports
+     * {@code fullReason} and is asked again at the next dispatch, while the planner serves younger requests and stores.
+     * Because nothing but this crane puts items into a port and its room can only grow until the drop while the world
+     * runs, a crane planned this way never waits in front of a port. (A trip planned before a restart that lowered the
+     * port's buffer, or a crane saved waiting before M27, is answered at the drop instead: the content layer takes what
+     * the port does not take back into storage.) A terminal and a production station keep the 1-item probe: a craft can
+     * put remainders into a terminal's buffer after the plan, and a supply has its own timeout.
      *
      * @param ownerId    the retrieval request or production ingredient line waiting for the items
-     * @param fullReason the reason to report when {@code target} accepts nothing
+     * @param fullReason the reason to report when {@code target} accepts nothing, or too little for a room-bound trip
      */
     private Optional<PlannedJob<K, L>> planOutOfStorage(PlannerInput<K, L> input, K key, L target, UUID ownerId,
             JobType type, int need, NoJobReason fullReason, Budget budget, Set<NoJobReason> reasons) {
@@ -510,10 +525,20 @@ public final class JobPlanner<K, L> {
             return Optional.empty();
         if (!budget.tryUse())
             return Optional.empty();
-        if (input.liveInsert().simulateInsert(target, key, 1) < 1) {
+        // Asked only for a retrieve, and only after the target was found available: the content layer answers it with
+        // one block entity lookup, which must never reach an unloaded position.
+        boolean bounded = type == JobType.RETRIEVE && input.roomBound().test(target);
+        int room = input.liveInsert().simulateInsert(target, key, bounded ? limit : 1);
+        // The smallest trip worth setting off for: the whole one, or one full stack of a larger one. Without it a port
+        // drained item by item would be served item by item, and requests are planned before storing.
+        int minimum = bounded ? Math.min(limit, Math.max(1, input.stackSize().applyAsInt(key))) : 1;
+        if (room < minimum) {
             reasons.add(fullReason);
             return Optional.empty();
         }
+        // Before the candidates are built, because every candidate carries the limit.
+        if (bounded)
+            limit = Math.min(limit, room);
         RackPosition outputPos = position(target);
         List<Candidate<L>> candidates = new ArrayList<>();
         int order = 0;

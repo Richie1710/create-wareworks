@@ -67,6 +67,7 @@ import dev.wareworks.core.job.RerouteTarget;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.production.FetchPreview;
@@ -224,6 +225,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     protected AisleLetterBehaviour aisleLetter;
 
     private final AisleMembership membership = new AisleMembership();
+    /**
+     * The warehouse's package doors as its terminals' screens list them (M27, issue #18, ADR-065 D9). Transient and
+     * pulled: built only while a terminal screen of this warehouse is open, never saved.
+     */
+    private final DoorDirectory doors = new DoorDirectory(this);
     private final StockIndex<ItemKey, RackPosition> stock = new StockIndex<>(RackPosition.ORDER);
     /**
      * The <b>parallel</b> fluid stock index: fluid key → storage location → millibuckets (M30, issue #21, D10).
@@ -1010,6 +1016,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // A terminal that was placed, broken, turned or whose chunk has just come back may hold a clipboard order the
         // warehouse does not know about yet; one boolean is the whole cost of never missing one (M23, issue #19).
         listTerminalsDirty = true;
+        // And a port that came or went may be a package door: the next screen push lists it (M27, ADR-065 D9).
+        doors.markDirty();
     }
 
     /**
@@ -1060,6 +1068,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     void onPortChanged(RackPosition rack) {
         if (level == null || level.isClientSide || layout == null)
             return;
+        // A port turned out of Request is no package door any more, and one turned into it may be one (M27, ADR-065 D9).
+        doors.markDirty();
         if (membership.kindAt(rack).orElse(null) != LocationKind.OUTPUT) {
             forgetPort(rack);
             return;
@@ -2561,7 +2571,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(scope, "scope");
         if (amount < 1)
             throw new IllegalArgumentException("amount must be at least 1: " + amount);
-        if (level == null || level.isClientSide || isRemoved() || layout == null || !isOutputStation(layout, outputPos))
+        if (level == null || level.isClientSide || isRemoved() || layout == null
+                || !isRequestDestination(layout, outputPos))
             return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
         requests.setMaxOpenRequests(configuredMaxOpenRequests());
         requests.setMaxOpenRequestsPerDestination(Math.max(RequestQueue.MIN_OPEN_REQUESTS,
@@ -2735,20 +2746,59 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return RequestRejection.NOT_IN_STOCK;
     }
 
-    private boolean isOutputStation(WarehouseLayout current, BlockPos pos) {
+    /**
+     * Whether a retrieval request may name {@code pos} as its destination: a loaded, aligned {@link LocationKind#OUTPUT}
+     * member of this warehouse — a warehouse terminal, or a warehouse port that <b>requests</b> (M27, issue #18,
+     * ADR-065). An accepting port must never receive items somebody asked for, and a collecting port takes no delivery
+     * at all ({@code TransferContexts}' collect context refuses every insert), so a request to either would be served into
+     * an export stream or never be served. The direction is read from the block entity itself, never from the
+     * {@link AislePorts} cache, where "not read yet" means the default. One block entity lookup, the same as before the
+     * direction was asked.
+     * <p>
+     * Public since the terminal half of M27: it is the first fact of a package door ({@code PackageDoors}), so the door
+     * check of a click and the controller's own check of the request it then makes are the same rule. An unloaded
+     * position is never a destination here and is refused before any block entity is asked for, so a caller cannot
+     * load a chunk through it. False on a client, without a warehouse and for a removed controller.
+     */
+    public boolean isRequestDestination(BlockPos pos) {
+        WarehouseLayout current = layout;
+        if (pos == null || current == null || level == null || level.isClientSide || isRemoved())
+            return false;
+        return isRequestDestination(current, pos);
+    }
+
+    /**
+     * Server: the package doors of this warehouse as its terminals' screens list them (M27, issue #18, ADR-065 D9).
+     * Built only when a screen's push asks, at most once per {@value DoorDirectory#MAX_AGE_TICKS} ticks plus once per
+     * change a hook reports; never saved.
+     */
+    public DoorDirectory doorDirectory() {
+        return doors;
+    }
+
+    /** {@link #isRequestDestination(BlockPos)} against a given layout: one block entity lookup. */
+    private boolean isRequestDestination(WarehouseLayout current, BlockPos pos) {
         Optional<RackPosition> rack = resolveRack(current, pos);
         if (rack.isEmpty() || !level.isLoaded(pos))
             return false;
         BlockEntity blockEntity = level.getBlockEntity(pos);
-        return blockEntity instanceof WarehouseMember member && !blockEntity.isRemoved()
-                && member.locationKind() == LocationKind.OUTPUT
-                && member.isAlignedWith(current.branch(rack.get().branch()), rack.get().side());
+        if (!(blockEntity instanceof WarehouseMember member) || blockEntity.isRemoved()
+                || member.locationKind() != LocationKind.OUTPUT
+                || !member.isAlignedWith(current.branch(rack.get().branch()), rack.get().side()))
+            return false;
+        return !(blockEntity instanceof WarehouseOutputBlockEntity port)
+                || port.portDirection() == PortDirection.REQUEST;
     }
 
     /**
      * Cancels the requests whose destination is no aligned output of this aisle any more although it is loaded (e.g. an
      * output removed before the controller ticked, so it never became a record), or lies outside the aisle. Requests for
      * unloaded destinations are kept. One block entity lookup per distinct destination.
+     * <p>
+     * A port that is loaded and no longer requests loses its requests here too ({@link #isRequestDestination}, M27,
+     * ADR-065). A wrench or a data command reaches {@link #onPortChanged} at once, but a port turned while this
+     * controller was not loaded, or an old save, can only be caught by this pass, which runs on every relink and every
+     * membership pass.
      *
      * @return whether a request was cancelled
      */
@@ -2762,7 +2812,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             if (!checked.add(destination))
                 continue;
             boolean outside = !current.isRackPosition(destination);
-            if (outside || (level.isLoaded(destination) && !isOutputStation(current, destination)))
+            if (outside || (level.isLoaded(destination) && !isRequestDestination(current, destination)))
                 cancelled |= cancelRequestsFor(destination);
         }
         if (cancelled)
@@ -3047,8 +3097,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * saving the copy with the controller: a maximum must keep capping and a reserve must keep holding back while the
      * keeper sleeps. A position that <b>is</b> loaded and holds no keeper facing this aisle any more loses its rules,
      * because then the keeper really is gone as far as this warehouse is concerned. The alignment test is the same one
-     * {@link #isOutputStation} uses, so a keeper a player turned away from the aisle stops governing at once instead of
-     * being put back by the next edit or chunk load (M15 review fix).
+     * {@link #isRequestDestination} uses, so a keeper a player turned away from the aisle stops governing at once
+     * instead of being put back by the next edit or chunk load (M15 review fix).
      *
      * @return whether the aisle's rule set changed
      */
@@ -4710,6 +4760,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // M19: a changed (or lost) aisle is a changed (or empty) chunk footprint. Deliberately below the early return
         // above: an unchanged layout - which is what every periodic re-link check finds - changes nothing to decide.
         markChunkKeepDirty();
+        // Every door's rack position and address may have changed with it (M27, ADR-065 D9).
+        doors.markDirty();
         if (next == null) {
             WarehouseRegistry.unregister(level, worldPosition);
             // The keepers lose their warehouse, so they stop calling for items. Their world positions come from the
@@ -5027,8 +5079,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             // Until that snapshot runs, the planner must not read the missing filter entry as "accepts everything".
             filters.markUnread(added.position());
         }
-        if (changed)
+        if (changed) {
             setChanged();
+            // The member that joined or left may be a package door, and the hook that marked this pass may have run
+            // before a screen's push read the old records (M27, ADR-065 D9).
+            doors.markDirty();
+        }
     }
 
     private void forgetStorageLocation(RackPosition rack) {

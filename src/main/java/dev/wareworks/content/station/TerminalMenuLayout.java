@@ -38,6 +38,10 @@ package dev.wareworks.content.station;
  * all, because its cells are ghosts ({@code core.crafting.CraftGrid}), so neither the slot order nor a single
  * {@code Slot#x} depends on whether it is folded out. The toggle sits inside the window, in the free column right of
  * the player inventory, and {@link #foldOffset} keeps the wider window on the screen.
+ * <p>
+ * <b>The door button costs no layout either</b> (M27, issue #18, ADR-065). It is the toggle's mirror in the free column
+ * left of the player inventory ({@link #doorButtonX()}/{@link #doorButtonY()}), so choosing where a click delivers
+ * takes neither a grid row nor a production line.
  */
 public final class TerminalMenuLayout {
     /** Edge length of an item cell and of a slot. */
@@ -388,6 +392,25 @@ public final class TerminalMenuLayout {
      * {@code playerSlotsY() - 1}, right under the player inventory's label row.
      */
     public int craftToggleY() {
+        return playerSlotsY() - 1;
+    }
+
+    // --- the door button (M27, issue #18, ADR-065) --------------------------------------------------------------------
+
+    /**
+     * X of the button that chooses where a click delivers: here, or one of the warehouse's package doors. It mirrors
+     * the fold toggle on the other side of the player inventory, in the free column between the left margin (x 7) and
+     * the inventory's first cell (x 33), centred and rounded to the right: x 11. The window has no free row left, and
+     * this column costs none.
+     */
+    public int doorButtonX() {
+        int freeLeft = MARGIN;
+        int freeRight = playerSlotsX() - 1;
+        return freeLeft + (freeRight - freeLeft - SLOT + 1) / 2;
+    }
+
+    /** Top of the door button: level with the inventory's first row of cells, like the fold toggle. */
+    public int doorButtonY() {
         return playerSlotsY() - 1;
     }
 

@@ -60,6 +60,8 @@ final class ScreenInput {
     /** An icon button's own icon, so a run can tell three orders apart by what the button draws. */
     private static final Field BUTTON_ICON = field(IconButton.class, "icon");
     private static final Field TERMINAL_LIST_BUTTON = field(WarehouseTerminalScreen.class, "listButton");
+    /** The button that chooses where a click delivers: here or a package door (M27, issue #18). */
+    private static final Field TERMINAL_DOOR_BUTTON = field(WarehouseTerminalScreen.class, "doorButton");
     private static final Method TERMINAL_CELL_AT = method(WarehouseTerminalScreen.class, "cellAt", double.class,
             double.class);
     private static final Method TERMINAL_ORDER_AT = method(WarehouseTerminalScreen.class, "orderAt", double.class,
@@ -256,6 +258,16 @@ final class ScreenInput {
      */
     static Point terminalSortButton(WarehouseTerminalScreen screen) {
         return terminalButton(screen, TERMINAL_SORT_BUTTON, "sort");
+    }
+
+    /**
+     * The centre of the terminal's <b>door button</b> — the one that chooses where a click delivers, here or a package
+     * door (M27, issue #18) — checked with the widget's own hit test, which also fails while the button is hidden
+     * because the warehouse has no door. The screen takes its clicks and its wheel itself
+     * ({@code WarehouseTerminalScreen#mouseClicked}, {@code #mouseScrolled}), so input here runs a player's branch.
+     */
+    static Point terminalDoorButton(WarehouseTerminalScreen screen) {
+        return terminalButton(screen, TERMINAL_DOOR_BUTTON, "door");
     }
 
     /** The centre of one of the terminal's icon buttons, checked with the widget's own hit test. */

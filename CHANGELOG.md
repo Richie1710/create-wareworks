@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Order goods to a package door from the warehouse terminal.** A warehouse output with a Create Packager at its back
+  is a door, and the sign on the Packager is its name. A new button left of your inventory in the terminal's screen
+  chooses where a click in the stock list delivers: here, or one of the warehouse's doors. Click it for the next door,
+  scroll over it, or right-click it to go back to here; its tooltip lists the doors and says which of them need a look,
+  such as a door without a sign or one whose port is full. While a door is chosen, its name stands in gold in the title
+  row, the item you point at is tinted gold and its tooltip names the door, and a question the terminal asks says where
+  a Yes delivers. The crane carries the goods into the door's port and your Packager boxes them with the sign's
+  address, so Create's belts, chain conveyors and trains take them on. The status line names the door when it takes
+  an order, "Iron Ingot x64 to Base North", and then says what the door is still waiting for. The screen opens on
+  "Here" every time, a door whose Packager carries a Stock Link cannot be chosen, and a door that goes away while it
+  is chosen sends your clicks back here and says so. Clipboard lists and the crafting panel's Fetch still always come
+  to the terminal, and their tooltips say so. Orders to a door share it with the door's own redstone request, because
+  requests have no owner: a door set to *while powered* or *unless powered* does not top itself up while an order to
+  it is open. There is no cancel button for an order to a door: turning the door out of *Request* with a wrench
+  cancels what it waits for, its own request included, and sends what the crane is carrying to it back into storage.
+  In a warehouse with very many outputs the door list looks at no more than 64 of them, in rack order and leaving out
+  accepting and collecting ports, and its tooltip says so when it stopped before the last one. A new Ponder scene on
+  the terminal and the output, **"Delivering to a Package Door"**, shows the whole build
+- **A package door now says when a box has been waiting at its Packager for a while.** A Packager that holds a box makes
+  no other, so a door whose funnel was forgotten, or whose belt stopped, stands still with its port filling up behind
+  it. Once a box has waited in the Packager's tray for ten seconds, the door's entry in the terminal's door list reads
+  "box waiting" in gold, and the door's goggles show the gold line "A box has been waiting at the Packager: is anything
+  taking it?". Ten seconds is longer than a working belt funnel waits for a belt turning at 3 RPM or more, so a door
+  that ships normally does not show it. The door can still be chosen, and both go away as soon as something takes the
+  box
+
+### Changed
+
+- **A crane no longer waits in front of a warehouse port it cannot fill.** It now carries only as much as the port
+  can take at that moment, and sets off once the port has room for the whole trip, or for a full stack of a larger
+  request. While the port is short of room the crane serves the rest of the warehouse, and the remaining items follow
+  as soon as something empties the port. Before, a port that was emptied slowly or not at all, for example one whose
+  Packager was never triggered, could hold the crane with the rest of a trip in its claw until somebody emptied, broke
+  or turned the port. A crane that was already waiting in front of a port when the world was saved, or one carrying a
+  trip that no longer fits because `outputBufferSlots` was lowered, takes what the port does not take back into storage
+  at its next try after the update, and the rest of the request follows once the port has room. A warehouse terminal
+  still keeps the crane waiting with what does not fit, as before
+- **A request only ever goes to a warehouse port that requests.** A request for an accepting or a collecting port is
+  now refused, and a port that was turned away from requesting while its warehouse was not loaded loses its open
+  requests the next time the warehouse checks its layout, as a port turned in a loaded warehouse always did. Before,
+  an accepting port could still be handed the items that had been requested for it, and a collecting port kept a
+  request that nothing could ever serve
+
+### Fixed
+
+- **Scrolling while the terminal asks a question or shows a chain's steps no longer moves anything behind it.** Before,
+  the mouse wheel scrolled the stock list or changed the amount field under the dialog
+
 ## [0.11.1-beta] - 2026-10-16
 
 ### Changed

@@ -3,6 +3,8 @@ package dev.wareworks.content.station;
 import java.util.List;
 import java.util.Optional;
 
+import org.jetbrains.annotations.Nullable;
+
 import com.simibubi.create.content.logistics.filter.FilterItem;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.CenteredSideValueBoxTransform;
@@ -20,6 +22,7 @@ import dev.wareworks.content.storage.AttachedInventoryCache;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.RequestQueue;
+import dev.wareworks.core.port.BoxWait;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
@@ -138,6 +141,14 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
      * and a missing key reads as 0: no migration exists.
      */
     private long collected;
+
+    /**
+     * How long a box has waited at rest at the Packager behind this port, as far as the looks at it can tell (M27,
+     * issue #18, ADR-065 D14; {@link #boxWaitingShown}). Transient on both sides and never saved or synced: a client's
+     * is fed by the goggle tooltip, a server's by the door rows of a terminal's screen, and a block entity loaded anew
+     * starts without one, which only means the next wait is counted from its first look.
+     */
+    private final BoxWait boxWait = new BoxWait();
 
     /**
      * The capability cache of the inventory <b>behind</b> this port ({@code pos − FACING}), the same helper and the same
@@ -596,7 +607,8 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
     /**
      * Client: what a Create <b>Packager</b> behind this port makes of it ({@code docs/warehouse-system.md} §3.2.5, M26,
      * issue #18) — that the goods leave as an addressed package, which address the next box the door sends will carry,
-     * and the one failure of such a door that nothing else in the game diagnoses.
+     * the one failure of such a door that nothing else in the game diagnoses, and (M27) a box that has waited at the
+     * Packager for a while without being taken.
      * <p>
      * <b>Why the port says it at all.</b> Not one line of Wareworks code is in that item path: a Packager whose back
      * touches a port can only pack, because the port's capability is extract-only on every side, and the address is the
@@ -641,6 +653,13 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
                     .forGoggles(tooltip, 2);
         else
             WareworksLang.packageAddress(address.get()).forGoggles(tooltip, 2);
+        // The door that may stand still with a box in its Packager (M27): the funnel was forgotten, or whatever takes
+        // the boxes has stopped, and a Packager that holds a box makes no other. It says how long the box has waited
+        // and asks, because a slow taker that works can wait that long too. Gold, and beside the rows above rather
+        // than instead of them, because it is true however the box was made.
+        if (boxWaitingShown(level.getGameTime()))
+            WareworksLang.translate(WareworksLang.GOGGLES_PORT_BOX_WAITING).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
     }
 
     /**
@@ -662,6 +681,39 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
         if (packager.isEmpty() || PackageHandover.ignoresRedstone(level, packager.get()))
             return Optional.empty();
         return Optional.of(PackageHandover.addressAt(level, packager.get()));
+    }
+
+    /**
+     * Whether a box has waited at the Packager behind this port long enough to say so (M27, issue #18, ADR-065 D14):
+     * the decision both the gold goggle row ({@link #addPackageLines}) and a terminal's door row
+     * ({@code PackageDoors#look}, {@code DoorState.BOX_WAITING}) are drawn from, as a value a test can read — a goggle
+     * tooltip cannot be built outside a client ({@link #packageAddressShown}).
+     * <p>
+     * Every call is a <b>look</b>: it reads which box the Packager holds with its tray at rest
+     * ({@link PackageHandover#restingBox}) and records it in this port's {@link BoxWait}, which answers true once a box
+     * has rested for {@value BoxWait#REPORT_AFTER_TICKS} ticks as far as the looks can tell. So the row needs a later
+     * look at least that much after the first, and a box nobody looks at costs nothing. Beyond finding the Packager
+     * ({@link PackageHandover#packagerFor}) nothing in the world is read but its block entity, and nothing is changed.
+     *
+     * @param now the level's game time
+     * @return false without a Packager, at a collecting port, or until a box has rested long enough
+     */
+    public boolean boxWaitingShown(long now) {
+        BlockPos packager = level == null || portDirection() == PortDirection.COLLECT ? null
+                : PackageHandover.packagerFor(level, worldPosition).orElse(null);
+        return boxWaitsAt(packager, now);
+    }
+
+    /**
+     * {@link #boxWaitingShown} for a caller that has found this port's Packager already ({@code PackageDoors#look}):
+     * the same look, without resolving the Packager a second time.
+     *
+     * @param packagerPos the Packager whose back touches this port, or {@code null} for none
+     */
+    boolean boxWaitsAt(@Nullable BlockPos packagerPos, long now) {
+        ItemStack resting = level == null || packagerPos == null ? null
+                : PackageHandover.restingBox(level, packagerPos);
+        return boxWait.look(now, resting);
     }
 
     /**

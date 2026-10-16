@@ -99,6 +99,15 @@ public abstract class WarehouseStationBlockEntity extends SmartBlockEntity
         return !buffer.isEmpty();
     }
 
+    /**
+     * Whether the buffer has at least one empty slot. A package door with none is one nothing is emptying (M27, issue
+     * #18): its Packager takes everything there is whenever it fires, so nine full slots at a look are a door that does
+     * not fire. Reads the slots in memory and nothing else.
+     */
+    public boolean hasEmptySlot() {
+        return buffer.hasEmptySlot();
+    }
+
     /** Current number of buffer slots (the configured count, or more if a save used more). */
     public int bufferSlots() {
         return buffer.getSlots();

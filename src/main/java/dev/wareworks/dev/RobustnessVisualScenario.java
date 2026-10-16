@@ -15,6 +15,7 @@ import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
+import com.simibubi.create.content.logistics.packager.PackagerBlock;
 
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkTickets;
@@ -24,12 +25,18 @@ import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftOutcome;
 import dev.wareworks.content.station.TerminalCraftResult;
+import dev.wareworks.content.station.TerminalDoorRow;
+import dev.wareworks.content.station.TerminalDoors;
 import dev.wareworks.content.station.TerminalPreferences;
+import dev.wareworks.content.station.TerminalRequestOutcome;
+import dev.wareworks.content.station.WarehouseOutputBlock;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
@@ -50,6 +57,9 @@ import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
+import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.port.DoorState;
+import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.network.TerminalCraftOrderPayload;
@@ -58,6 +68,7 @@ import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -66,6 +77,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
@@ -90,6 +103,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *   <li><b>a craft fetch interrupted twice</b> (issue #24, slice 2, ADR-062) — the player presses Fetch at the
  *       terminal's crafting panel and walks away, and the one order then rides a chunk unload and a save, quit and
  *       rejoin, each in the middle of a crane trip, and still ends with exactly what it asked for in the buffer;</li>
+ *   <li><b>an order to a package door interrupted twice</b> (M27, issue #18, ADR-065) — the player clicks goods to the
+ *       warehouse's package door at the terminal and walks away, and the order rides a chunk unload and a save, quit
+ *       and rejoin, each in the middle of a crane trip to the door, and ends with exactly what was ordered in the
+ *       door's port and nothing in the terminal;</li>
  *   <li><b>blocks broken at defined moments</b> — the controller is broken while the crane carries items, and later the
  *       dock itself, which drops the handling head at the dock.</li>
  * </ol>
@@ -108,7 +125,8 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * item into another all ride the chunk unload, the world reload, the chunk hold and the broken blocks.
  * <p>
  * A <b>warehouse terminal</b> stands beside the input from the start, so every phase carries an output-style member
- * and its buffer as well. Its craft order is <b>saved with the terminal</b> and keeps the crane working with nobody at
+ * and its buffer as well, and so does a <b>package door</b> (M27): a requesting warehouse port across the aisle with a
+ * Create Packager at its back and a sign that names it. Its craft order is <b>saved with the terminal</b> and keeps the crane working with nobody at
  * the screen, so a chunk unload or a world reload in the middle of one is a real risk, and it gets a phase of its own.
  */
 public final class RobustnessVisualScenario implements VisualScenario {
@@ -211,6 +229,18 @@ public final class RobustnessVisualScenario implements VisualScenario {
     /** Trips the fetch must take at least: one cut by the chunk unload, one by the save, and one after the rejoin. */
     private static final int FETCH_MIN_TRIPS = 3;
 
+    /**
+     * The package door of the door order phase (M27, issue #18): a requesting warehouse port opposite the terminal,
+     * before the first storage location, with its Packager one block further out and the sign beside the Packager.
+     */
+    private static final RackPosition DOOR = RackPosition.of(1, 0, Side.LEFT);
+    private static final String DOOR_ADDRESS = "Robustness Door";
+    /** What the door order phase stores and orders out to the door: an item no other phase moves. */
+    private static final ItemKey DOOR_ITEM = ItemKey.of(Items.GLOWSTONE_DUST);
+    /** Three crane trips of one stack with the shipped grabber: one cut by the chunk unload, one by the save. */
+    private static final int DOOR_STACKS = 3;
+    private static final int DOOR_ORDER = DOOR_STACKS * STACK;
+
     /** The order and the two items whose request counts have to survive the save, quit and rejoin (M24, issue #17). */
     private static final TerminalSort PREFERRED_SORT = TerminalSort.USED;
     private static final Item PREFERRED_ITEM = Items.AMETHYST_SHARD;
@@ -246,6 +276,14 @@ public final class RobustnessVisualScenario implements VisualScenario {
 
     private static List<ItemStack> fourthFill() {
         return List.of(new ItemStack(Items.COAL, STACK));
+    }
+
+    /** What the door order phase stores first, so the order has something to take out of the racks. */
+    private static List<ItemStack> doorFill() {
+        List<ItemStack> stacks = new ArrayList<>(DOOR_STACKS);
+        for (int i = 0; i < DOOR_STACKS; i++)
+            stacks.add(DOOR_ITEM.toStack(STACK));
+        return stacks;
     }
 
     /** What the craft fetch phase stores first, so the fetch has something to take out of the racks. */
@@ -290,6 +328,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
      * when the world was saved (save, quit and rejoin).
      */
     private volatile TerminalCraftOrderState fetchBefore = TerminalCraftOrderState.NONE;
+    /** What the door order had delivered into the door's port when the last interruption began. */
+    private volatile int doorDeliveredBefore;
 
     @Override
     public String name() {
@@ -326,6 +366,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         chunkRoundTrip(script);
         saveAndReload(script);
         craftFetch(script);
+        doorOrder(script);
         chunkHold(script);
         brokenBlocks(script);
 
@@ -504,6 +545,72 @@ public final class RobustnessVisualScenario implements VisualScenario {
     }
 
     /**
+     * <b>An order to a package door survives a chunk unload and a save, quit and rejoin</b> (M27, issue #18, ADR-065,
+     * {@code docs/warehouse-system.md} §3.4.6).
+     * <p>
+     * The player stands at the terminal, sees the door in the screen's rows, clicks {@value #DOOR_ORDER} items to it
+     * through the menu's own payload entry and walks away. The order is an ordinary request whose destination is the
+     * door's port: it lives in the controller's request queue and in the crane's job, nothing of it in the terminal. The
+     * phase then flies the camera away while the crane carries the first trip to the door, comes back once the dock and
+     * the controller have really been unloaded, and requires the request read back from the controller's save, with
+     * everything delivered so far in the port; waits for a later trip, saves the world while the crane carries it,
+     * quits, rejoins and requires the same again; and finally requires exactly the ordered items in the door's port,
+     * none in the terminal and none left in the racks. Both censuses are taken after every interruption.
+     * <p>
+     * What it cannot show is a door row that turned grey: the door stands in a chunk next to the controller's, so the
+     * two always unload together, and a reloaded controller starts with no memory of its doors. That rule is the pure
+     * {@code core.port.DoorRows} and is pinned by {@code DoorRowsTest}.
+     */
+    private void doorOrder(VisualScript script) {
+        script.server("robustness: store goods for the door order",
+                        (server, context) -> refill(server, context, doorFill()))
+                .serverUntil("robustness: wait until the door goods are stored", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census before the door order",
+                        (server, context) -> census(server, "the goods for the door order were stored"))
+                .server("robustness: order the goods to the package door at the terminal and walk away",
+                        this::startDoorOrder)
+                .serverUntil("robustness: wait until the crane carries goods to the door", this::craneCarriesToTheDoor,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: remember dock and controller and move the camera far away", (server, context) -> {
+                    doorDeliveredBefore = requireDoorOrderOpen(server, context, "before the camera left").delivered();
+                    dockBeforeUnload = crane(server, context);
+                    controllerBeforeUnload = controller(server, context);
+                    moveAway(server, context);
+                })
+                .serverUntil("robustness: wait until the aisle chunks with the door order really unload",
+                        this::doorOrderUnloaded, UNLOAD_TIMEOUT_TICKS)
+                .waitTicks(UNLOADED_TICKS)
+                .server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded again", this::sceneLoaded, CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the door order was read from the save again", (server, context) -> {
+                    if (controller(server, context) == controllerBeforeUnload)
+                        throw new VisualTestException("the controller block entity was never unloaded and read again");
+                    assertDoorOrderCameBack(server, context, "the chunk round trip");
+                })
+                .server("robustness: census after the chunk round trip during the door order",
+                        (server, context) -> census(server, "chunk unload and reload while an order to a door ran"))
+                .serverUntil("robustness: wait until the crane carries a later trip to the door",
+                        this::craneCarriesLaterDoorTrip, JOB_TIMEOUT_TICKS)
+                .server("robustness: save the world in the middle of the door order", (server, context) -> {
+                    doorDeliveredBefore = requireDoorTripsLeft(server, context);
+                    server.saveEverything(true, true, true);
+                });
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the door order came back after the rejoin",
+                        (server, context) -> assertDoorOrderCameBack(server, context, "the save, quit and rejoin"))
+                .server("robustness: census after save, quit and rejoin during the door order",
+                        (server, context) -> census(server, "save, quit and rejoin while an order to a door ran"))
+                .serverUntil("robustness: wait until the door order finished", this::doorOrderDone, JOB_TIMEOUT_TICKS)
+                .server("robustness: the door holds exactly what was ordered", this::assertDoorDelivered)
+                .server("robustness: census after the door order finished",
+                        (server, context) -> census(server, "the order to a door finished after both interruptions"));
+    }
+
+    /**
      * With chunk loading switched on (M19, issue #10), a job that is running when the player leaves <b>finishes while
      * nobody is anywhere near the aisle</b>, and afterwards the idle aisle lets its chunks go again.
      * <p>
@@ -635,6 +742,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
                 .setValue(WarehouseInputBlock.FACING, layout.sideDirection(INPUT.side()).getOpposite()));
         level.setBlockAndUpdate(layout.rackPos(TERMINAL), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
                 .setValue(WarehouseTerminalBlock.FACING, layout.sideDirection(TERMINAL.side()).getOpposite()));
+        buildDoor(level, layout);
         for (Side side : Side.values()) {
             Direction outward = layout.sideDirection(side);
             for (int x = STORAGE_FIRST_POSITION; x <= RAILS; x++) {
@@ -665,6 +773,24 @@ public final class RobustnessVisualScenario implements VisualScenario {
         }
     }
 
+    /**
+     * The package door (M27): a requesting warehouse port at {@link #DOOR}, a Create Packager one block further out with
+     * its back to the port, and a sign beside the Packager on the side away from the storage locations.
+     */
+    private static void buildDoor(ServerLevel level, BranchLayout layout) {
+        Direction outward = layout.sideDirection(DOOR.side());
+        BlockPos port = layout.rackPos(DOOR);
+        BlockPos packager = port.relative(outward);
+        BlockPos sign = packager.relative(AISLE.getOpposite());
+        level.setBlockAndUpdate(port, WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
+                .setValue(WarehouseOutputBlock.FACING, outward.getOpposite()));
+        level.setBlockAndUpdate(packager, AllBlocks.PACKAGER.getDefaultState().setValue(PackagerBlock.FACING, outward));
+        level.setBlockAndUpdate(sign, Blocks.OAK_SIGN.defaultBlockState());
+        if (!(level.getBlockEntity(sign) instanceof SignBlockEntity board)
+                || !board.setText(new SignText().setMessage(0, Component.literal(DOOR_ADDRESS)), true))
+            throw new VisualTestException("the sign that names the door at " + sign + " could not be written");
+    }
+
     /** Fills the rack bay through its own item capability, the way a funnel or a player's hand would. */
     private void fillBay(ServerLevel level, BlockPos pos) {
         IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
@@ -690,7 +816,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
         return controller != null && crane != null && controller.status() == ControllerStatus.READY
                 && !controller.isMembershipDirty() && controller.pendingSnapshotCount() == 0
                 && controller.storageLocations().size() == storage && controller.inputStations().size() == 1
-                && controller.outputStations().size() == 1 && crane.isControllerLinked()
+                // The terminal and the package door (M27).
+                && controller.outputStations().size() == 2 && crane.isControllerLinked()
                 && crane.aisleLength() == RAILS;
     }
 
@@ -1098,6 +1225,159 @@ public final class RobustnessVisualScenario implements VisualScenario {
             throw new VisualTestException("the craft fetch ended (" + state.state() + ", " + state.delivered() + " of "
                     + state.wanted() + " planks delivered) " + moment);
         return state;
+    }
+
+    // --- the door order (M27, issue #18) -----------------------------------------------------------------------------
+
+    /**
+     * The player clicks {@value #DOOR_ORDER} items to the package door at the terminal and walks away. The screen's own
+     * door rows must name the door, ready and under its sign, before the click — they are what the player chooses from
+     * — and the click goes through the menu's payload entry with the door's position and nothing else, as the screen's
+     * packet arrives. The screen is closed again in the same tick: the order has to run on with nobody at the terminal.
+     */
+    private void startDoorOrder(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminal(server, context);
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        BlockPos door = doorPos(context);
+        long stocked = controller.stockIndex().count(DOOR_ITEM);
+        if (stocked != DOOR_ORDER || !controller.requestsFor(door).isEmpty())
+            throw new VisualTestException("the racks must hold " + DOOR_ORDER + " " + DOOR_ITEM + " and nothing may be on "
+                    + "its way to the door before the order, but they hold " + stocked + " and the door waits for "
+                    + controller.requestsFor(door));
+        int carry = InventoryGrabber.carryLimitFor(DOOR_ITEM);
+        if (DOOR_ORDER <= 2 * carry)
+            throw new VisualTestException("an order of " + DOOR_ORDER + " takes fewer than three crane trips of " + carry
+                    + ", so it cannot be interrupted twice; this phase assumes the shipped grabber limits");
+
+        ServerPlayer player = context.serverPlayer(server);
+        BlockPos at = layout(context.origin()).rackPos(TERMINAL);
+        teleport(server, context, at.getX() + 0.5, at.getY() + 1.0, at.getZ() + 0.5);
+        if (!terminal.openScreen(player) || !(player.containerMenu instanceof WarehouseTerminalMenu menu))
+            throw new VisualTestException("the terminal screen could not be opened for the camera player");
+        TerminalDoors rows = terminal.doorRows();
+        Optional<TerminalRequestOutcome> answer = WarehouseTerminalMenu.submitRequest(player, menu.containerId,
+                DOOR_ITEM, DOOR_ORDER, RequestAcknowledgement.NONE, Optional.of(door));
+        player.closeContainer();
+        moveToBuildSite(server, context);
+
+        if (rows.rows().size() != 1)
+            throw new VisualTestException("the terminal lists " + rows + " instead of the one package door");
+        TerminalDoorRow row = rows.rows().getFirst();
+        if (!row.pos().equals(door) || row.state() != DoorState.READY || !row.label().equals(DOOR_ADDRESS))
+            throw new VisualTestException("the door row is " + row + " instead of a ready door named " + DOOR_ADDRESS);
+        TerminalRequestOutcome outcome = answer.orElseThrow(
+                () -> new VisualTestException("the terminal menu dropped the click to the door"));
+        RequestResult result = outcome.result().orElseThrow(
+                () -> new VisualTestException("the click to the door asked a question: " + outcome.question()));
+        if (!result.isAccepted() || result.granted() != DOOR_ORDER || !outcome.door().equals(Optional.of(door)))
+            throw new VisualTestException("the click to the door answered " + result + " for " + outcome.door()
+                    + " instead of " + DOOR_ORDER + " for " + door);
+        LOGGER.info(PREFIX + "robustness: the door order started: {} x {} to the door '{}' at {} ({}), {} per crane "
+                + "trip; the player left the terminal", DOOR_ORDER, DOOR_ITEM, row.label(), door, row.rackAddress(),
+                carry);
+    }
+
+    /** The crane carries goods of the door order to the door. Fails once the order is no longer open. */
+    private boolean craneCarriesToTheDoor(MinecraftServer server, VisualContext context) {
+        requireDoorOrderOpen(server, context, "before the crane was seen carrying goods for it");
+        StackerCraneBlockEntity crane = crane(server, context);
+        return crane.heldItems().count(DOOR_ITEM) > 0
+                && crane.currentJob().map(job -> job.target().equals(DOOR)).orElse(false);
+    }
+
+    /** The crane carries a trip <b>after</b> the one the chunk unload cut, so the save cuts a different one. */
+    private boolean craneCarriesLaterDoorTrip(MinecraftServer server, VisualContext context) {
+        RetrievalRequest<ItemKey, BlockPos> request = requireDoorOrderOpen(server, context,
+                "before a later trip could be cut by the save");
+        return request.delivered() > doorDeliveredBefore && craneCarriesToTheDoor(server, context);
+    }
+
+    /** Dock and controller were really unloaded, and so was the door: the whole order is on disk. */
+    private boolean doorOrderUnloaded(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controllerBeforeUnload;
+        ServerLevel level = server.overworld();
+        return dockUnloaded(server, context) && controller != null && controller.isRemoved()
+                && !level.isLoaded(controller.getBlockPos()) && !level.isLoaded(doorPos(context));
+    }
+
+    /**
+     * After an interruption the request to the door is the one that was saved: still open for the whole order, with
+     * nothing delivered forgotten, and every item it counts as delivered really in the door's port — and none of it in
+     * the terminal.
+     */
+    private void assertDoorOrderCameBack(MinecraftServer server, VisualContext context, String after) {
+        RetrievalRequest<ItemKey, BlockPos> request = requireDoorOrderOpen(server, context, "after " + after);
+        if (request.requested() != DOOR_ORDER || request.delivered() < doorDeliveredBefore)
+            throw new VisualTestException("the door order came back as " + request + " after " + after + ", with "
+                    + doorDeliveredBefore + " delivered before");
+        long inPort = port(server, context).bufferedItems().count(DOOR_ITEM);
+        if (inPort != request.delivered())
+            throw new VisualTestException("the door's port holds " + inPort + " but the request counts "
+                    + request.delivered() + " as delivered after " + after);
+        if (terminal(server, context).bufferedItems().count(DOOR_ITEM) != 0)
+            throw new VisualTestException("goods ordered to the door reached the terminal");
+        LOGGER.info(PREFIX + "robustness: PASS the door order came back after {}: {} of {} delivered into the door "
+                + "({} before)", after, request.delivered(), request.requested(), doorDeliveredBefore);
+    }
+
+    /**
+     * Right before the save: the crane carries goods to the door, and the order still needs more than those, so after
+     * the rejoin it has to go on with a request read back from disk, not only finish a trip.
+     *
+     * @return what the order had delivered when the world was saved
+     */
+    private int requireDoorTripsLeft(MinecraftServer server, VisualContext context) {
+        RetrievalRequest<ItemKey, BlockPos> request = requireDoorOrderOpen(server, context, "before the save");
+        int held = crane(server, context).heldItems().count(DOOR_ITEM);
+        if (held <= 0 || request.remaining() <= held)
+            throw new VisualTestException("the save would not interrupt the door order: the crane holds " + held
+                    + " and the order still waits for " + request.remaining());
+        LOGGER.info(PREFIX + "robustness: saving while the crane carries {} to the door ({} of {} delivered)", held,
+                request.delivered(), request.requested());
+        return request.delivered();
+    }
+
+    /** No request to the door is left and the crane has come to rest. */
+    private boolean doorOrderDone(MinecraftServer server, VisualContext context) {
+        return controller(server, context).requestsFor(doorPos(context)).isEmpty() && craneIdleAndEmpty(server, context);
+    }
+
+    /** The door's port holds exactly the order and nothing else, the terminal none of it and the racks none either. */
+    private void assertDoorDelivered(MinecraftServer server, VisualContext context) {
+        WarehouseOutputBlockEntity port = port(server, context);
+        long inPort = port.bufferedItems().count(DOOR_ITEM);
+        if (inPort != DOOR_ORDER || !port.bufferedItems().keys().equals(Set.of(DOOR_ITEM)))
+            throw new VisualTestException("the door's port holds " + inPort + " " + DOOR_ITEM + " and "
+                    + port.bufferedItems().keys() + " instead of exactly " + DOOR_ORDER);
+        if (terminal(server, context).bufferedItems().count(DOOR_ITEM) != 0)
+            throw new VisualTestException("goods ordered to the door reached the terminal");
+        long left = controller(server, context).stockIndex().count(DOOR_ITEM);
+        if (left != 0)
+            throw new VisualTestException("the racks still hold " + left + " " + DOOR_ITEM + " after the door order");
+        LOGGER.info(PREFIX + "robustness: PASS the door order ended with exactly {} in the door's port, none in the "
+                + "terminal and none in the racks", inPort);
+    }
+
+    /** The one open request to the door; fails naming {@code moment} when there is none, or more than one. */
+    private RetrievalRequest<ItemKey, BlockPos> requireDoorOrderOpen(MinecraftServer server, VisualContext context,
+            String moment) {
+        List<RetrievalRequest<ItemKey, BlockPos>> requests = controller(server, context).requestsFor(doorPos(context));
+        if (requests.size() != 1 || !requests.getFirst().key().equals(DOOR_ITEM))
+            throw new VisualTestException("the door order is not the one open request to the door " + moment + ": "
+                    + requests);
+        return requests.getFirst();
+    }
+
+    private static BlockPos doorPos(VisualContext context) {
+        return layout(context.origin()).rackPos(DOOR);
+    }
+
+    private static WarehouseOutputBlockEntity port(MinecraftServer server, VisualContext context) {
+        WarehouseOutputBlockEntity port = WareworksBlockEntityTypes.WAREHOUSE_OUTPUT.getNullable(server.overworld(),
+                doorPos(context));
+        if (port == null)
+            throw new VisualTestException("the package door's port at " + doorPos(context) + " is gone");
+        return port;
     }
 
     // --- helpers -----------------------------------------------------------------------------------------------------

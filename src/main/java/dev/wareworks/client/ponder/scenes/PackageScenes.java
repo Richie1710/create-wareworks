@@ -10,14 +10,17 @@ import com.simibubi.create.content.logistics.packager.PackagerBlock;
 import com.simibubi.create.content.logistics.packager.PackagerBlockEntity;
 import com.simibubi.create.content.redstone.DirectedDirectionalBlock;
 import com.simibubi.create.content.redstone.smartObserver.SmartObserverBlockEntity;
+import com.simibubi.create.foundation.gui.AllIcons;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.content.station.RequestFilterBehaviour;
+import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.port.PortRedstone;
+import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
 import net.createmod.ponder.api.scene.SceneBuildingUtil;
@@ -29,15 +32,18 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.FaceAttachedHorizontalDirectionalBlock;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.block.state.properties.AttachFace;
 
 /**
- * The Ponder scene of a <b>package door</b> ({@code docs/warehouse-system.md} §3.2.5, M26, issue #18): a Create
+ * The Ponder scenes of a <b>package door</b> ({@code docs/warehouse-system.md} §3.2.5, M26, issue #18): a Create
  * Packager whose back touches a warehouse port packs what the warehouse hands over and writes the address off a plain
- * vanilla sign, and one whose back touches a warehouse input takes arriving packages apart.
+ * vanilla sign, and one whose back touches a warehouse input takes arriving packages apart. The second scene,
+ * {@link #orderingToADoor}, is the terminal's half of the door (M27, issue #18 second half, ADR-065): choosing the door
+ * a click delivers to.
  * <p>
  * <b>Why this scene exists at all.</b> Both directions already work with no Wareworks code in the item path — they are
  * two mods fitting together — and until this scene nothing in the game said so. There is no new block to find, no new
@@ -107,6 +113,11 @@ public final class PackageScenes {
     private static final String FILTER_AMOUNT = "FilterAmount";
     /** Sign rotation that turns the written face towards the plate's fixed camera (north-west, 135°). */
     private static final int SIGN_FACING = 6;
+
+    /** How long a control icon on the terminal's screen stays up; the {@code TerminalScenes} value. */
+    private static final int CONTROL_TICKS = 40;
+    /** Ticks between a control icon appearing and the change it stands for; the {@code TerminalScenes} value. */
+    private static final int CLICK_LEAD = 7;
 
     private PackageScenes() {
     }
@@ -350,6 +361,239 @@ public final class PackageScenes {
         scene.idle(SHORT_IDLE);
 
         scene.markAsFinished();
+    }
+
+    /**
+     * Ordering to a door at the terminal (M27, issue #18 second half, ADR-065): a requesting port with a Packager at its
+     * back is a door, named by its sign; the terminal's door button chooses where a click delivers; the crane fills the
+     * door and the player's own redstone sends the box; clipboard lists and fetched ingredients always come to the
+     * terminal, and every new screen starts on Here; a Stock Link takes a door out of the choice.
+     * <p>
+     * <b>The screen is represented, not opened</b>, for the reason {@link TerminalScenes} gives: a {@code PonderLevel}
+     * has no {@code ServerPlayer} to open a menu for. The door button is drawn as its own icon
+     * ({@code AllIcons.I_SEND_ONLY}) in a control bubble on the terminal's screen, choosing a door as a click with a
+     * Packager in the bubble, and the chosen door as a gold ({@link PonderPalette#OUTPUT}) line from the terminal to the
+     * door, the colour the screen gives a chosen door.
+     * <p>
+     * <b>Both stations stand on the LEFT plane</b>, the one in front ({@link #packagesAtTheDoor} says why): the Packager
+     * is the frontmost block of the door, and the terminal's screen is on its north face (display
+     * {@link TerminalDisplaySide#BACK}, the face opposite its intake), which the camera draws. The terminal stands at
+     * position 1, in front of the dock column, and the door at position 4, straight across from the rack the iron comes
+     * out of, so the trip is one turn of the arm. The Stock Link of the last beat hangs on the Packager's west face,
+     * towards the camera: Create's {@code PackagerBlockEntity#getLinkPos} takes a link on any side whose connected
+     * direction points away from the Packager, which for a link on a wall is its {@code FACING}. So the Smart Observer's
+     * wire on top stays where the beat before put it.
+     * <p>
+     * A new scene rather than beats added to {@link #packagesAtTheDoor}: inserting a text into a shipped scene renumbers
+     * every later {@code text_n} key in both lang files (ADR-016), and this one needs a terminal, which that stage has
+     * no room for.
+     */
+    public static void orderingToADoor(SceneBuilder builder, SceneBuildingUtil util) {
+        CreateSceneBuilder scene = new CreateSceneBuilder(builder);
+        scene.title("warehouse_ordering_to_a_door", "Delivering to a Package Door");
+
+        PonderAisle aisle = PonderAisle.WIDE;
+        scene.configureBasePlate(0, 0, aisle.plateSize());
+        scene.scaleSceneView(0.9f);
+
+        int terminalPosition = 1;
+        int doorPosition = 4;
+        int firstRack = 3;
+        int sourcePosition = 4;
+        int lastRack = 5;
+
+        BlockPos dock = aisle.dock(util);
+        BlockPos terminal = aisle.rack(util, terminalPosition, 0, Side.LEFT);
+        BlockPos port = aisle.rack(util, doorPosition, 0, Side.LEFT);
+        BlockPos packager = aisle.inventory(util, doorPosition, 0, Side.LEFT);
+        BlockPos observer = port.above();
+        BlockPos wire = packager.above();
+        // Away from the terminal, as in the scene before: the sign is read off the Packager it stands beside.
+        BlockPos sign = packager.relative(PonderAisle.AISLE);
+        Direction linkSide = PonderAisle.AISLE.getOpposite();
+        BlockPos link = packager.relative(linkSide);
+
+        ItemStack box = addressedBox(OUT_ADDRESS, new ItemStack(Items.IRON_INGOT, REQUEST_AMOUNT));
+
+        // --- the stage ------------------------------------------------------------------------------------------------
+        aisle.placeAisle(scene, util);
+        for (int position = firstRack; position <= lastRack; position++)
+            aisle.placeStorage(scene, util, position, 0, Side.RIGHT);
+        aisle.placeTerminal(scene, util, terminalPosition, 0, Side.LEFT, TerminalDisplaySide.BACK);
+        // A requesting port with nothing set on it asks for nothing by itself, so every trip into it is a click's.
+        aisle.placeOutput(scene, util, doorPosition, 0, Side.LEFT);
+        scene.world().setBlock(packager, AllBlocks.PACKAGER.getDefaultState()
+                .setValue(PackagerBlock.FACING, PonderAisle.outward(Side.LEFT)), false);
+        // The redstone of the scene before: a Smart Observer looking down into the port, and a wire to the Packager.
+        scene.world().setBlock(observer, AllBlocks.SMART_OBSERVER.getDefaultState()
+                .setValue(DirectedDirectionalBlock.TARGET, AttachFace.FLOOR)
+                .setValue(DirectedDirectionalBlock.FACING, PonderAisle.AISLE), false);
+        scene.world().setBlock(wire, Blocks.REDSTONE_WIRE.defaultBlockState(), false);
+        scene.world().setBlock(sign, Blocks.OAK_SIGN.defaultBlockState()
+                .setValue(StandingSignBlock.ROTATION, SIGN_FACING), false);
+        writeSign(scene, sign, OUT_ADDRESS);
+        // Hidden until the last beat. The Packager's LINKED state is not derived in a PonderLevel (its lazyTick returns
+        // on a client level before recheckIfLinksPresent), so the beat sets it itself, as Create's own scenes do.
+        scene.world().setBlock(link, AllBlocks.STOCK_LINK.getDefaultState()
+                .setValue(FaceAttachedHorizontalDirectionalBlock.FACE, AttachFace.WALL)
+                .setValue(FaceAttachedHorizontalDirectionalBlock.FACING, linkSide), false);
+        scene.world().setKineticSpeed(util.select().everywhere(), CraneScript.PONDER_RPM);
+
+        Selection aisleLine = util.select().fromTo(aisle.dockX() - 1, PonderAisle.FLOOR_Y, aisle.aisleZ(),
+                aisle.lastRailX(), PonderAisle.FLOOR_Y, aisle.aisleZ());
+        Selection racks = util.select().fromTo(aisle.dockX() + firstRack, PonderAisle.FLOOR_Y, aisle.aisleZ() + 1,
+                aisle.dockX() + lastRack, PonderAisle.FLOOR_Y, aisle.aisleZ() + 2);
+        Selection signal = util.select().position(observer).add(util.select().position(wire))
+                .add(util.select().position(packager));
+
+        scene.showBasePlate();
+        scene.idle(10);
+        scene.world().showSection(aisleLine, Direction.DOWN);
+        scene.world().showSection(racks, Direction.DOWN);
+        scene.idle(FADE_IDLE + 5);
+        scene.world().showSection(util.select().position(port), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.world().showSection(util.select().position(packager), Direction.NORTH);
+        scene.idle(FADE_IDLE);
+
+        // --- 1. what a door is ----------------------------------------------------------------------------------------
+        scene.overlay().showOutline(PonderPalette.OUTPUT, "door", door(util, port, packager), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A requesting Warehouse Output with a Create Packager at its back is a package door")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(packager, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 2. its name ----------------------------------------------------------------------------------------------
+        scene.world().showSection(util.select().position(sign), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("The sign on the Packager names the door, and is the address on every box it sends")
+                .attachKeyFrame()
+                .colored(PonderPalette.BLUE)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(sign, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 3. the terminal's door button ----------------------------------------------------------------------------
+        scene.world().showSection(util.select().position(terminal), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showControls(util.vector().blockSurface(terminal, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .showing(AllIcons.I_SEND_ONLY);
+        scene.idle(CLICK_LEAD);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("In the terminal's screen, a button left of your inventory chooses where a click delivers")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 4. a door chosen -----------------------------------------------------------------------------------------
+        scene.overlay().showControls(util.vector().blockSurface(terminal, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .leftClick()
+                .withItem(AllBlocks.PACKAGER.asStack());
+        scene.idle(CLICK_LEAD);
+        // Along the empty positions 2 and 3 of the plane, so the line is drawn over nothing.
+        scene.overlay().showLine(PonderPalette.OUTPUT, util.vector().centerOf(terminal), util.vector().centerOf(port),
+                TEXT_TICKS);
+        scene.overlay().showOutline(PonderPalette.OUTPUT, "door", door(util, port, packager), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Click it for the next door: its name turns gold, and a click on an item now goes there")
+                .attachKeyFrame()
+                .colored(PonderPalette.OUTPUT)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 5. the crane fills the door ------------------------------------------------------------------------------
+        CraneScript crane = CraneScript.parkedAt(scene, dock);
+        scene.overlay().showControls(util.vector().blockSurface(terminal, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .leftClick()
+                .withItem(new ItemStack(Items.IRON_INGOT));
+        scene.idle(CLICK_LEAD);
+        // Shown for TEXT_TICKS while the trip under it idles far longer, so it is gone before the next caption.
+        scene.overlay().showText(TEXT_TICKS)
+                .text("The crane carries the goods into the door, never more than its port can take")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(port, PORT_FRONT));
+        deliver(scene, crane, sourcePosition, doorPosition, port);
+
+        // --- 6. the player's redstone sends the box -------------------------------------------------------------------
+        scene.world().showSection(util.select().position(observer).add(util.select().position(wire)), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Your own redstone fires the Packager, and the box leaves with the sign's address")
+                .attachKeyFrame()
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(observer, PORT_FRONT));
+        scene.idle(SIGNAL_LEAD);
+        scene.world().toggleRedstonePower(signal);
+        scene.effects().indicateRedstone(observer);
+        scene.idle(SIGNAL_LEAD);
+        packBox(scene, packager, box);
+        // The caption's own TEXT_IDLE in all, and longer than the tray's CYCLE, so the box is seen at rest.
+        scene.idle(TEXT_IDLE - 2 * SIGNAL_LEAD);
+        // Something behind the door took the box, which is the player's build and not this scene's.
+        clearBox(scene, packager);
+        scene.world().toggleRedstonePower(signal);
+        scene.idle(FADE_IDLE);
+
+        // --- 7. what always comes to the terminal ---------------------------------------------------------------------
+        scene.overlay().showOutline(PonderPalette.INPUT, "here", util.select().position(terminal), TEXT_TICKS);
+        scene.overlay().showControls(util.vector().blockSurface(terminal, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .leftClick()
+                .withItem(AllBlocks.CLIPBOARD.asStack());
+        scene.idle(CLICK_LEAD);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Clipboard lists and the ingredients the crafting grid fetches always come to the terminal")
+                .attachKeyFrame()
+                .colored(PonderPalette.INPUT)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 8. Here on every open ------------------------------------------------------------------------------------
+        scene.overlay().showControls(util.vector().blockSurface(terminal, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .rightClick();
+        scene.idle(CLICK_LEAD);
+        scene.effects().indicateSuccess(terminal);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Each time the screen opens it starts on Here again, so clicks come to the terminal")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 9. a Stock Link takes the door out of the choice ---------------------------------------------------------
+        // The link on a wall is a small plate low on the Packager's side, so the item itself is shown over it as well.
+        scene.overlay().showControls(util.vector().topOf(link), Pointing.DOWN, CONTROL_TICKS)
+                .rightClick()
+                .withItem(AllBlocks.STOCK_LINK.asStack());
+        scene.idle(CLICK_LEAD);
+        scene.world().showSection(util.select().position(link), PonderAisle.AISLE);
+        scene.idle(FADE_IDLE);
+        scene.world().cycleBlockProperty(packager, PackagerBlock.LINKED);
+        scene.overlay().showLine(PonderPalette.RED, util.vector().centerOf(terminal), util.vector().centerOf(port),
+                TEXT_TICKS);
+        scene.overlay().showOutline(PonderPalette.RED, "linked",
+                door(util, port, packager).add(util.select().position(link)), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A Stock Link on the Packager makes it ignore redstone: the door is red and cannot be chosen")
+                .attachKeyFrame()
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(link, linkSide));
+        scene.idle(TEXT_IDLE);
+
+        scene.markAsFinished();
+    }
+
+    /** A fresh selection of a door's port and Packager; {@code Selection#add} grows the selection it is called on. */
+    private static Selection door(SceneBuildingUtil util, BlockPos port, BlockPos packager) {
+        return util.select().position(port).add(util.select().position(packager));
     }
 
     // --- the two crane trips -----------------------------------------------------------------------------------------

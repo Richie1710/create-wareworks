@@ -1,10 +1,12 @@
 package dev.wareworks.network;
 
 import java.util.Objects;
+import java.util.Optional;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -24,13 +26,22 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * with {@link TerminalConfirmPayload} instead. {@link RequestAcknowledgement#ANY} is what a ctrl-click sends, which the
  * design makes the way to skip the question; it unlocks nothing, because a reserve never holds items back from the
  * player at the terminal in the first place ({@code core.stock.StockAccess}).
+ * <p>
+ * <b>The door is a position and nothing else</b> (M27, issue #18, ADR-065 D2): the package door the click delivers to,
+ * or none for here. No address is ever sent — the payload has no text field at all — and the server checks the
+ * position against the terminal's own warehouse after reach, amount and controller and before the stock is looked at
+ * ({@code WarehouseTerminalBlockEntity#requestFromTerminal}), so a hostile one from a player who may use the terminal
+ * is answered "not a package door of this warehouse" and the world is read at it no further. Only a click on a stock
+ * cell carries one; the crafting panel's Fetch, a recipe viewer's lay and a clipboard order have payloads of their own
+ * without it, so they always come here.
  *
  * @param containerId  the menu the player has open
  * @param key          the item the screen offered
  * @param amount       how much the player asked for
+ * @param door         the package door to deliver to; empty for here
  * @param acknowledged what the player accepted, {@link RequestAcknowledgement#NONE} for a plain first click
  */
-public record TerminalRequestPayload(int containerId, ItemKey key, int amount,
+public record TerminalRequestPayload(int containerId, ItemKey key, int amount, Optional<BlockPos> door,
                                      RequestAcknowledgement acknowledged) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<TerminalRequestPayload> TYPE =
             new CustomPacketPayload.Type<>(Wareworks.asResource("terminal_request"));
@@ -47,30 +58,40 @@ public record TerminalRequestPayload(int containerId, ItemKey key, int amount,
 
     public TerminalRequestPayload {
         Objects.requireNonNull(key, "key");
+        door = door == null ? Optional.empty() : door.map(BlockPos::immutable);
         if (acknowledged == null)
             acknowledged = RequestAcknowledgement.NONE;
     }
 
-    /** A plain request, i.e. one the player has agreed to nothing for yet. */
+    /** A request to here with what the player accepted for it: every shape this payload had before M27. */
+    public TerminalRequestPayload(int containerId, ItemKey key, int amount, RequestAcknowledgement acknowledged) {
+        this(containerId, key, amount, Optional.empty(), acknowledged);
+    }
+
+    /** A plain request to here, i.e. one the player has agreed to nothing for yet. */
     public TerminalRequestPayload(int containerId, ItemKey key, int amount) {
         this(containerId, key, amount, RequestAcknowledgement.NONE);
     }
 
     private TerminalRequestPayload(RegistryFriendlyByteBuf buffer) {
         this(buffer.readVarInt(), ItemKey.STREAM_CODEC.decode(buffer), buffer.readVarInt(),
-                readAcknowledgement(buffer));
+                buffer.readOptional(in -> in.readBlockPos()), readAcknowledgement(buffer));
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
         buffer.writeVarInt(containerId);
         ItemKey.STREAM_CODEC.encode(buffer, key);
         buffer.writeVarInt(amount);
+        // Before the acknowledgement, so the acknowledgement stays the last field and its unknown-tag rule still holds
+        // (M27): an absent door is one zero byte.
+        buffer.writeOptional(door, (out, pos) -> out.writeBlockPos(pos));
         writeAcknowledgement(buffer, acknowledged);
     }
 
     /**
-     * The acknowledgement as one tag and, only when it names amounts, the three numbers. A plain click — the payload
-     * every request without stock keepers is — therefore costs a single zero byte.
+     * The acknowledgement as one tag and, only when it names amounts, the three numbers. A plain click to here — the
+     * payload every request without stock keepers and doors is — therefore ends in two zero bytes, the absent door's and
+     * this one.
      */
     private static void writeAcknowledgement(RegistryFriendlyByteBuf buffer, RequestAcknowledgement acknowledged) {
         if (acknowledged.any()) {

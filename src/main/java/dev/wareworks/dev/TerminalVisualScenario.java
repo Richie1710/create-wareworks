@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import org.jetbrains.annotations.Nullable;
@@ -20,6 +21,7 @@ import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
+import com.simibubi.create.content.logistics.packager.PackagerBlock;
 
 import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
@@ -36,9 +38,12 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalCraftResult;
+import dev.wareworks.content.station.TerminalDoorRow;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalPreferences;
+import dev.wareworks.content.station.WarehouseOutputBlock;
+import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
@@ -52,6 +57,7 @@ import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
@@ -83,6 +89,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.StandingSignBlock;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
@@ -107,6 +116,14 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * world is saved, left and opened again ({@link #reloadSteps}), and the terminal has to come back in the order this
  * player chose, with the counts behind it.
  * <p>
+ * Last of all it chooses a <b>package door</b> with the screen's door button (M27, issue #18, {@link #doorSteps}): a
+ * requesting port across the aisle with a Create Packager at its back and a sign naming it. Real clicks, a right-click
+ * and the wheel on the button; the gold cues on the title row and the stock cells; the choice kept through a fold of the
+ * crafting panel and a re-layout; a door click that raises a question, which names the door and which the wheel cannot
+ * change; a door click the server answers, delivered into the door's port and not into the terminal; the standing line
+ * about the door while its request waits; "here" again on the next screen; and the choice falling back to here when the
+ * Packager is broken.
+ * <p>
  * The camera stands inside the aisle, about two blocks from the terminal: a screen closes itself as soon as the player
  * leaves the vanilla container range, so the shots also prove that the menu stays open while the crane works. The second
  * render pass only opens the screen once and takes a single shot, because a GUI does not depend on Flywheel.
@@ -125,6 +142,23 @@ public final class TerminalVisualScenario implements VisualScenario {
     private static final RackPosition PRODUCTION = RackPosition.of(2, 0, Side.RIGHT);
     /** The stock keeper above the terminal: what puts rule badges into the terminal's grid (M15, issue #3). */
     private static final RackPosition KEEPER = RackPosition.of(1, 1, Side.RIGHT);
+    /**
+     * The package door (M27, issue #18): a requesting port across the aisle from the production station, with a Create
+     * Packager at its back and a sign beside the Packager. Nothing triggers the Packager, so whatever the crane brings
+     * stays in the port, where the run can count it.
+     */
+    private static final RackPosition DOOR = RackPosition.of(2, 0, Side.LEFT);
+    /** What the door's sign says, and so what the screen calls the door. */
+    private static final String DOOR_ADDRESS = "Base North";
+    /** The terminal and the door: the output stations the controller records. */
+    private static final int OUTPUT_STATIONS = 2;
+    /** What the door's last click asks for, while the crane stands still, so the request waits on screen. */
+    private static final ItemKey DOOR_ITEM = ItemKey.of(Items.COBBLESTONE);
+    private static final String DOOR_ITEM_SEARCH = "cobble";
+    /** A search that keeps the item whose last items are all reserved, so a click on it raises a question. */
+    private static final String RESERVED_SEARCH = "emerald";
+    /** How long a door's answer stays in the status row, and a little more: then the standing line has the row. */
+    private static final int FEEDBACK_GONE_TICKS = 120;
     private static final int STORAGE_FIRST_POSITION = 3;
     private static final int STORAGE_LEVELS = 2;
     private static final int CLEAR_MARGIN = 3;
@@ -450,6 +484,7 @@ public final class TerminalVisualScenario implements VisualScenario {
             usageSteps(script);
             sortSteps(script);
             reloadSteps(script);
+            doorSteps(script);
         }
         script.client("terminal: close the screen", TerminalVisualScenario::closeScreen)
                 .until("terminal: wait until the screen is closed", context -> context.minecraft().screen == null,
@@ -531,6 +566,42 @@ public final class TerminalVisualScenario implements VisualScenario {
         }
         if (next < STOCK.size())
             throw new VisualTestException("only " + next + " of " + STOCK.size() + " item types fit into the racks");
+        buildDoor(level, dock);
+    }
+
+    /**
+     * The package door (M27, issue #18): a requesting port, a Create Packager whose back touches it — its target
+     * inventory is the block at {@code packagerPos - FACING} ({@code PackageHandover}), so FACING points away from the
+     * port — and a vanilla sign beside the Packager on the ground. Nothing powers the Packager.
+     */
+    private static void buildDoor(ServerLevel level, BlockPos dock) {
+        BranchLayout layout = layout(dock);
+        Direction outward = layout.sideDirection(DOOR.side());
+        BlockPos port = layout.rackPos(DOOR);
+        level.setBlockAndUpdate(port, WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
+                .setValue(WarehouseOutputBlock.FACING, outward.getOpposite()));
+        level.setBlockAndUpdate(packagerPos(dock),
+                AllBlocks.PACKAGER.getDefaultState().setValue(PackagerBlock.FACING, outward));
+        BlockPos sign = packagerPos(dock).relative(AISLE.getOpposite());
+        level.setBlockAndUpdate(sign, Blocks.OAK_SIGN.defaultBlockState().setValue(StandingSignBlock.ROTATION, 0));
+        if (!(level.getBlockEntity(sign) instanceof SignBlockEntity entity)
+                || !entity.setText(new SignText().setMessage(0, Component.literal(DOOR_ADDRESS)), true))
+            throw new VisualTestException("the door's sign at " + sign + " did not take its text");
+    }
+
+    private static BlockPos doorPos(BlockPos dock) {
+        return layout(dock).rackPos(DOOR);
+    }
+
+    private static BlockPos packagerPos(BlockPos dock) {
+        return doorPos(dock).relative(layout(dock).sideDirection(DOOR.side()));
+    }
+
+    private static WarehouseOutputBlockEntity doorPort(ServerLevel level, BlockPos dock) {
+        WarehouseOutputBlockEntity port = WareworksBlockEntityTypes.WAREHOUSE_OUTPUT.getNullable(level, doorPos(dock));
+        if (port == null)
+            throw new VisualTestException("the package door's port is missing");
+        return port;
     }
 
     /** One item type per chest: several stacks of it, so the grid shows amounts well above one stack. */
@@ -583,7 +654,7 @@ public final class TerminalVisualScenario implements VisualScenario {
         int expectedStorage = (RAILS - STORAGE_FIRST_POSITION + 1) * STORAGE_LEVELS * Side.values().length;
         boolean ready = controller.status() == ControllerStatus.READY && !controller.isMembershipDirty()
                 && controller.pendingSnapshotCount() == 0 && controller.storageLocations().size() == expectedStorage
-                && controller.outputStations().size() == 1 && crane.isControllerLinked();
+                && controller.outputStations().size() == OUTPUT_STATIONS && crane.isControllerLinked();
         return ready ? controller : null;
     }
 
@@ -1116,10 +1187,14 @@ public final class TerminalVisualScenario implements VisualScenario {
      */
     private void germanSortSteps(VisualScript script) {
         script.client("terminal: check every text of every clipped row in English",
-                TerminalVisualScenario::checkRowVocabularyFits);
+                TerminalVisualScenario::checkRowVocabularyFits)
+                .client("terminal: check the door button's tooltip in English",
+                        TerminalVisualScenario::checkDoorTooltipFits);
         switchLanguage(script, GERMAN);
         script.client("terminal: check every text of every clipped row in German",
                         TerminalVisualScenario::checkRowVocabularyFits)
+                .client("terminal: check the door button's tooltip in German",
+                        TerminalVisualScenario::checkDoorTooltipFits)
                 .client("terminal: check the amount order in German",
                         context -> checkSortTooltip(context, TerminalSort.AMOUNT));
         tooltipShot(script, TerminalSort.AMOUNT, "-de");
@@ -1882,6 +1957,26 @@ public final class TerminalVisualScenario implements VisualScenario {
         for (PlanRefusal refusal : PlanRefusal.values())
             row.put("craft.chain_refusal." + refusal.name().toLowerCase(Locale.ROOT),
                     WarehouseTerminalScreen.craftChainRefusalText(refusal, Component.empty()));
+        // Package doors (M27, issue #18): the answers to a door click and the standing line about the chosen door, built
+        // by the screen's own methods with the widest amounts and without the names, which give way in this row first
+        // (WarehouseTerminalScreen#fitDoorLine); the fallback when the door goes; and a door's OUTPUT_FULL through the
+        // frame-dropping decision. The two door rejections are among the refusals above.
+        row.put("door.requested", WarehouseTerminalScreen.doorRequestedText(Component.empty(), WIDEST_AMOUNT,
+                Component.empty()));
+        row.put("door.producing", WarehouseTerminalScreen.doorProducingText(Component.empty(), WIDEST_AMOUNT,
+                Component.empty(), WIDEST_AMOUNT));
+        row.put("door.standing", WarehouseTerminalScreen.doorStandingText(Component.empty(), WIDEST_AMOUNT,
+                WIDEST_AMOUNT));
+        row.put("door.standing_short", WarehouseTerminalScreen.doorStandingShortText(Component.empty(),
+                WIDEST_AMOUNT));
+        row.put("door.unavailable", WarehouseTerminalScreen.doorUnavailableText());
+        row.put("door.refused_full", terminal.refusedLine(WarehouseTerminalScreen.doorRefusedFullText()));
+        // An accepted door click whose chain was refused: every chain sentence behind the door it was for, both names
+        // left out because they give way first.
+        for (PlanRefusal refusal : PlanRefusal.values())
+            row.put("door.shortfall." + refusal.name().toLowerCase(Locale.ROOT), WarehouseTerminalScreen
+                    .doorShortfallText(Component.empty(), WareworksLang.translateDirect(refusal.langKey(),
+                            Component.empty())));
         return new MeasuredRow("terminal status row", ROW_WIDTH, row,
                 STATUS_ROW_TOO_LONG.getOrDefault(language, Set.of()));
     }
@@ -1951,6 +2046,389 @@ public final class TerminalVisualScenario implements VisualScenario {
                 MeasuredRow.of("station's stopped row without the item's name",
                         ROW_WIDTH - WarehouseProductionScreen.MIN_ITEM_WIDTH, stopped),
                 MeasuredRow.of("station's stopped row for several products", ROW_WIDTH, stoppedMany));
+    }
+
+    // --- the package door (M27, issue #18) --------------------------------------------------------------------------
+
+    /**
+     * The door button, driven like a player: real clicks, a right-click and the wheel through the mouse handler
+     * ({@link ScreenInput}), on the button the screen's own hit test finds. The choice is the screen's alone, so every
+     * step asserts it on the client, and the server says where each request really goes.
+     * <p>
+     * It runs last, after the rejoin, so nothing a door click counts can reach the orders and rankings the earlier steps
+     * assert; and the screen it starts on is the one the rejoin opened, which has to come up at here.
+     */
+    private void doorSteps(VisualScript script) {
+        script.until("terminal: wait until the screen lists the package door", TerminalVisualScenario::doorListed,
+                        SCREEN_TIMEOUT_TICKS)
+                .client("terminal: the screen delivers here, and the door button is shown",
+                        TerminalVisualScenario::checkDoorAtHere)
+                .client("terminal: hover the door button", TerminalVisualScenario::hoverDoorButton)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: check the door button's tooltip at here",
+                        context -> checkDoorTooltip(context, false))
+                .shot("door-tooltip")
+                .client("terminal: click the door button", TerminalVisualScenario::clickDoorButton)
+                .client("terminal: check that the click chose the door", TerminalVisualScenario::checkDoorChosen)
+                .client("terminal: the list button says a list still comes here",
+                        TerminalVisualScenario::checkListSaysHere)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: check the door button's tooltip with the door chosen",
+                        context -> checkDoorTooltip(context, true))
+                .shot("door-chosen-tip")
+                .client("terminal: hover the first stock cell", TerminalVisualScenario::hoverFirstCell)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: check the gold cues on the cell", TerminalVisualScenario::checkCellCue)
+                .shot("door-chosen")
+                // The choice belongs to the screen object, so laying the screen out again keeps it.
+                .client("terminal: fold the crafting panel out", TerminalVisualScenario::clickCraftToggle)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: the fold kept the door", TerminalVisualScenario::checkDoorChosen)
+                .client("terminal: fold the crafting panel back in", TerminalVisualScenario::clickCraftToggle)
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: the second fold kept the door", TerminalVisualScenario::checkDoorChosen)
+                .client("terminal: lay the screen out again, as a window resize does",
+                        context -> screen(context).resize(context.minecraft(), screen(context).width,
+                                screen(context).height))
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: the re-layout kept the door", TerminalVisualScenario::checkDoorChosen)
+                .client("terminal: right-click the door button", context -> ScreenInput.rightClick(
+                        context.minecraft(), ScreenInput.terminalDoorButton(screen(context))))
+                .client("terminal: the right-click went back to here", TerminalVisualScenario::checkDoorAtHere)
+                .client("terminal: scroll down over the door button", context -> ScreenInput.scroll(
+                        context.minecraft(), ScreenInput.terminalDoorButton(screen(context)), -1))
+                .client("terminal: the wheel down chose the door", TerminalVisualScenario::checkDoorChosen)
+                .client("terminal: scroll up over the door button", context -> ScreenInput.scroll(
+                        context.minecraft(), ScreenInput.terminalDoorButton(screen(context)), 1))
+                .client("terminal: the wheel up went back to here", TerminalVisualScenario::checkDoorAtHere)
+                .client("terminal: click the door button again", TerminalVisualScenario::clickDoorButton)
+                .client("terminal: the door is chosen again", TerminalVisualScenario::checkDoorChosen);
+        doorQuestionSteps(script);
+        doorStandingSteps(script);
+        script.client("terminal: close the screen with the door chosen", TerminalVisualScenario::closeScreen)
+                .until("terminal: wait until the screen is closed", context -> context.minecraft().screen == null,
+                        SCREEN_TIMEOUT_TICKS)
+                .server("terminal: open the terminal screen once more", TerminalVisualScenario::openScreen)
+                .until("terminal: wait for the screen with its stock and the door",
+                        context -> screenReady(context) && doorListed(context), SCREEN_TIMEOUT_TICKS)
+                .client("terminal: a new screen delivers here again", TerminalVisualScenario::checkDoorAtHere)
+                .client("terminal: choose the door on the new screen", TerminalVisualScenario::clickDoorButton)
+                .client("terminal: the door is chosen on the new screen", TerminalVisualScenario::checkDoorChosen)
+                .server("terminal: break the door's Packager", (server, context) -> server.overworld()
+                        .destroyBlock(packagerPos(context.origin()), false))
+                .until("terminal: wait until the choice fell back to here",
+                        context -> !screen(context).isDoorChosen() && !screen(context).isDoorButtonShown(),
+                        SCREEN_TIMEOUT_TICKS)
+                .client("terminal: the screen says why the door went", TerminalVisualScenario::checkDoorGone)
+                .client("terminal: park the mouse beside the sort button", TerminalVisualScenario::hoverOffButton)
+                .waitTicks(SETTLE_TICKS)
+                .shot("door-gone");
+    }
+
+    /**
+     * A door click that crosses a stock rule raises the terminal's question, and the question names the door it was
+     * measured for; the wheel over the door button changes nothing while it is up, and the Yes delivers to that door.
+     */
+    private void doorQuestionSteps(VisualScript script) {
+        script.client("terminal: search for the item a rule holds in reserve",
+                        context -> typeSearch(context, RESERVED_SEARCH))
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: click it for the door", context -> ScreenInput.click(context.minecraft(),
+                        ScreenInput.terminalCell(screen(context), 0)))
+                .until("terminal: wait until the terminal asks", context -> screen(context).confirmation() != null,
+                        REQUEST_TIMEOUT_TICKS)
+                .client("terminal: the question names the door", TerminalVisualScenario::checkQuestionNamesDoor)
+                .client("terminal: scroll over the door button while the question is up",
+                        context -> ScreenInput.scroll(context.minecraft(), doorButtonCentre(context), -1))
+                .client("terminal: the wheel changed nothing behind the question",
+                        TerminalVisualScenario::checkDoorChosen)
+                .waitTicks(SETTLE_TICKS)
+                .shot("door-question")
+                .client("terminal: answer yes", context -> ScreenInput.click(context.minecraft(),
+                        ScreenInput.terminalConfirmButton(screen(context), true)))
+                .until("terminal: wait until the answer names the door",
+                        context -> feedbackText(screen(context)).contains(DOOR_ADDRESS), REQUEST_TIMEOUT_TICKS)
+                .serverUntil("terminal: wait until the crane put it into the door's port",
+                        (server, context) -> doorPort(server.overworld(), context.origin()).bufferedItems()
+                                .count(AT_RESERVE_ITEM) > 0, DELIVERY_TIMEOUT_TICKS)
+                .server("terminal: none of it came to the terminal", TerminalVisualScenario::checkNothingHere)
+                .client("terminal: clear the search after the question", context -> screen(context).setSearch(""));
+    }
+
+    /**
+     * While the crane stands still, a door click's request waits, and once its answer has gone from the status row the
+     * row says what the chosen door is still owed; the crane then delivers it into the door's port.
+     */
+    private void doorStandingSteps(VisualScript script) {
+        script.serverUntil("terminal: wait until the crane is idle again", TerminalVisualScenario::warehouseIdle,
+                        DELIVERY_TIMEOUT_TICKS)
+                .server("terminal: stop the crane's motor, so the next request waits",
+                        (server, context) -> motor(server.overworld(), context.origin()).generatedSpeed.setValue(0))
+                .client("terminal: search for the door's last item", context -> typeSearch(context, DOOR_ITEM_SEARCH))
+                .waitTicks(SETTLE_TICKS)
+                .client("terminal: click it for the door", context -> ScreenInput.click(context.minecraft(),
+                        ScreenInput.terminalCell(screen(context), 0)))
+                .until("terminal: wait until the answer names the door",
+                        context -> feedbackText(screen(context)).contains(DOOR_ADDRESS)
+                                && feedbackText(screen(context)).contains(DOOR_ITEM.toStack().getHoverName()
+                                        .getString()), REQUEST_TIMEOUT_TICKS)
+                .client("terminal: check that the door's answer fits its row", TerminalVisualScenario::checkStatusFits)
+                .client("terminal: park the mouse beside the sort button", TerminalVisualScenario::hoverOffButton)
+                .waitTicks(SETTLE_TICKS)
+                .shot("door-sent")
+                .server("terminal: the request goes to the door", TerminalVisualScenario::checkRequestForDoor)
+                .waitTicks(FEEDBACK_GONE_TICKS)
+                .until("terminal: wait until the door's row counts the request",
+                        context -> chosenRow(context).waiting() > 0L, SCREEN_TIMEOUT_TICKS)
+                .client("terminal: the status row says what the door is still owed",
+                        TerminalVisualScenario::checkStandingLine)
+                .shot("door-standing")
+                .server("terminal: start the crane's motor again",
+                        (server, context) -> motor(server.overworld(), context.origin()).generatedSpeed
+                                .setValue(MOTOR_RPM))
+                .serverUntil("terminal: wait until the crane put it into the door's port",
+                        (server, context) -> doorPort(server.overworld(), context.origin()).bufferedItems()
+                                .count(DOOR_ITEM) > 0, DELIVERY_TIMEOUT_TICKS)
+                .server("terminal: none of it came to the terminal", TerminalVisualScenario::checkNothingHere)
+                .client("terminal: clear the search after the door's last click",
+                        context -> screen(context).setSearch(""));
+    }
+
+    /** Whether the screen lists the door, by its sign, with the door button shown. */
+    private static boolean doorListed(VisualContext context) {
+        if (!(context.minecraft().screen instanceof WarehouseTerminalScreen terminal))
+            return false;
+        return terminal.isDoorButtonShown()
+                && terminal.doors().rows().stream().anyMatch(row -> row.label().equals(DOOR_ADDRESS));
+    }
+
+    /** The door's row as the screen last got it. */
+    private static TerminalDoorRow doorRow(VisualContext context) {
+        return screen(context).doors().rows().stream().filter(row -> row.label().equals(DOOR_ADDRESS)).findFirst()
+                .orElseThrow(() -> new VisualTestException("the screen does not list the door '" + DOOR_ADDRESS
+                        + "': " + screen(context).doors()));
+    }
+
+    /** The chosen door's row; fails while the choice is here. */
+    private static TerminalDoorRow chosenRow(VisualContext context) {
+        TerminalDoorRow row = doorRow(context);
+        if (!screen(context).chosenDoor().equals(Optional.of(row.pos())))
+            throw new VisualTestException("the door is not chosen: " + screen(context).chosenDoor());
+        return row;
+    }
+
+    /** Here: no door chosen, the button shown but not green, the title row naming the warehouse. */
+    private static void checkDoorAtHere(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        if (terminal.isDoorChosen() || terminal.isDoorButtonGreen() || !terminal.isDoorButtonShown())
+            throw new VisualTestException("the screen should deliver here with the door button shown, not green: "
+                    + "chosen " + terminal.chosenDoor() + ", green " + terminal.isDoorButtonGreen() + ", shown "
+                    + terminal.isDoorButtonShown());
+        String label = terminal.titleRowLabel().getString();
+        String indicator = WarehouseTerminalScreen.doorIndicatorText(Component.empty()).getString().trim();
+        if (label.startsWith(indicator))
+            throw new VisualTestException("the title row names a door while the screen delivers here: " + label);
+        TerminalDoorRow row = doorRow(context);
+        if (row.state() != DoorState.READY)
+            throw new VisualTestException("the door should be ready: " + row);
+        LOGGER.info(PREFIX + "terminal: the screen delivers here; the door '{}' at {} is listed {}", row.label(),
+                row.rackAddress(), row.state());
+    }
+
+    /** The door chosen: the button green, the title row naming the door in gold behind its arrow. */
+    private static void checkDoorChosen(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        TerminalDoorRow row = chosenRow(context);
+        if (!terminal.isDoorButtonGreen())
+            throw new VisualTestException("the door button is not green while the door is chosen");
+        String label = terminal.titleRowLabel().getString();
+        String expected = WarehouseTerminalScreen.doorIndicatorText(Component.literal(DOOR_ADDRESS)).getString();
+        if (!label.equals(expected))
+            throw new VisualTestException("the title row reads '" + label + "', not '" + expected + "'");
+        LOGGER.info(PREFIX + "terminal: the door {} is chosen; the title row reads '{}'", row.rackAddress(), label);
+    }
+
+    /** While a door is chosen the list button's tooltip says that a clipboard list still delivers here. */
+    private static void checkListSaysHere(VisualContext context) {
+        List<String> tooltip = screen(context).listButtonTooltip().stream().map(Component::getString).toList();
+        String line = text(WareworksLang.TERMINAL_DOOR_LIST_HERE);
+        if (!tooltip.contains(line))
+            throw new VisualTestException("the list button's tooltip does not say '" + line + "': " + tooltip);
+    }
+
+    /**
+     * The door button's tooltip: at most {@value WarehouseTerminalScreen#MAX_DOOR_TOOLTIP_LINES} lines inside the row,
+     * where a click delivers in its first line, the current entry marked, the hint and Create's own scroll line.
+     */
+    private static void checkDoorTooltip(VisualContext context, boolean chosen) {
+        WarehouseTerminalScreen terminal = screen(context);
+        List<Component> tooltip = terminal.doorTooltip();
+        List<String> lines = tooltip.stream().map(Component::getString).toList();
+        checkDoorTooltipFits(context);
+        String here = text(WareworksLang.TERMINAL_DOOR_HERE);
+        TerminalDoorRow row = doorRow(context);
+        String title = WarehouseTerminalScreen.doorTitleText(Component.literal(chosen ? DOOR_ADDRESS : here))
+                .getString() + (chosen ? " " + row.rackAddress() : "");
+        String current = "-> " + (chosen ? DOOR_ADDRESS + "  " + row.rackAddress() : here);
+        String hint = text(WareworksLang.TERMINAL_DOOR_HINT);
+        String scroll = Component.translatable(WareworksLang.CREATE_SCROLL_TO_SELECT_KEY).getString();
+        if (lines.isEmpty() || !lines.getFirst().equals(title) || !lines.contains(current) || !lines.contains(hint)
+                || !lines.getLast().equals(scroll))
+            throw new VisualTestException("the door button's tooltip should start with '" + title + "', mark '"
+                    + current + "' and end with '" + hint + "' and '" + scroll + "': " + lines);
+        LOGGER.info(PREFIX + "terminal: the door button's tooltip ({} lines): {}", lines.size(), lines);
+    }
+
+    /**
+     * Every line of the door button's tooltip inside the row, and at most
+     * {@link WarehouseTerminalScreen#MAX_DOOR_TOOLTIP_LINES} lines.
+     */
+    private static void checkDoorTooltipFits(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        List<Component> tooltip = terminal.doorTooltip();
+        if (tooltip.isEmpty() || tooltip.size() > WarehouseTerminalScreen.MAX_DOOR_TOOLTIP_LINES)
+            throw new VisualTestException("the door button's tooltip has " + tooltip.size() + " lines: "
+                    + widths(context, tooltip));
+        for (Component line : tooltip) {
+            if (context.minecraft().font.width(line) > ROW_WIDTH)
+                throw new VisualTestException("a line of the door button's tooltip is wider than the window's row ("
+                        + ROW_WIDTH + " px): " + widths(context, tooltip));
+        }
+        LOGGER.info(PREFIX + "terminal: CHECK door tooltip PASS: {} lines fit {} px in {}: {}", tooltip.size(),
+                ROW_WIDTH, context.minecraft().getLanguageManager().getSelected(), widths(context, tooltip));
+    }
+
+    private static void hoverDoorButton(VisualContext context) {
+        ScreenInput.hover(context.minecraft(), ScreenInput.terminalDoorButton(screen(context)));
+    }
+
+    private static void clickDoorButton(VisualContext context) {
+        ScreenInput.click(context.minecraft(), ScreenInput.terminalDoorButton(screen(context)));
+    }
+
+    private static void clickCraftToggle(VisualContext context) {
+        ScreenInput.click(context.minecraft(), ScreenInput.terminalCraftToggle(screen(context)));
+    }
+
+    /**
+     * The centre of the door button while a question covers it: the button's own hit test is still the screen's, and
+     * the point is the one a player's wheel would be over.
+     */
+    private static ScreenInput.Point doorButtonCentre(VisualContext context) {
+        return ScreenInput.terminalDoorButton(screen(context));
+    }
+
+    private static void hoverFirstCell(VisualContext context) {
+        ScreenInput.hover(context.minecraft(), ScreenInput.terminalCell(screen(context), 0));
+    }
+
+    /** The cell under the mouse carries the door's cues: the gold tint is on, and its tooltip names the door. */
+    private static void checkCellCue(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        if (!terminal.doorCueShown())
+            throw new VisualTestException("the stock cells show no door cue while the door is chosen");
+        ScreenInput.Point cell = ScreenInput.terminalCell(terminal, 0);
+        List<String> tooltip = terminal.tooltipAt((int) cell.x(), (int) cell.y()).stream().map(Component::getString)
+                .toList();
+        String line = WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_CELL, DOOR_ADDRESS).getString();
+        if (!tooltip.contains(line))
+            throw new VisualTestException("the cell's tooltip does not say '" + line + "': " + tooltip);
+        LOGGER.info(PREFIX + "terminal: the hovered cell is tinted gold and its tooltip says '{}'", line);
+    }
+
+    /** The question the door click raised names the door and its rack address, in its own gold line. */
+    private static void checkQuestionNamesDoor(VisualContext context) {
+        TerminalDoorRow row = doorRow(context);
+        String line = WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_CONFIRM,
+                DOOR_ADDRESS + " (" + row.rackAddress() + ")").getString();
+        List<String> lines = ScreenInput.terminalConfirmationLines(screen(context)).stream()
+                .map(Component::getString).toList();
+        if (!lines.contains(line))
+            throw new VisualTestException("the question does not say '" + line + "': " + lines);
+        LOGGER.info(PREFIX + "terminal: the question says '{}': {}", line, lines);
+    }
+
+    /** Server: the open request for the door's last item is the door's, and none is the terminal's. */
+    private static void checkRequestForDoor(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        BlockPos door = doorPos(context.origin());
+        BlockPos here = layout(context.origin()).rackPos(TERMINAL);
+        long forDoor = controller.requestsFor(door).stream().filter(request -> request.key().equals(DOOR_ITEM))
+                .count();
+        long forHere = controller.requestsFor(here).stream().filter(request -> request.key().equals(DOOR_ITEM))
+                .count();
+        if (forDoor != 1L || forHere != 0L)
+            throw new VisualTestException("the door click should be one request to the door and none to the "
+                    + "terminal: " + forDoor + " for the door, " + forHere + " for the terminal");
+        // The door's own goggles list the click's request like any of its own: what a player sees looking at the port.
+        WarehouseOutputBlockEntity port = doorPort(server.overworld(), context.origin());
+        port.onGoggleObserved();
+        if (port.summary().openRequests() != 1 || port.summary().requestedItems() != controller.requestedFor(door))
+            throw new VisualTestException("the door's goggles should list the one request for "
+                    + controller.requestedFor(door) + " items: " + port.summary());
+        LOGGER.info(PREFIX + "terminal: PASS the door click is the door's request ({} waiting), and the door's "
+                + "goggles list it", controller.requestedFor(door));
+    }
+
+    /** Server: the terminal's buffer holds none of what the door clicks asked for. */
+    private static void checkNothingHere(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminal(server.overworld(), context.origin());
+        long reserved = terminal.bufferedItems().count(AT_RESERVE_ITEM);
+        long last = terminal.bufferedItems().count(DOOR_ITEM);
+        if (reserved != 0L || last != 0L)
+            throw new VisualTestException("a door click delivered into the terminal: " + reserved + " "
+                    + AT_RESERVE_ITEM + ", " + last + " " + DOOR_ITEM);
+        LOGGER.info(PREFIX + "terminal: PASS the door's items are in its port {} and none in the terminal",
+                doorPort(server.overworld(), context.origin()).bufferedItems());
+    }
+
+    /** Server: the crane has no job and nothing is open, so the next request is the only thing it could serve. */
+    private static boolean warehouseIdle(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(server.overworld(),
+                context.origin());
+        return crane != null && controller(server, context).openRequests().isEmpty() && crane.canAcceptJob();
+    }
+
+    /** The aisle's controller, whatever it is doing. */
+    private static WarehouseControllerBlockEntity controller(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER
+                .getNullable(server.overworld(), context.origin().relative(AISLE.getOpposite()));
+        if (controller == null)
+            throw new VisualTestException("the aisle's controller is missing");
+        return controller;
+    }
+
+    /** The status row's standing line about the chosen door, built from the door's own row on the screen. */
+    private static void checkStandingLine(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        TerminalDoorRow row = chosenRow(context);
+        if (terminal.hasFeedback())
+            throw new VisualTestException("an answer still holds the status row: " + feedbackText(terminal));
+        String expected = WarehouseTerminalScreen.doorStandingText(Component.literal(DOOR_ADDRESS), row.waiting(),
+                row.delivered()).getString();
+        String shown = terminal.shownStatusLine().getString();
+        if (!shown.equals(expected))
+            throw new VisualTestException("the status row reads '" + shown + "', not '" + expected + "'");
+        List<String> tooltip = terminal.doorTooltip().stream().map(Component::getString).toList();
+        String owed = WareworksLang.translateDirect(WareworksLang.TERMINAL_WAITING, amount(row.waiting()),
+                amount(row.delivered())).getString();
+        if (!tooltip.contains(owed))
+            throw new VisualTestException("the door button's tooltip does not say '" + owed + "': " + tooltip);
+        checkStatusFits(context);
+        LOGGER.info(PREFIX + "terminal: PASS the status row reads '{}', and the button's tooltip '{}'", shown, owed);
+    }
+
+    /** The Packager is gone: the screen delivers here again, says so in the row, and shows no door button. */
+    private static void checkDoorGone(VisualContext context) {
+        WarehouseTerminalScreen terminal = screen(context);
+        String expected = WarehouseTerminalScreen.doorUnavailableText().getString();
+        if (!feedbackText(terminal).equals(expected))
+            throw new VisualTestException("the status row reads '" + feedbackText(terminal) + "', not '" + expected
+                    + "'");
+        if (!terminal.doors().isEmpty())
+            throw new VisualTestException("a port without a Packager is still listed: " + terminal.doors());
+        LOGGER.info(PREFIX + "terminal: PASS the door went, the choice is here again, and the row says '{}'",
+                expected);
     }
 
     /** Steps a chain's badge counts at its widest: what this server allows, or the shipped default. */

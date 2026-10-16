@@ -2903,3 +2903,160 @@ you get tired of waiting, and put it back before judging check 160.
     with `./gradlew runClient` — not with a release build, which a dev server turns away for its dev-only components
     (ADR-064). Run checks 273 and 275, then stop the server with `/stop`, start it again, rejoin and request each entry
     once more: every request is delivered, and neither log has an error mentioning `wareworks`.
+
+## AY. Order to a door (M27, [issue #18](https://github.com/Richie1710/create-wareworks/issues/18), second half)
+
+> A retrieve into a warehouse port now carries at most what the port can take when the trip is planned, and sets off
+> only when the port takes the whole trip or a full stack of a larger request (ADR-065), so the crane never waits in
+> front of a port. `WarehousePortGameTests#craneNeverWaitsAtAFullPort` proves it with a port that a test empties by
+> hand, on every tick; `aPortThatTakesLittleWaitsForAFullTrip` proves the minimum carry. A request to an accepting or
+> collecting port is refused, and one to a port that stopped requesting without telling the controller is cancelled
+> on the next relink (`controllerRefusesARequestToAPortThatDoesNotRequest`, `aPortTurnedSilentlyLosesItsRequestsOnRelink`).
+> A port that fills up under a carrying crane all the same — a trip planned before a restart that lowered
+> `outputBufferSlots`, or a crane saved waiting before this version — gets the rest back into storage at the crane's
+> next retry (`aPortFilledUnderACarryingCraneGetsTheRestLater`). What no test shows is a real hopper draining a port in
+> a world, and how it looks.
+>
+> Setup: `./gradlew runClient`, a creative world with a powered warehouse, a warehouse terminal and a chest holding at
+> least ten stacks of cobblestone behind an interface, plus a Warehouse Output with **nothing** behind or below it.
+
+277. **A port nobody empties.** Set the output's filter to cobblestone with the amount **40**, its redstone behaviour
+    to *while powered*, and power it with a lever. The crane brings 40 at a time. After 14 trips the port holds 560
+    cobblestone and has room for 16 only: the crane now stays put with an **empty claw**, the port's goggles still list
+    the open request for 40, and the controller's goggles read "Last planning: an output is full". Request a stack of
+    anything at the terminal: the crane serves it at once. Then place a hopper under the port, leading into a chest: as
+    soon as the hopper has taken 24 cobblestone, the crane brings exactly 40 and drives off again. **Does the crane ever
+    stand in front of the port with items in its claw?** (Before this, it carried the fifteenth trip, dropped 16 and
+    waited in front of the port with 24 in its claw until somebody emptied it.)
+
+> **Ordering to a door from the terminal.** The server half is pinned by `PackageDoorGameTests` against a real Create
+> Packager, with the item census on every tick: a door click delivers into the door's port and never into the
+> terminal, the box leaves with the sign's address and no order data of Wareworks', what is no door is refused before
+> the stock is looked at, and nothing a door click ends in is remembered. The screen is pinned by
+> `TerminalDoorTextWidthTest` (every door text in its room, English and German) and by the `terminal` visual scenario,
+> which drives the door button with real clicks, a right-click and the wheel, checks the gold cues, a question naming
+> the door, the standing line, here on the next screen and the fallback when the Packager is broken. The `door` visual
+> scenario follows one order the whole way, in English and German: chosen on the real screen, carried into the port,
+> boxed by the Packager when a lever is flipped, and stored by a second warehouse at the end of a belt. What no gate can
+> answer is a Smart Observer emptying a door by itself, everything past the belt, two players on a dedicated server, a
+> recipe viewer's round trip, the wrench as the way out of an order, and how the button, its tooltip and the gold lines
+> read at the GUI scales a player uses.
+>
+> Setup: the warehouse of check 277, with its terminal and stock: iron ingots, cobblestone and something a stock
+> keeper holds in reserve. Turn the port of check 277 back to *Request* without a filter and put a **Create
+> Packager** one block behind it, its back to the port, with a sign on a post beside it reading `Base North`. A **Smart
+> Observer** looking at the port powers the Packager through a piece of redstone, and a **funnel** under or beside the
+> Packager puts its boxes onto a belt.
+
+278. **The button.** Open the terminal: an 18 × 18 button with Create's "send" icon sits left of your inventory, and
+    its tooltip reads "Deliver to: Here", "-> Here", "> Base North  A-…" and "Click: next door, right-click: here".
+    Click it: the button turns green, the title row's right end reads "→ Base North" in gold. Right-click it: back to
+    here. Scroll over it: down chooses the door, up goes back to here. Break the Packager: the button disappears within
+    about two seconds, and a terminal of a warehouse without any door looks exactly as before. **Is the button only
+    there while there is a door, and does every gesture do what its tooltip says?**
+279. **64 iron to Base North.** Choose the door, set the amount to 64 and click the iron ingots. The status line reads
+    "Iron Ingot x64 to Base North" (in German "Eisenbarren x64 an Base North"), uncut, the crane drives to the door's
+    port and not to the terminal, the
+    Smart Observer fires the Packager, and the box on the belt shows "→ Base North" in its tooltip. While the crane is
+    still on its way, the status line counts "Base North: waiting for 64, delivered 0" once the answer has gone, and
+    the port's goggles list the request. **Does anything arrive in the terminal's own slots?**
+280. **Here on every open.** Choose the door, close the screen and open it again: it says "Here". Choose the door
+    again and resize the game window, fold the crafting grid out and in, and, with JEI installed, open an item's
+    recipes from the terminal and close JEI again: the door stays chosen through all of it. **Does the door ever
+    survive closing the screen, or get lost while it stays open?**
+281. **Stock Link.** Put a Stock Link on the door's Packager: within about two seconds the door's entry in the tooltip
+    turns red, "ignores redstone", and a click on the button skips it. If the door was chosen, the status line says
+    "Door unavailable: clicks deliver here" and the next click delivers here. Click an item in the very moment after
+    linking, before the screen has caught up: the answer is "that door ignores redstone". Take the link off: the door
+    can be chosen again within about two seconds.
+282. **Blank sign.** Remove the sign: the door's entry says "no address" in gold and the chosen door's line under it
+    "No sign: the box leaves unaddressed". It can still be chosen and ordered to, and the box leaves without an
+    address.
+283. **Past the Packager, by chain.** Put a Frogport on the door's Packager, run a chain conveyor to a Frogport named
+    `Base North` above a Packager behind a Warehouse Input of a second warehouse, and order 64 iron to the door: the
+    iron arrives in the second warehouse and is stored there. **Is any step after the Packager done by Wareworks?**
+284. **Past the Packager, by train.** Replace the funnel by one leading into a Postbox at a train station, and send a
+    train on a "Deliver Packages" schedule to a second station with a Postbox named `Base North`: the box arrives there.
+285. **A question.** Choose the door and click the item the keeper holds in reserve. The question shows a gold line
+    "Goes to Base North (A-…)" under its title. Scroll over the door button and over the stock list while it is up:
+    nothing moves, and the amount field keeps its number. Answer Yes: the item goes into the door's port.
+286. **Fit.** At GUI scale 4 on a 1920 × 1080 window and on a 1280 × 960 window (the crafting grid folded in and out),
+    and fullscreen on a 5120 × 1440 monitor at the automatic scale 6, in English and in German: the button, its
+    tooltip (at most ten lines), the gold title row, the cell's gold line, the answers, the standing line and the
+    question's door line are whole and overlap nothing. A sign with a long text is cut with an ellipsis.
+287. **Multiplayer.** On a dedicated server, two players at one terminal choose two different doors (or one a door and
+    the other here) and click the same item: each order goes where its player chose, and both see the same door list.
+    Restart the server while the crane carries to a door: after the restart the delivery is finished into that door.
+288. **Lists and Fetch stay here.** Choose the door and hover the list button and the crafting panel's Fetch: they say
+    "A list always comes here" and "The ingredients always come here". Order a clipboard list and fetch a recipe's
+    ingredients: both arrive in the terminal.
+
+> **A box that has been waiting.** `PackageDoorGameTests#doorRowSaysNothingTakesTheBox` and
+> `#doorRowClearsOnceTheBoxIsTaken` pin the decision on the server: the door's row turns to "box waiting" only after
+> the box has rested ten seconds (200 ticks), the port's goggle decision equals the truth on every tick, and a hopper
+> that takes the box clears both, while a second box it takes is never reported. The `door` visual scenario shoots the
+> row and its advice line with the hopper taken away, in English and German, and the `packages` scenario the gold
+> goggle row. What no gate shows is a slow but working taker — a belt funnel on a slow belt — next to the report.
+
+289. **A box nobody takes.** Take the funnel away from the door's Packager and order 64 iron to the door, so the
+    Packager boxes it and holds the box. After about ten seconds the door's entry in the terminal button's tooltip
+    reads "box waiting" in gold, the chosen door's advice line "A box waits: is anything taking it?", and the port's
+    goggles show the gold line "A box has been waiting at the Packager: is anything taking it?" under the address. The
+    door can still be chosen. Put the funnel back: the goggle line goes at once, the tooltip entry within about two
+    seconds. In German the goggle line reads "Am Verpacker wartet schon länger ein Paket: Holt es etwas ab?". Then let
+    the Packager feed a **belt funnel** onto a belt at the slowest speed you use (8 RPM, say) and order several stacks:
+    **does either ever show for a door whose funnel works, while boxes leave one after the other?**
+
+> **The way out of an order, a question that outlives its door, and the Ponder scene.** There is no cancel button for
+> an order to a door: turning the door out of *Request* cancels what it waits for, and what the crane carries goes back
+> into storage, which `PackageDoorGameTests#doorTurnedMidOrderSendsTheCarryBack` and
+> `#doorBrokenMidOrderSendsTheCarryBack` pin with an item census on every tick. A Yes always sends the door its question
+> was measured for (`confirmedDoorRequestGoesToTheEchoedDoor`). The `ponder` visual scenario compiles the new scene and
+> shoots it three times from each block. What no gate shows is the wrench in a player's hand, the question and the
+> door list changing under two players at once, and whether the scene reads well in both languages.
+>
+> Setup: the warehouse and door of checks 278 to 289, with the funnel back on the Packager, plenty of cobblestone in
+> the racks, and for check 291 a second player (a second `./gradlew runClient` on a server, or a LAN world).
+
+290. **The wrench escape.** Note how much cobblestone the warehouse holds. Choose the door, put 512 in the amount field
+    and click the cobblestone. While the crane is on its way to the door with a load, turn the door's port to
+    *Accept* with the wrench. The port's goggles drop the request at once, the terminal's standing line for the door
+    goes, the crane drives the load it carries back into a storage location — not into the terminal and not into
+    another port — and within about two seconds the door is no longer in the button's list, because an accepting port
+    is no door. Turn the port back to *Request*: the door is listed again and its old order does not come back. Add up
+    the cobblestone in the racks, the port and the boxes that left: nothing is missing. Do the same once more and break
+    the port instead of turning it. **Does any item go missing, or end up anywhere you did not order it?**
+291. **A question that outlives its door.** Player one chooses the door and clicks the item the keeper holds in
+    reserve, so the question with "Goes to Base North (A-…)" is open. Player two breaks the door's Packager. Player
+    one answers Yes: the answer is "not a package door of this warehouse", nothing is requested, neither for the door
+    nor for the terminal, and the next click delivers here (with no door left, the door button is gone until there is
+    one again). Player two puts the Packager back; player one chooses
+    the door again, clicks the item and answers Yes: it goes into the door's port. **Does a Yes ever deliver somewhere
+    other than the door its question named?**
+292. **The Ponder scene.** Hold **W** over a Warehouse Terminal and over a Warehouse Output: the last scene of each is
+    **"Delivering to a Package Door"**, and every other scene of both blocks is where it was before. Watch it through:
+    the first bubble on the terminal shows the door button's own icon, a click with a Packager in the bubble draws a
+    gold line from the terminal to the door, the crane fills the port, a box appears in the Packager when the redstone
+    fires, and the Stock Link at the end turns the door red. Switch the game to German and watch it again ("An eine
+    Pakettür liefern"). **Do any two captions overlap, or does any text stand as a raw key?**
+
+> **A full port, a door's shared request, and a chain that cannot finish.** `PackageDoorGameTests#doorRowsNameTheirState`
+> reads a full port and a missing sign off real blocks, and `#doorWaitsForAtMostFourItemTypes` pins the refusal of a
+> fifth item type at a door. What no gate shows is a door filling up in a world, how its gold lines read, and the chain
+> refusal behind a door's name on screen.
+>
+> Setup: the warehouse and door of checks 278 to 289, with the funnel and the Smart Observer on the door's Packager.
+
+293. **Full port.** Take the Smart Observer off the door's Packager so nothing fires it, and order nine stacks of
+    cobblestone to the door. Once the port's nine slots are taken, the door's entry in the button's tooltip reads
+    "port full" in gold within about two seconds ("Ausgang voll" in German), and the chosen door's advice line reads
+    "Full: is the Packager running?" ("Kein Platz mehr: Läuft der Verpacker?"). The door can still be chosen, a click
+    to it is accepted and waits, and the crane serves a click to here meanwhile. Put the observer back: the Packager
+    empties the port, and the entry turns back to the rack address within about two seconds. **Does the crane ever
+    stand in front of the full port with items in its claw?**
+294. **A chain that cannot finish, to a door.** Set up production patterns for chests and for planks from logs, put a
+    few chests into the racks and no logs at all, choose the door and order more chests than the racks hold: the
+    click is accepted for the chests in stock, and the status line reads the chain's reason behind the door's name in
+    gold, for example "To Base North: Oak Log is missing" (in German "An Base North: Eichenstamm fehlt"). The chests
+    in stock go into the door, and the standing line names the door once the answer has gone. **Does the line ever
+    leave out the door, or name the item cut to nothing?**

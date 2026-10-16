@@ -1156,6 +1156,11 @@ public final class TerminalCraftPanel {
         missing.forEach((key, amount) -> tooltip.add(fitName(name -> WareworksLang.translateDirect(
                 WareworksLang.TERMINAL_CRAFT_TO_FETCH, name, LangNumberFormat.format(amount)),
                 key.toStack().getHoverName()).copy().withStyle(fetchLineStyle(key, amount))));
+        // The ingredients of a hand craft always come into this buffer (M27, ADR-065 D10), whichever door the clicks
+        // in the list go to: said while one is chosen, so the gold title row is not read as covering the Fetch too.
+        if (screen.isDoorChosen())
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_FETCH_HERE)
+                    .withStyle(ChatFormatting.GRAY));
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH_HINT)
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return tooltip;
