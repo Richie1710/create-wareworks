@@ -15,6 +15,7 @@ import dev.wareworks.content.crane.CraneServerHooks;
 import dev.wareworks.content.station.ProductionStationHooks;
 import dev.wareworks.content.storage.RackBayGestures;
 import dev.wareworks.data.WareworksDatagen;
+import dev.wareworks.gametest.GameTestComponents;
 import dev.wareworks.network.WareworksNetwork;
 import dev.wareworks.registry.WareworksArmInteractionPoints;
 import dev.wareworks.registry.WareworksAttachments;
@@ -33,6 +34,7 @@ import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.neoforge.common.NeoForge;
 
 /**
@@ -108,6 +110,16 @@ public final class Wareworks {
         AisleChunkTickets.register(modEventBus);
         AisleChunkTickets.registerHooks(NeoForge.EVENT_BUS);
         WareworksCommands.register(NeoForge.EVENT_BUS);
+        // 6. Dev runs only (ADR-064): the data components the GameTests need and no release has. The release jar does
+        //    not contain their class (build.gradle), and this guard keeps a jar built without that exclusion from
+        //    registering them.
+        if (!FMLLoader.isProduction())
+            registerGameTestComponents(modEventBus);
+    }
+
+    /** Separate method: GameTestComponents is resolved only when this runs, i.e. only in a dev run (ADR-014). */
+    private static void registerGameTestComponents(IEventBus modEventBus) {
+        GameTestComponents.register(modEventBus);
     }
 
     public static CreateRegistrate registrate() {

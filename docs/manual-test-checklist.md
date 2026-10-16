@@ -2864,3 +2864,42 @@ you get tired of waiting, and put it back before judging check 160.
     the red **x**, and open JEI on the Chest again: the "+" is usable, and a click lays the chest over the table. **Does
     "Move Items" above the red reason read as if the "+" would move items, and is the red line enough to tell you what
     to do?**
+
+## AX. Quark's seed pouches in the warehouse ([issue #27](https://github.com/Richie1710/create-wareworks/issues/27))
+
+> An item key now hashes only what its equality is known to compare (ADR-064), so a value that compares by value but
+> hashes by identity — Quark 4.1's seed pouch contents — no longer makes one item many keys. `ComponentHashGameTests`
+> reproduces the pouch without Quark, with a dev-only component that has Quark's exact `equals` and `hashCode`: pouches
+> built apart, seeded into the racks or stored by the crane through an input, are one stock entry per content; after
+> the storage chests and the controller are saved and loaded while one content lies in several locations, the keys
+> loaded per location merge into one entry; and a request whose key went through the request payload's codec is
+> delivered into the terminal, with the item census on every tick. At the key level only — equal keys built apart,
+> saved and sent are equal and hash equally — the same is checked inside a shulker box, a bundle, a crossbow, a name's
+> hover item and a Create clipboard's icon, and for fluid keys; none of these goes through the warehouse. What no test
+> can run is Quark itself, a nested pouch going through the warehouse (check 275), a restart of the game and a
+> dedicated server.
+>
+> Setup: Quark 4.1 for NeoForge 1.21.1 and the Zeta version it asks for in `run/mods`, then `./gradlew runClient`
+> (take both out again afterwards). A powered warehouse with an input, a terminal and at least four free storage
+> locations. Fill four **Seed Pouches**: two with exactly **64 wheat seeds** each, one with **32 wheat seeds**, and one
+> with another seed, such as chestnuts. Note the "Item types" line on the controller's goggles.
+
+273. **Store, request and retrieve.** Put all four pouches into the input and wait until the crane has stored them.
+    "Item types" on the controller has gone up by **three**, not four, and the terminal's stock list shows three pouch
+    entries: the two 64-wheat pouches as one with **2**, the 32-wheat pouch and the chestnut pouch with 1 each. Click
+    the entry with 2 with the amount field at 2: both pouches arrive in "Delivered here", and the status line shows no
+    "Request refused: not in stock". Request the 32-wheat pouch and the chestnut pouch the same way, with the amount
+    field at 1: each arrives. Hover every delivered pouch: it holds exactly what you put in. **Does each entry stand for
+    one content, and does each request bring exactly that content?**
+274. **After a restart.** Put the four pouches back into the input and let the crane store them. Save and quit, close
+    the game, start `./gradlew runClient` again and rejoin. The stock list shows the same three entries with the same
+    counts, and a request for each entry is delivered.
+275. **Inside a shulker box.** Place two empty **shulker boxes** of the same colour, put one 64-wheat pouch into the
+    **first slot** of each, break both and put them into the input; do the same with the chestnut pouch in a third
+    shulker box of that colour. The stock list shows two shulker box entries, one with 2 and one with 1. Request the one
+    with 2: both boxes are delivered, each still holding its pouch. (A shulker box counts as the same item only with
+    the same contents in the same slots, so a pouch in another slot makes an entry of its own, as for any shulker box.)
+276. **On a dedicated server.** Put Quark and Zeta into `run/server/mods` as well, start `./gradlew runServer` and join
+    with `./gradlew runClient` — not with a release build, which a dev server turns away for its dev-only components
+    (ADR-064). Run checks 273 and 275, then stop the server with `/stop`, start it again, rejoin and request each entry
+    once more: every request is delivered, and neither log has an error mentioning `wareworks`.

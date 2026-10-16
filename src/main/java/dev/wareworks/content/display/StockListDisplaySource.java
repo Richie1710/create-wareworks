@@ -1,7 +1,5 @@
 package dev.wareworks.content.display;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -39,12 +37,9 @@ public class StockListDisplaySource extends ValueListDisplaySource {
         if (found.isEmpty())
             return Stream.empty();
 
+        // The totals as they are, walked once: no lookup per key, which keys sharing a hash code would make quadratic.
         StockView<ItemKey, RackPosition> stock = found.get().stockIndex();
-        Map<ItemKey, Long> totals = new HashMap<>();
-        for (ItemKey key : stock.keys())
-            totals.put(key, stock.count(key));
-
-        return KeyCount.largestFirst(totals, maxRows, ItemKey.ORDER).stream()
+        return KeyCount.largestFirst(stock.totals(), maxRows, ItemKey.ORDER).stream()
                 // The aisle counts in long, IntAttached carries an int; no display shows more than that anyway.
                 .map(entry -> IntAttached.with((int) Math.min(Integer.MAX_VALUE, entry.count()),
                         entry.key().getItem().getDescription().copy()));

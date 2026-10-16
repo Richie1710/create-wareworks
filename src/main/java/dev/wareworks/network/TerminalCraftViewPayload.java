@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.item.ComponentHash;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.crafting.CraftGrid;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -232,10 +233,14 @@ public record TerminalCraftViewPayload(int containerId, CraftGrid<ItemKey> cells
                 && lay.equals(view.lay);
     }
 
+    /**
+     * Consistent with {@link #equals}: the result stack with its count through {@link ComponentHash#stack}, because
+     * {@link ItemStack#hashItemAndComponents} multiplies in every component value's own {@code hashCode}, which a mod's
+     * value may break (ADR-064).
+     */
     @Override
     public int hashCode() {
-        return Objects.hash(containerId, cells, recipe, ItemStack.hashItemAndComponents(result), result.getCount(),
-                locked, noAisle, keys, lay);
+        return Objects.hash(containerId, cells, recipe, ComponentHash.stack(result), locked, noAisle, keys, lay);
     }
 
     @Override

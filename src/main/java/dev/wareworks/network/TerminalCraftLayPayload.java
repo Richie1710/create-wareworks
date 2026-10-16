@@ -45,8 +45,10 @@ import net.neoforged.neoforge.network.connection.ConnectionType;
  * <b>What a lay may cost the server.</b> The candidates are a client's choice, components and hash codes included. The
  * byte bound keeps what the server thread hashes and compares per lay small, however large a client makes the
  * components; {@link IngredientPicker} keeps at most {@value IngredientPicker#MAX_SAME_HASH} distinct candidates per
- * hash code, so keys made to share one cost linear work, not quadratic; and the menu takes one lay per tick
- * ({@code WarehouseTerminalMenu#submitCraftLay}). A client sends what fits ({@link #fitted}): an honest lay of plain
+ * hash code, so keys made to share one cost a few comparisons each, not one per other candidate; and the menu takes
+ * one lay per tick ({@code WarehouseTerminalMenu#submitCraftLay}). One comparison of two keys costs about the square of
+ * their component-patch entries, as decoding them does, so a lay costs a few times the decode of its payload
+ * ({@link IngredientPicker}'s class description). A client sends what fits ({@link #fitted}): an honest lay of plain
  * items is a few kilobytes, and one that does not fit loses the candidates at the end of its longest cells, never a
  * cell.
  *

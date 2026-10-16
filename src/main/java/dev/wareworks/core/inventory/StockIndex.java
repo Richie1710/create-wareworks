@@ -245,6 +245,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
     }
 
     @Override
+    public Map<K, Long> totals() {
+        return Collections.unmodifiableMap(totals);
+    }
+
+    @Override
     public boolean contains(L location) {
         return entries.containsKey(Objects.requireNonNull(location, "location"));
     }
@@ -333,6 +338,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         @Override
         public Set<K> keys() {
             return StockIndex.this.keys();
+        }
+
+        @Override
+        public Map<K, Long> totals() {
+            return StockIndex.this.totals();
         }
 
         @Override

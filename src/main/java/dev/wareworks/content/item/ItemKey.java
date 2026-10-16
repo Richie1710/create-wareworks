@@ -25,9 +25,14 @@ import net.minecraft.world.level.ItemLike;
 /**
  * Immutable, count-less identity of an item: the item plus its data components.
  * <p>
- * Two keys are equal when {@link ItemStack#isSameItemSameComponents} says so; the hash is
- * {@link ItemStack#hashItemAndComponents}. The wrapped stack (count 1) is never exposed, so the key cannot be mutated
- * after construction and is safe as a map key. Keys are never empty.
+ * Two keys are equal when {@link ItemStack#isSameItemSameComponents} says so. The hash is {@link ComponentHash#itemKey}
+ * (ADR-064, issue #27): the item and a contract-safe hash of the component patch, which reads only what each value's
+ * {@code equals} is known to compare, so equal keys hash equally whatever mod defined their components — also a key
+ * decoded from a request or a save, whose values are new instances. It is <b>not</b>
+ * {@link ItemStack#hashItemAndComponents}: that one multiplies in every value's own {@code hashCode}, and a value whose
+ * {@code hashCode} is not value-based (Quark's seed pouch contents hash an inner stack by identity) gave two equal keys
+ * two hash codes, so no hash map found the second. The wrapped stack (count 1) is never exposed, so the key cannot be
+ * mutated after construction and is safe as a map key. Keys are never empty.
  * <p>
  * Persistence: {@link #save} and {@link #load} never throw. A key that cannot be encoded is saved as an empty tag, and
  * a tag that cannot be decoded (e.g. the item's mod was removed) loads as {@link Optional#empty()}.
@@ -47,12 +52,13 @@ public final class ItemKey {
      * i.e. the item id plus the component patch). Used wherever a list of item types has to look the same after a
      * restart — the terminal's stock snapshot ({@code TerminalStockEntry.ORDER}) and the stock list display source.
      * <p>
-     * <b>Not {@link #hashCode()}.</b> That hash is {@link ItemStack#hashItemAndComponents}, which mixes in
-     * {@code Item#hashCode()}; {@code Item} overrides neither {@code hashCode} nor {@code equals}, so the term is the
-     * JVM identity hash — the same within one run and different after every restart. An order falling back to it would
-     * swap two equally ranked keys of the same item (two named shulker boxes, two enchanted books) between launches,
-     * which is exactly what such an order exists to prevent. The text is only rendered when two keys share an item id,
-     * because {@link Comparator#thenComparing(java.util.function.Function)} evaluates its key extractor only on a tie.
+     * <b>Not {@link #hashCode()}.</b> That hash ({@link ComponentHash#itemKey}) mixes in the JVM identity hash of the
+     * item, of every component type and of every registry key it reads — the same within one run and different after
+     * every restart ({@code Item} overrides neither {@code hashCode} nor {@code equals}). An order falling back to it
+     * would swap two equally ranked keys of the same item (two named shulker boxes, two enchanted books) between
+     * launches, which is exactly what such an order exists to prevent. The text is only rendered when two keys share
+     * an item id, because {@link Comparator#thenComparing(java.util.function.Function)} evaluates its key extractor
+     * only on a tie.
      */
     public static final Comparator<ItemKey> ORDER =
             Comparator.comparing((ItemKey key) -> ItemTypeSummaries.itemId(key.getItem()))
@@ -65,7 +71,7 @@ public final class ItemKey {
         if (source.isEmpty())
             throw new IllegalArgumentException("An item key cannot be empty");
         this.stack = source.copyWithCount(1);
-        this.hash = ItemStack.hashItemAndComponents(this.stack);
+        this.hash = ComponentHash.itemKey(this.stack);
     }
 
     /**
@@ -165,6 +171,10 @@ public final class ItemKey {
         return parent.contains(name) ? load(registries, parent.get(name)) : Optional.empty();
     }
 
+    /**
+     * Item and components, as {@link ItemStack#isSameItemSameComponents} compares them. The hash is compared first: it
+     * is contract-safe ({@link ComponentHash}), so unequal hashes prove unequal keys for every mod.
+     */
     @Override
     public boolean equals(Object o) {
         return this == o || o instanceof ItemKey other && hash == other.hash

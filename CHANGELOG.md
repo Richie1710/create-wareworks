@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **JEI's "+" weighs at most four variants of one modded item per recipe when they differ only in that mod's own
+  data.** Where a JEI slot lists more such variants, for example one tool part in many materials, the terminal now
+  chooses among the first four in JEI's order: a later one is no longer preferred because it was delivered or is in
+  stock, and the cell shows the first one as missing instead. Potions, tipped arrows, enchanted books, rockets,
+  banners, dyed and trimmed armour and the other vanilla variants are all weighed as before, and so is mod data kept
+  as plain NBT, numbers, text or registry ids
+
+### Fixed
+
+- **Items whose mod data is hashed by identity, such as Quark's filled Seed Pouches, can now be retrieved.** They could
+  be stored, but every request for one at the terminal answered "not in stock", and each one stored showed up in the
+  stock list on its own. They now appear once per content — two pouches holding the same seeds as one entry with 2, a
+  pouch of chestnuts as another — and can be requested and retrieved, also after a restart, on a server and when they
+  sit inside another item, such as a pouch in a shulker box. A fluid carrying such data is no longer split into several
+  fluids either. Every other item is stored, listed and requested as before
+
 ## [0.11.0-beta] - 2026-10-15
 
 ### Added

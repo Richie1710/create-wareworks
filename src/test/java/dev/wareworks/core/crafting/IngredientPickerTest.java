@@ -305,8 +305,9 @@ class IngredientPickerTest {
     // --- keys a client chose: one hash code for all ------------------------------------------------------------------
 
     /**
-     * A key whose hash code a hostile client chose: every instance has the same one, as the same item with custom data
-     * whose tags hash alike has. Equal by its id only; every call of {@link #equals} is counted.
+     * A key whose hash code a hostile client chose: every instance has the same one, as item keys that differ only in
+     * what their hash does not read have (a name's colour, a mod's own component, ADR-064). Equal by its id only;
+     * every call of {@link #equals} is counted.
      */
     private static final class Colliding {
         private final int id;
@@ -397,6 +398,26 @@ class IngredientPickerTest {
         List<List<String>> chest = repeat(planks, CraftGrid.SIZE);
         chest.set(4, List.of());
         assertEquals(chest, IngredientPicker.spreadHashes(chest), "real items with their own hash codes all stay");
+    }
+
+    /**
+     * A cell that lists far more than {@value IngredientPicker#MAX_SAME_HASH} candidates with hash codes of their own —
+     * a tipped arrow's potion slot, which lists every potion, each of which hashes apart (ADR-064) — keeps every one of
+     * them, so the one the buffer holds is picked wherever it stands in the list, the last one included.
+     */
+    @Test
+    void aCellOfDistinctHashCodesKeepsEveryCandidate() {
+        List<String> potions = new ArrayList<>();
+        for (int i = 0; i < IngredientPicker.MAX_CANDIDATES; i++)
+            potions.add("potion_" + i);
+        List<String> held = List.of(potions.getFirst(), potions.get(IngredientPicker.MAX_SAME_HASH), potions.getLast());
+        for (String potion : held) {
+            List<List<String>> grid = repeat(List.of("arrow"), CraftGrid.SIZE);
+            grid.set(4, potions);
+            CraftGrid<String> picked = IngredientPicker.pick(grid, buffer(Map.of(potion, 1L)));
+            assertEquals(Optional.of(potion), picked.cell(4), "the potion the buffer holds: " + potion);
+            assertEquals(Optional.of("arrow"), picked.cell(0), "and the arrows around it");
+        }
     }
 
     @Test

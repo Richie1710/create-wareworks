@@ -1,8 +1,6 @@
 package dev.wareworks.content.display;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -65,12 +63,9 @@ public class FluidStockDisplaySource extends ValueListDisplaySource {
         if (found.isEmpty())
             return Stream.empty();
 
+        // The totals as they are, walked once: no lookup per key, which keys sharing a hash code would make quadratic.
         StockView<FluidKey, RackPosition> fluid = found.get().fluidStockIndex();
-        Map<FluidKey, Long> totals = new HashMap<>();
-        for (FluidKey key : fluid.keys())
-            totals.put(key, fluid.count(key));
-
-        return KeyCount.largestFirst(totals, maxRows, FluidKey.ORDER).stream()
+        return KeyCount.largestFirst(fluid.totals(), maxRows, FluidKey.ORDER).stream()
                 // The index counts in long and IntAttached carries an int; 2 147 483 buckets is 8 388 brass bays.
                 .map(entry -> IntAttached.with((int) Math.min(Integer.MAX_VALUE, entry.count()),
                         entry.key().hoverName().copy()));

@@ -62,7 +62,10 @@ dev.wareworks
 │   │                          of a perpendicular branch — the data the ownership rule resolves with the member's own
 │   │                          facing)
 │   ├── inventory              SlotView, InventorySnapshot, InventorySummary, KeyCount, CapacityMath;
-│   │                          StockIndex, StockView, LocationCount, SnapshotQueue, SharedInventories (M2)
+│   │                          StockIndex, StockView, LocationCount, SnapshotQueue, SharedInventories (M2);
+│   │                          ValueHash (issue #27, ADR-064: the contract-safe hash of a value - JDK types by their
+│   │                          own hashCode, collections by their interface equality, identity classes by identity,
+│   │                          everything with an equals of its own counted by its place alone, plus a hook)
 │   ├── warehouse              aisle membership: LocationKind, LocationRecord, RackProbe, AisleMembership,
 │   │                          MembershipChanges (M2);
 │   │                          the names a player gives a warehouse's aisles (M25, issue #15, ADR-038): AisleName (the
@@ -184,7 +187,10 @@ dev.wareworks
 ├── content
 │   ├── item                   ItemKey (item + components, count-less), ItemHandlerSnapshots, ItemTypeSummaries
 │   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views),
-│   │                          ClipboardList (M23, ADR-036: the only place Create's clipboard is read or ticked off)
+│   │                          ClipboardList (M23, ADR-036: the only place Create's clipboard is read or ticked off),
+│   │                          ComponentHash (issue #27, ADR-064: the hash of an item or fluid key - ValueHash's hook
+│   │                          for the verified Minecraft, NeoForge and Create classes, each hashed only from what its
+│   │                          equals compares)
 │   ├── storage                WarehouseInterfaceBlock / BlockEntity, AttachedInventorySummary (storage location);
 │   │                          RackBayBlock / BlockEntity and RackBayHandler (M28, ADR-043: the storage location
 │   │                          that IS the block - one item type as a count, 64/256/1024 stacks by tier, its own
@@ -508,13 +514,21 @@ dev.wareworks
 │                              stock, then what a station makes, plain items first, a shapeless recipe in JEI's
 │                              cells, missing ingredients that still lay, refused while a craft order runs and
 │                              without side effects for every hostile case, the laid grid in the view and the
-│                              payload's codec (M32, issue #24, ADR-063)
+│                              payload's codec (M32, issue #24, ADR-063);
+│                              ComponentHashGameTests: equal item and fluid keys hash equally however they were made
+│                              - built apart, saved, sent, nested in containers -, vanilla and Create variety still
+│                              spreads, and pouches shaped like Quark's are stored, listed once per content, reloaded
+│                              and requested with a decoded key (issue #27, ADR-064), with IdentityHashedStack
+│                              (Quark 4.1's equals and identity hashCode) and GameTestComponents (its component and a
+│                              modded tank's SimpleFluidContent, registered in dev runs only)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
 │                              MechanicalArmFixture: real Create arms selected and powered like a player's, M12;
 │                              templates: scripts/gen_structures.py).
-│                              Excluded from the release jar together with dev (build.gradle, M5 review)
+│                              Excluded from the release jar together with dev (build.gradle, M5 review); src/main
+│                              reaches it only through Wareworks#registerGameTestComponents, behind
+│                              FMLLoader#isProduction (ADR-064)
 ├── dev                        dev-only visual smoke test, client side (ADR-014): VisualTestHarness (entry, step runner),
 │                              VisualContext, VisualStep / VisualScript (step builder), VisualWorld (title screen, flat
 │                              world), VisualPass (Flywheel on/off), VisualScenario / VisualScenarios, AisleVisualScenario
@@ -4100,7 +4114,10 @@ obvious answer for the fluid half.
   wraps a count-less stack it never hands out, compares with `isSameFluidSameComponents`, hashes with
   `hashFluidAndComponents`, saves and loads through the never-throwing `saveOptional`/`parseOptional` pair, and carries
   a **value-based** `ORDER`, because `Fluid` overrides neither method either and an identity-hash fallback would
-  reshuffle every readout after a restart.
+  reshuffle every readout after a restart. *Amended by ADR-064 (issue #27):* it no longer hashes with
+  `hashFluidAndComponents`, which multiplies in every component value's own `hashCode`, but with
+  `ComponentHash#fluidKey`, the contract-safe hash `ItemKey` uses, so a modded fluid component whose `hashCode` is not
+  value-based no longer splits one fluid into several keys.
 * **NeoForge's `FluidTank` is not used.** With `capacity < getFluidAmount()`, which a lowered config legitimately
   produces, its `fill` computes a negative `filled` and then sets the amount to the new capacity — silent destruction
   on the first fill after a config change, and the exact promise `storage` makes to a server owner is that lowering a
@@ -5091,7 +5108,10 @@ recipe screen hands the terminal back, where JEI's item list ends) was read in t
   code is a client's to choose (custom data whose tags hash alike), and every hash set and map of a pick compares keys
   of one hash code one by one, so a lay of colliding keys would otherwise cost the square of its candidates. And a menu
   takes one lay per tick (`WarehouseTerminalMenu.MAX_LAYS_PER_TICK`) on top of its eight actions: a player presses the
-  "+" once per click.
+  "+" once per click. *Amended by ADR-064 (issue #27):* the key hash now mixes every compound entry, so the cheap
+  collision is a name's colour or a mod's own component rather than this custom data (colliding strings and lists
+  still are easy to build), one comparison of two keys costs about the square of their patch entries rather than
+  their bytes, and the bound stays four.
 * **The "+" never blocks on a missing ingredient.** Laying a recipe is not fetching it. A cell whose candidates the
   warehouse holds none of gets its first candidate, and the panel tints and names what is missing exactly as for a grid
   laid by hand; Fetch, a click, a clipboard or a production station brings it. JEI asks the handler on every client tick
@@ -5198,7 +5218,9 @@ lay in all until the ticks run again. The lay payload's decoder is strict — mo
 than nine, more than 64 candidates in a cell or an air candidate fails decoding, and NeoForge then closes that
 client's connection — stricter than `TerminalCraftPayload`, which reads a wrong cell count as no action; an honest
 client never sends such a payload. A candidate past four distinct keys of one hash code is dropped, so a hostile lay
-can lose whole cells; no real recipe comes near it. Every JEI for 1.21.1 is admitted; a JEI older than 19.8.4.110 is
+can lose whole cells; no real recipe comes near it. *Amended by ADR-064 (issue #27):* vanilla variants all hash apart,
+but a cell listing more than four variants of one modded item that differ only in a mod component keeps the first
+four. Every JEI for 1.21.1 is admitted; a JEI older than 19.8.4.110 is
 not one, and FML would refuse it with a loading error that names the version needed. A recipe
 `doLimitedCrafting` keeps from the player still lays, and the panel shows it locked as for a grid laid by hand. JEI
 draws its own "Move Items" line above the reason on a greyed-out "+". `JeiRuntimeAccess` ships in the jar, because the
@@ -5207,6 +5229,273 @@ plugin hands it JEI's runtime, though only the dev harness reads it. A future 1.
 from JEI already folded out, 27 px left of where it was before JEI opened, and nothing moves after that. Not tested at
 runtime: Shift on the "+", JEI 19.57's transfer from bookmarked recipes, a crafting extension of another mod, a
 dedicated server, and EMI; the manual checklist covers what a person can (section AW).
+
+### ADR-064 — An item key hashes only what its equality is known to compare: the item and a contract-safe hash of its component patch, in which a value no verified rule vouches for counts by its type alone ([issue #27](https://github.com/Richie1710/create-wareworks/issues/27))
+
+*Context:* Quark's filled Seed Pouch can be stored but never requested: every request answers "not in stock", and
+every stored pouch is its own stock line. Quark 4.1 keeps the contents in the component `quark:stored_item`, a record
+around an `ItemStack` whose `equals` compares by value (`ItemStack#matches`) and whose `hashCode` is
+`Objects.hashCode(stack)` — the **identity** hash, because `ItemStack` overrides neither method. `ItemKey` hashed with
+`ItemStack#hashItemAndComponents`, i.e. `31 * (31 + Item#hashCode) + PatchedDataComponentMap#hashCode`: the hash of
+the item's prototype (every default component) plus NeoForge's `hashPatch`, which multiplies in the `hashCode` of every
+patch value; and `ItemKey#equals` compared that hash first. Two equal pouches therefore hash apart unless they share
+the inner stack instance. A copy shares it (component maps are copy-on-write); a decode and a second pouch do not. So
+the key a client requests with, the key a save restores and the key of a second pouch never equal the stored one, and
+no `HashMap` or `HashSet` finds them. `FluidKey` hashed with `FluidStack#hashFluidAndComponents`, the same
+construction. The defect is not Quark's alone: the decompiled 1.21.1 and NeoForge sources contain it four times.
+* NeoForge fixed MC-272643 by overriding `FoodProperties#equals` (`using_converts_to` compared with
+  `isSameItemSameComponents` and the count) and kept the record's `hashCode`, which hashes that `ItemStack` by
+  identity: a patched `food` component breaks a vanilla-hashed key.
+* `HoverEvent.ItemStackInfo` hashes its `DataComponentPatch`, so a name or a lore line whose hover shows an item
+  carries every value hash of that item into the outer key.
+* `ItemContainerContents`, `BundleContents`, `ChargedProjectiles` and NeoForge's `SimpleFluidContent` hash their
+  stacks with `hashItemAndComponents` or `hashFluidAndComponents`: a broken value inside a shulker box, a bundle, a
+  crossbow, a Create package or filter, or a modded tank breaks the key of the item that holds it.
+* `TextColor` compares its value alone but hashes its name as well, so a named colour (`red`) and the same value
+  written as `#FF5555` are equal and hash apart — and with them two equal names or lore lines in those colours.
+
+NBT is not among them, although `FloatTag` and `DoubleTag` compare with `==` and hash their bits: their constructors
+are private, and `FloatTag#valueOf` and `DoubleTag#valueOf`, which every codec and `CompoundTag#putFloat` go through,
+fold `-0.0` into the zero tag, so no tag holds `-0.0`.
+
+What depends on the hash, surveyed on 0.11.0-beta: 69 `Map`/`Set` declarations typed by `ItemKey` or `FluidKey` in 15
+production files and 120 typed by the generic `K` in 27 `core` files (477 more in GameTests and the dev harness), fed by
+98 sites that build or decode a key. The large ones are the aisle's `StockIndex` (`countsByKey` and `totals`, one entry
+per distinct key of the aisle: up to about a thousand locations in a 32-long, 16-high aisle, 27 keys per chest, one per
+bay; a few hundred to a few thousand keys in practice) and the `InventorySnapshot` of each location (at most its slot
+count: 27 for a chest, but 20 per block for a Create item vault by default, so one vault location can hold over a
+thousand keys), rebuilt for at most `maxSnapshotsPerTick` (4) locations a tick and after every crane transfer into or
+out of a location. The rest stay small: the terminal's stock snapshot (`maxTerminalStockEntries`, 512 by default), a
+`ListOrder` (128 by default), reservations and requests (keys with open work), the craft panel and craft order (9 cells,
+at most 27 buffer slots), stock rules, the crane head, the display sources (one `totals` map, sorted by `ORDER`), the
+bay renderers' display caches (256 items, 64 fluids, cleared when full), the one-key probe memo of `AisleFilters`,
+`IngredientPicker` (at most 9 × 64 = 576 candidates per lay, of which at most `MAX_SAME_HASH` = 4 distinct ones per hash
+code are kept) and `TerminalCraftViewPayload#hashCode` (its keys, and its result stack hashed with
+`hashItemAndComponents`). Nothing persists or orders by the hash: saves and payloads go through the codecs,
+`ItemKey.ORDER` and `FluidKey.ORDER` compare id and text, no `TreeMap` or `TreeSet` is keyed by a key, and hash-map
+iteration order already changed with every run (the item's identity hash).
+
+*Decision:*
+* **A key hashes its item and its component patch, nothing else:** `mix(31 * identityHashCode(item) + patch)`, where
+  `patch` is the sum over the patch's entries of `mix(identityHashCode(type) * 0x9E3779B9 + v)` and `v` is the value's
+  hash, or a fixed constant for a removed prototype component; `mix` is MurmurHash3's 32-bit finaliser. The sum does
+  not depend on the patch map's insertion order, which differs between equal stacks; the prototype is left out
+  because one item has one prototype; the count is not part of a key. `FluidKey` hashes the same way with its fluid.
+  Equality is unchanged (`isSameItemSameComponents`, `isSameFluidSameComponents`): it compares exactly the item, by
+  identity, and the patch.
+* **A value's hash is contract-safe: equal values hash equally whatever mod defined them.** It reads only what the
+  value's `equals` is known to compare, by these rules, the first that applies:
+  1. a value nested deeper than 16 levels: `0`;
+  2. a Minecraft, NeoForge or Create class verified in the decompiled sources (below);
+  3. `String`, the boxed primitives, `UUID` and every enum: its own `hashCode` (an enum's is `Enum`'s final identity
+     hash);
+  4. `Optional`, `List`, `Set` and `Map`: recursively, as their interfaces define equality — in order for a list,
+     as an unordered sum for a set or a map;
+  5. a class that keeps `Object#equals`, whose equality is identity: `System.identityHashCode`;
+  6. anything else — every mod record and every class with an `equals` of its own, Quark's among them, and every
+     class whose `equals` cannot be looked up on this side: `0`, so the component counts by its type alone.
+
+  Rule 5 asks reflection once per class (`Class#getMethod("equals", Object.class)`, kept in a `ClassValue`), and the
+  question never throws. A record skips it: it always declares an `equals` of its own (JLS 8.10.3). For any other
+  class, `getMethod` builds every public method of the class and of its supertypes up to the one that declares
+  `equals`, resolving each signature, so a signature that names a class missing on this side — a client-only type a
+  mod left without `@OnlyIn` on a dedicated server, a type of an absent optional dependency — throws a
+  `NoClassDefFoundError`, although the class itself loads and runs. Any failure of the lookup (a `LinkageError` or a
+  `RuntimeException`) gives the answer of rule 6, which is always safe, and the `ClassValue` keeps it. The old hash
+  never used reflection, so letting the error out would have turned a component that worked into a crash of the
+  server tick, and a controller save holding such a key into a block entity that fails to load.
+
+  Trusted with their own `hashCode`, after checking every part they can reach: `ResourceLocation`, `GlobalPos`,
+  `Unbreakable`, `CustomModelData`, `DyedItemColor`, `MapItemColor`, `MapId`, `MapDecorations`, `LodestoneTracker`,
+  `FireworkExplosion`, `Fireworks`, `BannerPatternLayers`, `PotDecorations`, `BlockItemStateProperties`, `LockCode`,
+  `SeededContainerLoot`, `ItemAttributeModifiers`, `WritableBookContent`, `SuspiciousStewEffects`, `PotionContents`,
+  `Instrument` and `ResolvableProfile`. They are records of values with value hashes, of holders and of identity
+  classes: NeoForge patches `Holder.Reference` to hash by its interned `ResourceKey` and to equal any reference holder
+  with that key, exactly as `DeferredHolder` does, a `Holder.Direct` hashes its value, and `Item`, `Potion`,
+  `MobEffect`, `Attribute` and `SoundEvent` keep identity; `MobEffectInstance` hashes exactly the fields its `equals`
+  compares; and in authlib 6.0.54 (checked with `javap`) `GameProfile` compares and hashes its id and name, `Property`
+  is a record of three strings, and `PropertyMap` hands `equals` and `hashCode` to a `LinkedHashMultimap`, whose are
+  value-based, so a player head that differs only in its texture hashes apart. Of Create 6.0.10, trusted the same way:
+  `SequencedAssemblyRecipe.SequencedAssembly` (recipe id, step, progress), `ClickToLinkBlockItem.ClickToLinkData`,
+  `BezierTrackPointLocation`, `TrackPlacement.ConnectingFrom` and `SchematicannonBlockEntity.SchematicannonOptions`,
+  records of positions, vectors, resource locations and primitives whose `equals` and `hashCode` are the compiler's own
+  (`Vec3` compares with `Double.compare` and hashes the same bits). Hashed by projection, i.e. only from parts their
+  `equals` compares and the rules above cover: `ItemContainerContents`, `BundleContents` and `ChargedProjectiles` (their
+  stacks in order, each with its count, which `ItemStack#matches` compares) and `SimpleFluidContent` (its fluid, amount
+  and patch); `Component` (the contents — literal text, translation key and fallback, keybind — and the siblings; the
+  style, which may hold a hover item, and translation arguments are left out), `ItemLore` (its lines) and
+  `WrittenBookContent` (title, author, generation, resolution and pages); `ItemEnchantments` (each holder with its
+  level); `ArmorTrim` (its two holders); `JukeboxPlayable` (the song's key); `FoodProperties` (nutrition,
+  `can_always_eat`, the number of effects and `using_converts_to` as a stack); `CustomData` and every NBT tag (a
+  compound as an unordered sum, a list in order); a bee `Occupant`; `Vec3i` and `BlockPos` by their coordinates; a
+  holder by its key, a direct holder by its value; Create's `ClipboardContent` (type, pages, read-only flag, last opened
+  page and copied values) with each `ClipboardEntry` by what its final `equals` compares — the tick, the text, and the
+  icon by item and components, never the amount beside it — because the record's own `hashCode` reaches
+  `ClipboardEntry#hashCode`, which hashes the text's style and the icon with `hashItemAndComponents`; and Create's
+  `PackageItem.PackageOrderData` by its five numbers, without its order context. Of the 57 vanilla component types, four
+  count by their type alone: `tool`, `can_place_on`, `can_break` and `debug_stick_state`, which hold holder sets and
+  block state properties, both open to mods. Of Create 6.0.10's 57 component types, Create being a hard dependency, six
+  count by their type alone: `toolbox_inventory` (its `equals` compares filter stacks by identity),
+  `sand_paper_polishing` (its `equals` never equals another instance), `symmetry_wand`, `auto_request_data`,
+  `shopping_list` and `package_order_context`; and `attribute_filter_matched_attributes`, a list of records, hashes by
+  its length. Everything else Create stores is a number, a string, an enum, a position, a block state, NBT or an
+  `ItemContainerContents` (a package's contents and a filter's items), covered by the rules, or one of the classes
+  above.
+* **The pure part lives in `core`.** `core.inventory.ValueHash` holds `mix`, the depth bound and rules 3 to 6, with an
+  overridable hook for rule 2; `content.item.ComponentHash` is that hook and the entry points for an item key, a fluid
+  key and a stack with its count. `TerminalCraftViewPayload#hashCode` hashes its result stack with it.
+* **A walk over the whole stock reads its totals as entries.** `StockView#totals` hands out the index's totals map
+  (unmodifiable, live), and the terminal's stock snapshot and the two stock display sources walk it once instead of
+  looking up every key of `keys()` again with `count`: with N keys sharing one hash code, a lookup per key costs N²/2
+  comparisons, a walk N.
+* **`equals` keeps its shortcut,** now on the safe hash: unequal hashes prove unequal keys for every mod.
+* **No `Comparable`.** `ORDER` cannot be one: the patch text depends on the patch map's insertion order and on mods'
+  `toString`, so two equal keys can compare unequal, and a `HashMap` tree bin would then search the wrong subtree and
+  miss a key it holds. An order that is a function of equality needs the very value knowledge the hash lacks; keys
+  that still share a hash differ only in values nothing here can read, and a tree bin over them is a linear scan
+  anyway.
+* **`IngredientPicker.MAX_SAME_HASH` stays 4.** A client can still make any number of distinct keys with one hash code,
+  now without even searching (a name's colour, a mod component), so the bound is still what keeps a lay linear: at most
+  576 candidates in at most 32 767 bytes, each compared with at most four kept keys of its hash code in each of the
+  picker's sets and maps. One `equals` of two decoded keys is not linear in their bytes:
+  `PatchedDataComponentMap#equals` compares two fastutil `Reference2ObjectArrayMap`s through `entrySet().containsAll`, a
+  `containsKey` and a `get` per entry, each a linear scan, so it costs about k² reference probes for k patch entries,
+  and k is bounded only by the registered component types (about 110 with vanilla and Create, more in a large pack). A
+  pass therefore costs a few times what decoding the same payload costs — vanilla's decode of a patch puts every entry
+  into such an array map and is about k² itself — and it grows with a pack's component types; the menu takes one lay per
+  tick. The terminal's `Supply` comes on top: each lookup costs as many comparisons as the aisle's stock holds keys with
+  the candidate's hash code, which the bound does not cap, so a lay pays at most four lookups per hash code times the
+  size of that bucket. Hashing a decoded key is one walk over a tree, linear in its bytes. Real candidates that share a
+  hash code are now keys of one item that differ only in what the hash does not read. Every potion, tipped arrow,
+  enchanted book, suspicious stew, rocket, goat horn, banner, dyed or trimmed armour piece hashes apart, so a slot
+  listing every potion keeps every potion; a slot listing more than four variants of one modded item that differ only in
+  a mod component keeps the first four in the recipe's order.
+* **A test component reproduces Quark without Quark.** `gametest.IdentityHashedStack` is a record around an
+  `ItemStack` with Quark 4.1's `equals` (`ItemStack#matches`) and `hashCode` (`Objects.hashCode(stack)`) and with
+  codecs over `ItemStack.CODEC` and `ItemStack.STREAM_CODEC`, so it survives NBT and network round trips.
+  `gametest.GameTestComponents` registers it as `wareworks:identity_hashed_stack` through its own
+  `DeferredRegister.DataComponents`, together with `wareworks:fluid_content`, a component of NeoForge's
+  `SimpleFluidContent` — the stock component a mod's tank item keeps its fluid in, which neither vanilla nor Create
+  registers, so without it no item key could hold one. `Wareworks` calls the register from a separate method only when
+  `FMLLoader#isProduction` is false, the pattern `WareworksClient` follows for the visual harness (ADR-014). The jar
+  already leaves out `dev/wareworks/gametest/**`, so a release neither contains nor registers them, and the guard
+  keeps a jar built without that exclusion from registering them. Every dev run registers them (client, server,
+  GameTest server, data and the visual runs), so `/test run` works in `runClient` and `runServer` as well.
+
+*Alternatives considered:*
+* **The item and the set of component types (the issue's proposal).** Safe for every mod, but every vanilla item
+  told apart by a value collides: 500 enchanted books are one bucket and every lookup compares up to 500 enchantment
+  maps; every potion, tipped arrow, renamed item, written book, map, rocket and damaged tool of one item collides; and
+  the picker would keep four of the forty potions of a JEI slot.
+* **The vanilla hash, with `equals` no longer checking it first.** Fixes `equals`, but not the hash maps.
+* **Vanilla component types valued, every other type by its type.** Keyed on the wrong thing: Create's
+  `package_contents` and `filter_items` are `ItemContainerContents`, many mods store `Integer`, `String`, `UUID`,
+  `BlockPos` or `CompoundTag`, and four vanilla types above are not safe themselves. The value's class decides its
+  `equals`, so the rules key on the class.
+* **Hashing the encoded value.** Needs registry access in every key construction and costs an encode per key, and it
+  is not safe either: an `equals` coarser than the encoding (`GameProfile` compares id and name only) gives equal
+  values different bytes.
+* **Probing a component type at run time** (encode, decode, compare the hashes). One probe says nothing about the
+  next value, and a verdict that changes after keys were hashed corrupts every map that holds them.
+* **Trusting mod records whose `equals` is the compiler's own**, recognised from the class bytes (an `equals` whose
+  code is the `ObjectMethods` bootstrap) and hashed field by field with these rules. Safe except for a class
+  transformed at load, and it would give mod records their value hash back, but it needs a class-file reader on first
+  sight of every class. Not taken now; it is the step to take if a pack shows lookups slowed by many variants of one
+  modded item.
+
+*Verification:* `ValueHashTest` (JUnit) pins rules 3 to 6, the hook and the depth bound: equal structures built apart
+hash equally (an `ArrayList` and an immutable list, maps and sets filled in different orders, optionals, nesting past
+the bound), a class shaped like Quark's (value `equals`, identity `hashCode`) hashes equally for equal values alone and
+nested, a record counts by its place alone, a class with `Object#equals` hashes by identity, a class whose public
+signatures name a class its loader refuses (a record and a plain class, defined by a child-first class loader the way a
+dedicated server lacks client classes; `getMethod` really throws `NoClassDefFoundError` for both) counts by its place
+alone on every call without throwing, a list that holds itself ends at the bound, and `mix` is MurmurHash3's finaliser;
+`StockIndexTest` pins `totals`. `ComponentHashGameTests` pins the rest on real stacks. `componenthashequalkeys`: for a
+stack of every case above — the test component on its own, inside a shulker box, a bundle, a crossbow and a name's hover
+item; a patched `food` with `using_converts_to`; a name in the named colour `red` against the same name in `#FF5555`;
+`custom_data`; damage, enchantments in either order, stored enchantments, potions, stews, both books, rockets and stars,
+banners, trims, horns, maps, lodestones, a profile by name and one by its texture alone, lore, bees, a removed prototype
+component, the four types counted by their type, and Create's written clipboard (one entry in a named colour showing a
+pouch as its icon, copied values), sequenced assembly step and package order data — the key, the key of an equal stack
+built apart, both keys loaded from NBT and the key decoded from the network are equal both ways, hash equally and are
+found in hash maps and sets; different pouch contents and different values of the four types are different keys sharing
+one hash code. `componenthashvanillaspreads`: every potion and every enchanted book hashes apart, and so do 32 player
+heads that differ only in their texture, 64 Create clipboards that differ only in one line of text and 16 steps of a
+sequenced assembly; and the picker keeps every potion of one cell. `componenthashfluidkeys`: a fluid key with the test
+component or potion contents, built apart, saved and sent, and an item holding either in `wareworks:fluid_content`, keep
+the same contract. `componenthashstoresrequestsandreloads`: two pouches of wheat seeds built apart are seeded into two
+storage locations, a third and a pouch of pumpkin seeds are fed into the input and stored by the crane; the terminal
+shows two stock lines (three wheat, one pumpkin); then the three storage chests and the controller are saved and loaded
+while the wheat pouches lie in at least two locations, and the loaded index merges the keys it decoded per location into
+one key with the total three, before and after the reloaded chests are read again; the terminal menu's request entry
+then accepts two wheat pouches with the key the request payload's codec decoded and the crane delivers them into the
+terminal's buffer, and the pumpkin pouch follows the same way, with the item census on every tick.
+`TerminalCraftLayGameTests#terminalCraftLayKeepsEveryPotion` lays a tipped arrow whose potion cell lists every lingering
+potion through the lay payload's codec and gets the delivered one, the last of the cell; the lay test that floods the
+picker with keys of one hash code builds them by a name's colour now, because the compound tag hash it used to collide
+no longer collides, and `IngredientPickerTest` keeps a cell of sixty-four candidates with hash codes of their own whole.
+Run against the vanilla hash (`ItemKey` and `FluidKey` hashing with `hashItemAndComponents` and `hashFluidAndComponents`
+again), exactly four GameTests fail — `componenthashequalkeys`, `componenthashfluidkeys`,
+`componenthashstoresrequestsandreloads` (its item census sees the two seeded pouches as two keys, and its failure text
+says so: it renders unequal keys with one text as one entry, `…=2 (split over 2 unequal keys: [1, 1])`) and the
+colour-flooded lay — and every other one passes (593 of 597). Quark itself, a restart of the game, a shulker box in a
+real world and a dedicated server are left to the manual checklist (section AX).
+
+*Consequences:*
+* The hash is no longer `ItemStack#hashItemAndComponents` or `FluidStack#hashFluidAndComponents`. It still changes
+  with every run (identity hashes of the item, the fluid, the component type and the resource keys), so nothing may
+  persist it, and nothing does; `ORDER` is untouched.
+* What collides now, by design: keys of one item with the same component types whose values differ only in what the hash
+  does not read — values of rule 6, a name's or lore line's style and translation arguments, the four vanilla and six
+  Create types above, direct trim, song and enchantment holders, a food's floats and effects. They share a bucket, and a
+  lookup compares them one by one: N such variants of one item cost up to N `equals` per lookup in a map that holds them
+  all. In the aisle-wide `StockIndex` maps that is paid only for keys whose count changed (`applyDifference` touches
+  `totals` and `countsByKey` only through `apply`). A single location holding S of them pays about 3·S² `equals` on
+  every read, changed or not: two merges per slot in `InventorySnapshot` (a miss scans the bin twice), then
+  `after.getOrDefault` and `before.containsKey` in `applyDifference`, each a scan of a tree bin that has no order to
+  search by; that read happens in the round robin and after every crane transfer into or out of the location. The
+  terminal's stock snapshot (once per 10 ticks per open screen), `StockDiff` (up to `maxTerminalStockEntries` keys per
+  refresh and viewer) and the client's `StockListModel` pay about the same per rebuild over the keys they hold; the
+  terminal's own walk and the display sources' are linear (above). Measured on a dev GameTest server (median per key
+  over 40 rounds, a `StockIndex` of 1000 keys in 40 snapshots of 25, lookups with keys built apart): 1000 enchanted
+  books build in 77 ns (vanilla hash 98 ns), insert in 124 ns (86 ns) and are looked up in 98 ns (73 ns); 1000 named
+  items build in 41 ns (88 ns), insert in 86 ns (86 ns) and are looked up in 43 ns (45 ns). The worst case is 1000
+  variants of one item that differ only in a mod component: one hash code, 61 µs per insert and 15 µs per lookup, about
+  30 ns per `equals` — `IdentityHashedStack`'s (`ItemStack#matches` on one-item stacks), close to the cheapest a record
+  has; a record of pages, components or affixes costs more per comparison. Where the vanilla hash took 0.1 µs and found
+  none of these, a record whose own `hashCode` matches its `equals` (every mod record with an implicit `hashCode`) was
+  found in 0.1 µs too, so for such records the lookup is about 150 times slower at 1000 variants. One location read the
+  same way (median of 25 unchanged re-reads of a 1000-slot `ItemStackHandler`, i.e. `ItemHandlerSnapshots#capture` and
+  `StockIndex#update`, a vault of 50 blocks): 100 pouches of one hash code take 3.5 ms, 300 take 14 ms and 1000 take 176
+  ms (119 ms building the snapshot, 57 ms updating the index), where 1000 written Create clipboards, projected above,
+  take 0.48 ms and 1000 named papers 0.14 ms. Mod records with an implicit `hashCode` used to spread; that is the price
+  of being right for every mod, and the reason for the last alternative above: a warehouse that keeps hundreds of
+  variants of one modded item in one location pays it on every read of that location. Create's own records are projected
+  or trusted for that reason, written clipboards above all.
+* Vanilla items spread as before or better: books, potions and the like by their holders' keys and levels, player
+  heads by name, id and texture, and NBT by a mix per compound entry, where the vanilla compound hash summed
+  `name ^ value`, so the entries of real tags no longer cancel each other. Neither hash resists a built collision:
+  strings hash with `String#hashCode` (`"Aa"` and `"BB"`), lists and int arrays as a polynomial, and `mix` is
+  invertible, so a client can still build colliding names and tags on demand, as it can with a name's colour. That is
+  one more reason `MAX_SAME_HASH` stays (above): it is the bound that holds against such keys, not the hash.
+* A plain key no longer hashes its item's prototype (the vanilla hash walked every default component, attribute
+  modifiers and tool rules included): one identity hash and a mix. A patched key walks its values once, as the vanilla
+  hash did, except that a container's stacks are walked instead of read from the hash `ItemContainerContents` caches:
+  a full shulker box costs 27 stack hashes per key it is part of.
+* Quark's pouch, a patched food with `using_converts_to`, a name in a named colour and a hover item in a name each
+  give one key per content: found after a request, a save and a sync, and one stock line per content. A modded fluid
+  component no longer splits a fluid. A modded component whose class names a type missing on a dedicated server
+  counts by its type there instead of failing.
+* A JEI slot listing more than four variants of one modded item that differ only in a mod component keeps the first
+  four in the recipe's order (`MAX_SAME_HASH`, above); the changelog says so under *Changed*.
+* Dev runs have two synced registry entries more than a release. A dev client joins a release server (the server's
+  snapshot does not name the entries, and NeoForge only refuses entries the client lacks), but a release client cannot
+  join a `runServer` dev server (NeoForge disconnects it for a missing registry entry), so a release is tried on a
+  release server. A world that holds an item with a test component loses that component in a release; only GameTest
+  worlds hold one.
+* `build.gradle`'s note that nothing in `src/main` references `dev/wareworks/gametest` now reads "only behind
+  `FMLLoader#isProduction`", as for `dev/wareworks/dev`. `WareworksNetwork.VERSION` stays `"12"`: no payload's bytes
+  change.
 
 ## Persistence & sync
 

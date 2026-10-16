@@ -297,8 +297,11 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         Function<ItemKey, StockLevels> levels = key -> levelCache.computeIfAbsent(key,
                 item -> controller.stockLevelsOf(item, promised.getOrDefault(item, 0L)));
         List<TerminalStockEntry> entries = new ArrayList<>(stock.distinctKeys());
-        for (ItemKey key : stock.keys()) {
-            long total = stock.count(key);
+        // The totals walked as entries, not every key looked up again: keys that share a hash code (ADR-064) would make
+        // a lookup per key cost the square of their number.
+        for (Map.Entry<ItemKey, Long> stored : stock.totals().entrySet()) {
+            ItemKey key = stored.getKey();
+            long total = stored.getValue();
             if (total > 0)
                 entries.add(entry(controller, rules, levels, key, total,
                         reservations.availableStock(key, total, spoken.getOrDefault(key, 0L)),

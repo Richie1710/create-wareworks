@@ -11,6 +11,7 @@ import com.mojang.logging.LogUtils;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 
+import dev.wareworks.content.item.ComponentHash;
 import dev.wareworks.content.item.ItemKey;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -26,9 +27,12 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * Immutable, amount-less identity of a fluid: the fluid plus its data components. The {@link ItemKey} of fluids
  * (M30, issue #21).
  * <p>
- * Two keys are equal when {@link FluidStack#isSameFluidSameComponents} says so; the hash is
- * {@link FluidStack#hashFluidAndComponents}. The wrapped stack (amount 1) is never exposed, so the key cannot be
- * mutated after construction and is safe as a map key. Keys are never empty.
+ * Two keys are equal when {@link FluidStack#isSameFluidSameComponents} says so. The hash is
+ * {@link ComponentHash#fluidKey} (ADR-064, issue #27): the fluid and the same contract-safe hash of the component patch
+ * an {@link ItemKey} uses, never {@link FluidStack#hashFluidAndComponents}, which multiplies in every value's own
+ * {@code hashCode} and so gives two equal keys two hash codes as soon as one value hashes by identity. The wrapped
+ * stack (amount 1) is never exposed, so the key cannot be mutated after construction and is safe as a map key. Keys
+ * are never empty.
  * <p>
  * <b>Why a key at all, rather than a {@link FluidStack}.</b> A {@code FluidStack} overrides neither {@code equals} nor
  * {@code hashCode} — comparison is the static {@link FluidStack#isSameFluidSameComponents} — it is <b>mutable</b>, and
@@ -58,12 +62,13 @@ public final class FluidKey {
      * ({@link #toString()}, i.e. the fluid id plus the component patch). Used wherever a list of fluid types has to
      * look the same after a restart.
      * <p>
-     * <b>Not {@link #hashCode()}.</b> That hash mixes in {@code Fluid#hashCode()}, and {@code Fluid} overrides neither
-     * {@code hashCode} nor {@code equals}, so the term is the JVM identity hash — the same within one run and different
-     * after every restart. An order falling back to it would swap two equally ranked keys of the same fluid (two
-     * potions) between launches, which is exactly what such an order exists to prevent. The text is only rendered when
-     * two keys share a fluid id, because {@link Comparator#thenComparing(java.util.function.Function)} evaluates its
-     * key extractor only on a tie. This is {@link ItemKey#ORDER}'s argument, verbatim, for the same reason.
+     * <b>Not {@link #hashCode()}.</b> That hash mixes in the JVM identity hash of the fluid ({@code Fluid} overrides
+     * neither {@code hashCode} nor {@code equals}), of every component type and of every registry key it reads — the
+     * same within one run and different after every restart. An order falling back to it would swap two equally
+     * ranked keys of the same fluid (two potions) between launches, which is exactly what such an order exists to
+     * prevent. The text is only rendered when two keys share a fluid id, because
+     * {@link Comparator#thenComparing(java.util.function.Function)} evaluates its key extractor only on a tie. This is
+     * {@link ItemKey#ORDER}'s argument, verbatim, for the same reason.
      */
     public static final Comparator<FluidKey> ORDER =
             Comparator.comparing((FluidKey key) -> FluidTypeSummaries.fluidId(key.getFluid()))
@@ -77,7 +82,7 @@ public final class FluidKey {
             throw new IllegalArgumentException("A fluid key cannot be empty");
         // copyWithAmount copies the component map, so a later mutation of the source cannot change this key.
         this.stack = source.copyWithAmount(1);
-        this.hash = FluidStack.hashFluidAndComponents(this.stack);
+        this.hash = ComponentHash.fluidKey(this.stack);
     }
 
     /**
@@ -176,6 +181,10 @@ public final class FluidKey {
         return parent.contains(name) ? load(registries, parent.get(name)) : Optional.empty();
     }
 
+    /**
+     * Fluid and components, as {@link FluidStack#isSameFluidSameComponents} compares them. The hash is compared first:
+     * it is contract-safe ({@link ComponentHash}), so unequal hashes prove unequal keys for every mod.
+     */
     @Override
     public boolean equals(Object o) {
         return this == o || o instanceof FluidKey other && hash == other.hash

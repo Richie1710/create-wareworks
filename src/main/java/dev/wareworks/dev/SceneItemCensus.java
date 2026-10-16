@@ -1,8 +1,10 @@
 package dev.wareworks.dev;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 import java.util.TreeMap;
 
 import com.simibubi.create.AllDataComponents;
@@ -210,11 +212,26 @@ final class SceneItemCensus {
         throw new VisualTestException("item conservation violated, " + reason);
     }
 
-    /** A stable, readable rendering of a census, sorted by item key. */
+    /**
+     * A stable, readable rendering of a census, sorted by the keys' text. Unequal keys with the same text — one item
+     * split into several keys, the symptom of a hash that breaks its key's equality (issue #27) — are listed as one
+     * entry with their sum and every part, never folded into the last one seen.
+     */
     static String describe(Map<ItemKey, Long> counts) {
-        Map<String, Long> sorted = new TreeMap<>();
-        counts.forEach((key, count) -> sorted.put(key.toString(), count));
-        return sorted.toString();
+        Map<String, List<Long>> byText = new TreeMap<>();
+        counts.forEach((key, count) -> byText.computeIfAbsent(String.valueOf(key), text -> new ArrayList<>())
+                .add(count));
+        StringJoiner out = new StringJoiner(", ", "{", "}");
+        byText.forEach((text, parts) -> {
+            if (parts.size() == 1) {
+                out.add(text + "=" + parts.getFirst());
+                return;
+            }
+            parts.sort(null); // the census map's order is not stable, and the message must be
+            out.add(text + "=" + parts.stream().mapToLong(Long::longValue).sum() + " (split over " + parts.size()
+                    + " unequal keys: " + parts + ")");
+        });
+        return out.toString();
     }
 
     /**

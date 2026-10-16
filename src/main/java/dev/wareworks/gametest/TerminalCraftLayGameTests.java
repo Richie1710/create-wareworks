@@ -33,6 +33,7 @@ import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.crafting.IngredientPicker;
 import dev.wareworks.network.TerminalCraftAnswerPayload;
 import dev.wareworks.network.TerminalCraftLayPayload;
 import dev.wareworks.network.TerminalCraftOrderPayload;
@@ -42,6 +43,7 @@ import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.component.DataComponentPatch;
 import net.minecraft.core.component.DataComponents;
@@ -58,6 +60,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.alchemy.Potion;
+import net.minecraft.world.item.alchemy.PotionContents;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.RecipeHolder;
@@ -88,6 +92,8 @@ import net.neoforged.neoforge.network.connection.ConnectionType;
  * alternative the buffer holds, else the first;</li>
  * <li>{@code terminalcraftlayprefersplainitems} — vanilla's unused-item rule: a renamed item only when no plain one is
  * a candidate, and the rule's three marks read from the item;</li>
+ * <li>{@code terminalcraftlaykeepseverypotion} — a tipped arrow's potion cell listing every potion keeps every potion,
+ * because every potion hashes apart (ADR-064): the delivered one, the last of the cell, is laid;</li>
  * <li>{@code terminalcraftlaymissingingredientsstilllay} — nothing delivered, no aisle: every cell takes its first
  * candidate and the grid is laid all the same, for the panel to name what is missing;</li>
  * <li>{@code terminalcraftlayranksproducibleaboveabsent} — an ingredient a production station makes before the
@@ -149,6 +155,7 @@ public final class TerminalCraftLayGameTests {
     private static final ItemKey FIRE_CHARGE = ItemKey.of(Items.FIRE_CHARGE);
     private static final ItemKey STICK = ItemKey.of(Items.STICK);
     private static final ItemKey TORCH = ItemKey.of(Items.TORCH);
+    private static final ItemKey ARROW = ItemKey.of(Items.ARROW);
 
     private static final ResourceLocation CHEST_RECIPE = ResourceLocation.withDefaultNamespace("chest");
     private static final ResourceLocation FIRE_CHARGE_RECIPE = ResourceLocation.withDefaultNamespace("fire_charge");
@@ -316,6 +323,46 @@ public final class TerminalCraftLayGameTests {
     }
 
     /**
+     * <b>A cell that lists every potion keeps every potion.</b> A tipped arrow laid the way a viewer shows it, through
+     * the payload's codec: arrows in the eight ring cells and, in the middle, every lingering potion of the registry —
+     * far more than the picker keeps of one hash code ({@value IngredientPicker#MAX_SAME_HASH}). Every potion hashes
+     * apart (ADR-064), so none is dropped: the one the buffer holds, the registry's last, is laid, and the server's
+     * tipped arrow recipe names arrows of that potion.
+     */
+    @GameTest(template = EMPTY_7X5X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void terminalCraftLayKeepsEveryPotion(GameTestHelper helper) {
+        helper.setBlock(TERMINAL, terminalState());
+        Player player = playerAt(helper, TERMINAL);
+        Map<ItemKey, Long> expected = ItemCensus.of();
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, expected, "while every potion is laid", player));
+
+        helper.startSequence().thenIdle(1).thenExecute(() -> {
+            List<Holder.Reference<Potion>> registered = BuiltInRegistries.POTION.holders().toList();
+            List<ItemKey> potions = registered.stream()
+                    .map(potion -> ItemKey.of(PotionContents.createItemStack(Items.LINGERING_POTION, potion)))
+                    .toList();
+            helper.assertTrue(potions.size() > IngredientPicker.MAX_SAME_HASH
+                    && potions.size() <= TerminalCraftLayPayload.MAX_CANDIDATES,
+                    "more potions than the picker keeps of one hash code, and no more than a cell may list: "
+                            + potions.size());
+            ItemKey held = potions.getLast();
+            WarehouseTerminalBlockEntity terminal = terminalAt(helper, TERMINAL);
+            seed(helper, terminal, expected, held.toStack(1));
+            WarehouseTerminalMenu menu = openMenu(player, terminal);
+            List<List<ItemKey>> cells = new ArrayList<>(Collections.nCopies(CraftGrid.SIZE, List.of(ARROW)));
+            cells.set(4, potions);
+            TerminalCraftLayPayload sent = TerminalCraftGameTests.roundTrip(helper, payload(menu, cells),
+                    TerminalCraftLayPayload.STREAM_CODEC);
+            helper.assertValueEqual(sent.cells().get(4).size(), potions.size(), "every potion went over the wire");
+            TerminalCraftOutcome laid = WarehouseTerminalMenu.submitCraftLay(player, sent)
+                    .orElseThrow(() -> new GameTestAssertException("the lay was dropped instead of answered"));
+            ItemKey arrows = ItemKey.of(PotionContents.createItemStack(Items.TIPPED_ARROW, registered.getLast()));
+            assertLaid(helper, menu, laid, CraftGrid.of(ARROW, ARROW, ARROW, ARROW, held, ARROW, ARROW, ARROW, ARROW),
+                    arrows, "the delivered potion, the last of the cell");
+        }).thenSucceed();
+    }
+
+    /**
      * <b>A missing ingredient still lays.</b> Nothing delivered and no aisle: a chest takes the planks tag's first
      * entry in every cell, and a torch coal, its first alternative, in the middle column where a viewer puts a one-wide
      * recipe. Both grids are laid, so the panel can name what is missing and Fetch can ask for it.
@@ -463,9 +510,9 @@ public final class TerminalCraftLayGameTests {
      * <li>a second lay in one tick — dropped: a menu takes one lay per tick, and the first one of a tick goes through
      * the payload's entry like a click; a lay after the menu answered eight actions in a tick — dropped, because a lay
      * also counts as one of them;</li>
-     * <li>nine cells of sixty-four diamonds whose custom data all hash alike, through the payload's codec — answered
-     * {@link TerminalCraftResult#NOT_LAID} after one lookup: the picker keeps four keys of one hash code and drops the
-     * rest, so such a lay costs no more than an honest one.</li>
+     * <li>nine cells of sixty-four diamonds whose names differ only in colour, so they all hash alike, through the
+     * payload's codec — answered {@link TerminalCraftResult#NOT_LAID} after one lookup: the picker keeps four keys of
+     * one hash code and drops the rest, so such a lay costs no more than an honest one.</li>
      * </ul>
      */
     @GameTest(template = EMPTY_7X5X7, timeoutTicks = TIMEOUT_TICKS)
@@ -837,19 +884,19 @@ public final class TerminalCraftLayGameTests {
 
     /**
      * {@code count} distinct keys of {@code item}, numbered from 0, that all share one hash code, as a hostile client
-     * can make them: custom data {@code {a: i, b: w}} with {@code w} chosen so that every tag hashes to 0 — a compound
-     * tag's hash code is the sum of {@code name ^ value} over its entries, and an int tag's is its value.
+     * can make them without even searching: the custom name {@code "x"} in colour {@code i}. An item key's hash reads
+     * a name's text and never its style (ADR-064), so the keys differ by their name's colour and hash alike. (The old
+     * custom data construction, {@code {a: i, b: w}} with {@code w} cancelling vanilla's sum of {@code name ^ value},
+     * no longer collides, because the key hash mixes every compound entry. Custom data can still be made to collide on
+     * purpose: strings hash with {@code String#hashCode} ({@code "Aa"} and {@code "BB"}), and {@code mix} can be
+     * inverted. A name's colour simply needs no construction at all.)
      */
     private static List<ItemKey> sameHash(ItemLike item, int count) {
-        int a = "a".hashCode();
-        int b = "b".hashCode();
         List<ItemKey> keys = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            CompoundTag tag = new CompoundTag();
-            tag.putInt("a", i);
-            tag.putInt("b", -(a ^ i) ^ b);
+            int colour = i;
             ItemStack stack = new ItemStack(item);
-            stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+            stack.set(DataComponents.CUSTOM_NAME, Component.literal("x").withStyle(style -> style.withColor(colour)));
             keys.add(ItemKey.of(stack));
         }
         return keys;

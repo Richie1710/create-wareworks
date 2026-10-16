@@ -3478,9 +3478,14 @@ missing as for a grid laid by hand.
   delivered birch plank.
 * **A client's keys cost linear work.** Before anything else the pick keeps at most four distinct candidates per hash
   code across the lay (`IngredientPicker.MAX_SAME_HASH`, `#spreadHashes`) and drops the rest. A client chooses the
-  keys and their hash codes — the same item with custom data whose tags hash alike is easy to make — and every hash
-  set and map of the pick compares keys of one hash code one by one, so nine cells of 64 such keys would otherwise
-  cost well over a hundred thousand comparisons. Real items never come near the bound.
+  keys and their hash codes — keys of one item that differ only in what the key hash does not read, a name's colour
+  or a mod's own component, share one by design (ADR-064), and custom data with colliding strings or lists is just as
+  easy to build — and every hash set and map of the pick compares keys of one hash code one by one, so nine cells of
+  64 such keys would otherwise cost well over a hundred thousand comparisons. Vanilla variants hash apart (every
+  potion, tipped arrow, enchanted book, suspicious stew, rocket, goat horn, banner, dyed or trimmed piece), so a cell
+  listing every potion keeps every potion; real candidates share a hash code only when they are variants of one item
+  that differ in such a value, and a cell listing more than four of those keeps the first four in the recipe's
+  order.
 * **Bounded.** The aisle is asked about a key at most once per lay, and only for cells with two candidates or more: at
   most nine times 64 keys. A terminal without an aisle has its buffer and nothing else.
 
@@ -3613,12 +3618,13 @@ crafting extension draws with other than nine input slots gets no "+"; and a JEI
   `RequestConfirmationTest` and `RequestAcknowledgementTest` (`CRAFT` asks and answers exactly like `LIST`) and
   `content.station.TerminalCraftResultTest` (4: the fetch values, which of them are successes and which put a question
   up, `LAID` a craft's success and `NOT_LAID` a craft's refusal, and every value travelling by name with a sentence of
-  its own). For JEI's "+": `core.crafting.IngredientPickerTest` (19: empty cells, the nine-cell bound and nulls, single
+  its own). For JEI's "+": `core.crafting.IngredientPickerTest` (20: empty cells, the nine-cell bound and nulls, single
   candidates decided without a lookup, the first-candidate fallback, each ranking step, worn keys, a piston laid with
   missing ingredients, one key per candidate list, overlapping lists, claims, the 64-candidate cap, every key asked
   about at most once, negative and huge counts, 500 seeded random rounds with different map types, nine cells of 64
   keys sharing one hash code picked with at most 4 608 comparisons where the unbounded pick needs well over a hundred
-  thousand, and the hash bound counting distinct keys only; each rule was broken once on purpose and caught) and
+  thousand, the hash bound counting distinct keys only, and a cell of 64 candidates with hash codes of their own kept
+  whole, the held one picked first, at the bound and last; each rule was broken once on purpose and caught) and
   `client.compat.jei.JeiBoundaryTest` (5, ADR-063's code boundary as a text scan: no `mezz.jei` outside
   `client.compat.jei`, that package reached from nowhere but the `jei` scenario, no import below `mezz.jei.api`, the
   allowed places still holding their uses, and every form the patterns must catch or pass over).
@@ -3709,7 +3715,7 @@ crafting extension draws with other than nine input slots gets no "+"; and a JEI
   pass, the order never asking again on any tick, both machines played until `DONE`, 2 spare planks left in the racks
   and the gate crafted (`terminalcraftgatefetchasksonce`). Not covered by a GameTest: how the makeable and stopped cells
   look (the `craft` scenario shoots the makeable one; manual checks 264 and 267).
-* **GameTests for JEI's "+"** (`gametest.TerminalCraftLayGameTests`, 9, the item census over the test's blocks and
+* **GameTests for JEI's "+"** (`gametest.TerminalCraftLayGameTests`, 10, the item census over the test's blocks and
   players on every tick; what is picked is laid through the menu's own `layRecipe`, which the payload's handler
   reaches after its checks, and those checks and budgets are sent through `submitCraftLay` as a received payload is):
   a chest from the real `#planks` tag, whose first entry is oak, laid in
@@ -3717,18 +3723,20 @@ crafting extension draws with other than nine input slots gets no "+"; and a JEI
   (`terminalcraftlaypicksthebufferthenthestock`); a shapeless fire charge in JEI's cells 0, 1 and 3 taking the
   delivered charcoal over coal, the same items in other cells laying too, and coal with nothing
   delivered (`terminalcraftlayshapeless`); plain birch over delivered renamed oak, the delivered one when every
-  candidate is renamed, and the damaged, enchanted and renamed checks (`terminalcraftlayprefersplainitems`); every cell
+  candidate is renamed, and the damaged, enchanted and renamed checks (`terminalcraftlayprefersplainitems`); a tipped
+  arrow whose potion cell lists every lingering potion, sent through the payload's codec, keeping every potion and
+  laying the delivered one, the last of the cell (`terminalcraftlaykeepseverypotion`, ADR-064); every cell
   its first candidate when nothing is there, a torch in the middle column included
   (`terminalcraftlaymissingingredientsstilllay`); birch, which a station makes, over oak, which nothing holds
   (`terminalcraftlayranksproducibleaboveabsent`); `ALREADY_RUNNING` while a craft order runs and a lay after Cancel
   (`terminalcraftlayrefusedwhileacraftorderruns`); no open menu, a wrong container id, another terminal, a stranger, a
   fake player, 8 or 10 cells, 65 candidates, an empty grid, a diamond grid with and without a chest hint, out of reach,
   a second lay in one tick and a lay after the tick's eight actions, each leaving grid, view and lay unchanged, the
-  first lay of a tick taken through the payload's entry, nine cells of 64 diamonds whose custom data all hash alike
-  sent through the codec and answered `NOT_LAID`, and only the `NOT_LAID` refusals costing their one lookup
-  (`terminalcraftlayrefuseswithoutsideeffects`); the view carrying the chosen cells and naming the
-  chest, a preview of the laid grid with the lay's recipe costing no second lookup, a later preview of another grid
-  keeping the lay, a second lay numbered 2, and view and answer through their codecs
+  first lay of a tick taken through the payload's entry, nine cells of 64 diamonds whose names differ only in colour,
+  so that they all hash alike, sent through the codec and answered `NOT_LAID`, and only the `NOT_LAID` refusals
+  costing their one lookup (`terminalcraftlayrefuseswithoutsideeffects`); the view carrying the chosen cells and
+  naming the chest, a preview of the laid grid with the lay's recipe costing no second lookup, a later preview of
+  another grid keeping the lay, a second lay numbered 2, and view and answer through their codecs
   (`terminalcraftlayanswerswiththegrid`); and the payload's round trip, a count of 5 read as 1, every hostile shape
   refused — a lay of more than 32 767 bytes too, on decode and on write — an honest chest fitted as it is, a heavy lay
   cut to the first candidates of each cell until it fits and then decoded, and nothing to send when one candidate per
@@ -6448,9 +6456,9 @@ and is owned by the dock, exactly as the rail count was.
 
 ## 6. Item keys
 
-`ItemKey` = immutable copy of an `ItemStack` with count 1. Equality uses `ItemStack.isSameItemSameComponents`, the hash uses `ItemStack.hashItemAndComponents`. Core logic is generic over the key type (`K`), so it can be unit tested without Minecraft bootstrap.
+`ItemKey` = immutable copy of an `ItemStack` with count 1. Equality uses `ItemStack.isSameItemSameComponents`. The hash (`content.item.ComponentHash#itemKey`, ADR-064, [issue #27](https://github.com/Richie1710/create-wareworks/issues/27)) mixes the item with an order-independent sum over the component patch that reads each value only as far as its `equals` is known to compare it (the rules in `core.inventory.ValueHash`), so a value no rule vouches for — every mod record, Quark's seed pouch contents among them — counts by its component type alone and equal keys always hash equally; `FluidKey` hashes the same way (`ComponentHash#fluidKey`). It is deliberately **not** `ItemStack.hashItemAndComponents`, which multiplies in every value's own `hashCode`: a value that compares by value but hashes by identity gave two equal keys two hash codes, so a key decoded from a request or a save was never found and every stored pouch was its own stock entry. Core logic is generic over the key type (`K`), so it can be unit tested without Minecraft bootstrap.
 
-Implementation (`content.item.ItemKey`): the wrapped stack is never exposed (`toStack(count)` returns copies), so keys are safe map keys. `CODEC` is `ItemStack.SINGLE_ITEM_CODEC` (id + components), `STREAM_CODEC` wraps `ItemStack.STREAM_CODEC`. `save(provider)` / `load(provider, tag)` and `saveTo`/`loadFrom` never throw: an unencodable key saves as an empty tag, an unknown or invalid tag loads as `Optional.empty()` with a warning. Because `ItemKey` needs registries, it is tested in the GameTest `itemkeypersistence`, not in JUnit.
+Implementation (`content.item.ItemKey`): the wrapped stack is never exposed (`toStack(count)` returns copies), so keys are safe map keys. `CODEC` is `ItemStack.SINGLE_ITEM_CODEC` (id + components), `STREAM_CODEC` wraps `ItemStack.STREAM_CODEC`. `save(provider)` / `load(provider, tag)` and `saveTo`/`loadFrom` never throw: an unencodable key saves as an empty tag, an unknown or invalid tag loads as `Optional.empty()` with a warning. Because `ItemKey` needs registries, it is tested in the GameTests `itemkeypersistence` and `componenthash*` (`gametest.ComponentHashGameTests`: equal keys built apart, saved and sent hash equally, with a dev-only component shaped like Quark's), not in JUnit; the pure hash rules are JUnit-tested (`ValueHashTest`).
 
 ## 7. Jobs
 
@@ -7002,9 +7010,10 @@ production station has a pattern for but no stock of appears in a terminal's off
 types with the same amount are ordered by `ItemKey.ORDER` — the item id, then the key's text (item id plus component
 patch) — the rule `TerminalStockEntry.ORDER` also ends with: the stock index keeps its keys in a `HashSet`, so without
 a tie-break a display would swap two equally stocked lines for no reason. The tie-break is **value-based** on purpose.
-`ItemKey#hashCode` is `ItemStack.hashItemAndComponents`, which mixes in `Item#hashCode()` — an identity hash that
-differs after every restart — so falling back to it would reorder two equally stocked keys of the *same* item (two
-named shulker boxes, two enchanted books) across launches, which is what the tie-break exists to prevent.
+`ItemKey#hashCode` (`ComponentHash#itemKey`, ADR-064) mixes in the identity hashes of the item, the component types and
+the registry keys it reads — the same within a run and different after every restart — so falling back to it would
+reorder two equally stocked keys of the *same* item (two named shulker boxes, two enchanted books) across launches,
+which is what the tie-break exists to prevent.
 
 **Stock of the Filtered Item** (output, interface): the aisle-wide **stored** total of the item in the block's own
 filter slot — the output's request filter (§3.2), the interface's store filter (§3.1). It is deliberately not the

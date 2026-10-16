@@ -257,6 +257,10 @@ class StockIndexTest {
         assertEquals(expectedTotal, index.totalItems());
         assertEquals(expected.keySet(), index.keys());
         assertEquals(expected.size(), index.distinctKeys());
+        Map<String, Long> expectedTotals = new HashMap<>();
+        expected.forEach((key, perLocation) -> expectedTotals.put(key,
+                perLocation.values().stream().mapToLong(Long::longValue).sum()));
+        assertEquals(expectedTotals, index.totals(), "every key with its total");
         assertEquals(truth.size(), index.locationCount());
         for (int k = 0; k < keys; k++) {
             String key = "key" + k;
@@ -294,6 +298,8 @@ class StockIndexTest {
         StockIndex<String, String> index = new StockIndex<>();
         index.update("A", snapshot("iron", 3));
         assertThrows(UnsupportedOperationException.class, () -> index.keys().remove("iron"));
+        assertThrows(UnsupportedOperationException.class, () -> index.totals().remove("iron"));
+        assertThrows(UnsupportedOperationException.class, () -> index.totals().put("gold", 1L));
         assertThrows(UnsupportedOperationException.class, () -> index.locations().clear());
         assertThrows(UnsupportedOperationException.class, () -> index.locationsOf("iron").clear());
         assertThrows(NullPointerException.class, () -> index.update(null, snapshot()));
@@ -352,6 +358,8 @@ class StockIndexTest {
         assertEquals(6L, view.totalItems());
         assertEquals(2, view.distinctKeys());
         assertEquals(Set.of("iron", "gold"), view.keys());
+        assertEquals(Map.of("iron", 5L, "gold", 1L), view.totals());
+        assertThrows(UnsupportedOperationException.class, () -> view.totals().clear());
         assertTrue(view.contains("A"));
         assertEquals(2, view.locationCount());
         assertEquals(2, view.occupiedLocations());
@@ -359,8 +367,10 @@ class StockIndexTest {
         assertEquals(Map.of("iron", 2L, "gold", 1L), view.countsAt("B"));
         assertThrows(UnsupportedOperationException.class, () -> view.countsAt("B").clear());
 
+        Map<String, Long> totals = view.totals();
         index.remove("A");
         assertEquals(2L, view.count("iron"), "later changes are visible");
+        assertEquals(Map.of("iron", 2L, "gold", 1L), totals, "in the totals as well");
         assertFalse(view.contains("A"));
     }
 }

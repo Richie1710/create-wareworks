@@ -5,7 +5,6 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 
 import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.fluid.FluidKey;
@@ -218,10 +217,8 @@ final class FluidCensus {
             amounts.put(key, value);
     }
 
-    /** A stable, readable rendering of a fluid census, sorted by fluid key. */
+    /** A stable, readable rendering of a fluid census, as {@link ItemCensus#describe} renders an item census. */
     static String describe(Map<FluidKey, Long> amounts) {
-        Map<String, Long> sorted = new TreeMap<>();
-        amounts.forEach((key, millibuckets) -> sorted.put(key.toString(), millibuckets));
-        return sorted.toString();
+        return ItemCensus.describe(amounts);
     }
 }

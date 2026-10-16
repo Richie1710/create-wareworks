@@ -56,13 +56,26 @@ import java.util.Set;
  * candidates: a single-candidate cell is decided without a lookup.
  * <p>
  * <b>A client chooses the keys, and their hash codes.</b> On the server the candidates arrive from a client, which can
- * make any number of distinct keys with one hash code (the same item with custom data whose tags hash alike). Every
- * hash set and map in here compares keys of one hash code one by one, so a lay of nothing but such keys would cost the
- * square of its candidates. Before anything else, {@link #pick} therefore keeps at most {@value #MAX_SAME_HASH}
- * distinct candidates per hash code across the whole lay and drops the rest ({@link #spreadHashes}): the work stays
- * linear in the candidates, whatever their hashes. Real items never come near the bound — two different items share a
- * hash code only by chance — so it changes nothing for a recipe a viewer really shows; a hostile lay loses candidates,
- * and a cell that loses all of them stays empty.
+ * make any number of distinct keys with one hash code without even searching: an item key's hash reads only what each
+ * component value's {@code equals} is known to compare (ADR-064), so keys that differ only in what it does not read —
+ * a name's colour, a mod's own component — share one by design. Every hash set and map in here compares keys of one
+ * hash code one by one, so a lay of nothing but such keys would cost the square of its candidates. Before anything
+ * else, {@link #pick} therefore keeps at most {@value #MAX_SAME_HASH} distinct candidates per hash code across the
+ * whole lay and drops the rest ({@link #spreadHashes}): the work stays linear in the candidates, whatever their hashes.
+ * The bound re-derived: at most {@value CraftGrid#SIZE} × {@value #MAX_CANDIDATES} candidates, each compared with at
+ * most {@value #MAX_SAME_HASH} kept keys of its hash code in each set and map. One comparison of two item keys is not
+ * linear in their bytes but costs about k² reference probes for k component-patch entries: the patch is a fastutil
+ * array map, whose {@code equals} is {@code entrySet().containsAll}, a {@code containsKey} and a {@code get} per entry,
+ * each a linear scan. k is bounded only by the registered component types, about 110 with vanilla and Create, so a
+ * pass costs a few times what decoding the same payload costs (vanilla's decode of a patch is about k² as well) and
+ * grows with a pack's component types; the menu takes one lay per tick. The {@link Supply}'s lookups come on top:
+ * each costs as many comparisons as the stock holds keys with the candidate's hash code, which this bound does not
+ * cap, so a lay pays at most {@value #MAX_SAME_HASH} lookups per hash code times the size of that bucket. Vanilla
+ * variants hash apart — every potion, tipped arrow, enchanted book, suspicious stew, rocket, goat horn, banner and dyed
+ * or trimmed piece — so a cell that lists every potion keeps every potion; real candidates share a hash code only when
+ * they are one item that differs just in such a value, and a cell listing more than {@value #MAX_SAME_HASH} of those
+ * keeps the first ones in the recipe's order. A hostile lay loses candidates, and a cell that loses all of them stays
+ * empty.
  * <p>
  * <b>Deterministic.</b> The answer depends only on the cells and on what the {@link Supply} says, never on the
  * iteration order of a hash map: every tie ends at the recipe's order. Pure Java with no Minecraft types; {@code K}
@@ -77,7 +90,8 @@ public final class IngredientPicker {
     /**
      * How many distinct candidates of one lay may share a hash code; the rest are dropped ({@link #spreadHashes}). It
      * keeps the comparisons per lookup in every hash set and map of a pick at a handful, so a lay costs at most a few
-     * times its candidates however a client chose their hash codes.
+     * comparisons per candidate however a client chose their hash codes (what one comparison costs: the class
+     * description).
      */
     public static final int MAX_SAME_HASH = 4;
 

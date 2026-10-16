@@ -37,6 +37,13 @@ public interface StockView<K, L> {
     /** The keys with a positive total (unmodifiable, no defined order). */
     Set<K> keys();
 
+    /**
+     * Every key with its positive total, as {@link #count} answers it (unmodifiable, no defined order, reflects later
+     * changes). Walking it costs one step per key, where {@link #keys()} with a {@link #count} per key costs a lookup
+     * per key, and a lookup compares its key with every key that shares its hash code.
+     */
+    Map<K, Long> totals();
+
     /** Whether {@code location} is indexed (possibly without stock). */
     boolean contains(L location);
 

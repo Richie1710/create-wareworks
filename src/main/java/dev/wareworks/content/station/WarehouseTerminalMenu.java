@@ -716,9 +716,10 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      * {@value IngredientPicker#MAX_CANDIDATES} candidate keys and asks the aisle about the ones it compares, before the
      * one recipe lookup a preview also makes. The candidates are bounded on the way in — at most
      * {@value TerminalCraftLayPayload#MAX_BYTES} bytes, so a client cannot make the keys large, and at most
-     * {@value IngredientPicker#MAX_SAME_HASH} distinct keys per hash code kept by the picker, so it cannot make them
-     * collide — and one lay per tick bounds how often it is paid. A player presses a viewer's button once per click.
-     * Everything else — reach, the lock of a running craft order, the grid — is checked by {@link #layRecipe}.
+     * {@value IngredientPicker#MAX_SAME_HASH} distinct keys per hash code kept by the picker, so keys it makes share
+     * one cost a few comparisons each — and one lay per tick bounds how often it is paid. A player presses a viewer's
+     * button once per click. Everything else — reach, the lock of a running craft order, the grid — is checked by
+     * {@link #layRecipe}.
      *
      * @return what the lay became, for the acting player; empty for everything dropped
      */
