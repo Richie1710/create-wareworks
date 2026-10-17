@@ -92,7 +92,10 @@ import net.neoforged.neoforge.fluids.SimpleFluidContent;
  * <b>The key:</b> {@code mix(31 * identityHashCode(item) + patch)}, where {@code patch} is the sum over the patch's
  * entries of {@code mix(identityHashCode(type) * 0x9E3779B9 + v)} and {@code v} is the value's hash, or a fixed
  * constant for a removed prototype component. The sum does not depend on the patch map's insertion order, the
- * prototype is left out (one item has one), and the count is not part of a key.
+ * prototype is left out (one item has one), and the count is not part of a key. An entry of the key's own patch whose
+ * type has a {@link ComponentMeanings meaning} — Create's toolbox inventory, a sand paper's polished item and a
+ * symmetry wand's mirror — hashes its meaning instead of the value (ADR-066, issue #29), because that is what the key
+ * compares; nested patches never do, and neither do {@link #fluidKey} and {@link #stack}.
  * <p>
  * <b>A value</b> is hashed by {@link ValueHash}'s rules, with this class as rule 2: the Minecraft, NeoForge and Create
  * classes verified in the decompiled sources, each hashed only from what its {@code equals} compares —
@@ -107,7 +110,9 @@ import net.neoforged.neoforge.fluids.SimpleFluidContent;
  * enchantments; armour trims; jukebox songs by key; {@link FoodProperties} by nutrition, {@code can_always_eat}, the
  * number of effects and {@code using_converts_to}; bee occupants; {@link Vec3i} by its coordinates; Create's
  * {@link ClipboardContent} with its {@link ClipboardEntry entries} (tick, text and icon, never the amount beside the
- * icon) and a package's {@link PackageItem.PackageOrderData} by its numbers.</li>
+ * icon) and a package's {@link PackageItem.PackageOrderData} by its numbers;</li>
+ * <li>the two stack views a meaning is built from: {@link ComponentMeanings.ExactStack} like {@link #stack} (with its
+ * count) and {@link ComponentMeanings.SameKind} like {@link #kind} (item and components).</li>
  * </ul>
  * Everything else — every mod record and every class with an {@code equals} of its own — counts by its component type
  * alone ({@link ValueHash#OPAQUE}). Within one run only: identity hashes change with every start.
@@ -136,15 +141,20 @@ public final class ComponentHash extends ValueHash {
     private ComponentHash() {
     }
 
-    /** The hash of an item key: its item and its component patch (count ignored). The stack must not be empty. */
+    /**
+     * The hash of an item key: its item and its component patch (count ignored). An entry of the key's own patch whose
+     * type has a {@link ComponentMeanings meaning} (ADR-066) is hashed by its meaning, which is what the key compares;
+     * values nested inside other values never are. The stack must not be empty.
+     */
     public static int itemKey(ItemStack stack) {
-        return mix(31 * System.identityHashCode(stack.getItem()) + INSTANCE.patchOf(stack, 0));
+        return mix(31 * System.identityHashCode(stack.getItem())
+                + (stack.isComponentsPatchEmpty() ? 0 : INSTANCE.patch(stack.getComponentsPatch(), 0, true)));
     }
 
     /** The hash of a fluid key: its fluid and its component patch (amount ignored). The stack must not be empty. */
     public static int fluidKey(FluidStack stack) {
         return mix(31 * System.identityHashCode(stack.getFluid())
-                + (stack.isComponentsPatchEmpty() ? 0 : INSTANCE.patch(stack.getComponentsPatch(), 0)));
+                + (stack.isComponentsPatchEmpty() ? 0 : INSTANCE.patch(stack.getComponentsPatch(), 0, false)));
     }
 
     /**
@@ -155,22 +165,46 @@ public final class ComponentHash extends ValueHash {
         return INSTANCE.stackHash(stack, 0);
     }
 
+    /**
+     * The hash of a stack by its item and components, count ignored, consistent with
+     * {@link ItemStack#isSameItemSameComponents}; {@code 0} for an empty stack.
+     */
+    public static int kind(ItemStack stack) {
+        return INSTANCE.kindHash(stack, 0);
+    }
+
     private int stackHash(ItemStack stack, int depth) {
         if (stack.isEmpty())
             return 0;
         return mix(31 * (31 * System.identityHashCode(stack.getItem()) + stack.getCount()) + patchOf(stack, depth));
     }
 
-    private int patchOf(ItemStack stack, int depth) {
-        return stack.isComponentsPatchEmpty() ? 0 : patch(stack.getComponentsPatch(), depth);
+    private int kindHash(ItemStack stack, int depth) {
+        if (stack == null || stack.isEmpty())
+            return 0;
+        return mix(31 * System.identityHashCode(stack.getItem()) + patchOf(stack, depth));
     }
 
-    private int patch(DataComponentPatch patch, int depth) {
+    private int patchOf(ItemStack stack, int depth) {
+        return stack.isComponentsPatchEmpty() ? 0 : patch(stack.getComponentsPatch(), depth, false);
+    }
+
+    /**
+     * The unordered sum over the patch's entries. With {@code keyLevel} — the patch of an item key itself — an entry
+     * whose type has a meaning hashes the meaning (ADR-066); a nested patch hashes every value by the rules.
+     */
+    private int patch(DataComponentPatch patch, int depth, boolean keyLevel) {
         int h = 0;
         for (Map.Entry<DataComponentType<?>, Optional<?>> entry : patch.entrySet()) {
             Optional<?> value = entry.getValue();
-            h += mix(System.identityHashCode(entry.getKey()) * TYPE_SPREAD
-                    + (value.isPresent() ? hash(value.get(), depth + 1) : REMOVED));
+            int v;
+            if (value.isEmpty()) {
+                v = REMOVED;
+            } else {
+                ComponentMeanings.Meaning<?> meaning = keyLevel ? ComponentMeanings.of(entry.getKey()) : null;
+                v = hash(meaning != null ? meaning.meaningOf(value.get()) : value.get(), depth + 1);
+            }
+            h += mix(System.identityHashCode(entry.getKey()) * TYPE_SPREAD + v);
         }
         return h;
     }
@@ -226,6 +260,10 @@ public final class ComponentHash extends ValueHash {
         if (value instanceof PackageItem.PackageOrderData order)
             return 31 * (31 * (31 * (31 * order.orderId() + order.linkIndex()) + Boolean.hashCode(order.isFinalLink()))
                     + order.fragmentIndex()) + Boolean.hashCode(order.isFinal());
+        if (value instanceof ComponentMeanings.ExactStack exact)
+            return stackHash(exact.stack(), depth);
+        if (value instanceof ComponentMeanings.SameKind kind)
+            return kindHash(kind.stack(), depth);
         if (TRUSTED.contains(value.getClass()))
             return value.hashCode();
         return structural(value, depth);
@@ -255,7 +293,7 @@ public final class ComponentHash extends ValueHash {
             return 0;
         FluidStack stack = content.copy();
         return mix(31 * (31 * System.identityHashCode(stack.getFluid()) + stack.getAmount())
-                + (stack.isComponentsPatchEmpty() ? 0 : patch(stack.getComponentsPatch(), depth + 1)));
+                + (stack.isComponentsPatchEmpty() ? 0 : patch(stack.getComponentsPatch(), depth + 1, false)));
     }
 
     /**
@@ -276,10 +314,7 @@ public final class ComponentHash extends ValueHash {
      * beside the icon is left out, as {@code equals} leaves it out.
      */
     private int clipboardEntry(ClipboardEntry entry, int depth) {
-        ItemStack icon = entry.icon;
-        int iconHash = icon == null || icon.isEmpty() ? 0
-                : mix(31 * System.identityHashCode(icon.getItem()) + patchOf(icon, depth));
-        return 31 * (31 * Boolean.hashCode(entry.checked) + hash(entry.text, depth + 1)) + iconHash;
+        return 31 * (31 * Boolean.hashCode(entry.checked) + hash(entry.text, depth + 1)) + kindHash(entry.icon, depth);
     }
 
     private int writtenBook(WrittenBookContent book, int depth) {

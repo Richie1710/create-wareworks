@@ -25,14 +25,21 @@ import net.minecraft.world.level.ItemLike;
 /**
  * Immutable, count-less identity of an item: the item plus its data components.
  * <p>
- * Two keys are equal when {@link ItemStack#isSameItemSameComponents} says so. The hash is {@link ComponentHash#itemKey}
- * (ADR-064, issue #27): the item and a contract-safe hash of the component patch, which reads only what each value's
- * {@code equals} is known to compare, so equal keys hash equally whatever mod defined their components — also a key
- * decoded from a request or a save, whose values are new instances. It is <b>not</b>
- * {@link ItemStack#hashItemAndComponents}: that one multiplies in every value's own {@code hashCode}, and a value whose
- * {@code hashCode} is not value-based (Quark's seed pouch contents hash an inner stack by identity) gave two equal keys
- * two hash codes, so no hash map found the second. The wrapped stack (count 1) is never exposed, so the key cannot be
- * mutated after construction and is safe as a map key. Keys are never empty.
+ * Two keys are equal when {@link ItemStack#isSameItemSameComponents} says so — except for a component type with a
+ * {@link ComponentMeanings meaning} (ADR-066, issue #29): Create's toolbox inventory, whose {@code equals} compares
+ * its filter stacks by identity and never its contents, a sand paper's polished item, whose {@code equals} never
+ * holds, and a symmetry wand's mirror, whose {@code equals} never compares the kind of mirror. A key whose own patch
+ * holds such a value compares it by its meaning
+ * ({@link ComponentMeanings#sameItemSameComponents}) and keeps a <b>private copy</b> of it: the value is detached when
+ * the key is made, and every stack the key hands out gets a copy of its own, so nothing outside the key can change what
+ * it compares. The hash is {@link ComponentHash#itemKey} (ADR-064, issue #27): the item and a contract-safe hash of
+ * the component patch, which reads only what each value's {@code equals} is known to compare, so equal keys hash
+ * equally whatever mod defined their components — also a key decoded from a request or a save, whose values are new
+ * instances. It is <b>not</b> {@link ItemStack#hashItemAndComponents}: that one multiplies in every value's own
+ * {@code hashCode}, and a value whose {@code hashCode} is not value-based (Quark's seed pouch contents hash an inner
+ * stack by identity) gave two equal keys two hash codes, so no hash map found the second; an entry with a meaning is
+ * hashed by its meaning. The wrapped stack (count 1) is never exposed, so the key cannot be mutated after construction
+ * and is safe as a map key. Keys are never empty.
  * <p>
  * Persistence: {@link #save} and {@link #load} never throw. A key that cannot be encoded is saved as an empty tag, and
  * a tag that cannot be decoded (e.g. the item's mod was removed) loads as {@link Optional#empty()}.
@@ -65,12 +72,15 @@ public final class ItemKey {
                     .thenComparing(ItemKey::toString);
 
     private final ItemStack stack;
+    /** Whether the patch holds a value with a meaning (ADR-066): compared by meaning, handed out as copies. */
+    private final boolean meaningful;
     private final int hash;
 
     private ItemKey(ItemStack source) {
         if (source.isEmpty())
             throw new IllegalArgumentException("An item key cannot be empty");
-        this.stack = source.copyWithCount(1);
+        this.stack = ComponentMeanings.detach(source.copyWithCount(1));
+        this.meaningful = ComponentMeanings.present(this.stack);
         this.hash = ComponentHash.itemKey(this.stack);
     }
 
@@ -106,23 +116,37 @@ public final class ItemKey {
         return stack.getMaxStackSize();
     }
 
-    /** A new stack of this key with count 1. */
+    /**
+     * A new stack of this key with count 1. A value with a meaning (ADR-066) is a copy of its own, shared with nothing
+     * else.
+     */
     public ItemStack toStack() {
-        return stack.copy();
+        return meaningful ? ComponentMeanings.detach(stack.copy()) : stack.copy();
     }
 
     /**
      * A new stack of this key with the given count. Counts above the max stack size are allowed (callers must split
      * such stacks before handing them to code that expects valid stacks). A count of 0 or less yields
-     * {@link ItemStack#EMPTY}.
+     * {@link ItemStack#EMPTY}. A value with a meaning (ADR-066) is a copy of its own, shared with nothing else.
      */
     public ItemStack toStack(int count) {
-        return count <= 0 ? ItemStack.EMPTY : stack.copyWithCount(count);
+        if (count <= 0)
+            return ItemStack.EMPTY;
+        ItemStack copy = stack.copyWithCount(count);
+        return meaningful ? ComponentMeanings.detach(copy) : copy;
     }
 
-    /** Whether {@code other} is a non-empty stack of this key (count ignored). */
+    /**
+     * Whether {@code other} is a non-empty stack of this key (count ignored): as
+     * {@link ItemStack#isSameItemSameComponents} compares, or for a key holding a value with a meaning as
+     * {@link ComponentMeanings#sameItemSameComponents} does (ADR-066). What the crane checks on every slot it takes
+     * from.
+     */
     public boolean matches(@Nullable ItemStack other) {
-        return other != null && !other.isEmpty() && ItemStack.isSameItemSameComponents(stack, other);
+        if (other == null || other.isEmpty())
+            return false;
+        return meaningful ? ComponentMeanings.sameItemSameComponents(stack, other)
+                : ItemStack.isSameItemSameComponents(stack, other);
     }
 
     /**
@@ -172,13 +196,18 @@ public final class ItemKey {
     }
 
     /**
-     * Item and components, as {@link ItemStack#isSameItemSameComponents} compares them. The hash is compared first: it
-     * is contract-safe ({@link ComponentHash}), so unequal hashes prove unequal keys for every mod.
+     * Item and components, as {@link ItemStack#isSameItemSameComponents} compares them, a value with a meaning by its
+     * meaning ({@link ComponentMeanings#sameItemSameComponents}, ADR-066). The hash is compared first: it is
+     * contract-safe ({@link ComponentHash}), so unequal hashes prove unequal keys for every mod.
      */
     @Override
     public boolean equals(Object o) {
-        return this == o || o instanceof ItemKey other && hash == other.hash
-                && ItemStack.isSameItemSameComponents(stack, other.stack);
+        if (this == o)
+            return true;
+        if (!(o instanceof ItemKey other) || hash != other.hash)
+            return false;
+        return meaningful ? ComponentMeanings.sameItemSameComponents(stack, other.stack)
+                : ItemStack.isSameItemSameComponents(stack, other.stack);
     }
 
     @Override
@@ -187,12 +216,16 @@ public final class ItemKey {
     }
 
     /**
-     * The item id, plus the component patch if there is one. Value-based and therefore the same after a restart, which
-     * is why {@link #ORDER} uses it rather than the key's hash.
+     * The item id, plus the component patch if there is one ({@link ComponentMeanings#patchText}, ADR-066): its entries
+     * sorted by the component type's registered name, whatever order the components were added in (a toolbox's loot
+     * drop sets its uuid first, the same toolbox loaded from a save its inventory), and a value with a meaning written
+     * as its meaning (a toolbox inventory's own {@code toString} prints a hash built from identity hashes). Built from
+     * the values alone and therefore the same after a restart, which is why {@link #ORDER} uses it rather than the
+     * key's hash.
      */
     @Override
     public String toString() {
         String id = String.valueOf(BuiltInRegistries.ITEM.getKey(stack.getItem()));
-        return stack.isComponentsPatchEmpty() ? id : id + stack.getComponentsPatch();
+        return stack.isComponentsPatchEmpty() ? id : id + ComponentMeanings.patchText(stack.getComponentsPatch());
     }
 }

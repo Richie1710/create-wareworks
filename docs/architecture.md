@@ -200,7 +200,12 @@ dev.wareworks
 │   │                          ClipboardList (M23, ADR-036: the only place Create's clipboard is read or ticked off),
 │   │                          ComponentHash (issue #27, ADR-064: the hash of an item or fluid key - ValueHash's hook
 │   │                          for the verified Minecraft, NeoForge and Create classes, each hashed only from what its
-│   │                          equals compares)
+│   │                          equals compares, and for a meaning's ExactStack and SameKind),
+│   │                          ComponentMeanings (issue #29, ADR-066: what an item key compares, hashes and keeps a
+│   │                          private copy of instead of a value's own equals - Create's toolbox inventory, read
+│   │                          through privateLookupIn, a paused sand paper's polished item and a symmetry wand's
+│   │                          mirror; the key's text in registry-name order; also the same-key rule of a station
+│   │                          buffer's and the crane's merges)
 │   ├── storage                WarehouseInterfaceBlock / BlockEntity, AttachedInventorySummary (storage location);
 │   │                          RackBayBlock / BlockEntity and RackBayHandler (M28, ADR-043: the storage location
 │   │                          that IS the block - one item type as a count, 64/256/1024 stacks by tier, its own
@@ -546,7 +551,13 @@ dev.wareworks
 │                              spreads, and pouches shaped like Quark's are stored, listed once per content, reloaded
 │                              and requested with a decoded key (issue #27, ADR-064), with IdentityHashedStack
 │                              (Quark 4.1's equals and identity hashCode) and GameTestComponents (its component and a
-│                              modded tank's SimpleFluidContent, registered in dev runs only)
+│                              modded tank's SimpleFluidContent, registered in dev runs only);
+│                              ComponentMeaningGameTests: real Create toolboxes - placed, filled through Create's
+│                              handler and taken as the loot takes them, or decoded by Create's codec -, a paused
+│                              sand paper and symmetry wands as one key per contents, filters and mode or per kind
+│                              of mirror, saved and sent, hashed apart, a key untouched by its source, and toolboxes
+│                              and wands stored, reloaded, requested with a decoded key and delivered whole (issue
+│                              #29, ADR-066)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -5314,7 +5325,10 @@ iteration order already changed with every run (the item's identity hash).
   not depend on the patch map's insertion order, which differs between equal stacks; the prototype is left out
   because one item has one prototype; the count is not part of a key. `FluidKey` hashes the same way with its fluid.
   Equality is unchanged (`isSameItemSameComponents`, `isSameFluidSameComponents`): it compares exactly the item, by
-  identity, and the patch.
+  identity, and the patch. *Amended by ADR-066 (issue #29):* an item key compares, hashes and keeps a private copy of
+  `create:toolbox_inventory`, `create:sand_paper_polishing` and `create:symmetry_wand` by what they hold, because
+  their own `equals` compares stacks by identity, never holds or never compares the kind of mirror, and the warehouse
+  merges two stacks only when they are one key; every other value, and every fluid key, keeps this equality.
 * **A value's hash is contract-safe: equal values hash equally whatever mod defined them.** It reads only what the
   value's `equals` is known to compare, by these rules, the first that applies:
   1. a value nested deeper than 16 levels: `0`;
@@ -5369,10 +5383,13 @@ iteration order already changed with every run (the item's identity hash).
   block state properties, both open to mods. Of Create 6.0.10's 57 component types, Create being a hard dependency, six
   count by their type alone: `toolbox_inventory` (its `equals` compares filter stacks by identity),
   `sand_paper_polishing` (its `equals` never equals another instance), `symmetry_wand`, `auto_request_data`,
-  `shopping_list` and `package_order_context`; and `attribute_filter_matched_attributes`, a list of records, hashes by
-  its length. Everything else Create stores is a number, a string, an enum, a position, a block state, NBT or an
-  `ItemContainerContents` (a package's contents and a filter's items), covered by the rules, or one of the classes
-  above.
+  `shopping_list` and `package_order_context` (*amended by ADR-066:* in an item key's own patch the first three now
+  hash by what they hold, `symmetry_wand` because its `equals` never compares the kind of mirror; the other three
+  compare by value, as long as no stack in them is a filtered toolbox or a paused sand paper, and keep counting by
+  their type); and
+  `attribute_filter_matched_attributes`, a list of records, hashes by its length. Everything else Create stores is a
+  number, a string, an enum, a position, a block state, NBT or an `ItemContainerContents` (a package's contents and a
+  filter's items), covered by the rules, or one of the classes above.
 * **The pure part lives in `core`.** `core.inventory.ValueHash` holds `mix`, the depth bound and rules 3 to 6, with an
   overridable hook for rule 2; `content.item.ComponentHash` is that hook and the entry points for an item key, a fluid
   key and a stack with its count. `TerminalCraftViewPayload#hashCode` hashes its result stack with it.
@@ -5958,6 +5975,288 @@ already, and one small memory per port; nothing while nobody looks. The goggles 
 saved or sent. Because the wait is counted from looks, a door whose box has been stuck for minutes says so once a
 screen's builds have seen the same box ten seconds apart, or about ten seconds after a player starts looking at the
 port — at once when the same box was already seen waiting at a look ten seconds earlier.
+
+### ADR-066 — An item key compares Create's toolbox, a paused sand paper and a symmetry wand by what they hold: a component meaning gives the equality, the hash and a private copy (amends ADR-064) ([issue #29](https://github.com/Richie1710/create-wareworks/issues/29))
+
+*Context:* A Create Toolbox with a filter set on any compartment can be stored, but every request for it answers "not
+in stock", and after a restart it is a stock line of its own that nothing can request; toolboxes without a filter are
+one stock line whatever they hold. Create 6.0.10 keeps a toolbox's inventory in the component
+`create:toolbox_inventory`, whose value is a `ToolboxInventory`: an `ItemStackHandler` of 32 slots (eight compartments
+of four), a package-private `filters` list (one `ItemStack` per compartment, set to a one-item copy of the first stack
+that enters it and cleared only by a click on one of its empty slots with an empty cursor in the toolbox menu), a
+private `limitedMode` (true only inside `inLimitedMode`, around Create's equip and dispose packets), a package-private
+`settling` (true only while Create settles a compartment or decodes the value) and the private block entity it belongs
+to. The component is saved with `ToolboxInventory.BACKWARDS_COMPAT_CODEC` and synced with `STREAM_CODEC`. The
+saving codec is `Codec.withAlternative(CODEC, ...)`: it always encodes with `CODEC` and decodes with `CODEC` first;
+only data `CODEC` cannot read, a toolbox Create saved before 6.0.6 as a plain `ItemContainerContents` list, falls back
+to `new ToolboxInventory(null)` filled through `ItemHelper#fillItemStackHandler`, whose `setStackInSlot` derives the
+filters from the contents and settles each compartment, so it can move stacks. `CODEC` and `STREAM_CODEC` carry the
+contents (`ItemSlots`, copies of the non-empty stacks) and the filters, and both decode through the private static
+`deserialize`, which fills the slots with `settling` set so that nothing is moved. No codec carries `limitedMode`,
+`settling` or the block entity, and every key Wareworks saves is written with `CODEC`, so its own saves never reach
+the fallback. `ToolboxInventory#equals` compares `settling`, `limitedMode`, the filter lists with `List#equals` —
+`ItemStack` overrides neither `equals` nor `hashCode`, so two filter lists are equal only while they hold the very same
+stack objects or `ItemStack.EMPTY` — and the block entity; never the contents. `ItemKey#equals` and `ItemKey#matches`
+compared with `ItemStack#isSameItemSameComponents`, which reaches that `equals` through `PatchedDataComponentMap#equals`.
+Three things follow:
+* a toolbox with a filter never equals a key decoded from a request, a save or a sync, whose filter stacks are new
+  objects;
+* a toolbox taken from the world by breaking it carries the block entity's own live inventory as its component,
+  block entity reference included. Its loot table copies `collectComponents()` (`CopyComponentsFunction`, source
+  `block_entity`), and so does `ToolboxBlock#attack` (`getCloneItemStack`, then `applyComponents(collectComponents())`),
+  which is how a survival player picks one up. A pick-block stack is made on the client only (`Minecraft#pickBlock`):
+  in creative it reaches the server through `ServerboundSetCreativeModeSlotPacket`, already decoded by
+  `ToolboxInventory.STREAM_CODEC` (also in singleplayer, whose in-memory connection still encodes packets), and in
+  survival `ServerboundPickItemPacket` only moves a stack the player already has. A broken toolbox, even an empty one,
+  therefore differs from every decoded key until the stack has been saved and loaded once;
+* toolboxes without a filter, without a block entity reference (any decoded one) and with the same
+  `create:toolbox_uuid` compare equal whatever they hold. Every placed toolbox writes a random uuid, so in survival this
+  shows with toolboxes given by a command (no uuid) or copies of one toolbox; where it shows, it moves items: the crane
+  hands out `key.toStack(n)`, a stack of the job's key, so a delivery holds that key's contents whatever toolbox the
+  crane took. And every container stacks two such toolboxes into one slot, because it merges with
+  `isSameItemSameComponents` itself: an empty one put beside a full one becomes a second copy of the full one.
+
+The hash was never the problem: ADR-064 already counts a `ToolboxInventory` by its type (rule 6).
+
+The value is also **mutable and shared**, which matters as soon as a key's equality reads it. An item stack's component
+values are shared by all its copies (the map is copy-on-write), so a key — a copy with count 1 — shares the
+`ToolboxInventory` with the stack it was made from and with every stack it hands out.
+`ToolboxBlockEntity#readInventory`, which places a toolbox from its item, copies the filter list but puts the item's own
+content stacks into the block entity's slots, and NeoForge's `ItemStackHandler#insertItem` grows a slot's stack in
+place, while `#extractItem` hands a slot's own stack out when it takes all of it. A key that compares contents would
+change behind its cached hash, lose its place in every map that holds it, and hand out whatever a placed toolbox has
+since done to those stacks.
+
+The other Create types ADR-064 counts by their type alone, surveyed for the same defect:
+* `create:sand_paper_polishing` has it. Its value, `SandPaperItemComponent`, is a record around the one item being
+  polished (`split(1)` from the offhand or from an item entity); `SandPaperItem` sets it when polishing starts and
+  removes it when the use finishes or is released. Switching the hotbar slot mid-use does neither, and the next use
+  resumes, so a sand paper can keep an item inside for good. Its `equals` asks `arg0 instanceof ItemStack`, so it never
+  equals another instance (only the identity check of `Optional#equals` keeps a stack equal to its copies): such a
+  paper can be stored but never requested, and each one is a stock line of its own. `releaseUsing` hands the record's
+  own stack to `Inventory#placeItemBackInInventory`, which splits it, so this value is changed in place as well.
+* `create:symmetry_wand` has a milder form of it. Its value, `SymmetryMirror`, has a final `equals` over the
+  orientation index, the enable flag, the position and the orientation (an enum constant of the subclass), and a
+  `hashCode` over the same, so a key holding one is found after a save and a request; but it never compares the kind of
+  mirror (the subclass, `typeName`). A `TriplePlaneMirror` keeps orientation index 0 (its `setOrientation(int)` does
+  nothing, and Create never calls `rotate`) and answers `CrossPlaneMirror.Align.Y`, exactly as a new
+  `CrossPlaneMirror` does; the wand's screen switches the kind with `new CrossPlaneMirror(position)` or
+  `new TriplePlaneMirror(position)` and keeps the position, which `SymmetryWandItem#useOn` sets to whole block
+  coordinates. So an orthogonal cross-plane wand and a triple-plane wand centred on one block were one key and one
+  stock line, and a delivery, `key.toStack(n)`, held the key's kind of mirror whichever wand the crane took: the defect
+  this ADR removes for toolboxes without a filter. The value is mutable and shared as well: `useOn` moves the stack's
+  own mirror in place (`setPosition`, `setOrientation`) and sets the same instance back.
+* `create:auto_request_data` and `create:package_order_context` (records down to `BigItemStack`, whose `equals`
+  compares item, components and count; only its `hashCode` hashes the stack by identity, which rule 6 already keeps
+  out of the key hash) and `create:shopping_list` (a record of a list of catnip `IntAttached` pairs, equal and hashed by
+  value, and two `UUID`s) compare by value, so a key holding one is found after a save and a request — as long as no
+  `BigItemStack` in them holds a toolbox with a filter or a paused sand paper, which compare by their own `equals`
+  there (nested values, below). So does `create:attribute_filter_matched_attributes`, which ADR-064 hashes by its
+  length: records of strings, holders, tags and enums, `InItemGroupAttribute` by its tab, and singletons that decode to
+  their one instance. These keep counting by their type for the hash and get no meaning.
+
+*Decision:*
+* **A component meaning** (`content.item.ComponentMeanings`) is what an item key compares instead of a value's own
+  `equals`, for the component types registered there: a function from a value to a list built only from values whose
+  `equals` is by value and which `ComponentHash` hashes consistently with it — JDK values, enum constants, lists, and
+  two views of a stack: `ExactStack`, equal by `ItemStack#matches` (item, components and count) and hashed like
+  `ComponentHash#stack`, and `SameKind`, equal by `ItemStack#isSameItemSameComponents` and hashed from the item and
+  patch alone, as the icon of a clipboard entry is. Two values of a registered type are the same when their meanings are equal, and the key
+  hash of the entry is `ComponentHash`'s hash of the meaning. Equal meanings hash equally by ADR-064's contract, so the
+  equality and the hash agree by construction, not by two methods kept in step by hand. A meaning also brings a
+  **detach**: a copy of a value that shares nothing mutable with it and means the same.
+* **Three types are registered:**
+  * `create:toolbox_inventory` means `[its 32 slots as ExactStack in slot order, its filters as SameKind in order,
+    limitedMode]`: the contents with their counts, because that is what the toolbox holds and what a delivery hands
+    out; the filters by item and components, because Create writes every filter as a one-item copy and compares one
+    only through `canItemsShareCompartment` (item and components, or the item alone for two damageable tools), and a
+    finer test only ever splits a line, never mixes two; `limitedMode`, because the issue names the toolbox's mode and
+    the copy carries it. Never `settling`, which is true only while Create itself fills or settles the inventory, and
+    never the block entity, which for a stored toolbox is a removed block. Its detach is what Create's codecs make of
+    it: `deserialize` with `ItemSlots#fromHandler` (copies of the stacks) and copies of the filters, with `limitedMode`
+    carried over.
+  * `create:sand_paper_polishing` means `[the polished stack as ExactStack]`, with its count, because `releaseUsing`
+    gives exactly that stack back. Its detach is a new record around a copy of the stack.
+  * `create:symmetry_wand` means `[typeName, the orientation index, the position as three Doubles, enable, the
+    orientation]`: what `SymmetryMirror#equals` compares, plus the kind of mirror it leaves out, so the meaning only
+    ever splits what Create calls equal and never merges anything. The position goes in as `Double`s, which compare as
+    `Vec3#equals` does (`Double.compare`) and which `ValueHash` hashes by value; a `Vec3` would count by its type alone.
+    Its detach is what a save and a load make of it: the mirror encoded by the component's own codec into a one-entry
+    patch through `NbtOps`, decoded (`SymmetryMirror.CODEC`'s decoder builds the mirror of the type name and sets its
+    orientation index and enable; a `Vec3` is immutable) and applied with `ItemStack#applyComponents`, as loading a
+    saved stack applies it. Not with `ItemStack#set`: in a development run NeoForge checks every value set on a stack
+    (`CommonHooks#validateComponent`) by resolving its class's public methods, and on a dedicated server that throws
+    for Create's mirrors, whose `applyModelTransform` names the client's `PoseStack` (the GameTest server found it);
+    production runs never check, and a decoded patch is never checked, so the copy takes the same path in every run. A
+    copy that cannot be made or does not mean the same, which no mirror Create makes can give, leaves the value shared,
+    with one warning.
+* **`ItemKey` uses it** for its whole identity: `equals`, `matches` (the crane's check on every slot it takes
+  from and on what it took, a rack bay's acceptance, the terminal's buffer, the crafting grid, the clipboard list) and
+  `hashCode` (`ComponentHash#itemKey`, for the entries of the key's own patch). A key notes once, when it is made,
+  whether its patch holds a value of a registered type. One that does not compares with `isSameItemSameComponents`
+  exactly as before. One that does compares the two patches entry by entry — the same types and removals, a registered
+  type by its meaning, every other value by its own `equals` — which is what `PatchedDataComponentMap#equals` does for
+  two stacks of one item, because one item has one prototype and a patch never holds a value equal to the prototype's.
+  Everything that holds or compares keys follows without a change of its own: the stock index and its location
+  snapshots, requests and reservations, stock rules, the terminal's stock snapshot and its diffs, the client's stock
+  list, the crafting grid and the picker of JEI's "+", the display sources and the GameTests' item census.
+* **The warehouse merges a stack only into a slot holding the same key.** The two places where Wareworks itself decides
+  that two stacks become one ask `ComponentMeanings#sameItemSameComponents` before the container's own check: a station
+  buffer's `insertItem` (`StationBuffer`, behind every input, output, terminal and production station, so also what a
+  funnel or a hopper inserts) refuses a slot holding another key, and the crane's slot-by-slot insert
+  (`TransferContexts`) offers a stack only to a slot holding the same key, with its simulation (`simulateInsert`)
+  going through the same slots instead of `ItemHandlerHelper#insertItemStacked`, so the plan and the trip agree. For
+  every stack without a registered type both answer exactly as before. A toolbox equal to another by meaning but not
+  by Create's `equals` still takes a slot of its own, because the container refuses that merge, and the location's
+  snapshot sums both under one key. The toolbox item stacks to 64 (`UncontainableBlockItem` with default properties),
+  not 1; a sand paper does not stack at all.
+* **A key keeps a private copy** of a registered type's value: it detaches the value when it is made, and every stack
+  it hands out (`toStack`) gets a copy of its own — set into the stack, or for a meaning without a copy of its own
+  (the wand's) applied as a patch the type's codec decoded. Nothing outside the key can change what it compares, no
+  two stacks it hands out share one, and a stored key no longer keeps a broken toolbox's block entity reachable.
+* **Create's private toolbox members are read through `MethodHandles.privateLookupIn`:** a `VarHandle` for `filters`
+  and one for `limitedMode`, and a `MethodHandle` for `deserialize`, resolved once. Create's jar has no `module-info`,
+  so NeoForge loads it as an automatic module, which opens every package. If one of them cannot be resolved (a later
+  Create within `create_version_range`, `[6.0.10,6.1)`, renamed it), the toolbox meaning is left out and one warning is
+  logged: toolboxes then compare as Create compares them and hash by their type, which is consistent, and is what every
+  earlier version did. Every test of `ComponentMeaningGameTests` first checks that the meanings are registered, with
+  a message that points at the startup warning naming the member, so such a Create update fails the suite there
+  instead of in a player's request. The sand paper needs no such access: the record's accessor and constructor are public.
+* **Kept on vanilla equality, on purpose:**
+  * *A container's own merges:* a chest a player or a hopper fills, the player's inventory a rack bay, a pallet or the
+    terminal's menu hands items into. There the container decides, with Create's `equals`, as for every item anywhere.
+    Only toolboxes without a filter and with the same uuid or none are affected, and every placed toolbox writes a
+    random uuid, so in survival that takes a command or a duplicated toolbox.
+  * *Storage filters:* `AisleFilters`, a rack bay and a fluid bay compare a filter stack with
+    `isSameItemSameComponents` only to decide whether to rebuild Create's filter, and Create's filter tests
+    (`FilterItem#testDirect`: the item alone for a plain filter, `isSameItemSameComponents` for a list or package
+    filter that respects data) reach a toolbox only through Create's own `equals`, so a source equal by it resolves to
+    a filter that tests the same. What a filter accepts stays Create's rule, as at a funnel or a packager.
+  * *`TerminalCraftViewPayload#equals`*, which only decides whether a view is sent again: its result is resolved once
+    per change of the grid and reused, so the identity check of `ItemStack#matches` holds between rebuilds.
+  * *`FluidKey`:* only a command puts either type on a fluid. `ComponentHash#fluidKey` and `ComponentHash#stack` never
+    apply a meaning.
+  * *Nested values:* a meaning applies to the key's own patch, never inside another value — a shulker box's, a
+    bundle's or a package's `ItemContainerContents`, a `BigItemStack`, or the stacks of a meaning itself. There the
+    outer value's own `equals` decides, which is vanilla, so `ComponentHash` keeps hashing a nested toolbox inventory,
+    sand paper record or mirror by its type (rule 6), consistent with it. `UncontainableBlockItem` keeps a toolbox out
+    of a shulker box, a bundle and another toolbox, but not out of a package: Create's packager
+    (`PackagerBlockEntity#attemptToSend`) packs an item that cannot go inside a container item alone, in an otherwise
+    empty box (warehouse-system.md, "A bulky item travels alone"). Such a box can come from a package door, a stock
+    ticker order or any Packager, and if it reaches a warehouse input with no Packager behind it, it is stored as an
+    ordinary item (`packagestoredasanitem`). When the toolbox inside has a filter, that stored package stays as
+    unrequestable as before, because `ItemContainerContents#equals` goes through `ItemStack#listMatches` to
+    `ToolboxInventory#equals`. The same holds for a filter's `filter_items`, a linked controller, or an order context
+    (`BigItemStack#equals` is `isSameItemSameComponents`) that names a filtered toolbox; for a shulker box, a package or
+    a toolbox holding a sand paper that holds an item; and a cross-plane and a triple-plane wand on one block in two
+    otherwise equal shulker boxes are one key, as before.
+* **`ItemKey#toString` renders a registered type's entry by its meaning** (a stack as its count, item id and patch)
+  instead of the value's own `toString`. A toolbox inventory has none of its own: `Object#toString` prints Create's
+  `hashCode`, which mixes in the identity hashes of its filter stacks and its block entity, and a mirror's `hashCode`
+  mixes in its orientation's, so both changed with every start; with the meaning, `ItemKey.ORDER` no longer orders two
+  toolboxes of one colour differently after every start. The sand paper record's own text is value-based but leaves
+  out the polished stack's components, so it is rendered by its meaning too, in the same format. **The entries are
+  sorted by the component type's registered name**, for every key, not only one with a meaning, and so are the
+  patches of the stacks a meaning holds: a patch keeps the order its components were added in, which differs for one
+  toolbox between its loot drop (`collectImplicitComponents` sets the uuid first) and the same stack loaded from a
+  save (the NBT compound's hash order put the inventory first), so a key's text, and with it `ItemKey.ORDER`, changed
+  once the chest holding it had been saved. The text keeps `DataComponentPatch#toString`'s format.
+* Nothing is reported to Create.
+
+*Alternatives considered:*
+* **A toolbox case in `ItemKey`,** an `equals` and a hash written for the one type. A few lines shorter, but the sand
+  paper and the wand need the same three parts, and two hand-written methods kept in step are what ADR-064 moved away
+  from.
+* **Only correcting the survey for the wand,** leaving `symmetry_wand` on Create's `equals` as a documented merge.
+  The meaning is a few lines of public API, and without it a request can still hand back the other kind of mirror.
+* **Create's public API only.** Nothing public reads or sets the filters, and a copy built through `setStackInSlot`
+  settles each compartment as it fills it, so it can move stacks, and a key would not equal its own source.
+* **A mixin accessor.** Its names are checked when it applies, but it would be the project's first mixin, with a
+  mixin config, and a renamed field would crash the game when Create's class loads instead of leaving the old
+  behaviour.
+* **An access transformer.** Applied to Minecraft only when the dev environment is set up, so the code would not
+  compile against Create's class.
+* **Comparing or hashing the encoded value.** Needs registry access in every key construction and an encode per
+  comparison — rejected for the hash in ADR-064 for the same reasons.
+* **Meanings inside other values** (a toolbox or a sand paper in a shulker box, a package, a filter list). Needs an
+  equality, a hash and a copy aware of meanings for every container value — `ItemContainerContents`, `BundleContents`,
+  `ChargedProjectiles`, Create's package contents and filter items, `BigItemStack` —, all for a filtered toolbox
+  stored still boxed, or named in a filter or an order context, a sand paper left paused in a container, and two kinds
+  of wand on one block in two shulker boxes.
+* **No private copy,** comparing and hashing the value the key shares. A placed toolbox grows the stacks it shares
+  with the item it came from.
+* **Leaving every merge to the container,** keys apart. Two toolboxes without a filter and without a uuid are two keys
+  then, but an input that receives the empty one after the full one stacks it onto the full one, and the warehouse
+  holds two full toolboxes: the aisle GameTest failed exactly so before the same-key rule was added.
+* **Leaving `limitedMode` out.** No codec carries it and it is true only while Create's own packet handler runs,
+  so it is the same in every key that can exist; it stays because the issue names the toolbox's mode, and the copy
+  carries it.
+
+*Verification:* `ComponentMeaningGameTests`, added with the change. Each of its tests first checks that the three
+meanings are registered, so a Create update that renamed one of the toolbox's private members fails with that message,
+not as an unequal key further down. `componentmeaningtoolboxkeys`: toolboxes filled through a placed toolbox's item
+handler (Create sets the filters) and taken as its loot takes them, with the block entity's own uuid and inventory as
+the components, against toolboxes built apart, loaded from NBT and decoded from the network: equal both ways, one hash
+code, found in hash maps and sets, and `matches` on the live and the decoded stacks. The premise is pinned too:
+Create's own `isSameItemSameComponents` tells the live filtered toolbox and its decoded twin apart and lets an
+unfiltered toolbox with eight diamonds equal an empty one. Other contents (item, count, components, compartment),
+another filter and `limitedMode` (a key made inside `inLimitedMode`) give other keys, and other hash codes: every such
+pair hashes apart, and spread checks over sixteen diamond counts, the eight compartments, a filter in each compartment
+and sixteen polished counts of a sand paper give each key a hash code of its own, so a revert to the type-only hash of
+ADR-064, which would still be consistent with the meaning equality, fails the suite. A filter's count gives no other
+key. A key's text is the same for one toolbox value set uuid first and inventory first, whose patches' own texts
+differ, for a sword named and damaged in either order, and after a save and a load. A key is untouched when its
+source's stacks are grown in place, and two stacks it hands out share no inventory. A paused sand paper keeps the same
+contract, and plain, named and enchanted stacks compare exactly as `isSameItemSameComponents` does.
+`componentmeaningsymmetrywand`: Create's own equality calls a cross-plane and a triple-plane mirror at one position,
+and two wands holding them, the same — the old key equality; the two wands are two keys with two hash codes, and each
+is one key with its twin built apart, its save and its network copy; a plane mirror's two orientations, a mirror one
+block further and one switched off are other keys, sixteen positions in a row sixteen hash codes; the key's text is the
+same after a save; moving the source's mirror in place, as `useOn` does, leaves the key's hash and equality as they
+were, and the wands it hands out have mirrors of their own, of the key's kind.
+`componentmeaningtoolboxstoresrequestsandreloads`: two filtered toolboxes holding eight diamonds, taken from two placed
+toolboxes with one uuid, in two locations, a filtered empty one beside a cross-plane and a triple-plane wand centred on
+one block, and two toolboxes without a filter or uuid — eight diamonds and empty — fed through the input; one stock
+line with two and five with one; the chests and the controller are saved and loaded while the two filtered ones lie in
+two locations, and the loaded index merges them; every line is requested with a key that went through the request
+payload's codec and delivered into the terminal's buffer, each toolbox holding exactly what it was stored with and each
+wand the mirror it was stored with; the item census holds on every tick. With the change, `runGameTestServer` passes
+all 625 required tests (622 before). With the meaning taken out of the key hash only — ADR-064's type-only hash,
+equality unchanged — both key tests fail at their first pair that hashes apart ("unfiltered and empty: two hash codes",
+"a cross-plane and a triple-plane wand: two hash codes"); with the key's text left unsorted,
+`componentmeaningtoolboxkeys` fails where the toolbox taken from the world meets its own key loaded from a save.
+Against Create's own equality — the same code with no meaning registered, which is exactly the old behaviour — every
+test of the class now fails at its first line, the registration check. Before that check moved there, the same run
+failed `componentmeaningtoolboxkeys` at its first key ("a filtered toolbox taken from the world: key 0 does not equal
+key 1", the two toolboxes printed with identity hashes), and the aisle test at its first check, that the two copies are
+one key, and with that check taken out on its first tick, where the item census counts the two copies as two keys.
+With the meanings but without the same-key merge rule the aisle test failed as well: the empty unfiltered toolbox was
+stacked onto the one holding eight diamonds, and the census found two toolboxes of diamonds and no empty one. No JUnit
+test is added: everything new reads item stacks or Create's classes, so it is tested on real ones.
+
+*Consequences:*
+* Toolboxes are one stock line per contents, filters and uuid; a filtered toolbox is requested and delivered, also
+  after a restart; a delivery holds the contents its request named. A sand paper paused while polishing likewise. A
+  wand of symmetry is one stock line per kind of mirror, orientation, position and state, and a delivery holds the
+  mirror its request named.
+* A toolbox key costs, per hash and per comparison that gets past the hash, a meaning (forty small views) and up to
+  forty stack comparisons, and a copy of up to 32 stacks and 8 filters when it is made and per `toStack` — also each
+  frame a screen draws such a key through `toStack`. Every other key costs one patch lookup per registered type when
+  it is made, and nothing when it is compared. A station buffer's insert and the crane's insert look up the registered
+  types of two stacks of the same item per slot they consider merging into. A wand key costs a meaning of five values
+  per hash and comparison, and an encode and a decode of its mirror when it is made and per `toStack`.
+* Stock lines of one item with the same amount whose keys carry more than one component change their order once, to
+  the registered-name order of the key's text, and then keep it after every restart.
+* The first access to another mod's private members in production code; resolved once, guarded, logged once and
+  tested.
+* A key made while Create's packet handler holds a toolbox in limited mode would come back without it after a save;
+  no key is made there.
+* A stack the crane hands out for a toolbox key is a fresh copy without the block entity reference, as after a save and
+  load.
+* `WareworksNetwork.VERSION` stays `"13"` and no save changes: keys are written and read by the same codecs.
+* A filtered toolbox inside a stored package, a filter, a linked controller or an order context, a sand paper paused
+  inside a shulker box, a package or a toolbox, and two kinds of wand on one block inside two shulker boxes behave as
+  before (nested values, above).
 
 ## Persistence & sync
 

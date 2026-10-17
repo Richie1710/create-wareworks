@@ -142,7 +142,7 @@ public final class ComponentHashGameTests {
     private static final int TEST_RPM = 128;
     private static final int AISLE_TIMEOUT_TICKS = 3600;
 
-    private static final RackPosition TERMINAL_RACK = new RackPosition(0, 0, Side.RIGHT);
+    static final RackPosition TERMINAL_RACK = new RackPosition(0, 0, Side.RIGHT);
     private static final RackPosition INPUT_RACK = new RackPosition(1, 0, Side.RIGHT);
     private static final RackPosition STORAGE_A = new RackPosition(1, 0, Side.LEFT);
     private static final RackPosition STORAGE_B = new RackPosition(2, 0, Side.LEFT);
@@ -385,7 +385,7 @@ public final class ComponentHashGameTests {
      * What a restart makes of {@code saved}: a block entity of the same type loaded from its full save. Not yet in the
      * level; the caller puts it there.
      */
-    private static <T extends BlockEntity> T reload(GameTestHelper helper, BlockEntity saved, Class<T> type) {
+    static <T extends BlockEntity> T reload(GameTestHelper helper, BlockEntity saved, Class<T> type) {
         HolderLookup.Provider registries = helper.getLevel().registryAccess();
         CompoundTag tag = saved.saveWithFullMetadata(registries);
         BlockEntity loaded = BlockEntity.loadStatic(saved.getBlockPos(), saved.getBlockState(), tag, registries);
@@ -401,7 +401,7 @@ public final class ComponentHashGameTests {
      * and the key decoded from its network form are equal both ways, hash equally and are found in a hash map and a
      * hash set, and unless the patch is part of the key at all.
      */
-    private static void assertOneKey(GameTestHelper helper, String name, ItemStack built, ItemStack builtApart) {
+    static void assertOneKey(GameTestHelper helper, String name, ItemStack built, ItemStack builtApart) {
         HolderLookup.Provider registries = helper.getLevel().registryAccess();
         ItemKey key = ItemKey.of(built);
         ItemKey apart = ItemKey.of(builtApart);
@@ -426,7 +426,7 @@ public final class ComponentHashGameTests {
     }
 
     /** Every pair equal both ways with one hash code, and each one found where the first was put. */
-    private static <K> void assertAllEqual(GameTestHelper helper, String name, List<K> keys) {
+    static <K> void assertAllEqual(GameTestHelper helper, String name, List<K> keys) {
         Map<K, String> map = new HashMap<>();
         map.put(keys.getFirst(), name);
         Set<K> set = new HashSet<>();
@@ -446,7 +446,7 @@ public final class ComponentHashGameTests {
     }
 
     /** {@code count} different stacks, each a key with a hash code of its own. */
-    private static void assertSpread(GameTestHelper helper, String name, int count, IntFunction<ItemStack> stack) {
+    static void assertSpread(GameTestHelper helper, String name, int count, IntFunction<ItemStack> stack) {
         List<ItemKey> keys = IntStream.range(0, count).mapToObj(i -> ItemKey.of(stack.apply(i))).toList();
         helper.assertValueEqual(Set.copyOf(keys).size(), count, name + ": different keys");
         helper.assertValueEqual(keys.stream().mapToInt(ItemKey::hashCode).distinct().count(), (long) count,
@@ -465,7 +465,7 @@ public final class ComponentHashGameTests {
     }
 
     /** The stock line of {@code key}; fails the test when there is none. */
-    private static TerminalStockEntry entry(GameTestHelper helper, List<TerminalStockEntry> stock, ItemKey key) {
+    static TerminalStockEntry entry(GameTestHelper helper, List<TerminalStockEntry> stock, ItemKey key) {
         return stock.stream().filter(line -> line.key().equals(key)).findFirst()
                 .orElseThrow(() -> new GameTestAssertException("no stock line for " + key + " in " + stock));
     }
@@ -474,7 +474,7 @@ public final class ComponentHashGameTests {
      * A request the way a client's click arrives: the request payload through its network codec, so the key is a new
      * instance decoded from bytes, then the menu's payload entry with a terminal menu open at the terminal.
      */
-    private static RequestResult requestAsAClient(GameTestHelper helper, AisleFixture aisle, Player player,
+    static RequestResult requestAsAClient(GameTestHelper helper, AisleFixture aisle, Player player,
             ItemKey key, int amount) {
         WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
         Vec3 center = Vec3.atCenterOf(aisle.absoluteRackPos(TERMINAL_RACK));

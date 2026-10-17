@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Create Toolboxes that have held items can now be requested and retrieved, and toolboxes with different contents are
+  no longer one stock line.** A toolbox compartment remembers the first item put into it, and a toolbox with such a
+  compartment could be stored, but every request for it answered "not in stock", also after a restart; one picked up
+  from the world answered so until the next restart even if it had never held anything. A request now delivers exactly
+  the toolbox it names, holding what it held when it was stored, also after a restart and on a server. Toolboxes given
+  by a command without any remembered item all shared one stock line whatever they held, so a request could deliver one
+  holding another one's contents, and the warehouse could stack an empty one onto a full one, making it a second full
+  one. Now each content is a line of its own, and neither the crane nor a warehouse station stacks two toolboxes with
+  different contents into one slot. Every toolbox that has been placed keeps an id of its own, so two of them stay two
+  lines even when they hold the same, as before. A Sand Paper put away in the middle of polishing an item could be
+  stored but never requested, and each one was a stock line of its own; it can now be requested like any other item, and
+  finishing the polish still gives the polished item. A toolbox that holds a Sand Paper paused in the middle of
+  polishing still cannot be requested
+- **A Wand of Symmetry set to Rectangular, Orthogonal and one set to Octagonal, centred on the same block, are no longer
+  one stock line.** The warehouse took them for the same item, so a request for one could deliver a wand with the other
+  mirror. Each mirror is a line of its own now, and a request delivers the wand that was stored
+- **Two Create Toolboxes of one colour, and items carrying several changes each, now keep their order in the stock list
+  after a restart.** Two Create Toolboxes of one colour could swap places in the terminal's stock list and on a stock
+  list display at every start, and two items carrying several changes each, such as two renamed and enchanted swords,
+  could swap places once the chest holding them had been saved and loaded again. On the first start after updating, such
+  lines may change their order once; after that they keep it. Items whose contents are a container's, such as two
+  Shulker Boxes of one colour holding different things, can still swap places
+
 ## [0.12.0-beta] - 2026-10-16
 
 ### Added

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import dev.wareworks.content.item.ComponentMeanings;
 import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.inventory.InventorySnapshot;
@@ -33,6 +34,11 @@ import net.neoforged.neoforge.items.ItemStackHandler;
  * slot; this buffer stores copies ({@link #insertItem}, {@link #setStackInSlot}), and {@link #extract} and {@link #insert}
  * never hand out or keep a caller's instance, so a caller that changes its stack later cannot duplicate or delete
  * buffered items.
+ * <p>
+ * <b>One key per stack.</b> A stack merges only into a slot holding the same {@link ItemKey}
+ * ({@link ComponentMeanings#sameItemSameComponents}, ADR-066), not merely what {@code isSameItemSameComponents} calls
+ * the same: that calls two Create toolboxes without filters the same whatever they hold, so merging them would turn
+ * an empty toolbox into a second copy of a full one.
  * <p>
  * <b>Persistence.</b> {@link #save} writes each non-empty slot as a count-less {@link ItemKey} plus an {@code int} count,
  * so {@code ItemStack.save} is never called and saving never throws. {@link #load} never throws and never drops a
@@ -77,9 +83,17 @@ public class StationBuffer extends ItemStackHandler {
 
     // --- item handler --------------------------------------------------------------------------------------------
 
-    /** Inserts a copy: the caller's stack is never stored. Returns the remainder like {@link ItemStackHandler}. */
+    /**
+     * Inserts a copy: the caller's stack is never stored. Returns the remainder like {@link ItemStackHandler}, and the
+     * whole stack when the slot holds another key (class comment).
+     */
     @Override
     public ItemStack insertItem(int slot, ItemStack stack, boolean simulate) {
+        if (!stack.isEmpty()) {
+            ItemStack existing = getStackInSlot(slot); // checks the index, as ItemStackHandler does
+            if (!existing.isEmpty() && !ComponentMeanings.sameItemSameComponents(existing, stack))
+                return stack;
+        }
         return super.insertItem(slot, simulate ? stack : stack.copy(), simulate);
     }
 

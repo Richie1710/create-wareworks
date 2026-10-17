@@ -12,6 +12,7 @@ import dev.wareworks.content.controller.StorageMember;
 import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.fluid.FluidContainers;
+import dev.wareworks.content.item.ComponentMeanings;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseDeliveryStationBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
@@ -319,6 +320,11 @@ public final class TransferContexts {
          * stackable one the slots holding the same item first, then the empty slots), one handler call per slot. A real
          * insertion that fails part way (a foreign inventory throws) stops and returns exactly what did not go in, so
          * items already inserted are never counted as held; simulations rethrow.
+         * <p>
+         * A stack is only offered to a slot holding <b>the same key</b>
+         * ({@link ComponentMeanings#sameItemSameComponents}, ADR-066): the inventory merges by
+         * {@code isSameItemSameComponents} itself, which calls two Create toolboxes without filters the same whatever
+         * they hold, so offering one to the other's slot would turn an empty toolbox into a second copy of a full one.
          */
         private ItemStack insertSlotBySlot(ItemStack stack, boolean simulate) {
             ItemStack rest = stack;
@@ -330,7 +336,7 @@ public final class TransferContexts {
                     return rest;
                 }
                 for (int slot = 0; slot < slots && !rest.isEmpty(); slot++) {
-                    if (ItemStack.isSameItemSameComponents(handler.getStackInSlot(slot), rest))
+                    if (ComponentMeanings.sameItemSameComponents(handler.getStackInSlot(slot), rest))
                         rest = handler.insertItem(slot, rest, simulate);
                 }
                 for (int slot = 0; slot < slots && !rest.isEmpty(); slot++) {
@@ -364,11 +370,12 @@ public final class TransferContexts {
             return total;
         }
 
+        /** What {@link #insert} would take: the same slots, simulated. */
         @Override
         public int simulateInsert(ItemKey key, int amount) {
             if (amount <= 0)
                 return 0;
-            return accepted(amount, ItemHandlerHelper.insertItemStacked(handler, key.toStack(amount), true));
+            return accepted(amount, insertSlotBySlot(key.toStack(amount), true));
         }
 
         @Override

@@ -3060,3 +3060,75 @@ you get tired of waiting, and put it back before judging check 160.
     gold, for example "To Base North: Oak Log is missing" (in German "An Base North: Eichenstamm fehlt"). The chests
     in stock go into the door, and the standing line names the door once the answer has gone. **Does the line ever
     leave out the door, or name the item cut to nothing?**
+
+## AZ. Create Toolboxes in the warehouse ([issue #29](https://github.com/Richie1710/create-wareworks/issues/29))
+
+> An item key now compares Create's toolbox inventory by what it holds — every compartment with its counts, and the
+> item each compartment remembers (its filter) — and keeps a copy of its own, because Create's own comparison looks at
+> the remembered items by identity and never at the contents (ADR-066). The same goes for a Sand Paper paused while
+> polishing, and for a Wand of Symmetry, whose own comparison never looks at the kind of mirror. The warehouse's
+> stations and the crane also stack two items into one slot only when they are the same key. `ComponentMeaningGameTests` uses real toolboxes, placed, filled through Create's own item handler and taken the
+> way breaking one takes it, or decoded by Create's codec: equal ones built apart, saved and sent are one key, other
+> contents or filters are other keys, and filtered and unfiltered toolboxes are stored, reloaded with the chests and the
+> controller, requested with a key decoded as a client sends it and delivered whole, with the item census on every
+> tick. What no test does is a player's hands: opening the toolbox, picking it up, placing it again, the toolbox's own
+> screen, a real restart of the game and a dedicated server.
+>
+> Setup: `./gradlew runClient`, a creative world with a powered warehouse: an input, a terminal and at least four free
+> storage locations. Place three **Create Toolboxes**. Into the first, put **16 iron ingots** into the top-left
+> compartment and **8 gold ingots** into the one beside it; into the second, put **16 iron ingots** into the top-left
+> compartment; into the third, put a diamond into the top-left compartment and take it out again, so the compartment
+> keeps the diamond as its filter. Switch to survival (`/gamemode survival`) and pick up all three by left-clicking
+> them — in creative a left-click destroys a toolbox with its contents — and note the "Item types" line on the
+> controller's goggles. Pick toolboxes up the same way, in survival, in every check below. Every toolbox that has been
+> placed keeps an id of its own, so two placed toolboxes are two entries even when they hold the same; that is not a
+> fault.
+
+295. **Store, request and retrieve.** Put the three toolboxes into the input and wait until the crane has stored them.
+    "Item types" has gone up by **three**, and the terminal's stock list shows three toolbox entries. Request each one
+    with the amount field at 1: each arrives in "Delivered here", and the status line never shows "Request refused: not
+    in stock". Place each delivered toolbox and open it: the first holds 16 iron and 8 gold in the same compartments,
+    the second 16 iron, the third nothing, with the diamond still shown as the empty compartment's filter. **Does each
+    request bring exactly the toolbox it names, with what it held?** (Before this, every one of them answered "not in
+    stock".)
+296. **After a restart.** Pick the three toolboxes up again, put them into the input and let the crane store them. Save
+    and quit, close the game, start `./gradlew runClient` again and rejoin. The stock list shows the same three
+    entries, and a request for each is delivered with the same contents. (Before this, none of them could be requested
+    after a restart either.)
+297. **Two contents without a filter.** A command makes toolboxes without any filter and without an id, which Create
+    itself treats as the same whatever they hold: every inventory of the game stacks two of them into one, outside the
+    warehouse too, so move them only with plain clicks into empty slots, never with Shift or onto each other. Give
+    yourself two of them, one holding **8 diamonds** and one empty, each into its own hotbar slot (`/give` would stack
+    the second onto the first):
+    `/item replace entity @s hotbar.7 with create:brown_toolbox[create:toolbox_inventory={items:{items:{"0":{id:"minecraft:diamond",count:8}},size:32},filters:[{},{},{},{},{},{},{},{}]}]`
+    and
+    `/item replace entity @s hotbar.8 with create:brown_toolbox[create:toolbox_inventory={items:{items:{},size:32},filters:[{},{},{},{},{},{},{},{}]}]`.
+    Put a hopper on the input and move each toolbox into a hopper slot of its own. Once the crane has stored both, the
+    stock list shows **two** new Brown Toolbox entries with 1 each. Request each with the amount field at 1, take each
+    out of the terminal into an empty slot and place it: one holds 8 diamonds, the other nothing. **Are there exactly 8
+    diamonds between the two?** (Before this, both were one entry with 2, and the requests could bring the diamonds
+    back twice or not at all.)
+298. **Refilled and stored again.** Place the second toolbox that check 296 delivered (16 iron), add **8 gold ingots**
+    to the compartment beside the iron, pick it up and put it into the input. Once the crane has stored it, the stock
+    list shows it as one new entry with 1. Request it and place it: 16 iron and 8 gold, no more. Count the iron and
+    gold in all toolboxes and the terminal together: **is any ingot there twice?**
+299. **A sand paper paused while polishing.** Hold a new **Sand Paper** in your main hand and a **Rose Quartz** in your
+    off hand, hold the right mouse button and switch to another hotbar slot before the polish finishes: the off hand
+    holds one rose quartz less, and the paper keeps it. Do the same with a second new sand paper, put both papers into
+    the input and wait until they are stored: the stock list shows them as **one** entry with 2. Request both: they
+    arrive. Take one, hold it in your main hand and hold the right mouse button until the polish finishes: you get a
+    **Polished Rose Quartz**. (Before this, a paused paper could be stored but never requested, and each one was an
+    entry of its own.)
+300. **On a dedicated server, with a restart.** Start `./gradlew runServer`, join with `./gradlew runClient`, fill the
+    setup's three toolboxes there and run checks 295 and 299. Then pick the three toolboxes up again and put them and
+    the paper that still holds its rose quartz into the input. Once they are stored, stop the server with `/stop`,
+    start it again and rejoin: the stock list shows the same four entries, and a request for each is delivered with
+    the same contents. Neither log has a warning "Cannot read Create's" or "Cannot copy a", or an error
+    mentioning `wareworks`.
+301. **Two kinds of Wand of Symmetry on one block.** Take two **Wands of Symmetry** and right-click the top of the same
+    block with each, so both mirrors stand on that block. Shift-right-click with the first and set its Mirror to
+    **Rectangular** with the Orientation **Orthogonal**; Shift-right-click with the second and set its Mirror to
+    **Octagonal**. Put both wands into the input and wait until the crane has stored them: the stock list shows **two**
+    Wand of Symmetry entries with 1 each. Save and quit and rejoin: still two entries. Request each with the amount
+    field at 1, take it out and Shift-right-click with it: **does each wand show the Mirror it was stored with?**
+    (Before this, both wands were one entry with 2, and a request could bring back the other Mirror.)
