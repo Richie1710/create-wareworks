@@ -195,7 +195,8 @@ The build *is* the configuration; there is no setup screen.
 
 1. **Place the Stacker Crane dock** looking in the direction the aisle should run.
 2. **Power it from below.** The dock takes rotational force only through a shaft underneath (4 SU per RPM by default).
-   Higher RPM means a faster crane.
+   Higher RPM means a faster crane; how much faster, and how much stress it takes, is server config (see
+   [Balancing the crane](#balancing-the-crane)).
 3. **Lay Warehouse Rails** in a line in front of the dock. Their number is the aisle length (up to 32 by
    default). Scroll the **Mast Height** value box on the dock for the number of levels.
    *You may bend and split:* lay a second run at right angles to the first and the block they share becomes a corner
@@ -254,6 +255,46 @@ cannot fill one and that breaking a full one loses the fluid. The twenty-second,
 belongs to the terminal and the output: the port with a Packager at its back that is a door, the sign that names it,
 the terminal's door button that sends a click there, the crane filling the door and your redstone sending the box,
 what always comes to the terminal instead, and the Stock Link that takes a door out of the choice.
+
+## Balancing the crane
+
+How fast the crane runs and how much stress it takes are server settings, in the section `[crane]` of
+`config/wareworks-server.toml` (for a single world: `<world>/serverconfig/wareworks-server.toml`). The crane follows the
+RPM of the shaft under its dock, so every speed is a factor per RPM:
+
+| Key | Default | What it does |
+|---|---|---|
+| `stressImpact` | 4.0 | SU per RPM, so it works as a multiplier: 8.0 is twice the load, 0 none at all |
+| `travelBlocksPerTickPerRpm` | 1/384 | travel along the aisle: two thirds of a block per tick at 256 RPM |
+| `liftBlocksPerTickPerRpm` | 1/512 | the lift: half a block per tick at 256 RPM |
+| `armExtendPerTickPerRpm` | 1/192 | the arm, in full extensions per tick: at most one, which it reaches at 192 RPM |
+| `maxBlocksPerTick` | 1.0 | a hard speed cap for travel and lift |
+
+**`maxBlocksPerTick` caps travel and lift, not the arm.** The quarter turns at corners run off travel, so it caps them
+too. With the default factors it is never reached up to Create's default top speed of 256 RPM: one block per tick
+would take 384 RPM to travel and 512 to lift. Lower it to have an effect: at 0.25 the crane travels no faster from 96
+RPM on and lifts no faster from 128 RPM on, while the arm still speeds up. The file lists every key with its comment;
+this doubles the load (8 SU per RPM, 2048 SU at 256 RPM) and keeps travel and lift at a quarter block per tick at most:
+
+```toml
+[crane]
+	stressImpact = 8.0
+	maxBlocksPerTick = 0.25
+```
+
+The speed keys take effect as soon as the server has read the saved file (a dedicated server sends its config to a
+player on joining, so players already online animate the crane with the old values until they rejoin). **A changed
+`stressImpact` reaches a network when the crane joins it again.** Create keeps the stress it read when the crane joined
+its kinetic network, so a network that is already running goes on counting the old value. Break the shaft under the dock
+and place it again, or change the speed that drives it (scroll a creative motor, or a Rotation Speed Controller in front
+of the crane, to another RPM and back), and the network counts the new value at once. A restart is not enough on its
+own: the crane reads the new value, but Create does not add the network up again while it loads, so a Stressometer, and
+a network that was overstressed, can keep the old total until something in that network changes. Reconnect the shaft
+after a restart as well. On a dedicated server the goggles and tooltips of players already online show the old impact
+until they rejoin.
+
+To slow down a single crane, drive it through Create's **Rotation Speed Controller**: the crane follows the RPM of its
+own shaft, and at a lower RPM it also takes less stress.
 
 ## Requesting items
 

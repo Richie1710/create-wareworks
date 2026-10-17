@@ -13,6 +13,7 @@ import java.util.Set;
 import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.api.stress.BlockStressValues;
+import com.simibubi.create.content.kinetics.KineticNetwork;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
@@ -40,6 +41,7 @@ import dev.wareworks.registry.WareworksTags;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
@@ -87,6 +89,7 @@ public final class StackerCraneGameTests {
     private static final int MAST_HEIGHT = 6;
     private static final int OVERSIZED_MAST_HEIGHT = 10_000;
     private static final int TEST_RPM = 64;
+    private static final int SLOWER_TEST_RPM = TEST_RPM / 2;
     private static final int KINETIC_START_TICKS = 2;
     private static final int KINETIC_SETTLE_TICKS = 10;
     private static final int PERIODIC_REFRESH_TIMEOUT_TICKS = 300;
@@ -104,6 +107,11 @@ public final class StackerCraneGameTests {
     private static final double SHAPE_EPSILON = 1.0E-6;
     /** The end stop is 1 px deep at the block edge: its centre is at least this far from the block centre. */
     private static final double END_STOP_MIN_OFFSET = 0.4;
+    /** {@code crane.stressImpact} is overridden, so its test runs alone ({@link ConfigOverrides}). */
+    private static final String STRESS_CONFIG_BATCH = "wareworkscranestress";
+    /** Longer than Create's {@code kineticValidationFrequency} (60 ticks by default), so a revalidation has run. */
+    private static final int LONGER_THAN_KINETIC_VALIDATION_TICKS = 70;
+    private static final int STRESS_REJOIN_TIMEOUT_TICKS = 300;
 
     private StackerCraneGameTests() {
     }
@@ -372,6 +380,105 @@ public final class StackerCraneGameTests {
                     helper.assertFalse(dock.isOverStressed(), "a creative motor is not overstressed by the dock");
                 })
                 .thenSucceed();
+    }
+
+    /**
+     * A changed {@code crane.stressImpact} reaches a kinetic network that is already running only when the crane joins
+     * it again (README "Balancing the crane", issue #31). Create reads the impact in {@code KineticNetwork#add} and
+     * keeps it per member, multiplying only the RPM onto it, while the goggles read the config on every draw. Breaking
+     * the shaft under the dock and placing it again is such a join, and so is a speed change at the motor, which
+     * detaches the tree below it and attaches it again; both also make Create recompute the network's total, which a
+     * Stressometer shows and a save keeps. A restart is no reliable way and is not tested here: {@code #addSilently}
+     * refreshes only the dock's member entry, and the total stays as saved until the network next changes.
+     */
+    @GameTest(template = EMPTY_7X5X7, batch = STRESS_CONFIG_BATCH, timeoutTicks = STRESS_REJOIN_TIMEOUT_TICKS)
+    public static void craneStressImpactWaitsForTheNetwork(GameTestHelper helper) {
+        BlockPos motorPos = CENTER;
+        BlockPos shaftPos = CENTER.above();
+        BlockPos dockPos = CENTER.above(2);
+        placeMotor(helper, motorPos, Direction.UP);
+        helper.setBlock(shaftPos, AllBlocks.SHAFT.getDefaultState());
+        placeDock(helper, dockPos, Direction.EAST);
+        float impact = (float) WareworksConfig.stressImpact();
+        float doubled = impact * 2;
+
+        helper.startSequence()
+                .thenIdle(KINETIC_START_TICKS)
+                .thenExecute(() -> motorAt(helper, motorPos).generatedSpeed.setValue(TEST_RPM))
+                .thenWaitUntil(() -> helper.assertTrue(dockAt(helper, dockPos).getSpeed() != 0,
+                        "the dock must receive rotation through the shaft below"))
+                .thenWaitUntil(() -> assertNetworkTotal(helper, dockAt(helper, dockPos), impact * TEST_RPM,
+                        "before the change"))
+                .thenExecute(() -> {
+                    assertNetworkImpact(helper, dockAt(helper, dockPos), impact, "before the change");
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.stressImpact, (double) doubled);
+                    helper.assertValueEqual(dockAt(helper, dockPos).calculateStressApplied(), doubled,
+                            "the impact the goggles read after the change");
+                })
+                .thenIdle(LONGER_THAN_KINETIC_VALIDATION_TICKS)
+                .thenExecute(() -> {
+                    assertNetworkImpact(helper, dockAt(helper, dockPos), impact, "while the network keeps running");
+                    assertNetworkTotal(helper, dockAt(helper, dockPos), impact * TEST_RPM,
+                            "while the network keeps running");
+                    helper.setBlock(shaftPos, Blocks.AIR);
+                })
+                .thenWaitUntil(() -> helper.assertFalse(dockAt(helper, dockPos).hasNetwork(),
+                        "the dock leaves its network when the shaft below is broken"))
+                .thenExecute(() -> helper.setBlock(shaftPos, AllBlocks.SHAFT.getDefaultState()))
+                .thenWaitUntil(() -> helper.assertTrue(dockAt(helper, dockPos).getSpeed() != 0,
+                        "the dock turns again once the shaft is back"))
+                .thenExecute(() -> assertNetworkImpact(helper, dockAt(helper, dockPos), doubled,
+                        "after the shaft was placed again"))
+                .thenWaitUntil(() -> assertNetworkTotal(helper, dockAt(helper, dockPos), doubled * TEST_RPM,
+                        "after the shaft was placed again"))
+                .thenExecute(() -> {
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.stressImpact, (double) impact);
+                    motorAt(helper, motorPos).generatedSpeed.setValue(SLOWER_TEST_RPM);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(Math.abs(dockAt(helper, dockPos).getSpeed()) == SLOWER_TEST_RPM,
+                        "the dock follows the motor down to " + SLOWER_TEST_RPM + " RPM"))
+                .thenExecute(() -> motorAt(helper, motorPos).generatedSpeed.setValue(TEST_RPM))
+                .thenWaitUntil(() -> helper.assertTrue(Math.abs(dockAt(helper, dockPos).getSpeed()) == TEST_RPM,
+                        "the dock follows the motor back up to " + TEST_RPM + " RPM"))
+                .thenExecute(() -> assertNetworkImpact(helper, dockAt(helper, dockPos), impact,
+                        "after a speed change at the motor"))
+                .thenWaitUntil(() -> assertNetworkTotal(helper, dockAt(helper, dockPos), impact * TEST_RPM,
+                        "after a speed change at the motor"))
+                .thenSucceed();
+    }
+
+    /** Restores {@code crane.stressImpact} even when its test fails before the end. */
+    @AfterBatch(batch = STRESS_CONFIG_BATCH)
+    public static void restoreStressConfig(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /** The impact the dock's kinetic network counts for it, and the stress that makes at {@link #TEST_RPM}. */
+    private static void assertNetworkImpact(GameTestHelper helper, StackerCraneBlockEntity dock, float impact,
+                                            String moment) {
+        if (!dock.hasNetwork()) {
+            helper.fail("the dock is in no kinetic network " + moment);
+            return;
+        }
+        KineticNetwork network = dock.getOrCreateNetwork();
+        Float counted = network.members.get(dock);
+        if (counted == null) {
+            helper.fail("the dock is no member of its kinetic network " + moment);
+            return;
+        }
+        helper.assertValueEqual(counted, impact, "the impact the network counts for the dock " + moment);
+        helper.assertValueEqual(network.getActualStressOf(dock), impact * TEST_RPM,
+                "the dock's stress at " + TEST_RPM + " RPM " + moment);
+    }
+
+    /**
+     * The network's total stress as the dock last received it ({@code KineticNetwork#sync}): what a Stressometer on the
+     * same network shows, and what a save keeps for {@code KineticNetwork#initFromTE} to start from.
+     */
+    private static void assertNetworkTotal(GameTestHelper helper, StackerCraneBlockEntity dock, float total,
+                                           String moment) {
+        CompoundTag network = dock.saveWithoutMetadata(helper.getLevel().registryAccess()).getCompound("Network");
+        helper.assertValueEqual(network.getFloat("Stress"), total, "the network's total stress " + moment);
     }
 
     /** Motors at the sides and on top, with their shafts pointing at the dock, do not connect. */

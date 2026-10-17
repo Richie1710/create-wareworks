@@ -780,6 +780,55 @@ Based on the Create 6.0.10 and NeoForge 21.1 sources, checked before implementat
 *Reason:* Server-authoritative balancing without depending on Create's internal config classes.
 *Implementation (M1):* `config.WareworksConfig`. NeoForge 21.1 loads SERVER configs from `<instance>/config/wareworks-server.toml`; a copy in `<world>/serverconfig/` overrides it for that world (`ServerLifecycleHooks.handleServerAboutToStart`). All reads go through typed static getters (`WareworksConfig.maxAisleLength()` ...) that return the default while the spec is not loaded, so no caller can hit "Cannot get config value before config is loaded". `WareworksStress.configuredImpact()` registers the crane impact with such a getter.
 
+*Amendment — what the crane's speed and stress keys reach, and when
+([issue #31](https://github.com/Richie1710/create-wareworks/issues/31)):*
+*Context:* asked for in #28 as a configurable maximum speed and stress multiplier for the stacker crane. Both existed
+(`crane.stressImpact`, the three per-RPM factors and `crane.maxBlocksPerTick`), but nothing a player reads named them,
+and two comments in the file said more or less than the code does: `maxBlocksPerTick` claimed to cap "each crane axis",
+and `stressImpact` did not say when a change arrives.
+
+*Decision:* no change to how the crane behaves, to saves or to the protocol. The README gets the section "Balancing
+the crane", the config comments say what the code does, and two tests pin what both say: JUnit
+`TravelTimeModelTest#documentedBalancingNumbers` (every speed and RPM the text gives) and the GameTest
+`cranestressimpactwaitsforthenetwork` (the impact and the total a running network keeps, and the two rejoins that
+apply a change: the shaft under the dock placed again and a speed change at the motor):
+* `maxBlocksPerTick` caps **travel and lift** (`CraneKinematics#speeds`) and so the quarter turns, which run off travel
+  (`CraneMotion#turnSpeed`), but **never the arm**, whose cap is the fixed `CraneKinematics.MAX_ARM_SPEED` of one full
+  extension per tick (192 RPM at the default factor). With the default factors one block per tick takes 384 RPM to
+  travel and 512 RPM to lift, above Create's default `maxRotationSpeed` of 256 (`CKinetics`), so the key only acts
+  when it is lowered.
+* `stressImpact` is read by Create when the crane **joins** a kinetic network (`KineticNetwork#add` and `#addSilently`
+  call `KineticBlockEntity#calculateStressApplied`) and kept per member; only the RPM multiplier is applied on top of it
+  as the network runs. A running network therefore counts a changed value only once the crane joins it again through
+  `#add`, which also sets `networkDirty`, so the next tick's `updateNetwork` recomputes the total: a reconnected kinetic
+  block between the source and the dock (the shaft under it), or a speed change at the source or at a Rotation Speed
+  Controller on the way (`GeneratingKineticBlockEntity#applyNewSpeed` "Reapply source" and
+  `SpeedControllerBlockEntity#updateTargetRotation` detach the tree below and attach it again). A restart or a reload of
+  the dock's chunk is **no such join**: on a load `#addSilently` stores the new impact per member, but it neither calls
+  `updateStress` nor sets `networkDirty`, and `initFromTE` starts the total from the saved one. The total, and every
+  member's `stress` and `overStressed`, stay as saved until that network's next `updateStress`/`updateNetwork`, which on
+  a load depends on block entity tick order: a creative motor recomputes in its `initialize`
+  (`updateGeneratedRotation`), which counts the dock's new value only if the dock has initialised first, and a water
+  wheel only when its flow changes. The README therefore names the reconnected shaft as the way to apply a change, after
+  a restart as well, and the config comment says so in short. Create's own stress values (`CStress`, a provider over its
+  config with no reload hook) behave exactly the same way.
+* Tooltips and goggles read the supplier on every draw, on the client from its own copy of the SERVER config. In single
+  player that copy is the server's (`ConfigSync#receiveSyncedConfig` skips a local server), so they show a change as
+  soon as FML's watcher has reloaded the file. On a dedicated server, and for a LAN guest, it is the copy the client
+  received while joining, so goggles and Shift tooltips show the old impact until the player rejoins, like the speed
+  factors below, even once the Stressometer, whose network stress comes from the server, shows the new load.
+* The four speed keys are read in every tick on both sides. A dedicated server sends its config only while a client
+  joins (NeoForge's `ConfigSync`), so a client that is already connected animates the crane with the old factors until
+  it rejoins; the server's crane runs at the new speed as soon as FML's watcher has reloaded the file.
+
+*Rejected:* pushing a reloaded impact into running networks, with `KineticNetwork#updateStressFor` for every loaded dock
+from a `ModConfigEvent.Reloading` listener. It would reach into Create's network bookkeeping from a config event for a
+number an operator changes once, and make the crane the only kinetic block that behaves differently from Create's own.
+Also rejected: making a restart apply the value reliably, by setting `networkDirty` one server tick after the dock's
+`initialize` (so the other members loaded with the chunk have initialised and `updateNetwork` re-syncs them all). It is
+the same departure from how Create's own blocks load, for the same rare change, and the reconnected shaft already
+does it.
+
 ### ADR-014 — Automated visual smoke test (dev tooling, M4)
 *Context:* Rendering (M4: animated crane, Flywheel on and off) must be checked visually, and GameTests and JUnit cannot see the game window.
 *Decision:* A client-side harness in `dev.wareworks.dev`, started by the Gradle run `runVisualTest` (game directory `run/visual`, 1600x900 window, system property `wareworks.visualTest=<scenario>`, default `aisle`). It drives a normal client: title screen → fresh superflat creative world `wareworks_visual` (`WorldOpenFlows#createFreshLevel`, deleted first) → world settings (noon, clear, daylight/weather/mob spawning off, peaceful, spectator camera) → the scenario builds its scene with real block placement on the integrated server thread → camera tour (server-side teleports, wait for chunk section compilation) with vanilla `Screenshot.grab` of the main render target after a rendered frame, GUI hidden → the same tour again after `/flywheel backend off` (labels `nofw-*`) → `screenshots/index.txt` → `Minecraft#stop()`. Moments of the crane (carrying, arm extended, travelling) are detected on the synced client block entity and captured with the game ticks frozen (`ServerTickRateManager#setFrozen`), so several views show the same moment.

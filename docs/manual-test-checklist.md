@@ -3195,3 +3195,52 @@ you get tired of waiting, and put it back before judging check 160.
     zuerst", in one line that fits the screen also in the default window size, and the sixth text of the Ponder scene
     "Regalfächer in einem Lagergang" says to hold Right-Click with an empty hand to set a priority, and that the higher
     it is, the sooner the bay fills. Nothing shows a raw key, runs out of its box or is cut off.
+
+## BB. Balancing the crane ([issue #31](https://github.com/Richie1710/create-wareworks/issues/31))
+
+> The README's section "Balancing the crane" and the `[crane]` comments in `wareworks-server.toml` describe settings
+> that already existed; nothing about the crane changed. `TravelTimeModelTest#documentedBalancingNumbers` pins every
+> speed the text gives, and the GameTest `cranestressimpactwaitsforthenetwork` shows that a running kinetic network
+> keeps the stress impact it read, and its total, until the crane joins it again, which breaking and placing the shaft
+> under the dock does, and so does a speed change at the creative motor. What no test does is edit the file while the
+> game runs, read a Stressometer, restart the world, slow a crane with a Rotation Speed Controller, and run all this on
+> a dedicated server.
+>
+> Setup: `./gradlew runClient`, a creative world with a straight aisle of 16 rails and a few items to store, the dock
+> driven by a creative motor at 256 RPM through a Stressometer and then one shaft directly under the dock, with nothing
+> else on that network, and Engineer's Goggles. The dock's goggles show its own "Stress Impact ... at current speed".
+> The Stressometer's goggles show the network's "Remaining Capacity": the creative motor gives 4,194,304 SU at 256 RPM,
+> so the load the network counts is that minus the remaining capacity, and the dial barely moves. Put every value you
+> change back afterwards.
+
+308. **The comments.** Open `run/config/wareworks-server.toml` after the world has started once (an older file gets the
+    new comments then, keeping its values). In `[crane]`, `maxBlocksPerTick` says it caps travel and lift but not the
+    arm, that the default factors never reach it up to 256 RPM and that it has to be lowered to act;
+    `stressImpact` says a running network counts a change only once the crane joins it again (the shaft under the dock
+    broken and placed again, or a speed change at the source) and that after a restart the network total follows only
+    at its next change; `armExtendPerTickPerRpm` says the arm never extends faster than fully in one tick. **Does the
+    file explain both settings without the README?**
+309. **`stressImpact` while the world runs.** The dock's goggles show 1024 SU at current speed (4 SU per RPM), and the
+    Stressometer a Remaining Capacity of 4,193,280 / 4,194,304 SU, so the network counts 1024 SU. Set
+    `stressImpact = 8.0` and save the file: within a few seconds the dock's goggles show 2048 SU, while the Stressometer
+    still reads 4,193,280. Break the shaft under the dock and place it again: 4,192,256 / 4,194,304 SU, so the network
+    counts 2048 SU. Set 4.0 again and save, then scroll the creative motor to 128 RPM and back to 256: 4,193,280 again,
+    without touching the shaft. Set 8.0 again and save, leave the world and open it again: the dock's goggles show
+    2048 SU. Note what the Stressometer reads before you touch anything: 4,193,280 (the saved total) or 4,192,256,
+    depending on the order the blocks load in. Break and place the shaft under the dock: 4,192,256.
+310. **`maxBlocksPerTick`.** Request a stack from the far end of the aisle and watch the trip. Set
+    `maxBlocksPerTick = 0.25`, save and request again: travel and lift are clearly slower (16 rails take about 64 ticks
+    instead of 24), the arm reaches in exactly as fast as before, and the turn at a corner, if your aisle has one, is
+    slower too. With 1.0 again the crane is as fast as on the first trip.
+311. **One crane slowed down.** Drive the dock through Create's **Rotation Speed Controller** set to 32 RPM: the crane
+    travels, lifts and turns at an eighth of its speed and extends its arm at a sixth (the arm is capped at one full
+    extension per tick from 192 RPM on, so it ran at that cap at 256 RPM). The dock's goggles show 128 SU at current
+    speed and the Stressometer reads 4,194,176 / 4,194,304 SU, while a second crane on another motor keeps its speed.
+312. **On a dedicated server.** Start `./gradlew runServer`, join with `./gradlew runClient`, build the setup above on
+    the server, and while you are connected set `maxBlocksPerTick = 0.25` in `run/server/config/wareworks-server.toml`
+    (or in the world's `serverconfig/` copy, if there is one) and request a stack. The crane on the server is capped at
+    once; your client still animates it with the old values until you rejoin, then it moves smoothly at the capped
+    speed. **How does the crane look before the rejoin: does it jump, and is the README's one sentence about it
+    enough?** Then, still connected, set `stressImpact = 8.0` in the same file, save, and break and place the shaft
+    under the dock: the Stressometer reads 4,192,256 / 4,194,304 SU, while the dock's goggles still show 1024 SU at
+    current speed; after a rejoin they show 2048 SU. Neither log has an error mentioning `wareworks`.

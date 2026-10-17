@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The hover tip of a storage location's filter slot now says how to reach the priority and which way it ranks.** It
   reads "Hold with an empty hand to set the priority; higher fills first", and the Ponder scene "Rack Bays in a
   Warehouse Aisle" says the same
+- **The server config now says what the crane's speed cap and stress setting really do.** In `wareworks-server.toml`,
+  `crane.maxBlocksPerTick` read as a cap for "each crane axis"; it caps travel and lift (and with travel the turns at
+  corners), not the arm, and with the default factors it is never reached up to Create's default top speed of 256 RPM,
+  so it has to be lowered to have an effect. `crane.stressImpact` now says that a kinetic network that is already
+  running counts a change only once the crane joins it again (break and place the shaft under the dock, or change the
+  speed at the source), because Create keeps the stress it read when the crane joined the network, and that after a
+  restart the network's total follows only at its next change. `crane.armExtendPerTickPerRpm` now says that the arm
+  never extends faster than fully in one tick. The values themselves and their defaults are unchanged; the file picks up
+  the new comments the next time a world or server starts
 
 ### Fixed
 

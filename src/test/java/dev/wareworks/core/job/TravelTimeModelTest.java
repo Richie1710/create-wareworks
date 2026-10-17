@@ -9,6 +9,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import dev.wareworks.core.crane.CraneMotion;
+
 class TravelTimeModelTest {
     /** The config defaults of {@code docs/warehouse-system.md} §9. */
     private static final CraneKinematics.Params DEFAULTS = new CraneKinematics.Params(1.0 / 384.0, 1.0 / 512.0,
@@ -36,6 +38,47 @@ class TravelTimeModelTest {
         assertEquals(0.5, capped.va(), DELTA, "the arm has its own cap");
         CraneSpeeds infinite = CraneKinematics.speeds(DEFAULTS, Double.POSITIVE_INFINITY);
         assertEquals(new CraneSpeeds(1.0, 1.0, 1.0), infinite);
+    }
+
+    /**
+     * The numbers the README's "Balancing the crane" and the {@code crane.*} config comments give (issue #31): with the
+     * default factors {@code maxBlocksPerTick} is never reached up to Create's default top speed of 256 RPM, it caps
+     * travel, lift and the turns that run off travel, but never the arm, which has its own cap at 192 RPM. Also the
+     * Rotation Speed Controller check of {@code docs/manual-test-checklist.md}: at 32 RPM travel, lift and turns run at
+     * an eighth of their 256 RPM speed, the arm at a sixth.
+     */
+    @Test
+    void documentedBalancingNumbers() {
+        CraneSpeeds topSpeed = CraneKinematics.speeds(DEFAULTS, 256);
+        assertEquals(2.0 / 3.0, topSpeed.vx(), DELTA, "two thirds of a block per tick at 256 RPM");
+        assertEquals(0.5, topSpeed.vy(), DELTA, "half a block per tick at 256 RPM");
+        assertEquals(CraneKinematics.MAX_ARM_SPEED, topSpeed.va(), DELTA);
+        assertTrue(topSpeed.vx() < DEFAULTS.maxBlocksPerTick() && topSpeed.vy() < DEFAULTS.maxBlocksPerTick(),
+                "the default cap is not reached at 256 RPM");
+        assertEquals(1.0, CraneKinematics.speeds(DEFAULTS, 384).vx(), DELTA, "travel reaches one block at 384 RPM");
+        assertTrue(CraneKinematics.speeds(DEFAULTS, 383).vx() < 1.0);
+        assertEquals(1.0, CraneKinematics.speeds(DEFAULTS, 512).vy(), DELTA, "the lift reaches it at 512 RPM");
+        assertTrue(CraneKinematics.speeds(DEFAULTS, 511).vy() < 1.0);
+        assertEquals(1.0, CraneKinematics.speeds(DEFAULTS, 192).va(), DELTA, "the arm reaches its cap at 192 RPM");
+        assertTrue(CraneKinematics.speeds(DEFAULTS, 191).va() < 1.0);
+
+        CraneSpeeds slowed = CraneKinematics.speeds(DEFAULTS, 32);
+        assertEquals(topSpeed.vx() / 8, slowed.vx(), DELTA, "32 RPM travels at an eighth of the 256 RPM speed");
+        assertEquals(topSpeed.vy() / 8, slowed.vy(), DELTA, "and lifts at an eighth");
+        assertEquals(CraneMotion.turnSpeed(topSpeed, 1.0) / 8, CraneMotion.turnSpeed(slowed, 1.0), DELTA,
+                "and turns at an eighth");
+        assertEquals(topSpeed.va() / 6, slowed.va(), DELTA, "but extends the arm at a sixth: it was capped at 256 RPM");
+
+        CraneKinematics.Params lowered = new CraneKinematics.Params(DEFAULTS.travelBlocksPerTickPerRpm(),
+                DEFAULTS.liftBlocksPerTickPerRpm(), DEFAULTS.armExtendPerTickPerRpm(), 0.25);
+        assertEquals(0.25, CraneKinematics.speeds(lowered, 96).vx(), DELTA, "travel is capped from 96 RPM on");
+        assertTrue(CraneKinematics.speeds(lowered, 95).vx() < 0.25);
+        assertEquals(0.25, CraneKinematics.speeds(lowered, 128).vy(), DELTA, "the lift from 128 RPM on");
+        assertTrue(CraneKinematics.speeds(lowered, 127).vy() < 0.25);
+        CraneSpeeds loweredTop = CraneKinematics.speeds(lowered, 256);
+        assertEquals(new CraneSpeeds(0.25, 0.25, CraneKinematics.MAX_ARM_SPEED), loweredTop,
+                "more RPM still speeds the arm up");
+        assertEquals(0.25, CraneMotion.turnSpeed(loweredTop, 1.0), DELTA, "a turn runs off the capped travel speed");
     }
 
     @Test

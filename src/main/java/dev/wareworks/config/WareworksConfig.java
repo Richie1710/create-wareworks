@@ -598,7 +598,13 @@ public final class WareworksConfig {
 
             builder.comment("Stacker crane").push("crane");
             stressImpact = builder
-                    .comment("[in Stress Units] Stress impact of the stacker crane per RPM.")
+                    .comment("[in Stress Units] Stress impact of the stacker crane per RPM, so it works as a "
+                            + "multiplier: the default 4 is 1024 SU at 256 RPM, 8 doubles the load, 0 takes none.",
+                            "Create reads it when the crane joins a kinetic network and keeps that value, so a running "
+                                    + "network counts a change only once the crane joins it again: break the shaft "
+                                    + "under the dock and place it again, or change the speed at the source.",
+                            "After a restart the crane reads the new value, but the network total (Stressometer, "
+                                    + "overstress) follows only at that network's next change.")
                     .defineInRange("stressImpact", 4.0, 0.0, 1024.0);
             travelBlocksPerTickPerRpm = builder
                     .comment("[in Blocks per Tick per RPM] Travel speed along the aisle (X axis). Default 1/384.")
@@ -607,10 +613,18 @@ public final class WareworksConfig {
                     .comment("[in Blocks per Tick per RPM] Lift speed of the carriage (Y axis). Default 1/512.")
                     .defineInRange("liftBlocksPerTickPerRpm", 1.0 / 512.0, 0.0, 1.0);
             armExtendPerTickPerRpm = builder
-                    .comment("[in Extensions per Tick per RPM] Arm speed as a fraction of the full extension. Default 1/192.")
+                    .comment("[in Extensions per Tick per RPM] Arm speed as a fraction of the full extension. "
+                            + "Default 1/192.",
+                            "The arm never extends faster than fully in one tick, which the default reaches at "
+                                    + "192 RPM; maxBlocksPerTick does not cap it.")
                     .defineInRange("armExtendPerTickPerRpm", 1.0 / 192.0, 0.0, 1.0);
             maxBlocksPerTick = builder
-                    .comment("[in Blocks per Tick] Hard speed cap for each crane axis.")
+                    .comment("[in Blocks per Tick] Hard speed cap for travel and lift, and so for the quarter turns at "
+                            + "corners, which run off travel. It does not cap the arm.",
+                            "With the default factors it is never reached up to Create's default top speed of 256 RPM: "
+                                    + "one block per tick takes 384 RPM to travel and 512 RPM to lift.",
+                            "Lower it to have an effect: at 0.25 the crane travels no faster from 96 RPM on and lifts "
+                                    + "no faster from 128 RPM on, while more RPM still costs more stress.")
                     .defineInRange("maxBlocksPerTick", 1.0, 0.01, 4.0);
             turnPenaltyBlocks = builder
                     .comment("[in Blocks] What one quarter turn at a corner costs the crane, measured in blocks of "

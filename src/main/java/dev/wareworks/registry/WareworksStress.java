@@ -14,7 +14,23 @@ import net.minecraft.world.level.block.Block;
  * (which throws for non-Create registrates).
  * <p>
  * Impacts are registered in {@code BlockStressValues.IMPACTS} as suppliers. Create queries the supplier on every
- * {@code getImpact} call, so config changes apply to tooltips at once and to kinetic networks when they re-propagate.
+ * {@code getImpact} call, so tooltips and goggles always show the value this side's config holds (on a client connected
+ * to a dedicated server, the copy NeoForge synced while it joined, so a reloaded server file reaches them only after a
+ * rejoin). A kinetic network, however, reads the impact only when a block entity joins it ({@code KineticNetwork#add}
+ * and {@code #addSilently} call {@code calculateStressApplied}) and keeps that number per member; RPM changes are
+ * applied on top of it, a changed impact is not.
+ * <p>
+ * A running network therefore counts a new value only once the crane joins it again through {@code #add}, which also
+ * sets {@code networkDirty}, so the next tick's {@code updateNetwork} recomputes the total: the dock's shaft (or any
+ * kinetic block between it and the source) disconnected and connected again, or a speed change at the source or at a
+ * Rotation Speed Controller on the way ({@code GeneratingKineticBlockEntity#applyNewSpeed},
+ * {@code SpeedControllerBlockEntity#updateTargetRotation}), which detaches the tree below it and attaches it again. A
+ * load is no such join: {@code #addSilently} stores the new impact per member, but neither it nor {@code initFromTE},
+ * which starts the total from the saved one, recomputes the total from the new impacts. {@code currentStress} and every
+ * member's {@code stress} and {@code overStressed} stay as saved until the network's next
+ * {@code updateStress}/{@code updateNetwork}, for example a generator's {@code updateGeneratedRotation} or a member
+ * joining or leaving; a creative motor runs the former in its {@code initialize}, which sees the dock's new impact only
+ * if the dock has initialised first.
  */
 public final class WareworksStress {
     private WareworksStress() {
