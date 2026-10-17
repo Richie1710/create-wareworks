@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and an older client cannot join a server with this one, because a click with an item on a storage filter slot is now
+  applied by the server (see Fixed below)
 - **The hover tip of a storage location's filter slot now says how to reach the priority and which way it ranks.** It
   reads "Hold with an empty hand to set the priority; higher fills first", and the Ponder scene "Rack Bays in a
   Warehouse Aisle" says the same
@@ -47,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Warehouse Summary's "Locations" line counts a Fluid Bay that holds fluid as in use, so a warehouse with fluid
   bays can read full.** A fluid bay was counted in the total but never as in use, however full it was, so a chest of
   items and two full bays read "Locations: 1 / 3". An empty bay still counts as free
+- **The German texts call the filter slot "Filterfeld" everywhere.** The Warehouse Interface's tooltip and two Ponder
+  lines said "Filterplatz", while every other text said "Filterfeld"
 
 ## [0.12.1-beta] - 2026-10-17
 

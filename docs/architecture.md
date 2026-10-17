@@ -1979,8 +1979,11 @@ bay hides both, because a click that misses the sphere puts the item into the ba
 * **The hint says so, and says which way the number ranks**: the hover tip's third line is "Hold with an empty hand to
   set the priority; higher fills first", and the rack bay's Ponder line says the same. The direction of the scale is
   unchanged (0 is no priority, higher fills first), as this ADR decided.
-* **No mixin, no new packet, no save change.** The client still sends vanilla's `ServerboundUseItemOnPacket` and the
-  server answers it, so `WareworksNetwork.VERSION` stays `13`.
+* **No mixin, no new packet, no save change, but a new network version.** The client still sends vanilla's
+  `ServerboundUseItemOnPacket` and the server answers it, so no payload's bytes change. `WareworksNetwork.VERSION`
+  still goes from `"13"` to `"14"`, because client and server now disagree about who applies the click: a newer client
+  on an older server would neither start Create's warmup nor have the server set the filter, so nothing would happen
+  and nothing would say why. The versions must not mix.
 
 *Rejected:* making `bypassesInput` true for an item — Create's `FilteringRenderer` then draws the box passive, without
 its highlight, exactly while the player aims at it with the item; making `acceptsValueSettings()` depend on the hand —

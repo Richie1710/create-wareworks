@@ -116,8 +116,9 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 19l. Point a **deployer** at the aisle face of a filtered interface and let it right-click with something in hand: the
     filter must **not** change and the filter item that is in the slot must not disappear.
 
-The same slot carries a second setting since M16 — the location's **storage priority**, set by *holding* the click. It has
-its own checks in **section S**, because it needs a rack wall and a longer look at the crane; do them together with these
+The same slot carries a second setting since M16 — the location's **storage priority**, set by *holding* the click
+with an empty hand or a wrench (since issue #30 a click with an item only sets the filter, section BA). It has its own
+checks in **section S**, because it needs a rack wall and a longer look at the crane; do them together with these
 if you are already standing at the wall.
 
 ## D. Stations
@@ -2150,7 +2151,8 @@ you get tired of waiting, and put it back before judging check 160.
     stack of cobblestone. Right-click the **face**, a little away from the little box in the middle: **one** item goes
     in. Hold **Shift** and right-click: a **whole stack** goes in. Empty your hand: a plain right-click gives **one**
     back, Shift gives a **stack**. Now aim deliberately at the box in the middle and click with a filter item: it must
-    go into the **filter slot**, not into the bay, and holding that click must still open the **priority** board. The
+    go into the **filter slot**, not into the bay, the moment you press, and holding that click opens no board (issue
+    #30, section BA); holding a click with an **empty hand** (or a wrench) on the box opens the **priority** board. The
     sphere is 4 px across and nothing automated can feel where its edge is — so: **is the box findable, and is it easy
     to miss when you mean to store something?** The honest failure mode here is a player who tried to store an item
     and set a filter instead, or the other way round.

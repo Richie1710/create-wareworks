@@ -34,8 +34,8 @@ public final class WareworksNetwork {
      * Payload version; a change makes clients with an older Wareworks fail the connection instead of misbehaving.
      * <p>
      * <b>Bump it whenever the wire form of any payload changes</b> — a field added, removed or reordered, and also a
-     * constant inserted into an enum a payload encodes by ordinal ({@link dev.wareworks.content.controller.RequestRejection}).
-     * The negotiation only compares this string, and a decoder that reads the fields in the old order fails open rather
+     * constant inserted into an enum a payload encodes by ordinal ({@link dev.wareworks.content.controller.RequestRejection}),
+     * or whenever client and server change which of them applies an interaction. The negotiation only compares this string, and a decoder that reads the fields in the old order fails open rather
      * than loudly: it would show a refusal as an accepted request and then desynchronise the connection.
      * <p>
      * {@code "2"}: M7 added {@code pending} to {@link TerminalResultPayload} and {@code REQUEST_FULL} to
@@ -127,8 +127,14 @@ public final class WareworksNetwork {
      * client), which an older client would not understand; and the two constants {@code NOT_A_DOOR} and
      * {@code DOOR_IGNORES_REDSTONE} appended to {@code RequestRejection}, which travels by ordinal and which an older
      * client would read as no reason at all. Nothing is saved for any of it.
+     * <p>
+     * <b>{@code "14"} is issue #30</b>: a click with an item on a storage filter slot (Warehouse Interface, Rack Bay,
+     * Fluid Bay) is applied by the server on the press ({@code StorageFilterClicks}), and the client no longer starts
+     * Create's warmup or sends its release {@code ValueSettingsPacket} for it. No payload's bytes changed, but the two
+     * sides disagree about who applies the click: a newer client on an older server would set nothing and say nothing.
+     * So the versions must not mix.
      */
-    public static final String VERSION = "13";
+    public static final String VERSION = "14";
 
     private WareworksNetwork() {
     }
