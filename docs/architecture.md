@@ -220,6 +220,9 @@ dev.wareworks
 │   │                          same box also carries the storage priority as a hold-to-edit board row, written only
 │   │                          while it is not 0, ADR-028),
 │   │                          StorageFilterValueBox (its slot on the aisle face) (M8, ADR-021);
+│   │                          StorageFilterClicks (issue #30, ADR-028: marks a click with an item on that slot as
+│   │                          a press, which Create's own handler then applies at once instead of starting its
+│   │                          hold-to-edit warmup; the empty hand and the wrench keep the warmup);
 │   │                          AttachedInventoryCache (the BlockCapabilityCache lifecycle of one neighbouring
 │   │                          inventory, extracted here in M18 and shared with the collecting warehouse port,
 │   │                          ADR-030);
@@ -420,6 +423,9 @@ dev.wareworks
 │   │                          JEI-free client half of a recipe viewer's "+": whether it may be used, the candidate
 │   │                          lists, the lay payload) and WarehouseTerminalScreen#forMenu (the terminal screen a
 │   │                          payload belongs to, also while a recipe viewer's screen covers it, ADR-063)
+│   ├── input                  StorageFilterPressGuard (issue #30, ADR-028: only the first use of a press sets a
+│   │                          store filter, so a held button that slides onto a slot sets none, and while the
+│   │                          button that set one stays down, its repeats do nothing on any storage filter slot)
 │   ├── compat                 integrations with optional mods
 │   │   └── jei                the optional JEI integration, the only package that names a JEI type (ADR-063):
 │   │                          WareworksJeiPlugin (@JeiPlugin, found by JEI, referenced by nothing in the mod),
@@ -557,11 +563,19 @@ dev.wareworks
 │                              sand paper and symmetry wands as one key per contents, filters and mode or per kind
 │                              of mirror, saved and sent, hashed apart, a key untouched by its source, and toolboxes
 │                              and wands stored, reloaded, requested with a decoded key and delivered whole (issue
-│                              #29, ADR-066)
+│                              #29, ADR-066);
+│                              StorageFilterClickGameTests: a click on the filter slot of an interface, a rack bay
+│                              and a fluid bay through the server's real dispatch - an item set on the press, Create
+│                              filter items, an empty hand (also with an item in the off hand) and a wrench left to
+│                              Create's warmup, the clipboard, the arm item, sneaking, fake, adventure and spectating
+│                              players and a click beside the slot passed on, and a claim listener at HIGH that
+│                              registered after this mod still refusing the press (issue #30, ADR-028)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
 │                              MechanicalArmFixture: real Create arms selected and powered like a player's, M12;
+│                              ClickingPlayer: a real ServerPlayer for clicks through ServerPlayerGameMode#useItemOn,
+│                              shared by StationClickGameTests and StorageFilterClickGameTests since issue #30;
 │                              templates: scripts/gen_structures.py).
 │                              Excluded from the release jar together with dev (build.gradle, M5 review); src/main
 │                              reaches it only through Wareworks#registerGameTestComponents, behind
@@ -592,7 +606,13 @@ dev.wareworks
 │                              three questions and the safety stop, M15 part 2), the last two through ScreenInput (mouse
 │                              and key input into an open screen) and GoggleShots (shared goggle-tooltip shots and the
 │                              player reach they need);
-│                              FiltersVisualScenario (a rack row dedicated by filters, M8) and
+│                              FiltersVisualScenario (a rack row dedicated by filters, M8),
+│                              FilterClicksVisualScenario (the filter slot of an interface, a rack bay and a fluid
+│                              bay under real input: an item held past Create's warmup, a press whose crosshair
+│                              drifts off the slot, the hand emptied while the button stays down, the empty hand's
+│                              short click and board, a hold that slides onto the slot from the face above it, and
+│                              the hover tip, its width and the rack bay's Ponder line in English and German, issue
+│                              #30) and
 │                              PrioritiesVisualScenario (the priority digit on the block and the delivery order it
 │                              causes, fed by a real Create belt, M16) and
 │                              PortsVisualScenario (the five rows of issue #12's own table in one aisle: an unwired
@@ -1689,12 +1709,17 @@ with intent.
   which is also Create's most common idiom (funnel, saw, deployer, belt tunnel): a **short click** still sets or clears
   the filter, **holding** the click opens `ValueSettingsScreen` with one row, "Priority", 0..9. A player on a rack wall
   reaches it exactly where they already reach the filter, at any height, with no new face and no new block.
+  *(Amended by issue #30: a click with an item sets the filter on the press, and the board opens for a click held with
+  an empty hand or a wrench; see the amendment at the end of this ADR.)*
 * **`acceptsValueSettings()` becomes a constant `true`** — deliberately **not** Create's own `isCountVisible()`, whose
   `getMaxStackSize() > 1` term would make the board unreachable as soon as a player used a non-stackable item as a plain
   filter. The one behaviour change this brings is that a filter click no longer takes `ValueSettingsInputHandler`'s
   immediate server-side `onShortInteract` branch but goes through Create's client warmup and fires on **release**. That
   is a change in feel, recorded rather than hidden. The M8 fake-player protection is untouched, because
-  `ValueSettingsInputHandler` asks `mayInteract` *before* its fake-player branch.
+  `ValueSettingsInputHandler` asks `mayInteract` *before* its fake-player branch. *(Amended by issue #30: the change in
+  feel was a defect. The answer stays `true` for everything that asks outside a click, but is `false` during the
+  dispatch of a click with an item, so such a click no longer takes the warmup at all; see the amendment at the end of
+  this ADR.)*
 * **Range 0..9, no negative numbers.** `ValueSettingsScreen#getClosestCoordinate` scans board columns from 0, so a
   negative value cannot be picked on a board at all, and an offset encoding would make the saved number differ from the
   shown one. A single digit also keeps the digit on the block one glyph wide. Consequence,
@@ -1718,7 +1743,8 @@ with intent.
   that shows through the open counters of the big glyph: the number was garbled at exactly the moment a player aims at
   the block to read it. `getCountLabelForValueBox()` is therefore always empty — it cannot simply be dropped, because
   Create's own implementation would put the *filter amount* there — while `isCountVisible()` stays `true`, which is what
-  adds the "Hold to set the priority" hover line. The lesson is general and belongs with ADR-013: a Create hook that
+  adds the "Hold to set the priority" hover line (since issue #30 "Hold with an empty hand to set the priority; higher
+  fills first"). The lesson is general and belongs with ADR-013: a Create hook that
   *looks* like it is scoped to the hovered box may be scoped to the targeted **block**, and the difference is only
   visible in `FilteringRenderer`'s statement order.
 * **Persistence, sync and the clipboard cost as little as the filter does.** `StorePriority` is written **only while it
@@ -1761,6 +1787,98 @@ other keys. **M17 did exactly that** (ADR-029): an accepting warehouse port beca
 above the filter, and a port's own strength reuses this key rather than adding one — so the milestone that ADR-028 was
 written to make possible cost the comparator a single key in total. Two names were **not** changed although they now carry both settings: `AisleFilters` and
 `WarehouseRegistry.filterChanged`; their javadoc says so, and renaming them is a separate, mechanical change.
+
+*Amendment — the filter click on the press
+([issue #30](https://github.com/Richie1710/create-wareworks/issues/30)):*
+*Context:* reported in #28 as "setting a storage filter can sometimes be finicky". Read against Create's sources, the
+"change in feel" recorded above was two defects. `ValueSettingsClient#tick` opens the board once a held click has lasted
+more than five ticks and then sets no filter, which a low frame rate makes likelier; and it cancels the warmup without a
+word when the crosshair leaves the 4 px sphere or the block before the release, although the hand already swung. A rack
+bay hides both, because a click that misses the sphere puts the item into the bay, which looks like a filter.
+
+*Decision:*
+* **A click with an item sets the filter on the press**, on all three storage locations, which share
+  `StorageFilterBehaviour`, and **Create's own handler applies it**. `content.storage.StorageFilterClicks` is a
+  `PlayerInteractEvent.RightClickBlock` listener at `HIGH` on both sides that cancels nothing: it marks the dispatch of
+  a main-hand click inside the sphere whose item is not empty, not a wrench (`c:tools/wrench`) and not the clipboard
+  (a `ThreadLocal`, because an integrated server dispatches on its own thread). For that one dispatch
+  `StorageFilterBehaviour#acceptsValueSettings()` answers `false`, so `ValueSettingsInputHandler#onBlockActivated` at
+  `NORMAL` takes the branch it takes for every value box without settings: it cancels the click with `SUCCESS` on both
+  sides and calls `FilteringBehaviour#onShortInteract` at once, the very method the release reached, which applies on
+  the server only. So a Create filter item is still taken from a survival hand and the one it replaces given back, and
+  the slot still keeps a sample of one. A second listener at `LOWEST` that also receives cancelled events ends the
+  mark, so the renderer, the board's own `ValueSettingsPacket#applySettings` and the clipboard, which all ask outside a
+  dispatch, see `true` as before. Every click the listener does not mark reaches what it reached before, because
+  `StorageFilterClicks#slotUnder` repeats `ValueSettingsInputHandler`'s checks in their order: `canInteract` (sneaking,
+  spectating, adventure mode), the clipboard, `bypassesInput` (the Mechanical Arm item), `mayInteract` (a fake player,
+  the M8 protection), the active face and `testHit`. A click beside the sphere still reaches a rack bay's own insert.
+* **An empty hand and a wrench keep the warmup.** Neither has a filter to set: a short click with an empty hand still
+  clears the filter on release, and holding either opens the board. The wrench belongs there for the reason it
+  configures a port (ADR-029): "hold a wrench to configure" is one rule.
+* **Nothing of ours cancels, so a claim comes first.** Not every protection mod refuses a click at `HIGHEST`: a mod
+  built on Architectury refuses through Architectury's own NeoForge listener, and at one priority NeoForge calls
+  listeners in registration order, which follows mod construction, and FML constructs mods in parallel. A listener of
+  ours that cancelled at `HIGH` would therefore have hidden the click, on some launches and not on others, from a claim
+  listener at `HIGH` that registered after it (`receiveCanceled` is false), and the server would have set the filter
+  inside the claim. Because the apply now lives in Create's handler at `NORMAL`, any protection listener at `HIGHEST` or
+  `HIGH` refuses first, in any order, and nothing is set (GameTest `filterclickyieldstoaclaim` registers such a listener
+  at `HIGH` after this mod's). A protection listener at `NORMAL` meets Create's handler in registration order, as on
+  every Create value box. The empty hand's and the wrench's release (`ValueSettingsPacket`) fires no interaction event,
+  so it passes a claim as on every Create value box; that path is Create's and unchanged. Before issue #30 every filter
+  click took that path.
+* **A held stack that already is the filter is not applied again** (`StorageFilterBehaviour#onShortInteract` returns
+  during a marked press when `holdsFilterOf` says so, which trims a copy the way `FilterItemStack.of` trims what it
+  stores, because a configured filter item's stored copy carries removal entries in its patch). A second click with the
+  same item costs no update packet, no sound and no controller re-read, and swaps no filter item. The release path is
+  untouched, so a short click with an empty hand still clears the filter.
+* **One press sets one filter, and only a press does.** Vanilla repeats a held use click every four ticks, and
+  NeoForge's `InputEvent.InteractionKeyMappingTriggered` looks the same for a repeat and for the click a press queued.
+  `client.input.StorageFilterPressGuard` therefore remembers whether the current press of the use key has been used
+  once already (set by every main-hand use while the key is still down, wherever it went; cleared by the key's release
+  event and, once a tick, by its state) and swallows a later use of the same press that a storage filter slot would
+  take: a hold that starts on a rack bay's face to pour items in one at a time, or with a bucket on a fluid bay, and
+  slides onto the sphere, sets nothing. Before issue #30 such a repeat only started Create's warmup; leaving it to the
+  warmup is no longer possible, because the slot takes a click with an item first, so it does nothing, and the board is
+  still a deliberate hold with an empty hand away. A script that only calls `KeyMapping#click` finds the key up, so its
+  click is a press of its own. And once a press set a filter, the guard drops every use on a storage filter slot until
+  the release: a repeat with the same item changes nothing, but once a Create filter item has left a survival hand the
+  repeat is an empty-hand click, which is Create's warmup — the release would clear the filter again and hand the item
+  back, and a longer hold would open the board. Both act before `Minecraft#startUseItem` asks the block anything, so a
+  swallowed use is never sent, client and server agree, and nothing swings. Create guards its own warmup the same way
+  (`ValueSettingsClient#cancelIfWarmupAlreadyStarted`); the server cannot tell a repeat from a new click. For the same
+  reason the guard drops a use on the slot while Create's own warmup runs on that block: a player who holds an empty
+  hand and scrolls to an item would otherwise have the item set by the server, which knows nothing of the warmup that
+  Create's client cancels the repeat for. Two whole clicks before one client tick count as one press
+  (`Minecraft#handleKeybinds` drains both in one loop), which is harmless: both hold the same item.
+* **The hint says so, and says which way the number ranks**: the hover tip's third line is "Hold with an empty hand to
+  set the priority; higher fills first", and the rack bay's Ponder line says the same. The direction of the scale is
+  unchanged (0 is no priority, higher fills first), as this ADR decided.
+* **No mixin, no new packet, no save change.** The client still sends vanilla's `ServerboundUseItemOnPacket` and the
+  server answers it, so `WareworksNetwork.VERSION` stays `13`.
+
+*Rejected:* making `bypassesInput` true for an item — Create's `FilteringRenderer` then draws the box passive, without
+its highlight, exactly while the player aims at it with the item; making `acceptsValueSettings()` depend on the hand —
+it has no player, and `ValueSettingsPacket#applySettings` asks it on the server for the board's own packet (the answer
+depends on the dispatch instead, which none of those callers is inside); cancelling the click in the listener at `HIGH`
+and applying it there — it hid the click from a claim listener at `HIGH` that registered later, see above; moving the
+listener to `HIGHEST`, or registering it after mod construction — either only moves the race to other listeners;
+leaving a held repeat that reaches the slot to Create's warmup, as before issue #30 — the listener marks it before the
+warmup is asked, so it would set the filter; a mixin into `ValueSettingsInputHandler` or `ValueSettingsClient` — a
+listener ahead of the handler decides the same thing without one; applying the click on the client and sending a
+packet of our own — the server already receives the use packet with the hit.
+
+*Consequences:* a click with an item behaves like a Create value box that takes no value settings, at once and on the
+press, and a slightly long click or a drifting crosshair no longer loses it. The priority board is reached with an
+empty hand or a wrench only, which the hint and Ponder say. A claim that refuses right-clicks at `HIGHEST` or `HIGH`
+now protects a filter click with an item; the release of Create's warmup never asked it. Tests:
+`gametest.StorageFilterClickGameTests` (the press on all three blocks, Create filter items, the warmup kept for an empty
+hand and a wrench, every pass-through, and a later claim listener at `HIGH` refusing the press), the JUnit
+`data.HoverTipWidthTest` (every hover-tip line of the mod's value boxes at most 320 GUI px in English and German, the
+narrowest GUI `Window#calculateScale` leaves: Create's `ValueSettingsClient#render` centres each line and never wraps
+it; the first German text of this tip was 446 px), and the visual scenario `filterclicks`
+(`dev.FilterClicksVisualScenario`: real held and drifting clicks, the press guard, a hold that slides onto the slot
+from the face above it, the board, and the hover tip, its drawn width and the rack bay's Ponder line in English and
+German).
 
 ### ADR-029 — The warehouse output became the warehouse **port**: one signed rank carries direction and order, on the block that was already there (M17, issue #12)
 *Context:* GitHub issue #12, from the user, with a table of the combinations they wanted. Until M17 a warehouse output

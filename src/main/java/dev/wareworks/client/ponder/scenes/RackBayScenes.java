@@ -592,7 +592,7 @@ public final class RackBayScenes {
         scene.overlay().showFilterSlotInput(filterSlot(util, empty, aisleFace), CONTROL_TICKS);
         scene.idle(CONTROL_LEAD);
         scene.overlay().showText(TEXT_TICKS)
-                .text("The filter slot low in the bay's face says what belongs here; holding the click sets a priority")
+                .text("The filter slot says what belongs here; hold Right-Click on it with an empty hand to set a priority: higher fills first")
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(filterSlot(util, empty, aisleFace));

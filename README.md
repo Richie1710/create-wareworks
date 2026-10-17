@@ -493,7 +493,9 @@ stores then is iron and planks rather than boxes.
 ## Storage filters and priorities
 
 Right-click the filter slot on the lower half of a Warehouse Interface's aisle face with an item, and that storage
-location only accepts that item. List, Attribute and Package Filters work exactly as elsewhere in Create.
+location only accepts that item. List, Attribute and Package Filters work exactly as elsewhere in Create. The filter is
+set the moment you press the button, so holding it a little longer or moving the mouse does not lose the click, and a
+short click with an empty hand clears it again. A Rack Bay and a Fluid Bay have the same slot on their aisle face.
 
 * **An empty slot accepts everything.**
 * **Dedicated locations fill first**, before unfiltered ones. A deny-list filter only excludes items, so such a location
@@ -505,10 +507,11 @@ location only accepts that item. List, Attribute and Package Filters work exactl
 
 ![A rack row of four storage locations, three of them showing their filter item](docs/screenshots/storage-filters.png)
 
-**Priorities.** *Hold* the click on the same slot to set a priority from **0** to **9**. Among the locations that are
-equally suitable, the crane fills the highest one first, so the vault by the door can fill before the far end of the
-aisle. The number is drawn on the block while it is not 0, and a Create clipboard copies filter and priority together
-down a whole rack wall.
+**Priorities.** *Hold* right-click on the same slot **with an empty hand** (or a wrench) to set a priority from **0**
+to **9**; with an item in hand the click sets the filter instead. A **higher** number fills first: among the locations
+that are equally suitable, the crane fills the highest one first, so the vault by the door can fill before the far end
+of the aisle. The number is drawn on the block while it is not 0, and a Create clipboard copies filter and priority
+together down a whole rack wall.
 
 * **Storing only.** Retrieval always takes the nearest source, and raising a priority never moves what is already
   stored. A running job keeps its target.

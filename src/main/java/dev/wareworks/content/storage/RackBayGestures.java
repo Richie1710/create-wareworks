@@ -37,8 +37,11 @@ import net.neoforged.neoforge.items.wrapper.PlayerMainInvWrapper;
  * <tr><td><b>Shift</b> + right-click with such an item</td><td>puts <b>one stack</b> in</td></tr>
  * <tr><td>right-click with an <b>empty hand</b></td><td>takes <b>one item</b> out</td></tr>
  * <tr><td><b>Shift</b> + right-click with an empty hand</td><td>takes <b>one stack</b> out</td></tr>
- * <tr><td>a plain click <b>inside</b> the value box's 4 px sphere</td><td>Create's filter slot, untouched</td></tr>
- * <tr><td>holding a click inside that sphere</td><td>the storage priority board, untouched</td></tr>
+ * <tr><td>a plain click with an item <b>inside</b> the value box's 4 px sphere</td><td>sets the store filter on the
+ * press ({@link StorageFilterClicks})</td></tr>
+ * <tr><td>a short click with an empty hand inside that sphere</td><td>clears the store filter, through Create</td></tr>
+ * <tr><td>holding a click inside that sphere with an empty hand or a wrench</td><td>the storage priority board,
+ * through Create</td></tr>
  * <tr><td>a punch (left-click)</td><td><b>not used</b> — it is the same input as breaking the block</td></tr>
  * </table>
  *

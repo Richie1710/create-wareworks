@@ -78,8 +78,9 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 19a. **Filter slot (M8).** Look at an interface **from the aisle**: a filter slot sits on the lower half of the framed
     plate, below the dark arm slot. Right-click it with an item — the item is drawn there, and goggles read
     "Filter: <item>" instead of "Accepts everything". Right-click with an **empty hand** clears it again. Holding the
-    click opens a board for the location's **storage priority**, not for an amount (a storage filter has no amount);
-    that board is check 111.
+    click with an empty hand opens a board for the location's **storage priority**, not for an amount (a storage filter
+    has no amount); that board is check 111. Holding the click with an item sets the filter and opens no board
+    (issue #30, section BA).
 19b. The slot must not swallow the other interactions: the **wrench** on the top face still rotates the block, clicking
     the **side** of an interface with another interface still copies its facing (row building), and clicking the parts
     of the aisle face away from the slot still places a block normally.
@@ -854,15 +855,15 @@ automated side of M16 (`StoragePriorityGameTests`, `JobPlannerTest`, the `priori
 went where it went.
 
 111. **Can you set it, on the wall, at any height?** Stand in the aisle and look at the filter slot on the lower half of
-    an interface's aisle face. A **short** right-click still sets or clears the filter, exactly as before. **Hold** the
-    click for about a quarter second: Create's value settings board opens with one row, "Priority", and a scale from 0
-    to 9. Set 5, release, and check that the number stuck. Do this for a location **above head height** and one at your
-    feet — the judgement is whether you can aim at a 6 px plate on a rack wall without crouching around, and whether the
-    board opens reliably rather than sometimes only setting the filter.
+    an interface's aisle face. A right-click **with an item** sets the filter, and a short right-click with an **empty
+    hand** clears it. **Hold** the click **with an empty hand** for about a quarter second: Create's value settings
+    board opens with one row, "Priority", and a scale from 0 to 9. Set 5, release, and check that the number stuck. Do
+    this for a location **above head height** and one at your feet — the judgement is whether you can aim at a 6 px
+    plate on a rack wall without crouching around, and whether the board opens reliably for an empty hand.
 
-    Watch for the one change in feel this brought: since the slot accepts value settings, a filter click fires on
-    **release** instead of the instant you press. Note it if it feels laggy or if a quick click ever fails to set a
-    filter.
+    Until issue #30 every filter click fired on **release**, which made it unreliable: held a moment too long, the board
+    opened instead, and a mouse moved before the release lost the click. A click with an item now sets the filter the
+    instant you press, and only an empty hand or a wrench opens the board; section BA checks that in detail.
 
     The other interactions must still work over it: the **wrench** on the top face rotates the block, clicking the
     **side** of an interface with another interface still copies its facing (row building), and the parts of the aisle
@@ -880,9 +881,9 @@ went where it went.
     of itself and must not turn into a smear (that was an M16 defect — Create's corner label on the value box was drawn
     on top of it for every targeted block, and it is switched off now). Then step close enough to hit the slot itself:
     Create's box highlight and the checkered face appear and cover the digit, which is expected, and the hover tip's
-    third line must read "Hold to set the priority". Goggles on the interface read "Priority: 5"; goggles on the
-    **controller** read "Prioritised locations: N" under the storage count, and **nothing** while no location is
-    prioritised.
+    third line must read "Hold with an empty hand to set the priority; higher fills first". Goggles on the interface
+    read "Priority: 5"; goggles on the **controller** read "Prioritised locations: N" under the storage count, and
+    **nothing** while no location is prioritised.
 
 113. **Is the effect obvious?** Leave two nearer locations empty and unprioritised, give a **far** one priority 5, and
     feed a stack into the input. The crane must drive **past** the near ones to the far one — watch a whole trip and
@@ -915,13 +916,14 @@ went where it went.
     a priority and no filter**, and the controller's "Prioritised locations" must not count it.
 
 115. **German (`de_de`).** Switch the language and walk the same surfaces: the board's title ("Lagerpriorität") and its
-    row ("Priorität"), the hover tip ("Halten, um die Priorität zu setzen"), the interface's goggle line
-    ("Priorität: 5"), the controller's "Priorisierte Lagerplätze: N", and the interface's Shift tooltip, which names
-    the priority in its one sentence (since issue #22 the descriptions are short and the Ponder scenes carry the
-    detail). Nothing may show a raw key, run out of its box or be cut off.
+    row ("Priorität"), the hover tip ("Mit leerer Hand halten: Priorität; höhere füllt sich zuerst"), the interface's
+    goggle line ("Priorität: 5"), the controller's "Priorisierte Lagerplätze: N", and the interface's Shift tooltip,
+    which names the priority in its one sentence (since issue #22 the descriptions are short and the Ponder scenes carry
+    the detail). Nothing may show a raw key, run out of its box or be cut off.
 
-    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders —
-    nothing about how they look.
+    **Automated:** `LangConsistencyTest` proves German has exactly the generated keys with the same placeholders, and
+    `HoverTipWidthTest` (issue #30) that every hover-tip line fits a 320 GUI px wide screen in both languages — nothing
+    else about how they look.
 ## T. The warehouse port (M17)
 
 Build one aisle with a **warehouse input** fed by a belt or a funnel, a **warehouse stock keeper**, a rack wall of a few
@@ -2372,9 +2374,10 @@ you get tired of waiting, and put it back before judging check 160.
 232. **Does the value box still win where you aim?** The drawn item stands at the mouth of the bay, in front of the
     store filter's value box at (8, 5) — the two overlap on screen while the crosshair rests on the block, which is
     Create's own idiom (a funnel's filter box sits over its own model). **With a bay that already holds something,
-    does a plain right-click near the middle of the front still open the filter box rather than putting the held item
-    in?** And the other way round: **can you still get an item *into* a full-looking bay without fighting the box?**
-    The box's hit sphere is 4 px across and no automated test can feel it.
+    does a plain right-click near the middle of the front still set the filter rather than putting the held item in?**
+    (Since issue #30 a click with an item sets the filter on the press.) And the other way round: **can you still get
+    an item *into* a full-looking bay without fighting the box?** The box's hit sphere is 4 px across and no automated
+    test can feel it.
 233. **Does a bay read right in a dark aisle?** Light one aisle well and leave the next one unlit, and put the same
     item in a bay of each. The drawn item takes the brighter of the bay's own light and the aisle block in front of
     it. **Is the item in the dark aisle readable but clearly dark, rather than either pitch black or oddly glowing?**
@@ -3132,3 +3135,63 @@ you get tired of waiting, and put it back before judging check 160.
     Wand of Symmetry entries with 1 each. Save and quit and rejoin: still two entries. Request each with the amount
     field at 1, take it out and Shift-right-click with it: **does each wand show the Mirror it was stored with?**
     (Before this, both wands were one entry with 2, and a request could bring back the other Mirror.)
+
+
+## BA. Setting a filter with an item in hand ([issue #30](https://github.com/Richie1710/create-wareworks/issues/30))
+
+> A click **with an item** on the filter slot of a Warehouse Interface, a Rack Bay or a Fluid Bay now sets the filter
+> the moment the button goes down, instead of Create's hold-to-edit warmup setting it on the release. An **empty hand**
+> or a **wrench** keeps the warmup: a short click with an empty hand clears the filter, holding either opens the
+> priority board. Only a press sets a filter: a button held down elsewhere that slides onto a slot sets nothing. While
+> the button that set a filter stays down, its repeats do nothing on any filter slot, so a Create filter item that has
+> left a survival player's hand is not cleared again by the empty hand (ADR-028, amendment).
+> `StorageFilterClickGameTests` proves the server half on all three blocks, including a claim listener that refuses
+> the click, `HoverTipWidthTest` the width of the hover tip, and the visual scenario `filterclicks` holds real clicks
+> past the warmup, drifts the crosshair off the slot before the release, empties the hand while the button is down,
+> slides a held button onto the slot from the face above it, and reads the hover tip and the rack bay's Ponder line in
+> English and German. What no test does is a player's own hands: a slow click, a shaky mouse, a low frame rate,
+> survival, and a server with latency.
+>
+> Setup: `./gradlew runClient`, a creative world, one Warehouse Interface with a chest behind it, one Rack Bay and one
+> Fluid Bay standing in a row with their aisle faces towards you. In the hotbar: cobblestone, an iron ingot, a List
+> Filter set to iron, a water bucket, a Wrench, a Create clipboard, the Mechanical Arm item and an empty slot. In the
+> inventory: two untouched Attribute Filters (check 304 runs in survival, where the creative tab is out of reach).
+
+302. **Held and shaky clicks.** On each of the three blocks, right-click the filter slot with cobblestone (the water
+    bucket on the Fluid Bay) and **keep the button down for a second** before you let go: the item is drawn in the
+    slot the moment you press, and **no board opens**. Then, on the Warehouse Interface, click with the iron ingot and
+    **move the mouse** off the slot before you let go: the filter is iron. (On a bay, a crosshair that slides off the
+    slot onto the bay's face while the button is still down is a held right-click on that face, as anywhere else on it:
+    a Rack Bay takes one iron ingot about every fifth of a second, a Fluid Bay fills or empties the bucket. That is
+    expected.) Set your frame rate limit to 10 in the video settings and do both again. **Does a click with an item
+    ever open the board, or ever do nothing?** (Before this, a held click opened the board and a moved one was lost,
+    and both happened more often at a low frame rate.) Then the other way round: clear the Rack Bay's slot with a short
+    empty-hand click, hold right-click with cobblestone on the bay's face **above** the slot, so cobblestone goes in
+    one at a time, and let the crosshair slide down onto the slot before you let go. **No filter may be set**, no board
+    may open, and no more cobblestone may go in while the crosshair is on the slot; a fresh click there sets the filter.
+    The same with the water bucket on the Fluid Bay, and with the iron ingot on the interface.
+303. **Empty hand and wrench.** With an empty hand, a short click on a filtered slot clears it; holding the click opens
+    the priority board, and so does holding the Wrench. Set 7 and release: the digit 7 is drawn on the block. Aim at the
+    slot and read the hover tip: its third line says to hold with an **empty hand** and that **higher fills first**.
+    **Is it clear from the tip how to reach the board, and which way the number ranks?**
+304. **A Create filter item in survival.** Switch to survival (`/gamemode survival`), take the List Filter, right-click
+    a slot and **keep the button down for a second**: the filter goes into the slot and leaves your hand, and after the
+    release it is still the slot's filter — no board opened, the filter was not cleared and did not come back to you.
+    Click the same slot with an Attribute Filter: it replaces the List Filter, which comes back to your inventory. Click
+    once more with a second, untouched Attribute Filter: nothing changes, and it stays in your hand.
+305. **Everything else still does what it did.** The clipboard still copies a slot with a right-click and pastes it
+    with a left-click down a wall; the Mechanical Arm item still selects the interface as a target where it did; a
+    sneaking click with cobblestone on a Rack Bay's slot puts a whole stack in, and a plain click beside the slot one
+    item; in adventure mode (`/gamemode adventure`) a click on a slot sets no filter and opens no board (a Rack Bay
+    still takes or gives one item and a Fluid Bay still fills or empties a bucket, as a click beside the slot does; the
+    interface does nothing). A Deployer facing a slot still cannot set a filter.
+306. **On a dedicated server.** Start `./gradlew runServer`, join with `./gradlew runClient` and repeat 302 and 304. The
+    filter you see is the one the goggles report after a reconnect, the hand swings once per press while the crosshair
+    stays on the slot, and holding the button on a slot with an item in hand neither flickers the slot nor puts
+    anything into a Rack Bay. Neither log has an error mentioning `wareworks`. If you have a claim mod at hand (FTB
+    Chunks, Open Parties and Claims) and a second account: claim the chunk with one player and click a slot with an
+    item as the other, who is not allowed there. **Nothing may be set**, and the client must show the old filter.
+307. **German (`de_de`).** The hover tip's third line reads "Mit leerer Hand halten: Priorität; höhere füllt sich
+    zuerst", in one line that fits the screen also in the default window size, and the sixth text of the Ponder scene
+    "Regalfächer in einem Lagergang" says to hold Right-Click with an empty hand to set a priority, and that the higher
+    it is, the sooner the bay fills. Nothing shows a raw key, runs out of its box or is cut off.

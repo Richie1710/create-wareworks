@@ -32,7 +32,9 @@ import net.neoforged.neoforge.fluids.FluidUtil;
  * <tr><td>right-click with an <b>empty hand</b></td><td><b>nothing</b> — a hand cannot carry fluid, so unlike a rack
  * bay's there is nothing to take out</td></tr>
  * <tr><td>right-click with anything else that is not a container</td><td>passed on: it keeps its own meaning</td></tr>
- * <tr><td>a plain click <b>inside</b> the value box's 4 px sphere</td><td>Create's filter slot, untouched</td></tr>
+ * <tr><td>a plain click <b>inside</b> the value box's 4 px sphere</td><td>the store filter slot: an item in the
+ * main hand sets it on the press ({@link StorageFilterClicks}), a short click with an empty hand clears it, and
+ * holding an empty hand or a wrench opens the priority board</td></tr>
  * <tr><td>a punch (left-click)</td><td>the warning that breaking it loses the fluid ({@link FluidBayBlock})</td></tr>
  * </table>
  *

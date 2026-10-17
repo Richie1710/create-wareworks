@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The hover tip of a storage location's filter slot now says how to reach the priority and which way it ranks.** It
+  reads "Hold with an empty hand to set the priority; higher fills first", and the Ponder scene "Rack Bays in a
+  Warehouse Aisle" says the same
+
+### Fixed
+
+- **A click with an item on the filter slot of a Warehouse Interface, a Rack Bay or a Fluid Bay now sets the filter at
+  once.** The filter was only set when the button was released: holding the click a moment too long opened the
+  priority board instead, which a low frame rate made more likely, and moving the mouse off the slot before letting go
+  lost the click without a word. Now the filter is set the moment you press, and holding the button or moving the mouse
+  changes nothing; a button held down elsewhere that slides onto the slot sets nothing either. A Create filter item is
+  still taken from your hand and the one it replaces given back. The priority board opens when you hold the click with
+  an empty hand or a wrench, and a short click with an empty hand still clears the filter
+
 ## [0.12.1-beta] - 2026-10-17
 
 ### Fixed

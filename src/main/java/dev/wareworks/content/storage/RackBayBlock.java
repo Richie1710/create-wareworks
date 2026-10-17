@@ -197,9 +197,10 @@ public class RackBayBlock extends HorizontalDirectionalBlock implements IBE<Rack
      * bay</b> (which is how a wall grows: {@link BayColumn#placementFacing}), a transfer the bay would refuse — is
      * passed straight on, so it behaves exactly as it did before this block existed.
      * <p>
-     * A plain click that really hits the value box in the middle of the aisle face never arrives here: Create's
-     * {@code ValueSettingsInputHandler} cancels it for the store filter and the storage priority board, as it does on
-     * a warehouse interface. A <b>sneaking</b> click does not arrive on its own either, which is why
+     * A plain click that really hits the value box in the middle of the aisle face never arrives here, as on a
+     * warehouse interface: Create's {@code ValueSettingsInputHandler} cancels it, and with an item in hand sets the
+     * store filter at once ({@link StorageFilterClicks}), with an empty hand or a wrench starts its warmup for the
+     * filter and the storage priority board. A <b>sneaking</b> click does not arrive on its own either, which is why
      * {@link RackBayGestures} carries an interaction listener; the class comment there has the whole of it.
      */
     @Override

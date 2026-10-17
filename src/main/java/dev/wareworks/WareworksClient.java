@@ -1,6 +1,7 @@
 package dev.wareworks;
 
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
+import dev.wareworks.client.input.StorageFilterPressGuard;
 import dev.wareworks.client.ponder.WareworksPonderLang;
 import dev.wareworks.client.ponder.WareworksPonderPlugin;
 import dev.wareworks.client.render.WareworksPartialModels;
@@ -34,6 +35,10 @@ public final class WareworksClient {
         // leaving the world or server forgets them, so none comes back in another world or reaches a connection whose
         // registries cannot write its item keys.
         NeoForge.EVENT_BUS.addListener(WareworksClient::onLoggingOut);
+        // Issue #30: only a press sets a store filter, not a held button's repeat that slides onto a slot, and while
+        // the button that set one stays down, its repeats do nothing on a storage filter slot, so a Create filter item
+        // that left the hand is not cleared again by the empty hand.
+        StorageFilterPressGuard.register(NeoForge.EVENT_BUS);
         // Dev tooling (ADR-014), like the harness below: open the window on another monitor when build.gradle passes
         // one (Gradle property wareworks.windowMonitor or the environment variable WAREWORKS_WINDOW_MONITOR).
         String windowMonitor = System.getProperty(WindowPlacement.PROPERTY);

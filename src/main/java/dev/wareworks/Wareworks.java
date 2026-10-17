@@ -14,6 +14,7 @@ import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.crane.CraneServerHooks;
 import dev.wareworks.content.station.ProductionStationHooks;
 import dev.wareworks.content.storage.RackBayGestures;
+import dev.wareworks.content.storage.StorageFilterClicks;
 import dev.wareworks.data.WareworksDatagen;
 import dev.wareworks.gametest.GameTestComponents;
 import dev.wareworks.network.WareworksNetwork;
@@ -104,6 +105,10 @@ public final class Wareworks {
         // M28: the rack bay's Shift gesture, which vanilla would otherwise never hand to the block at all — a
         // sneaking interaction is dropped before the block whenever a hand holds something (RackBayGestures).
         RackBayGestures.register(NeoForge.EVENT_BUS);
+        // Issue #30: a click with an item on a storage location's filter slot sets the filter on the press: marked
+        // here, applied by Create's own handler instead of its hold-to-edit warmup, which only applied it on the
+        // release (StorageFilterClicks).
+        StorageFilterClicks.register(NeoForge.EVENT_BUS);
         // 5. Optional chunk loading for aisles that have work (M19, issue #10, ADR-031). The ticket controller must be
         //    registered on the MOD bus and unconditionally: an unregistered controller has its saved tickets stripped
         //    from the level. Its lifecycle hooks and the operator command live on the game bus.

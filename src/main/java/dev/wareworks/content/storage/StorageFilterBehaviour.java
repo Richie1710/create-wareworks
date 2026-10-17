@@ -5,6 +5,7 @@ import java.util.function.IntConsumer;
 
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.logistics.filter.FilterItem;
+import com.simibubi.create.content.logistics.filter.FilterItemStack;
 import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueBoxTransform;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsBoard;
@@ -18,6 +19,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.BlockHitResult;
@@ -39,16 +41,22 @@ import net.neoforged.neoforge.common.util.FakePlayer;
  * ADR-022 mistake M10 had to undo. So the priority is a <b>board row on the existing box</b>, which is also Create's most
  * common idiom (funnel, saw, deployer, belt tunnel):
  * <ul>
- * <li><b>short click</b> with an item sets or clears the filter, unchanged;</li>
- * <li><b>hold</b> the click for five ticks and Create's {@code ValueSettingsScreen} opens with one row, "Priority",
- * {@value #MIN_PRIORITY}..{@value #MAX_PRIORITY}.</li>
+ * <li>a click <b>with an item</b> sets the filter on the press ({@link StorageFilterClicks}, issue #30);</li>
+ * <li>a <b>short</b> click with an <b>empty hand</b> clears it;</li>
+ * <li><b>hold</b> the click with an empty hand or a wrench for five ticks and Create's {@code ValueSettingsScreen}
+ * opens with one row, "Priority", {@value #MIN_PRIORITY}..{@value #MAX_PRIORITY}.</li>
  * </ul>
- * <b>The one behaviour change:</b> {@link #acceptsValueSettings()} is now {@code true}, so a filter click no longer takes
- * {@code ValueSettingsInputHandler}'s immediate server-side {@code onShortInteract} branch but goes through Create's
- * client warmup and fires on release. It is a constant and deliberately <b>not</b> Create's {@code isCountVisible()},
- * whose {@code getMaxStackSize() > 1} term would make the board unreachable as soon as a player used a non-stackable
- * item as a plain filter. The M8 fake-player protection is untouched: {@code ValueSettingsInputHandler} asks
- * {@link #mayInteract} <i>before</i> its fake-player branch.
+ * {@link #acceptsValueSettings()} is {@code true} for that board, so Create's {@code ValueSettingsInputHandler} no
+ * longer takes its immediate {@code onShortInteract} branch for this slot but goes through the client warmup and
+ * applies a short click on <b>release</b>. Between M16 and issue #30 that was every filter click, and it made them
+ * unreliable: held a moment too long the board opened instead, and a crosshair that left the box before the release
+ * dropped the click. So it answers {@code false} for exactly one thing, the dispatch of a click with an item that
+ * {@link StorageFilterClicks} marked as a press, and Create's handler then applies that click at once; the warmup is
+ * left with the two inputs that have no filter to set. Otherwise the answer does not depend on what is held, and it is
+ * deliberately <b>not</b> Create's {@code isCountVisible()}, whose {@code getMaxStackSize() > 1} term would make the
+ * board unreachable as soon as a player used a non-stackable item as a plain filter. The M8 fake-player protection is
+ * untouched: {@code ValueSettingsInputHandler} and {@link StorageFilterClicks} both ask {@link #mayInteract}
+ * <i>before</i> anything else.
  * <p>
  * <b>Negative priorities were rejected.</b> {@code ValueSettingsScreen#getClosestCoordinate} scans columns from 0, so a
  * negative value cannot be picked on a board at all, and an offset encoding would make the saved number differ from the
@@ -161,12 +169,16 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
     }
 
     /**
-     * Constant, not Create's {@code isCountVisible()}: the board must stay reachable whatever sits in the filter slot
-     * (see the class comment).
+     * {@code true}, not Create's {@code isCountVisible()}: the board must stay reachable whatever sits in the filter
+     * slot (see the class comment). {@code false} only while the right-click being dispatched on this thread is a press
+     * with an item that {@link StorageFilterClicks} marked on this slot, so that Create's
+     * {@code ValueSettingsInputHandler} applies it at once instead of starting its warmup (issue #30). The renderer, the
+     * board's own packet ({@code ValueSettingsPacket#applySettings}) and the clipboard ask outside that dispatch and
+     * always see {@code true}.
      */
     @Override
     public boolean acceptsValueSettings() {
-        return true;
+        return !StorageFilterClicks.isPressOn(this);
     }
 
     @Override
@@ -206,7 +218,11 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
         return true;
     }
 
-    /** "Hold to set the priority", the third line of the hover tip Create shows for this slot. */
+    /**
+     * "Hold with an empty hand to set the priority; higher fills first", the third line of the hover tip Create shows
+     * for this slot: with an item in hand the click sets the filter on the press ({@link StorageFilterClicks}), and
+     * nothing else in the game says which way the number ranks.
+     */
     @Override
     public MutableComponent getAmountTip() {
         return WareworksLang.translateDirect(WareworksLang.INTERFACE_STORE_PRIORITY_TIP);
@@ -269,6 +285,20 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
         return AllBlocks.MECHANICAL_ARM.isIn(mainhandItem) || super.bypassesInput(mainhandItem);
     }
 
+    /**
+     * Create's own short click — on the press for a click with an item ({@link StorageFilterClicks}), on the release
+     * of Create's warmup otherwise — except that a press with a stack that already <b>is</b> the filter changes nothing
+     * ({@link #holdsFilterOf}): applying it again would only cost an update packet, a sound and a controller re-read,
+     * and swap one Create filter item for an identical one. The release path is left exactly as it was, so a short
+     * click with an empty hand still clears the filter.
+     */
+    @Override
+    public void onShortInteract(Player player, InteractionHand hand, Direction side, BlockHitResult hitResult) {
+        if (StorageFilterClicks.isPressOn(this) && holdsFilterOf(player.getItemInHand(hand)))
+            return;
+        super.onShortInteract(player, hand, side, hitResult);
+    }
+
     // --- persistence, sync and clipboard -------------------------------------------------------------------------
 
     /**
@@ -317,6 +347,22 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
     @Override
     public boolean setFilter(ItemStack stack) {
         return super.setFilter(sampleOf(stack));
+    }
+
+    /**
+     * Whether a click with {@code held} would store exactly the filter this slot already holds, so that applying it
+     * again would change nothing but cost an update packet, a sound and a controller re-read
+     * ({@link #onShortInteract}). The count never matters (the slot keeps a sample of one). A copy of the held stack
+     * is first trimmed the way Create's {@code FilterItemStack.of} trims what it stores: a configured filter item loses
+     * its enchantments and attribute modifiers <b>in place</b>, which leaves removal entries in the stored copy's
+     * patch, and the held stack itself is never touched.
+     */
+    public boolean holdsFilterOf(ItemStack held) {
+        if (held.isEmpty())
+            return getFilter().isEmpty();
+        ItemStack probe = held.copy();
+        FilterItemStack.of(probe);
+        return ItemStack.isSameItemSameComponents(probe, getFilter());
     }
 
     /**

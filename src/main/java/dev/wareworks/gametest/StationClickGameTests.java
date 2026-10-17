@@ -3,14 +3,9 @@ package dev.wareworks.gametest;
 import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
 import static dev.wareworks.gametest.WareworksGameTests.EMPTY_7X5X7;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 
-import org.jetbrains.annotations.Nullable;
-
-import com.mojang.authlib.GameProfile;
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.AllDataComponents;
 import com.simibubi.create.AllItems;
@@ -30,18 +25,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
-import net.minecraft.network.Connection;
-import net.minecraft.network.PacketSendListener;
-import net.minecraft.network.chat.contents.TranslatableContents;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.PacketFlow;
-import net.minecraft.network.protocol.game.ClientboundSystemChatPacket;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ClientInformation;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.network.CommonListenerCookie;
-import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -85,8 +69,8 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * {@code onItemUseFirst} and skips the sneak guard — and the sneak guard is the whole of "sneak + right-click places
  * the block". Its mock player is no {@code ServerPlayer} either, so no screen could open. These tests call
  * {@code ServerPlayerGameMode#useItemOn}, the method a {@code ServerboundUseItemOnPacket} reaches on a dedicated
- * server, with a real {@link ServerPlayer} ({@link Clicker}). A client predicts the same click with the same block
- * methods ({@code MultiPlayerGameMode#performUseItemOn}); what it does next is decided by whether the click was
+ * server, with a real {@link ServerPlayer} ({@link ClickingPlayer}). A client predicts the same click with the same
+ * block methods ({@code MultiPlayerGameMode#performUseItemOn}); what it does next is decided by whether the click was
  * consumed, which is what every case asserts.
  * <p>
  * Every case is one click and its answer within the same tick, and the player is never added to the level or the
@@ -120,7 +104,7 @@ public final class StationClickGameTests {
     public static void stationsOpenWhateverIsHeld(GameTestHelper helper) {
         placeStations(helper);
         helper.startSequence().thenIdle(1).thenExecute(() -> {
-            Clicker player = Clicker.at(helper, STAND);
+            ClickingPlayer player = ClickingPlayer.at(helper, STAND);
             for (Station station : stations()) {
                 for (ItemStack held : List.of(ItemStack.EMPTY,
                         Items.COBBLESTONE.getDefaultInstance().copyWithCount(BLOCKS),
@@ -150,7 +134,7 @@ public final class StationClickGameTests {
     public static void stationsSneakClickUsesTheItem(GameTestHelper helper) {
         placeStations(helper);
         helper.startSequence().thenIdle(1).thenExecute(() -> {
-            Clicker player = Clicker.at(helper, STAND);
+            ClickingPlayer player = ClickingPlayer.at(helper, STAND);
             for (Station station : stations()) {
                 InteractionResult placed = click(helper, player, station.pos(),
                         Items.COBBLESTONE.getDefaultInstance().copyWithCount(BLOCKS), true);
@@ -231,7 +215,7 @@ public final class StationClickGameTests {
     public static void stationsKeepTheirOwnClickItems(GameTestHelper helper) {
         placeStations(helper);
         helper.startSequence().thenIdle(1).thenExecute(() -> {
-            Clicker player = Clicker.at(helper, STAND);
+            ClickingPlayer player = ClickingPlayer.at(helper, STAND);
             for (Station station : stations()) {
                 BlockState before = stateAt(helper, station.pos());
                 InteractionResult wrenched = click(helper, player, station.pos(), AllItems.WRENCH.asStack(), false);
@@ -307,7 +291,7 @@ public final class StationClickGameTests {
     public static void stationsOpenForAWrenchInAdventureMode(GameTestHelper helper) {
         placeStations(helper);
         helper.startSequence().thenIdle(1).thenExecute(() -> {
-            Clicker player = Clicker.at(helper, STAND);
+            ClickingPlayer player = ClickingPlayer.at(helper, STAND);
             player.setGameMode(GameType.ADVENTURE);
             helper.assertFalse(player.mayBuild(), "an adventure player may not build");
             for (Station station : stations()) {
@@ -407,7 +391,7 @@ public final class StationClickGameTests {
      * The item's cooldown is cleared first, because each click here stands for a separate one a player makes at least a
      * moment later: Create's clipboard puts itself on a ten-tick cooldown, and this player is never ticked.
      */
-    private static InteractionResult click(GameTestHelper helper, Clicker player, BlockPos pos, ItemStack held,
+    private static InteractionResult click(GameTestHelper helper, ClickingPlayer player, BlockPos pos, ItemStack held,
             boolean sneaking) {
         player.setItemInHand(InteractionHand.MAIN_HAND, held);
         player.setShiftKeyDown(sneaking);
@@ -421,8 +405,8 @@ public final class StationClickGameTests {
     }
 
     /** The click was consumed and opened exactly this station's screen, which is then closed again. */
-    private static void assertOpened(GameTestHelper helper, Clicker player, Station station, InteractionResult result,
-            String what) {
+    private static void assertOpened(GameTestHelper helper, ClickingPlayer player, Station station,
+            InteractionResult result, String what) {
         helper.assertTrue(result.consumesAction(), "a right-click with " + what + " on the " + station.name()
                 + " is consumed, so the client neither places nor uses the item: " + result);
         helper.assertTrue(station.menu().isInstance(player.containerMenu), "a right-click with " + what
@@ -430,7 +414,7 @@ public final class StationClickGameTests {
         player.closeContainer();
     }
 
-    private static void assertNoScreen(GameTestHelper helper, Clicker player, Station station, String what) {
+    private static void assertNoScreen(GameTestHelper helper, ClickingPlayer player, Station station, String what) {
         AbstractContainerMenu open = player.containerMenu;
         if (open != player.inventoryMenu)
             player.closeContainer();
@@ -445,7 +429,7 @@ public final class StationClickGameTests {
     }
 
     /** The player was told exactly these lines (relative lang keys) since the last check, which this one starts. */
-    private static void assertTold(GameTestHelper helper, Clicker player, Station station, String what,
+    private static void assertTold(GameTestHelper helper, ClickingPlayer player, Station station, String what,
             String... relativeKeys) {
         List<String> expected = new ArrayList<>(relativeKeys.length);
         for (String key : relativeKeys)
@@ -453,68 +437,5 @@ public final class StationClickGameTests {
         helper.assertValueEqual(player.toldKeys(), List.copyOf(expected), "what " + what + " at the " + station.name()
                 + " told the player");
         player.told.clear();
-    }
-
-    /**
-     * A real {@link ServerPlayer} whose connection keeps what the server sends it instead of writing it to a socket —
-     * the screen it opens, the chat lines it gets — the way NeoForge's own {@code FakePlayer} keeps a connection that
-     * drops them. It is no {@code FakePlayer}: the stations deliberately treat a fake player as a Deployer.
-     * <p>
-     * It is never added to the level or the player list, so it never ticks and no other test sees it. Its id is fixed,
-     * so the player list keeps a single stats and advancement record for it however often these tests run — the way
-     * {@code FakePlayerFactory} reuses its own profile. A new player starts in survival, so a placed block costs one.
-     */
-    private static final class Clicker extends ServerPlayer {
-        private static final GameProfile PROFILE = new GameProfile(
-                UUID.nameUUIDFromBytes("wareworks-station-click".getBytes(StandardCharsets.UTF_8)),
-                "wareworks-station-click");
-
-        /** The chat and action bar lines sent to this player, in order. */
-        private final List<ClientboundSystemChatPacket> told = new ArrayList<>();
-
-        private Clicker(ServerLevel level) {
-            super(level.getServer(), level, PROFILE, ClientInformation.createDefault());
-            this.connection = new Keeping(level.getServer(), this);
-            setGameMode(GameType.SURVIVAL);
-        }
-
-        /** A player standing on the floor at the test-relative {@code pos}, looking north at the stations. */
-        static Clicker at(GameTestHelper helper, BlockPos pos) {
-            Clicker player = new Clicker(helper.getLevel());
-            Vec3 feet = Vec3.atBottomCenterOf(helper.absolutePos(pos));
-            player.moveTo(feet.x, feet.y, feet.z, 180.0F, 30.0F);
-            return player;
-        }
-
-        /** The translation keys of what this player was told, in order. */
-        List<String> toldKeys() {
-            List<String> keys = new ArrayList<>(told.size());
-            for (ClientboundSystemChatPacket line : told)
-                keys.add(line.content().getContents() instanceof TranslatableContents translatable
-                        ? translatable.getKey() : "<literal> " + line.content().getString());
-            return keys;
-        }
-    }
-
-    /** The connection of a {@link Clicker}: it keeps the chat lines and lets everything else go. */
-    private static final class Keeping extends ServerGamePacketListenerImpl {
-        private final Clicker clicker;
-
-        private Keeping(MinecraftServer server, Clicker clicker) {
-            super(server, new Connection(PacketFlow.SERVERBOUND), clicker,
-                    CommonListenerCookie.createInitial(clicker.getGameProfile(), false));
-            this.clicker = clicker;
-        }
-
-        @Override
-        public void send(Packet<?> packet) {
-            send(packet, null);
-        }
-
-        @Override
-        public void send(Packet<?> packet, @Nullable PacketSendListener listener) {
-            if (packet instanceof ClientboundSystemChatPacket line)
-                clicker.told.add(line);
-        }
     }
 }

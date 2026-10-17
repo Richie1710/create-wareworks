@@ -130,7 +130,10 @@ public final class WareworksLang {
     public static final String INTERFACE_STORE_PRIORITY = "interface.store_priority";
     /** {@code "Priority"}: the single row label of that board. */
     public static final String INTERFACE_STORE_PRIORITY_ROW = "interface.store_priority_row";
-    /** Hover tip under the filter slot: hold the click to set the storage priority (M16). */
+    /**
+     * Hover tip under the filter slot: hold the click with an empty hand to set the storage priority, and higher fills
+     * first (M16; since issue #30 a click with an item sets the filter on the press).
+     */
     public static final String INTERFACE_STORE_PRIORITY_TIP = "interface.store_priority_tip";
     /** {@code "Warehouse Controller:"}: goggle header of a warehouse controller. */
     public static final String GOGGLES_WAREHOUSE_CONTROLLER = "gui.goggles.warehouse_controller";

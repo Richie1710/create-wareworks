@@ -221,7 +221,9 @@ public class FluidBayBlock extends HorizontalDirectionalBlock implements IBE<Flu
      * on, so it behaves exactly as it did before this block existed.
      * <p>
      * A plain click that really hits the value box in the middle of the aisle face never arrives here: Create's
-     * {@code ValueSettingsInputHandler} cancels it for the store filter and the storage priority board.
+     * {@code ValueSettingsInputHandler} cancels it, and with an item in hand sets the store filter at once
+     * ({@link StorageFilterClicks}), with an empty hand or a wrench starts its warmup for the filter and the storage
+     * priority board.
      */
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
