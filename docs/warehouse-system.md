@@ -6563,10 +6563,13 @@ Two differences from the item index, both deliberate:
 * **It is not saved.** A fluid bay *is* its own tank, so its contents live in its own block entity and the first
   `refreshLocation` brings everything back; the item index is saved for the opposite reason, that a chest can stay
   unloaded while its interface is not. The visible consequence is the same as for an unloaded chest: a surface opened
-  in the first ticks after a world load fills up over one snapshot cycle.
+  in the first ticks after a world load fills up over one snapshot cycle. Since issue #32 that includes the "Locations"
+  line and the warehouse number's locations in use, which count a bay holding fluid as in use
+  (`occupiedStorageLocationCount()`, §10.1): right after a load they can read a bay or two low for that one cycle.
 * **A location holding no fluid is removed** rather than kept with empty counts, so the index holds the warehouse's
   fluid bays and nothing else. Nothing asks it how many locations a warehouse has, which is the one question the item
-  index keeps every location for. There is also no `setChanged()` for a fluid change: nothing is saved, and a pump
+  index keeps every location for; what it is asked is how many bays hold fluid, and with every empty bay removed that
+  is its own occupied count. There is also no `setChanged()` for a fluid change: nothing is saved, and a pump
   reports a change several times a second.
 
 **Three surfaces read it.** Two guarded goggle lines on the controller ("Fluid types: 2", "Fluid stored: 60.00
@@ -7287,11 +7290,14 @@ The four speed keys are read in every tick (`CraneExecution` on the server, `Sta
 
 ## 10. Stock displays (Display Link sources, M14 and M25)
 
-> Decision and reasons: **ADR-026**, and **ADR-039** for the throughput source.
+> Decision and reasons: **ADR-026** (with its amendment for the warehouse number source, issue #32), and **ADR-039**
+> for the throughput source.
 
-Classes: `registry.WareworksDisplaySources` (the five registered sources and the `bind` transformer),
+Classes: `registry.WareworksDisplaySources` (the seven registered sources and the `bind` transformer),
 `content.display.WarehouseDisplays` (shared plumbing) with `AisleSummaryDisplaySource`, `StockListDisplaySource`,
-`FilteredStockDisplaySource`, `CraneStatusDisplaySource` and `CraneThroughputDisplaySource`.
+`FluidStockDisplaySource`, `WarehouseNumberDisplaySource`, `FilteredStockDisplaySource`, `CraneStatusDisplaySource` and
+`CraneThroughputDisplaySource`; `core.warehouse.WarehouseNumber` (the numbers the warehouse number source can show, in
+the order a link saves them).
 
 A player's Create **Display Link** reads one of these sources off a Wareworks block and writes the text onto nixie
 tubes, a display board, a sign or a lectern. Wareworks adds no display block of its own and pushes nothing: the link
@@ -7301,12 +7307,15 @@ pulls on its own schedule, and every pull answers from state the controller and 
 |---|---|---|---|
 | `wareworks:aisle_summary` | Warehouse Summary | warehouse controller, warehouse terminal | four lines: the warehouse and its status, storage locations in use, item types, items — and below them, only when there is something to say, the aisles the warehouse is made of (with `(cut short)` when the rails stop short of what the player laid), its ports, its stock rules, its stopped products and its held chunks. Every optional line is below the four, because a four-tube board shows four rows and the tail is dropped: one above them would cost the player the item count (M22 review fix). Named "Aisle Summary" until M22; only the **text** changed, because renaming the registry path would unbind every Display Link already pointed at a controller |
 | `wareworks:stock_list` | Stock List | warehouse controller, warehouse terminal | the most stocked item types with their amounts, one per line |
+| `wareworks:fluid_stock` | Fluid Stock | warehouse controller, warehouse terminal | the fluids the warehouse's fluid bays hold, with the amount of each, one per line (M30, §3.9) |
+| `wareworks:warehouse_number` | Warehouse Number | warehouse controller, warehouse terminal | **one** number about the whole warehouse, picked in the Display Link screen: items stored, item types, fluid stored, locations in use, locations in total, locations in use as a percentage, open requests, production orders, rules below minimum, rules at maximum, stopped products, accepting ports, collecting ports or misaligned blocks (issue #32) |
 | `wareworks:filtered_stock` | Stock of the Filtered Item | warehouse output, warehouse interface | one number: how many of the item in the block's filter slot the aisle holds |
 | `wareworks:crane_status` | Crane Status | stacker crane dock | what the crane is doing, the item and amount of its job, its target address, what the head holds |
 | `wareworks:crane_throughput` | Crane Throughput | stacker crane dock | four rows of what the crane **got done** in the rolling minute behind it: trips, items, busy share, turning share — or the single line `Measuring` while that minute is not full yet (M25, issue #16) |
 
-A block that offers two sources lists them in exactly this order, and the link's screen preselects the first one
-(`WareworksDisplaySources#bind`, §10.4). The **warehouse rail**, the **warehouse input** and the **warehouse production
+A block that offers several sources lists them in exactly this order, and the link's screen preselects the first one
+(`WareworksDisplaySources#bind`, §10.4): the controller and the terminal offer Warehouse Summary, Stock List, Fluid
+Stock and Warehouse Number, so a link hung there still starts on the summary. The **warehouse rail**, the **warehouse input** and the **warehouse production
 station** offer none, which GameTest `displaysourcesregistered` asserts, so it stays a decision rather than an
 oversight: a rail carries no state at all, and what an input or a production station holds is its own buffer, which its
 goggle tooltip shows and any funnel can read. A production station's **orders** are aisle state and belong to the
@@ -7324,7 +7333,8 @@ Warehouse A: Ready      the warehouse's letter - which is its FIRST aisle's - an
 Aisles: A B C           while the warehouse really has more than one aisle (M21), and since M22 also on a single
                         aisle whose rails stop short; "(cut short)" is then appended, so the board says THAT
                         something is wrong and the controller's goggles say what
-Locations: 3 / 30       inventories holding at least one item, of all inventories the aisle counts
+Locations: 3 / 30       storage locations holding something - an inventory with at least one item, or a fluid
+                        bay with fluid (since issue #32) - of all the locations the warehouse counts
 Item types: 3           distinct item keys in the stock index
 Items: 176              total stored amount
 Ports: 2 accepting      only while a warehouse port of the aisle really accepts items (M17); since M18 the same
@@ -7358,12 +7368,17 @@ without its letter cannot be matched to the address the terminal speaks, and it 
 has: a label outlives the aisle it was given to on purpose, so that rebuilding the aisle brings the label back, but a
 board names rows of *this* warehouse.
 
-Both numbers of the "used / total" line are drawn from the same population, the **counted** inventories: locations that
+Both numbers of the "used / total" line are drawn from the same population, the **counted** locations: locations that
 read an inventory another location already counts (§3.1.1 — a double chest behind two interfaces, an item vault behind
 several) are aliases, are indexed with empty counts and can therefore never be occupied. Counting them in the total
 would make the line unable to reach full on such an aisle, so `WarehouseControllerBlockEntity#countedStorageLocationCount()`
-subtracts them. The goggle line `Storage locations: 30` is a different number on purpose: it says how many locations
-the aisle *has*.
+subtracts them. **Fluid bays** are the other way round: a bay is a storage location of its own and so in the total, but
+its item snapshot has zero slots (§3.9), so the item index never counts it occupied, however full it is. The used
+number is therefore `WarehouseControllerBlockEntity#occupiedStorageLocationCount()`, the inventories holding at least one
+item **plus** the bays holding fluid, which the fluid index holds and nothing else (§3.9.4); no location is in both.
+Until issue #32 the line took the item index's count alone, so a chest and two bays, all of them full, read `1 / 3`, and
+a warehouse with a fluid bay could never read full. The goggle line `Storage locations: 30` is a different number on
+purpose: it says how many locations the aisle *has*.
 
 The statuses are deliberately shorter than their goggle sentences (`Ready`, `No crane`, `Crane turned`, `No rails`),
 because a row of four nixie tubes shows eight characters. German shortens them the same way but keeps the block's own
@@ -7387,6 +7402,53 @@ filter slot — the output's request filter (§3.2), the interface's store filte
 *available* amount, which moves with every reservation and would make a display count down and back up while the crane
 works. The filter item is the whole configuration; the source adds no setting of its own beyond Create's generic
 "Label" text box.
+
+**Warehouse Number** (controller, terminal, issue #32): one number, for a target that shows one line. A row of nixie
+tubes was the target the other warehouse sources served worst: the summary's first line there only ever read
+"Warehouse A: Ready", and "Items: 176" could not be shown at all; open requests and open production orders were on
+the controller's goggles alone. The Display Link screen gets a **selector** on its second line, "Number shown", below
+Create's "Label" box:
+
+| Index | Name in the selector | What the source writes | Read from |
+|---|---|---|---|
+| 0 | Items stored | the summary's "Items" | `StockView#totalItems` of the stock index |
+| 1 | Item types | the summary's "Item types" | `StockView#distinctKeys` |
+| 2 | Fluid stored | `48.0 B`, `250 mB` | the fluid index's total, through Create's `FluidFormatter` in its short form |
+| 3 | Locations in use | the first number of the summary's "Locations": inventories with items and fluid bays with fluid | `occupiedStorageLocationCount()` |
+| 4 | Locations in total | the second number of it, fluid bays included | `countedStorageLocationCount()` |
+| 5 | Locations in use (%) | `45%`, German `45 %` | the two above, rounded down |
+| 6 | Open requests | the goggles' "Open requests" | `openRequestCount()` |
+| 7 | Production orders | the goggles' "Production orders", the open ones | `openProductionOrderCount()` |
+| 8 | Rules below minimum | the goggles' "Below minimum" | `stockRulesBelowMinimum()` |
+| 9 | Rules at maximum | the goggles' "At maximum" | `stockRulesAtMaximum()` |
+| 10 | Stopped products | the summary's "Stopped products" | `pausedStockRuleCount()` |
+| 11 | Accepting ports | the goggles' "Accepting ports" | `acceptingPortCount()` |
+| 12 | Collecting ports | the goggles' "Collecting ports" | `collectingPortCount()` |
+| 13 | Misaligned blocks | the goggles' "Misaligned blocks" | `misalignedCount()` |
+
+* **The index is a save format.** Create's selector writes the option a player picked as its **index** under the key
+  `Mode` of the link's source settings, so `WarehouseNumber` may only ever grow at its end: a value moved or put in the
+  middle would make every link already built show a different number without a word. `WarehouseNumberTest` and the
+  GameTest `warehousenumbermodeorder` pin the order and the key, and a link that carries an index this build has no
+  number for (one saved by a later build) writes **nothing**, never a different number: no label either, and on a
+  display board Create's unlabelled layout with one blank section, because Create's labelled one would keep the label
+  and the number that stood beside it (`WarehouseNumberDisplaySource#provideFlapDisplayText` and
+  `#loadFlapDisplayLayout`).
+* **The numbers are the ones the other surfaces show.** Each is the count the goggles or the summary already show,
+  read from the same cached field, so a board and the goggles never disagree, and a pull is a handful of field reads.
+  The share uses the summary's population on both sides (the **counted** locations, fluid bays included, see above),
+  so a full warehouse can read `100%`; it is rounded **down**, so a nearly full one never does, and it goes through
+  the mod's one percent key (`gui.goggles.percent`). The fluid is the summary's fluid amount, Create's short form
+  always: the screen's second line holds the selector, so there is no room for Create's "shortened / full number"
+  switch, and a single number is what a short target is for.
+* **Label and layout.** The source is a `NumericSingleLineDisplaySource`, like Create's own item count: the "Label" box
+  puts a player's word in front of the number (`Items 176` on a nixie row, a sign or a lectern), and a display board
+  gets Create's labelled `Number` layout, a section as wide as the label and a space and the number in the rest of the
+  row.
+* **Names that fit.** Every name in the selector has to fit its box, 137 px, in English and German
+  (`WarehouseNumberTextTest`, measured with the game's own glyph widths): Create's label does not cut its text, it runs
+  out of the box. The names are therefore the words the goggles use where those fit, and short German forms where they
+  do not (`Regeln unter Minimum` against the goggles' `Unter dem Mindestbestand`).
 
 **Crane Status** (dock):
 
@@ -7441,8 +7503,9 @@ Three things about it are decided rather than incidental:
   sources, Create's default, and **20 ticks** for the crane status, because a crane changes state far faster than a
   warehouse fills up (Create's own fast source, the stopwatch, uses 20 as well). The crane **throughput** keeps the
   default 100 and not the status's 20: a rolling minute does not change meaningfully every second, and a board that
-  flips its flaps to redraw identical numbers is noise. A **powered** link does not refresh at all and pulls once when
-  the signal ends — Create's behaviour, unchanged here.
+  flips its flaps to redraw identical numbers is noise. The **warehouse number** keeps the default 100 too, like every
+  other warehouse source. A **powered** link does not refresh at all and pulls once when the signal ends — Create's
+  behaviour, unchanged here.
 * Lines are cut to the target's `maxRows()` and **not** clipped to `maxColumns()`. Clipping would need
   `Component#getString()` on the server, which resolves the line against the **server's** language, so every player
   would be shown that one language and no client could translate the line any more. Targets clip themselves: a nixie
@@ -7457,26 +7520,32 @@ Three things about it are decided rather than incidental:
 
 ### 10.3 Degraded cases
 
-| Situation | Warehouse Summary | Stock List | Filtered Stock | Crane Status | Crane Throughput |
-|---|---|---|---|---|---|
-| Source block belongs to no aisle, or its controller's chunk is not loaded | one line `No aisle` | nothing | `0` | — | — |
-| Controller without a dock, or with a turned dock (`NO_DOCK`, `DOCK_MISALIGNED`) | only the status line | nothing: such a controller has no layout and no indexed location | its aisle is not registered either, so an output or interface beside it reads `0` | — | — |
-| Aisle indexed but empty | `Locations: 0 / 30`, `Item types: 0`, `Items: 0` | no line at all | `0` | — | — |
-| Filter slot empty, or holding a Create list, attribute or package filter | — | — | `0` | — | — |
-| Dock without a job | — | — | — | `Idle` plus `Empty` | the rows it always shows; an idle minute simply reads `Busy: 0%` |
-| Dock loaded less than a minute ago, or its chunks were away | — | — | — | the state it is in | one line `Measuring` |
-| No dock under the link at all | — | — | — | the source is dropped by Create | one line `No crane` |
+| Situation | Warehouse Summary | Stock List | Filtered Stock | Warehouse Number | Crane Status | Crane Throughput |
+|---|---|---|---|---|---|---|
+| Source block belongs to no aisle, or its controller's chunk is not loaded | one line `No warehouse` | nothing | `0` | `No warehouse`, the summary's own line | — | — |
+| Controller without a dock, or with a turned dock (`NO_DOCK`, `DOCK_MISALIGNED`) | only the status line | nothing: such a controller has no layout and no indexed location | its aisle is not registered either, so an output or interface beside it reads `0` | `No warehouse` for every number, which is what a terminal of the same warehouse writes at that moment: the controller has no aisle to count and is not registered, and its saved safety stops would be a number about a warehouse that is not there | — | — |
+| Aisle indexed but empty | `Locations: 0 / 30`, `Item types: 0`, `Items: 0` | no line at all | `0` | `0`, the fluid `0 mB` and the share `0%`; the locations in total still read `30` | — | — |
+| Filter slot empty, or holding a Create list, attribute or package filter | — | — | `0` | — | — | — |
+| A saved number index this build does not know (a link from a later build) | — | — | — | nothing at all, label included | — | — |
+| Dock without a job | — | — | — | — | `Idle` plus `Empty` | the rows it always shows; an idle minute simply reads `Busy: 0%` |
+| Dock loaded less than a minute ago, or its chunks were away | — | — | — | — | the state it is in | one line `Measuring` |
+| No dock under the link at all | — | — | — | — | the source is dropped by Create | one line `No crane` |
 
 A display therefore cannot tell "none in stock" from "not configured": keeping the filtered stock line numeric is what
-lets a display board use its number layout. Whether a block is part of no aisle at all or of one whose controller is
-merely unloaded is likewise not distinguished: both read `No aisle` / `0`. Telling them apart would need a
-`WarehouseRegistry` query of its own ("a registered layout contains this position, but its controller is not loaded"),
-and a stale number would be the worse answer in either case.
+lets a display board use its number layout. The warehouse number, whose numbers are about the whole warehouse, says
+`No warehouse` instead of `0` when its block belongs to none, and on a controller that has no aisle: a board that shows
+"Open requests 0" for a warehouse it cannot read would be a number made up, and one that went on showing "Stopped
+products 2" after the dock was broken would be a number about a warehouse that is not there. It writes that line rather
+than the summary's status word (`No crane`) because the German status words do not fit a three-block board
+(`Kein Regalbediengerät`), and so a controller and its terminal agree. Whether a block is part of no aisle at all or of
+one whose controller is merely unloaded is likewise not distinguished: both read `No warehouse` / `0`. Telling them
+apart would need a `WarehouseRegistry` query of its own ("a registered layout contains this position, but its
+controller is not loaded"), and a stale number would be the worse answer in either case.
 
 ### 10.4 Implementation notes
 
 * **Registration** (`registry.WareworksDisplaySources`, loaded from the `Wareworks` constructor **before**
-  `WareworksBlocks`, whose builders reference the entries): the five sources go into Create's registry
+  `WareworksBlocks`, whose builders reference the entries): the seven sources go into Create's registry
   `CreateRegistries.DISPLAY_SOURCE` through `CreateRegistrate#displaySource(name, supplier)`, the path Create's own
   `AllDisplaySources` uses, not through a NeoForge `DeferredRegister` like the arm interaction point types of M12
   (ADR-025). Binding a source to a block needs a Registrate `RegistryEntry`, which a `DeferredHolder` is not
@@ -7488,23 +7557,30 @@ and a stale number would be the worse answer in either case.
 * **Resolving the controller** (`WarehouseDisplays#controller`): a controller answers for itself; every other source
   block goes through `WarehouseRegistry#findController` (§4), the same lookup a station uses, so a block that lies in
   two aisles is read by exactly the aisle that serves it.
-* **Cost of one pull.** Aisle summary, filtered stock and crane status are field and map reads; the stock list is one
-  pass over the distinct item types. `occupiedLocations()` is maintained incrementally in `StockIndex`, and
-  `countedStorageLocationCount()` is the membership's storage count minus `SharedInventories#aliasCount()` (two field
-  reads, no location record list), so "used / total" costs nothing either. Only the
-  controller lookup scales, with the number of registered controllers **of that level**. A player may therefore hang
-  many links on one warehouse; nothing runs per tick.
+* **Cost of one pull.** Aisle summary, filtered stock, warehouse number and crane status are field and map reads (the
+  open production orders are counted in the controller's order book in memory, the port counts over its port
+  settings); the stock list is one pass over the distinct item types. `occupiedLocations()` is maintained incrementally
+  in `StockIndex` (in the item index and in the fluid index alike, so `occupiedStorageLocationCount()` is two field
+  reads), and `countedStorageLocationCount()` is the membership's storage count minus `SharedInventories#aliasCount()`
+  (two field reads, no location record list), so "used / total" costs nothing either. Only the controller lookup
+  scales, with the number of registered controllers **of that level**. A player may therefore hang many links on one
+  warehouse; nothing runs per tick.
 * **Number formatting** follows the goggles and the terminal (`WareworksLang#number`, catnip's `LangNumberFormat`,
-  grouping separators included) for the aisle summary, the crane status and the filtered stock. The stock list keeps
+  grouping separators included) for the aisle summary, the crane status, the filtered stock and the warehouse number. The stock list keeps
   Create's `ValueListDisplaySource` formatting, because the player's own "shortened / full number" option and the
   two-column flap layout depend on it.
 * **Common code, server side.** A link gathers its text on the server and sends the finished lines to its target, so
-  none of the six classes imports a client class; the dedicated server loads them like any other content class.
-* **21 lang keys** at M14, 39 by M25, English generated, German hand-written. Create builds a source's name as
-  `<namespace>.display_source.<registry path>` (`DisplaySource#getName`), so the path of the registry entry and the
-  tail of the key are the same string; `WareworksLang` says so at the five name keys. The throughput rows put their
-  **shares** through `gui.goggles.percent`, the one value in the whole mod that carries a percent sign (ADR-039), so
-  no board row writes the sign itself — German puts a space before it, and a second place to get that wrong is a
+  none of the source classes uses a client class on the server; the dedicated server loads them like any other content
+  class. The one client part is the warehouse number's selector: `WarehouseNumberDisplaySource#initConfigurationWidgets`
+  builds it from Create's `ModularGuiLineBuilder`, and it is `@OnlyIn(Dist.CLIENT)` like the method it overrides, so
+  FML strips it and its lambda from the class on a dedicated server, exactly as for Create's own
+  `KineticStressDisplaySource`. A dedicated server boot loads the class, because the registration instantiates it.
+* **21 lang keys** at M14, 39 by M25 and 16 more for the warehouse number (issue #32), English generated, German
+  hand-written. Create builds a source's name as `<namespace>.display_source.<registry path>` (`DisplaySource#getName`),
+  so the path of the registry entry and the tail of the key are the same string; `WareworksLang` says so at the aisle
+  summary's name key, and the other name keys refer to that rule. The throughput rows put their **shares** through
+  `gui.goggles.percent`, the one value in the whole mod that carries a percent sign (ADR-039), so no board row writes
+  the sign itself — German puts a space before it, and a second place to get that wrong is a
   second place to get it wrong silently: `TranslatableContents` *catches* a bad template and shows the raw text.
   `LangConsistencyTest#everyPercentSignIsAFormatMinecraftAccepts` pins that for every key of both files, and
   `#theThroughputBoardRowsFitADisplayBoard` pins every row of this source against a board row's flap count in both
@@ -7525,10 +7601,11 @@ and is therefore the target for line-by-line assertions by lang key and argument
 line to JSON and parses it back, which is the path of a display in a real world; a **display board** is the only target
 that goes through `provideFlapDisplayText`; a **sign** is the one that flattens the text on the server.
 
-* `displaysourcesregistered`: the five ids resolve in `CreateBuiltInRegistries.DISPLAY_SOURCE`, each name uses the
+* `displaysourcesregistered`: the seven ids resolve in `CreateBuiltInRegistries.DISPLAY_SOURCE`, each name uses the
   generated lang key, and `DisplaySource.getAll` returns the expected list, in the expected order, for all nine
-  Wareworks blocks — including the empty list for rail, input and production station, and `Crane Status` **before**
-  `Crane Throughput` on the dock, which is what keeps every link already hung on a dock showing what it showed.
+  Wareworks blocks — including the empty list for rail, input and production station, `Crane Status` **before**
+  `Crane Throughput` on the dock, which is what keeps every link already hung on a dock showing what it showed, and
+  `Warehouse Number` **last** on the controller and the terminal (issue #32).
 * `aislesummaryoncontroller` / `aislesummaryonterminal`: the four lines by key and arguments, on a lectern, plus line 0
   on an eight-tube nixie row; the terminal resolves its controller through `WarehouseRegistry.findController`. Both
   fixtures keep the four numbers pairwise different (one stocked location out of three, holding two item types), so no
@@ -7540,7 +7617,7 @@ that goes through `provideFlapDisplayText`; a **sign** is the one that flattens 
 * `aislesummarysharedinventory`: two interfaces on one double chest plus a third location read `1 / 2`, not `1 / 3` —
   an alias is not in the total.
 * `aislesummarydegraded`: a controller without a dock shows exactly the status line, a terminal outside any aisle
-  exactly the `No aisle` line.
+  exactly the `No warehouse` line.
 * `sourcesoutsideaisle`: beside a **stocked** aisle, a terminal and an output that belong to none of it list nothing
   and read `0` — the Stock List and Filtered Stock half of the first row of §10.3.
 * `stocklistoncontroller`, `stocklistemptywarehouse`, `stocklistonflapdisplay`: the largest-first list cut to the
@@ -7563,6 +7640,29 @@ that goes through `provideFlapDisplayText`; a **sign** is the one that flattens 
   through `gui.goggles.percent` and all. The minute is filled before the job rather than after it because the window
   rolls: a trip counted in its first seconds would have been rolled off again by the sixtieth, and the test would be
   asserting against an empty minute without saying so.
+* `warehousenumberstock`, `warehousenumberorders`, `warehousenumberrules`, `warehousenumberports` (issue #32): each
+  fixture reads **all** fourteen numbers through a real link onto an eight-tube nixie row **and** a lectern, the stock
+  numbers through the controller and through the terminal at once, and every number a fixture is built for differs
+  from every other number in that fixture, so a value wired to the wrong field fails (`assertNumbers` checks that on
+  the fixture's own table before it reads a link): 52 items of 2 types, 59 buckets, 3 of 5 counted locations in use
+  and so 60 % (one chest and both fluid bays); 2 requests and 1 order beside 3 item types in 3 of 3 chests; 2 rules
+  below, 1 at the maximum and 4 stopped products beside the same stock; 2 accepting ports, 1 collecting port and 3
+  misaligned blocks in a warehouse that stores nothing. The four stopped products are written into the controller's
+  own save and read back like a `/data merge`, because arming them for real would take four broken machines; the stop
+  itself has its own tests. `aislesummarywithfluid` pins the summary's half of the fluid bay rule: `1 / 3` with two
+  empty bays, `3 / 3` once they hold fluid.
+* `warehousenumberlabel`: the "Label" box gives `Items 52` on the nixie row and the lectern, and on a four-block display
+  board a label section as wide as the label and a space beside the number section, which only `provideFlapDisplayText`
+  reaches. On that labelled board an index no number has leaves one blank section, neither the label nor the number
+  that stood there, and a known number brings the labelled layout back.
+* `warehousenumbermodeorder`: the numbers in their saved order, the selector's options in the same order, and a link
+  whose settings carry the literal index 5 under the literal key `Mode` still showing the share after it was saved and
+  loaded again: two of three, `66%` and not `67%`, so the source's rounding down is pinned through a real link too.
+* `warehousenumberdegraded`: a terminal outside a warehouse and a controller that never had a dock write
+  `No warehouse`, and an index no number has writes nothing on a nixie row, with a label set.
+* `warehousenumberdocklost`: a board on a working warehouse's controller shows 2 rules below their minimum and 4
+  stopped products; once the dock is broken it writes `No warehouse` for all fourteen numbers, like a link on the same
+  warehouse's terminal, while the controller keeps its safety stops and its rule counts read 0.
 * `displaylinkonsign`: all four aisle summary lines reach a sign as the server-side flattening of the components the
   source built, cut to the sign's own line width, and line 0 is the server's English text (`Warehouse A: Ready`) — the
   documented caveat of §10.2, pinned rather than merely survived. This test is what showed the caveat had been worded
@@ -7571,8 +7671,11 @@ that goes through `provideFlapDisplayText`; a **sign** is the one that flattens 
 
 The client side runs in the visual scenario `display` (`./gradlew runVisualTest -Pwareworks.visualTest=display`,
 `dev.DisplayVisualScenario`): a powered aisle with a wall of four display boards (crane status on the dock, aisle
-summary on the controller, stock list on the terminal, and aisle summary on a stray terminal that belongs to no aisle)
-plus a nixie row on the output's filtered stock. Five real display links pull on their own passive schedule; before
+summary on the controller, stock list on the terminal, and aisle summary on a stray terminal that belongs to no aisle;
+since then the crane throughput, the fluid stock and, since issue #32, a one-row board with the warehouse number set to
+the share in use and labelled `Used`) plus a nixie row on the output's filtered stock. For the warehouse number it also
+opens the real Display Link screen in English and in German, checks that it preselects the source, the number and the
+label the link saved and that every number's name fits the selector with the game's own font, and shoots it. Five real display links pull on their own passive schedule; before
 every shot the scenario compares each line against the controller's own numbers read in the same tick and checks that
 every flap section fits its flap count, then the warehouse changes under the displays and the same views are shot
 again. It photographs the boards at 192 RPM, above Create's 128 RPM instant-flip threshold, so no shot catches

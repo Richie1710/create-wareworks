@@ -16,6 +16,7 @@ import dev.wareworks.content.display.CraneThroughputDisplaySource;
 import dev.wareworks.content.display.FilteredStockDisplaySource;
 import dev.wareworks.content.display.FluidStockDisplaySource;
 import dev.wareworks.content.display.StockListDisplaySource;
+import dev.wareworks.content.display.WarehouseNumberDisplaySource;
 import net.minecraft.world.level.block.Block;
 
 /**
@@ -59,6 +60,15 @@ public final class WareworksDisplaySources {
     public static final RegistryEntry<DisplaySource, FluidStockDisplaySource> FLUID_STOCK =
             REGISTRATE.displaySource("fluid_stock", FluidStockDisplaySource::new).register();
 
+    /**
+     * One number about the warehouse, picked in the Display Link screen (issue #32): the stored items, the open
+     * requests, the share of locations in use and so on. Registered as {@code warehouse_number}, after the name the
+     * screen shows, and bound <b>after</b> the three sources above on the controller and the terminal, so a link hung
+     * there still starts on the Warehouse Summary.
+     */
+    public static final RegistryEntry<DisplaySource, WarehouseNumberDisplaySource> WAREHOUSE_NUMBER =
+            REGISTRATE.displaySource("warehouse_number", WarehouseNumberDisplaySource::new).register();
+
     /** How many of the item in the source block's filter slot the aisle holds. */
     public static final RegistryEntry<DisplaySource, FilteredStockDisplaySource> FILTERED_STOCK =
             REGISTRATE.displaySource("filtered_stock", FilteredStockDisplaySource::new).register();
@@ -78,8 +88,9 @@ public final class WareworksDisplaySources {
      * Registrate transformer that offers <b>several</b> sources on one block, in this order. Use it instead of one
      * {@code .transform(DisplaySource.displaySource(...))} call per source; see the class comment.
      * <p>
-     * Varargs since M30, where the controller and the terminal gained a third source. The reason it exists is the
-     * order, and that reason only gets stronger with a third entry: every source added in a separate
+     * Varargs since M30, where the controller and the terminal gained a third source (and a fourth with issue #32).
+     * The reason it exists is the order, and that reason only gets stronger with every entry: every source added in a
+     * separate
      * {@code onRegisterAfter} callback rides a {@code HashMultimap} whose iteration order is not reproducible, so the
      * source a Display Link screen preselects could change between launches.
      */

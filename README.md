@@ -136,9 +136,14 @@ Put a link on the controller or the terminal for a **warehouse summary** (letter
 use, item types, items) or a **stock list** of the most stocked item types; on a warehouse output or interface for the
 **stock of the item in its filter slot**; and on the crane dock for the **crane's status** — what it is doing, what it
 carries and which address it is heading for — or for its **throughput**, the busy share of the last minute with
-travelling, turning and rack time under it. A warehouse summary names the aisles you have named. Nixie tubes, display boards and lecterns show the text in your own
-language. A sign accepts it too, but it keeps whatever language the server writes it in — English on a dedicated
-server, for everyone — because a sign stores plain text. Create's own display sources behave the same way.
+travelling, turning and rack time under it. A warehouse summary names the aisles you have named. For **one number**,
+pick **Warehouse Number** on the controller or the terminal and choose in the Display Link screen what it shows: items
+stored, item types, fluid stored, locations in use, in total or as a percentage, open requests, production orders,
+stock rules below their minimum or at their maximum, stopped products, accepting or collecting ports, or misaligned
+blocks. That is the source for Nixie Tubes, which show one line: with "Items" in the screen's **Label** box they read
+`Items 176`. Nixie tubes, display boards and lecterns show the text in your own language. A sign accepts it too, but it
+keeps whatever language the server writes it in — English on a dedicated server, for everyone — because a sign stores
+plain text. Create's own display sources behave the same way.
 
 **Stock rules** let you tell a warehouse how much of something it should hold. One row of a **Warehouse Stock Keeper**
 carries an item and three numbers: a **minimum** the warehouse tries to keep (a comparator on the keeper calls for the

@@ -696,13 +696,32 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * How many storage locations of this aisle count an inventory of their own: {@link #storageLocationCount()} minus
      * the shared-inventory aliases ({@code docs/warehouse-system.md} §3.1.1).
      * <p>
-     * This is the number to put opposite {@link StockView#occupiedLocations()}, which can never count an alias: an
+     * This is the number to put opposite {@link #occupiedStorageLocationCount()}, which can never count an alias: an
      * alias is indexed with empty counts on purpose, so a ratio against {@link #storageLocationCount()} could never
-     * reach full on an aisle with a double chest or an item vault behind several interfaces (M14 review fix). Two
-     * field reads, like the plain count.
+     * reach full on an aisle with a double chest or an item vault behind several interfaces (M14 review fix). Fluid
+     * bays are in this total, which is why the used count opposite it is not the item index's alone. Two field reads,
+     * like the plain count.
      */
     public int countedStorageLocationCount() {
         return membership.storageCount() - sharedInventories.aliasCount();
+    }
+
+    /**
+     * How many of the {@link #countedStorageLocationCount() counted} storage locations hold something: an inventory
+     * holding at least one item, or a fluid bay holding fluid. The number to put opposite that total, which the
+     * Warehouse Summary's "Locations" line and the "Warehouse Number" display source do (issue #32).
+     * <p>
+     * The item index alone is not enough: a fluid bay is a storage location and therefore in the total, but its item
+     * snapshot has zero slots, so the item index never counts it occupied however full it is, and a warehouse with a
+     * single fluid bay could never read full. Nothing is counted twice: the fluid index holds exactly the bays that
+     * hold fluid (an emptied bay is removed from it), and none of those is ever occupied in the item index. A bay reads
+     * no item inventory, so its identity is its own position and it is never an alias, which keeps it in the total.
+     * <p>
+     * The fluid index is not saved, so in the first ticks after a load the bays fill back in over one snapshot cycle,
+     * exactly like the fluid lines themselves. Two field reads.
+     */
+    public int occupiedStorageLocationCount() {
+        return stock.occupiedLocations() + fluidStock.occupiedLocations();
     }
 
     public List<LocationRecord> inputStations() {
@@ -1468,7 +1487,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // fluid index holds the warehouse's fluid bays and nothing else. The item index keeps every storage location
         // on purpose, because occupiedLocations() compares the ones in use against the ones counted; nothing asks the
         // fluid index how many locations a warehouse has, and an entry per chest would be a map entry per location for
-        // a number nobody reads.
+        // a number nobody reads. What it is asked is how many bays hold fluid (occupiedStorageLocationCount), and with
+        // every empty bay removed that is exactly its own occupied count.
         Map<FluidKey, Long> carried = member.fluidStock();
         if (carried.isEmpty())
             fluidStock.remove(rack);
@@ -1695,6 +1715,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** The open production orders of this aisle. */
     public List<ProductionOrder<ItemKey, RackPosition>> openProductionOrders() {
         return productionOrders.open();
+    }
+
+    /**
+     * How many production orders of this aisle are open: the number the goggles show as "Production orders" and the
+     * "Warehouse Number" display source reads (issue #32). A walk over the order book in memory, never over the world.
+     */
+    public int openProductionOrderCount() {
+        return productionOrders.openCount();
     }
 
     /** The production orders of the station at the world position {@code station}. */
@@ -3389,8 +3417,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * summary display show (M15, issue #3).
      * <p>
      * Derived state, refreshed by the rule tick every {@code stockRuleIntervalTicks} and never saved, so it can be a
-     * tick or two behind what a keeper's screen shows and reads 0 for the first rule tick after a load. Nothing that
-     * moves an item ever reads it: enforcement asks {@link #stockRules()} itself.
+     * tick or two behind what a keeper's screen shows and reads 0 for the first rule tick after a load, and 0 while the
+     * controller has no aisle (the rule tick does not run then). Nothing that moves an item ever reads it: enforcement
+     * asks {@link #stockRules()} itself.
      */
     public int governingStockRuleCount() {
         return governingRules;
@@ -4771,6 +4800,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             clearAllHomePointStates();
             clearAllProductionStops();
             clearAisleState(); // no aisle, no locations, no output stations to deliver to
+            // The rule counts are derived and refreshed only by the rule tick, which does not run without a layout, so
+            // they would otherwise keep judging a warehouse that is gone (issue #32). The copy of the rules is kept on
+            // purpose (clearAisleState says why), and so are the saved safety stops; only these three counts describe
+            // the warehouse that was there.
+            governingRules = 0;
+            rulesBelowMinimum = 0;
+            rulesAtMaximum = 0;
             branchTable.clear(); // the lines this table pinned belong to a warehouse that is gone
         } else {
             WarehouseRegistry.register(level, worldPosition, next);

@@ -23,6 +23,7 @@ import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.core.warehouse.NetworkStop;
+import dev.wareworks.core.warehouse.WarehouseNumber;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import dev.wareworks.util.WareworksLang;
 
@@ -879,7 +880,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_INCOMING), "Incoming: %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RESERVED_OUTGOING), "Reserved for pickup: %1$s x%2$s");
 
-        // Display Link sources (M14, M25, M30). The names must stay in step with the registry paths in
+        // Display Link sources (M14, M25, M30, issue #32). The names must stay in step with the registry paths in
         // WareworksDisplaySources: Create builds a source name as "wareworks.display_source.<path>". The line texts are
         // deliberately short, because a row of four nixie tubes shows eight characters.
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_AISLE_SUMMARY), "Warehouse Summary");
@@ -888,6 +889,30 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_STATUS), "Crane Status");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_CRANE_THROUGHPUT), "Crane Throughput");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_FLUID_STOCK), "Fluid Stock");
+        // Issue #32: one number about the warehouse, picked in the Display Link screen. The names are the words the
+        // controller's goggles and the Warehouse Summary already use for the same numbers, and each one has to fit the
+        // selector's 137 px box in both languages (WarehouseNumberTextTest).
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_SOURCE_WAREHOUSE_NUMBER), "Warehouse Number");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_NUMBER_SHOWN), "Number shown");
+        for (WarehouseNumber number : WarehouseNumber.values()) {
+            lang.accept(WareworksLang.key(WareworksLang.displayNumberKey(number)), switch (number) {
+                case ITEMS -> "Items stored";
+                case ITEM_TYPES -> "Item types";
+                case FLUID -> "Fluid stored";
+                case LOCATIONS_USED -> "Locations in use";
+                case LOCATIONS_TOTAL -> "Locations in total";
+                // A percent sign in a lang value has to be written %% (LangConsistencyTest), also without arguments.
+                case LOCATIONS_USED_SHARE -> "Locations in use (%%)";
+                case OPEN_REQUESTS -> "Open requests";
+                case PRODUCTION_ORDERS -> "Production orders";
+                case RULES_BELOW_MINIMUM -> "Rules below minimum";
+                case RULES_AT_MAXIMUM -> "Rules at maximum";
+                case STOPPED_PRODUCTS -> "Stopped products";
+                case ACCEPTING_PORTS -> "Accepting ports";
+                case COLLECTING_PORTS -> "Collecting ports";
+                case MISALIGNED -> "Misaligned blocks";
+            });
+        }
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_AISLE), "Warehouse %1$s: %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS), "Locations: %1$s / %2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES), "Item types: %1$s");

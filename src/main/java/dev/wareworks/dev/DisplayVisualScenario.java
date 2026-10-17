@@ -19,6 +19,7 @@ import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
 import com.simibubi.create.content.redstone.displayLink.DisplayLinkBlock;
 import com.simibubi.create.content.redstone.displayLink.DisplayLinkBlockEntity;
+import com.simibubi.create.content.redstone.displayLink.DisplayLinkScreen;
 import com.simibubi.create.content.redstone.nixieTube.NixieTubeBlock;
 import com.simibubi.create.content.redstone.nixieTube.NixieTubeBlockEntity;
 import com.simibubi.create.content.trains.display.FlapDisplayBlock;
@@ -27,6 +28,7 @@ import com.simibubi.create.content.trains.display.FlapDisplayLayout;
 import com.simibubi.create.content.trains.display.FlapDisplaySection;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
+import com.simibubi.create.foundation.gui.widget.SelectionScrollInput;
 import com.simibubi.create.foundation.utility.FluidFormatter;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
@@ -39,6 +41,7 @@ import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.display.WarehouseNumberDisplaySource;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
@@ -55,11 +58,15 @@ import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.inventory.StockView;
+import dev.wareworks.core.warehouse.WarehouseNumber;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksDisplaySources;
 import dev.wareworks.util.WareworksLang;
 import net.createmod.catnip.data.Couple;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -83,8 +90,8 @@ import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 /**
- * Scenario "display": the six Display Link sources on real display targets ({@code docs/warehouse-system.md} §10, M14,
- * M25, M30).
+ * Scenario "display": the seven Display Link sources on real display targets ({@code docs/warehouse-system.md} §10,
+ * M14, M25, M30 and issue #32).
  * <p>
  * Layout, relative to the dock (the scene origin; the aisle runs east, so a positive x offset is along the aisle and a
  * negative z offset is the left rack side): the usual powered aisle with {@value #RAILS} rails, a controller behind the
@@ -99,7 +106,7 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <b>named</b> (M25, issue #15), and a four-line board is exactly where that line is dropped,</li>
  * <li>"Stock List" on the terminal, on a {@value #BOARD_WIDTH}x{@value #BOARD_HEIGHT} board,</li>
  * <li>"Aisle Summary" on a stray terminal that belongs to no aisle, on a small
- * {@value #SMALL_BOARD_WIDTH}x1 board — the degraded case, which must read "No aisle",</li>
+ * {@value #SMALL_BOARD_WIDTH}x1 board — the degraded case, which must read "No warehouse",</li>
  * <li>"Crane Throughput" on the dock's <b>second</b> face (M25, issue #16): what the machine got done in the minute
  * behind it, on a board of the standard size, because the source writes exactly four rows — or the single word
  * "Measuring" while its window is still short, which is what a freshly built warehouse really shows,</li>
@@ -108,6 +115,11 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * at all, which is why it is worth looking at: the number is millibuckets inside the mod and the row has to read in
  * buckets, and the unit comes from Create's own {@code fluid_units} flap cycle rather than from a word this mod
  * invented.</li>
+ * <li>"Warehouse Number" on the controller's <b>west</b> face (issue #32), set to "locations in use (%)" with the label
+ * {@value #NUMBER_LABEL}: a single number on a one-row board, in Create's labelled number layout, whose share is the
+ * one text of that board the German chapter translates. Before the wall is read in either language the scenario opens
+ * the real <b>Display Link screen</b> of that link, checks that it preselects the source, the number and the label the
+ * link saved, that every number's name fits the selector, and shoots it.</li>
  * </ul>
  * "Stock of the Filtered Item" sits on the output, whose request filter names {@link #FILTERED_ITEM}, and writes to a row
  * of {@value #NIXIE_TUBES} nixie tube blocks on a pedestal south of the aisle, where that output stands.
@@ -155,6 +167,7 @@ public final class DisplayVisualScenario implements VisualScenario {
     private static final int BOARD_CHARS = (int) ((BOARD_WIDTH * 16f - 2f) / 3.5f);
     private static final int BOARD_HEIGHT = 2;
     private static final int SMALL_BOARD_WIDTH = 3;
+    private static final int NUMBER_BOARD_WIDTH = 4;
     /**
      * A display board only accepts text above Create's medium speed level, and it flips its flaps one by one over about
      * two seconds — unless it turns faster than 128 RPM, where Create switches the whole board to an instant flip
@@ -183,8 +196,14 @@ public final class DisplayVisualScenario implements VisualScenario {
     private static final Board THROUGHPUT_BOARD = new Board("throughput", 28, BOARD_WIDTH, BOARD_HEIGHT);
     /** "Fluid Stock" on the controller, the third source that block offers (M30, issue #21). */
     private static final Board FLUID_BOARD = new Board("fluid", 36, BOARD_WIDTH, BOARD_HEIGHT);
-    private static final List<Board> BOARDS =
-            List.of(CRANE_BOARD, AISLE_BOARD, STOCK_BOARD, NO_AISLE_BOARD, THROUGHPUT_BOARD, FLUID_BOARD);
+    /**
+     * "Warehouse Number" on the controller, the fourth source that block offers (issue #32): one row, because the
+     * source writes one number, and four blocks, 17 characters, so the label and the number have sections of their
+     * own.
+     */
+    private static final Board NUMBER_BOARD = new Board("number", 44, NUMBER_BOARD_WIDTH, 1);
+    private static final List<Board> BOARDS = List.of(CRANE_BOARD, AISLE_BOARD, STOCK_BOARD, NO_AISLE_BOARD,
+            THROUGHPUT_BOARD, FLUID_BOARD, NUMBER_BOARD);
     /** West end of the backing wall: one column before the westmost board, so no board ends at a bare edge. */
     private static final int WALL_WEST = -2;
     /** East end of the backing wall and of the cleared plaza: one column past the easternmost board. */
@@ -192,6 +211,19 @@ public final class DisplayVisualScenario implements VisualScenario {
             BOARDS.stream().mapToInt(board -> board.x0() + board.width()).max().orElseThrow();
     /** The middle of the wall, which is what the camera that shows all of it has to be centred on. */
     private static final double WALL_CENTRE = (WALL_WEST + WALL_EAST) / 2.0;
+
+    /** What the warehouse number board shows: a share, because that is the one value of it a language changes. */
+    private static final WarehouseNumber NUMBER_SHOWN = WarehouseNumber.LOCATIONS_USED_SHARE;
+    /** The word a player would type into Create's "Label" box for it. Player text, so the same in both languages. */
+    private static final String NUMBER_LABEL = "Used";
+    /** Create's key of that box in a single-line source's settings ({@code SingleLineDisplaySource}). */
+    private static final String LABEL_KEY = "Label";
+    /** Width of the Display Link screen's own source selector ({@code DisplayLinkScreen#initGathererOptions}). */
+    private static final int SOURCE_SELECTOR_WIDTH = 135;
+    /** How far into its box Create's {@code ModularGuiLineBuilder} draws a selector's label; as much is kept free. */
+    private static final int LABEL_INSET = 5;
+    /** Where the mouse is parked for the screen's plain shot, in GUI px: a corner far from every widget. */
+    private static final double MOUSE_PARK = 2.0;
 
     /** The warehouse terminal that belongs to no aisle, in front of the small board. */
     private static final BlockPos STRAY_TERMINAL = new BlockPos(25, 0, -6);
@@ -297,11 +329,12 @@ public final class DisplayVisualScenario implements VisualScenario {
     /**
      * The whole wall from the south, high enough that the racks between camera and wall stay below the sight line.
      * Centred on the wall and far enough back for all of it: the fifth board (M25) put six more columns on the east
-     * end and the fluid board (M30) six more, and a camera that kept the old framing would have left the newest board
-     * out of the one shot that claims to show the wall. The plaza is cleared further south than the nixie row for it
-     * ({@link #CAMERA_CLEAR_Z}), because a camera inside a block photographs the inside of a block.
+     * end, the fluid board (M30) six more and the warehouse number board (issue #32) five, and a camera that kept
+     * the old framing would have left the newest board out of the one shot that claims to show the wall. The plaza is
+     * cleared further south than the nixie row for it ({@link #CAMERA_CLEAR_Z}), because a camera inside a block
+     * photographs the inside of a block.
      */
-    private static final CameraView WALL = CameraView.of("wall", WALL_CENTRE, 6.1, 11.0, WALL_CENTRE, 2.4, WALL_Z);
+    private static final CameraView WALL = CameraView.of("wall", WALL_CENTRE, 6.6, 13.5, WALL_CENTRE, 2.4, WALL_Z);
     /** Warehouse and wall together, from above the west end of the aisle. */
     private static final CameraView OVERVIEW = CameraView.of("overview", -4.0, 9.0, 10.0, 16.0, 2.5, -5.0);
     /**
@@ -360,6 +393,8 @@ public final class DisplayVisualScenario implements VisualScenario {
     @Override
     public void pass(VisualPass pass, VisualScript script) {
         readAndCheck(script, RESTING);
+        if (pass == VisualPass.FLYWHEEL)
+            numberScreen(script, RESTING);
         script.shotFrom(WALL, RESTING).shotFrom(OVERVIEW, RESTING);
         if (pass == VisualPass.FLYWHEEL) {
             for (Board board : BOARDS)
@@ -397,7 +432,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         script.client("display: check that the displays followed the warehouse", this::checkChanged)
                 .shotFrom(WALL, UPDATED).shotFrom(AISLE_BOARD.view(), UPDATED).shotFrom(STOCK_BOARD.view(), UPDATED)
                 .shotFrom(THROUGHPUT_BOARD.view(), UPDATED).shotFrom(FLUID_BOARD.view(), UPDATED)
-                .shotFrom(NIXIE, UPDATED);
+                .shotFrom(NUMBER_BOARD.view(), UPDATED).shotFrom(NIXIE, UPDATED);
         if (pass == VisualPass.FLYWHEEL)
             germanChapter(script);
     }
@@ -407,10 +442,12 @@ public final class DisplayVisualScenario implements VisualScenario {
         Expectation expected = expectation;
         String crane = clientCrane(context).map(be -> be.craneState().phase().name()).orElse("missing");
         return String.format(Locale.ROOT,
-                "crane=%s items=%d types=%d fluid=%dmB filtered=%s aisle='%s' stock0='%s' crane0='%s' fluid0='%s'",
+                "crane=%s items=%d types=%d fluid=%dmB filtered=%s aisle='%s' stock0='%s' crane0='%s' fluid0='%s'"
+                        + " number='%s'",
                 crane, expected.items(), expected.itemTypes(), expected.fluidMillibuckets(), expected.filtered(),
                 boardLine(context, AISLE_BOARD, 0), boardLine(context, STOCK_BOARD, 0),
-                boardLine(context, CRANE_BOARD, 0), boardLine(context, FLUID_BOARD, 0));
+                boardLine(context, CRANE_BOARD, 0), boardLine(context, FLUID_BOARD, 0),
+                boardLine(context, NUMBER_BOARD, 0));
     }
 
     /**
@@ -442,7 +479,8 @@ public final class DisplayVisualScenario implements VisualScenario {
         script.shotFrom(WALL, GERMAN_MOMENT).shotFrom(AISLE_BOARD.view(), GERMAN_MOMENT)
                 .shotFrom(THROUGHPUT_BOARD.view(), GERMAN_MOMENT).shotFrom(CRANE_BOARD.view(), GERMAN_MOMENT)
                 .shotFrom(STOCK_BOARD.view(), GERMAN_MOMENT).shotFrom(FLUID_BOARD.view(), GERMAN_MOMENT)
-                .shotFrom(NO_AISLE_BOARD.view(), GERMAN_MOMENT);
+                .shotFrom(NO_AISLE_BOARD.view(), GERMAN_MOMENT).shotFrom(NUMBER_BOARD.view(), GERMAN_MOMENT);
+        numberScreen(script, GERMAN_MOMENT);
         language.switchTo(script, "display: ", ENGLISH);
         script.server("display: pull every link again, so the boards read English for the next pass",
                         DisplayVisualScenario::repullEveryLink)
@@ -572,15 +610,15 @@ public final class DisplayVisualScenario implements VisualScenario {
         LOGGER.info(PREFIX + "display: aisle {} is now called '{}'", letter, stored);
     }
 
-    /** The terminal on the plaza, far outside every aisle, that makes the small board read "No aisle". */
+    /** The terminal on the plaza, far outside every aisle, that makes the small board read "No warehouse". */
     private static BlockPos strayTerminal(BlockPos dock) {
         return dock.offset(STRAY_TERMINAL.getX(), STRAY_TERMINAL.getY(), STRAY_TERMINAL.getZ());
     }
 
     /**
-     * Places the five display links, each on a face of its source block, and points it at its target. Setting the source
-     * here is what the link screen does for a player; from then on the links pull on their own schedule, exactly as they
-     * would in a real world.
+     * Places the eight display links, each on a face of its source block, and points it at its target. Setting the
+     * source here is what the link screen does for a player; from then on the links pull on their own schedule, exactly
+     * as they would in a real world.
      */
     private static void attachLinks(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
@@ -607,6 +645,20 @@ public final class DisplayVisualScenario implements VisualScenario {
         // because that list renders one number column and 64 iron ingots must not stand in it beside 64 000 mB.
         link(level, dock.relative(AISLE.getOpposite()), Direction.NORTH, FLUID_BOARD.controllerPos(dock),
                 WareworksDisplaySources.FLUID_STOCK);
+        // The controller's west face, for its fourth source (issue #32), set up the way a player sets it in the
+        // Display Link screen: the number picked by its index and a label typed into Create's box. The settings are
+        // synced, so the screen this scenario opens on the client reads them back.
+        DisplayLinkBlockEntity number = link(level, dock.relative(AISLE.getOpposite()), Direction.WEST,
+                NUMBER_BOARD.controllerPos(dock), WareworksDisplaySources.WAREHOUSE_NUMBER);
+        number.getSourceConfig().putInt(WarehouseNumberDisplaySource.MODE, NUMBER_SHOWN.index());
+        number.getSourceConfig().putString(LABEL_KEY, NUMBER_LABEL);
+        number.notifyUpdate();
+        number.updateGatheredData();
+    }
+
+    /** The display link of the warehouse number board, on the controller's west face. */
+    private static BlockPos numberLinkPos(BlockPos dock) {
+        return dock.relative(AISLE.getOpposite()).relative(Direction.WEST);
     }
 
     private static DisplayLinkBlockEntity linkAt(ServerLevel level, BlockPos pos) {
@@ -616,7 +668,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         return link;
     }
 
-    private static void link(ServerLevel level, BlockPos source, Direction face, BlockPos target,
+    private static DisplayLinkBlockEntity link(ServerLevel level, BlockPos source, Direction face, BlockPos target,
             RegistryEntry<DisplaySource, ? extends DisplaySource> entry) {
         BlockPos pos = source.relative(face);
         level.setBlockAndUpdate(pos, AllBlocks.DISPLAY_LINK.getDefaultState().setValue(DisplayLinkBlock.FACING, face));
@@ -633,6 +685,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         link.updateGatheredData();
         if (link.activeTarget == null)
             throw new VisualTestException("the block at " + target + " does not accept display text");
+        return link;
     }
 
     private boolean sceneReady(MinecraftServer server, VisualContext context) {
@@ -740,8 +793,9 @@ public final class DisplayVisualScenario implements VisualScenario {
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_AISLE,
                         String.valueOf(controller.aisleLetter()),
                         WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_STATUS_READY)).getString(),
+                // The chests in use and the two bays, which hold fluid: a fluid bay is a counted location (issue #32).
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS,
-                        WareworksLang.number(stock.occupiedLocations()),
+                        WareworksLang.number(controller.occupiedStorageLocationCount()),
                         WareworksLang.number(controller.countedStorageLocationCount())).getString(),
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES,
                         WareworksLang.number(stock.distinctKeys())).getString(),
@@ -775,9 +829,14 @@ public final class DisplayVisualScenario implements VisualScenario {
         // Kept before this reading replaces it, so the check after the warehouse changed has something to compare with.
         previousItems = expectation.items();
         previousFluid = expectation.fluidMillibuckets();
+        // The warehouse number board: Create's label section, then the share the source writes, through the mod's one
+        // percent key, which is what the German chapter translates (issue #32).
+        String numberLine = NUMBER_LABEL + " " + WareworksLang.percent(WarehouseNumber.share(
+                controller.occupiedStorageLocationCount(), controller.countedStorageLocationCount())).component()
+                .getString();
         expectation = new Expectation(aisleLines, stock.distinctKeys(), stock.totalItems(),
                 top == null ? "" : top.getItem().getDescription().getString(), topCount, filtered, "",
-                throughputLines, fluidLines, fluid.totalItems());
+                throughputLines, fluidLines, fluid.totalItems(), numberLine);
         LOGGER.info(PREFIX + "display: the warehouse reads {}", expectation);
     }
 
@@ -862,7 +921,7 @@ public final class DisplayVisualScenario implements VisualScenario {
                 dock.relative(AISLE.getOpposite()).above(),
                 dock.relative(AISLE.getOpposite()).relative(Direction.NORTH),
                 layout.rackPos(TERMINAL).above(),
-                layout.rackPos(OUTPUT).above(), strayTerminal(dock).above()))
+                layout.rackPos(OUTPUT).above(), strayTerminal(dock).above(), numberLinkPos(dock)))
             linkAt(level, source).updateGatheredData();
     }
 
@@ -902,7 +961,7 @@ public final class DisplayVisualScenario implements VisualScenario {
         Expectation previous = expectation;
         expectation = new Expectation(previous.aisleLines(), previous.itemTypes(), previous.items(),
                 previous.topName(), previous.topCount(), previous.filtered(), String.join(" | ", lines),
-                previous.throughputLines(), previous.fluidLines(), previous.fluidMillibuckets());
+                previous.throughputLines(), previous.fluidLines(), previous.fluidMillibuckets(), previous.numberLine());
         LOGGER.info(PREFIX + "display: the crane reports {}", lines);
     }
 
@@ -935,6 +994,8 @@ public final class DisplayVisualScenario implements VisualScenario {
                     "fluid stock row " + i);
 
         assertLine(nixieText(context), expected.filtered(), "the nixie row of the output");
+        assertLine(boardLines(context, NUMBER_BOARD).getFirst(), expected.numberLine(), "the warehouse number board");
+        checkNumberLayout(context);
         assertLine(boardLines(context, NO_AISLE_BOARD).getFirst(),
                 WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_NO_AISLE).getString(),
                 "the board of the terminal without an aisle");
@@ -942,9 +1003,9 @@ public final class DisplayVisualScenario implements VisualScenario {
 
         for (Board board : BOARDS)
             checkFits(context, board);
-        LOGGER.info(PREFIX + "display: aisle {} | stock {} | crane {} | throughput {} | fluid {} | nixie '{}'", aisle,
-                stock, boardLines(context, CRANE_BOARD), boardLines(context, THROUGHPUT_BOARD), fluidRows,
-                nixieText(context));
+        LOGGER.info(PREFIX + "display: aisle {} | stock {} | crane {} | throughput {} | fluid {} | number {} | nixie "
+                + "'{}'", aisle, stock, boardLines(context, CRANE_BOARD), boardLines(context, THROUGHPUT_BOARD),
+                fluidRows, boardLines(context, NUMBER_BOARD), nixieText(context));
     }
 
     /**
@@ -966,6 +1027,123 @@ public final class DisplayVisualScenario implements VisualScenario {
         if (!expected.isEmpty() && expected.size() != 1 && expected.size() != ROWS_WITH_NUMBERS)
             throw new VisualTestException("the throughput source writes either one line or " + ROWS_WITH_NUMBERS
                     + " of them, never " + expected.size() + ": " + expected);
+    }
+
+    /**
+     * The warehouse number board is in Create's <b>labelled</b> number layout (issue #32): the label in a section of
+     * its own, as wide as the label and a space, and the number in the rest of the row. That layout is only reached
+     * through {@code provideFlapDisplayText}, so a row that merely read right could still have come from a plain text
+     * line.
+     */
+    private static void checkNumberLayout(VisualContext context) {
+        List<FlapDisplaySection> sections = clientBoard(context, NUMBER_BOARD).getLines().getFirst().getSections();
+        if (sections.size() != 2)
+            throw new VisualTestException("the warehouse number board has " + sections.size()
+                    + " sections instead of the label's and the number's");
+        int labelFlaps = (int) (sections.getFirst().getSize() / FlapDisplaySection.MONOSPACE);
+        if (labelFlaps != NUMBER_LABEL.length() + 1)
+            throw new VisualTestException("the label section of the warehouse number board holds " + labelFlaps
+                    + " flaps instead of " + (NUMBER_LABEL.length() + 1));
+    }
+
+    /**
+     * Opens the real Display Link screen of the warehouse number link, checks it and shoots it (issue #32): the screen
+     * is the one place the names of the numbers are drawn, and Create's label never cuts its text, so a name too wide
+     * for the selector would run out of its box in exactly the language nobody looked at.
+     */
+    private void numberScreen(VisualScript script, String moment) {
+        script.client("display: open the Display Link screen of the warehouse number link",
+                        DisplayVisualScenario::openNumberScreen)
+                .waitTicks(SETTLE_TICKS)
+                .client("display: check the warehouse number selector in the '" + moment + "' moment",
+                        DisplayVisualScenario::checkNumberScreen)
+                // The mouse rests where the window happens to centre it, which can be on the selector: parked in the
+                // corner, the shot shows the boxes as a player sees them before touching anything.
+                .client("display: park the mouse in the corner of the screen",
+                        context -> ScreenInput.hover(context.minecraft(),
+                                new ScreenInput.Point(MOUSE_PARK, MOUSE_PARK)))
+                .waitTicks(SETTLE_TICKS)
+                .shot(moment + "-number-screen")
+                // And over the selector, whose tooltip lists every name at once: the one view of all fourteen.
+                .client("display: rest the mouse on the warehouse number selector",
+                        DisplayVisualScenario::hoverNumberSelector)
+                .waitTicks(SETTLE_TICKS)
+                .shot(moment + "-number-options")
+                // Closed without Create's confirm, which would send the screen's values back to the server: the
+                // screen is looked at here, never used to change the link.
+                .client("display: close the Display Link screen", context -> context.minecraft().setScreen(null));
+    }
+
+    private static void openNumberScreen(VisualContext context) {
+        ClientLevel level = context.minecraft().level;
+        if (level == null)
+            throw new VisualTestException("no client level to open the Display Link screen in");
+        BlockPos pos = numberLinkPos(context.origin());
+        if (!(level.getBlockEntity(pos) instanceof DisplayLinkBlockEntity link))
+            throw new VisualTestException("no display link at " + pos + " on the client");
+        context.minecraft().setScreen(new DisplayLinkScreen(link));
+    }
+
+    /**
+     * The screen preselects what the link saved — the source, the number and the label — and every name the selector
+     * can show fits its box in the language that is loaded, measured with the game's own font.
+     */
+    private static void checkNumberScreen(VisualContext context) {
+        Minecraft minecraft = context.minecraft();
+        if (!(minecraft.screen instanceof DisplayLinkScreen screen))
+            throw new VisualTestException("the Display Link screen is not open: " + minecraft.screen);
+        List<SelectionScrollInput> selectors = new ArrayList<>();
+        List<EditBox> boxes = new ArrayList<>();
+        for (GuiEventListener child : screen.children()) {
+            if (child instanceof SelectionScrollInput selector)
+                selectors.add(selector);
+            if (child instanceof EditBox box)
+                boxes.add(box);
+        }
+        SelectionScrollInput source = selectors.stream().filter(input -> input.getWidth() == SOURCE_SELECTOR_WIDTH)
+                .findFirst().orElseThrow(() -> new VisualTestException("the screen has no source selector"));
+        int sourceIndex = DisplaySource.getAll(minecraft.level, context.origin().relative(AISLE.getOpposite()))
+                .indexOf(WareworksDisplaySources.WAREHOUSE_NUMBER.get());
+        if (sourceIndex != 3 || source.getState() != sourceIndex)
+            throw new VisualTestException("the source selector shows entry " + source.getState()
+                    + " instead of the warehouse number, the controller's fourth source (index " + sourceIndex + ")");
+        SelectionScrollInput number = numberSelector(screen);
+        if (number.getState() != NUMBER_SHOWN.index())
+            throw new VisualTestException("the number selector shows " + number.getState() + " instead of "
+                    + NUMBER_SHOWN.index());
+        if (boxes.stream().noneMatch(box -> box.getValue().equals(NUMBER_LABEL)))
+            throw new VisualTestException("no text box of the screen carries the label '" + NUMBER_LABEL + "'");
+        int room = WarehouseNumberDisplaySource.SELECTOR_WIDTH - 2 * LABEL_INSET;
+        List<String> widths = new ArrayList<>();
+        for (Component name : WarehouseNumberDisplaySource.numberNames()) {
+            int width = minecraft.font.width(name);
+            if (width > room)
+                throw new VisualTestException("'" + name.getString() + "' is " + width + " px wide, the selector has "
+                        + room + " px");
+            widths.add(name.getString() + "=" + width);
+        }
+        Component sourceName = WareworksDisplaySources.WAREHOUSE_NUMBER.get().getName();
+        if (minecraft.font.width(sourceName) > SOURCE_SELECTOR_WIDTH - 2 * LABEL_INSET)
+            throw new VisualTestException("'" + sourceName.getString() + "' does not fit the source selector");
+        LOGGER.info(PREFIX + "display: the Display Link screen shows '{}', number {} and label '{}'; names {}",
+                sourceName.getString(), number.getState(), NUMBER_LABEL, widths);
+    }
+
+    /** The selector the warehouse number source adds to the Display Link screen, told apart by its width. */
+    private static SelectionScrollInput numberSelector(DisplayLinkScreen screen) {
+        for (GuiEventListener child : screen.children())
+            if (child instanceof SelectionScrollInput selector
+                    && selector.getWidth() == WarehouseNumberDisplaySource.SELECTOR_WIDTH)
+                return selector;
+        throw new VisualTestException("the screen has no warehouse number selector");
+    }
+
+    private static void hoverNumberSelector(VisualContext context) {
+        if (!(context.minecraft().screen instanceof DisplayLinkScreen screen))
+            throw new VisualTestException("the Display Link screen is not open: " + context.minecraft().screen);
+        SelectionScrollInput selector = numberSelector(screen);
+        ScreenInput.hover(context.minecraft(), new ScreenInput.Point(selector.getX() + selector.getWidth() / 2.0,
+                selector.getY() + selector.getHeight() / 2.0));
     }
 
     /** The crane status board, checked against the job the server read a moment ago. */
@@ -1206,13 +1384,13 @@ public final class DisplayVisualScenario implements VisualScenario {
      * What the displays must carry: the aisle summary lines (the four core ones, the fluid line and the names line
      * below them), the numbers behind them, the first stock list row, the output's filtered total, — while a job runs
      * — the crane status lines, joined for the log, the rows of the throughput board, and the rows of the fluid stock
-     * board with the millibuckets behind them.
+     * board with the millibuckets behind them, and the row of the warehouse number board.
      */
     private record Expectation(List<String> aisleLines, int itemTypes, long items, String topName, long topCount,
             String filtered, String craneLines, List<String> throughputLines, List<String> fluidLines,
-            long fluidMillibuckets) {
+            long fluidMillibuckets, String numberLine) {
         static final Expectation EMPTY =
-                new Expectation(List.of(), 0, 0L, "", 0L, "", "", List.of(), List.of(), 0L);
+                new Expectation(List.of(), 0, 0L, "", 0L, "", "", List.of(), List.of(), 0L, "");
     }
 
     /**

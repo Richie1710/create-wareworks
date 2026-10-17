@@ -23,11 +23,11 @@ import net.minecraft.network.chat.MutableComponent;
 
 /**
  * Display Link source "Warehouse Summary" ({@code docs/warehouse-system.md} §10): the warehouse's letter and status,
- * the counted inventories in use, the item types and its total stock — <b>four lines on every warehouse</b> — and below
- * them, only when there is something to say, the fluid it holds, the aisles it is made of, its ports, its stock rules,
- * its stopped products, its held chunks and last of all the names a player gave its aisles. Every one of those is
- * below the four, because a four-tube board shows four rows and {@link WarehouseDisplays#limit} drops the tail: an optional line above
- * them would cost a player a number they asked for.
+ * the counted storage locations in use, the item types and its total stock — <b>four lines on every warehouse</b> —
+ * and below them, only when there is something to say, the fluid it holds, the aisles it is made of, its ports, its
+ * stock rules, its stopped products, its held chunks and last of all the names a player gave its aisles. Every one of
+ * those is below the four, because a four-tube board shows four rows and {@link WarehouseDisplays#limit} drops the
+ * tail: an optional line above them would cost a player a number they asked for.
  * <p>
  * The order of the optional lines is the order in which a short board may lose them, youngest loss last: the names are
  * a label a player chose, while every line above them is a count they asked for or a state they have to act on.
@@ -62,9 +62,11 @@ public class AisleSummaryDisplaySource extends DisplaySource {
 
         StockView<ItemKey, RackPosition> stock = controller.stockIndex();
         // Both numbers must be drawn from the same population, or the line could never read full: an alias of a shared
-        // inventory (two interfaces on one double chest) is indexed with empty counts and is therefore never occupied.
+        // inventory (two interfaces on one double chest) is indexed with empty counts and is therefore never occupied,
+        // so it is not in the total; a fluid bay is in the total, so it counts as in use while it holds fluid, which
+        // the item index alone never says (issue #32; until then a chest and two bays, all of them full, read "1 / 3").
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_LOCATIONS,
-                WareworksLang.number(stock.occupiedLocations()),
+                WareworksLang.number(controller.occupiedStorageLocationCount()),
                 WareworksLang.number(controller.countedStorageLocationCount())));
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_AISLE_LINE_ITEM_TYPES,
                 WareworksLang.number(stock.distinctKeys())));

@@ -5,8 +5,12 @@ import static dev.wareworks.gametest.WareworksGameTests.BASE_Y;
 import static dev.wareworks.gametest.WareworksGameTests.EMPTY_7X5X7;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
@@ -33,22 +37,33 @@ import com.simibubi.create.foundation.utility.FluidFormatter;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
+import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.content.crane.CraneJobSummary;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.display.StockListDisplaySource;
+import dev.wareworks.content.display.WarehouseNumberDisplaySource;
+import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.StockKeeperRules;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
+import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.content.storage.FluidBayBlock;
 import dev.wareworks.content.storage.FluidBayBlockEntity;
+import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.crane.CraneThroughput;
+import dev.wareworks.core.port.PortDirection;
+import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.stock.StockRulePause;
+import dev.wareworks.core.warehouse.WarehouseNumber;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksDisplaySources;
@@ -57,9 +72,12 @@ import net.createmod.catnip.data.Couple;
 import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.contents.TranslatableContents;
@@ -71,6 +89,7 @@ import net.minecraft.world.item.component.WrittenBookContent;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.LecternBlockEntity;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -83,9 +102,9 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
 /**
- * GameTests of the six Display Link sources ({@code docs/warehouse-system.md} §10, M14, M25 and M30): they are registered
- * and bound to the right blocks, and a real {@code AllBlocks.DISPLAY_LINK} placed on a Wareworks block delivers the
- * expected text to a real display target, degraded cases included.
+ * GameTests of the seven Display Link sources ({@code docs/warehouse-system.md} §10, M14, M25, M30 and issue #32): they
+ * are registered and bound to the right blocks, and a real {@code AllBlocks.DISPLAY_LINK} placed on a Wareworks block
+ * delivers the expected text to a real display target, degraded cases included.
  * <p>
  * <b>Targets.</b> A <b>lectern</b> keeps the {@code Component} of every line as it was built, so multi-line sources are
  * asserted there by lang key and arguments. A <b>nixie tube row</b> serializes the line to JSON and parses it back,
@@ -188,9 +207,64 @@ public final class DisplayLinkGameTests {
     private static final int PAUSE_SETTLE_TICKS = 3;
     private static final int BOARD_SETTLE_TICKS = 20;
 
+
+    // --- warehouse number (issue #32) ---
+    /** Every number of the source with the index a world on disk knows it by. Only ever append to this list. */
+    private static final List<String> NUMBER_ORDER = List.of("ITEMS", "ITEM_TYPES", "FLUID", "LOCATIONS_USED",
+            "LOCATIONS_TOTAL", "LOCATIONS_USED_SHARE", "OPEN_REQUESTS", "PRODUCTION_ORDERS", "RULES_BELOW_MINIMUM",
+            "RULES_AT_MAXIMUM", "STOPPED_PRODUCTS", "ACCEPTING_PORTS", "COLLECTING_PORTS", "MISALIGNED");
+    /** The literal index of "locations in use (%)" a saved link carries, spelled out on purpose. */
+    private static final int SAVED_SHARE_INDEX = 5;
+    /**
+     * The literal key a saved link carries that index under, spelled out on purpose: Create's selector writes it, and
+     * renaming {@code WarehouseNumberDisplaySource.MODE} would make every link already built show the items instead.
+     */
+    private static final String SAVED_MODE_KEY = "Mode";
+    /** Three chest-backed interfaces and the two fluid bays: what the stock test's warehouse counts. */
+    private static final int NUMBER_COUNTED_LOCATIONS = 5;
+    /** One chest holds items and both bays hold fluid, so three of those five are in use. */
+    private static final int NUMBER_USED_LOCATIONS = 3;
+    private static final int NUMBER_SHARE = NUMBER_USED_LOCATIONS * 100 / NUMBER_COUNTED_LOCATIONS;
+    /** The water of the stock test: eleven buckets, so the fluid (59.0 B) and the share (60 %) read apart. */
+    private static final int NUMBER_WATER_MB = 11 * FluidType.BUCKET_VOLUME;
+    /**
+     * Three chests holding one item type each, for the fixtures whose own numbers are not about stock: 3 item types in
+     * 3 of 3 counted inventories, which none of their own numbers (2, 1, 4) reads.
+     */
+    private static final List<RackPosition> NUMBER_CHESTS = List.of(new RackPosition(1, 0, Side.LEFT),
+            new RackPosition(2, 0, Side.LEFT), new RackPosition(3, 0, Side.LEFT));
+    private static final RackPosition NUMBER_PRODUCTION = new RackPosition(4, 0, Side.RIGHT);
+    /** Two ports that will accept and one that will collect. */
+    private static final List<RackPosition> NUMBER_PORTS = List.of(new RackPosition(1, 0, Side.RIGHT),
+            new RackPosition(2, 0, Side.RIGHT), new RackPosition(4, 0, Side.RIGHT));
+    /** Interfaces turned along the aisle, which the controller counts as misaligned. */
+    private static final List<RackPosition> MISALIGNED = List.of(new RackPosition(1, 0, Side.LEFT),
+            new RackPosition(2, 0, Side.LEFT), new RackPosition(3, 0, Side.LEFT));
+    private static final int LOGS_IN_STOCK = 16;
+    /** What the three chests hold in all: iron, diamonds and logs. */
+    private static final int NUMBER_CHEST_ITEMS = STORED_IRON + STORED_DIAMONDS + LOGS_IN_STOCK;
+    private static final int PLANKS_PER_LOG = 4;
+    private static final int ORDERED_PLANKS = 8;
+    private static final int REQUESTED_IRON = 10;
+    /** Create's key of the "Label" text box in a single-line source's settings ({@code SingleLineDisplaySource}). */
+    private static final String LABEL = "Label";
+    private static final String NUMBER_LABEL = "Items";
+    /** A board four blocks wide, 17 characters a row: room for the label and the number. */
+    private static final int WIDE_BOARD_BLOCKS = 4;
+    /** Its westmost block, which leads a board that faces south; the board runs east from here. */
+    private static final BlockPos WIDE_BOARD = new BlockPos(2, BASE_Y, 6);
+    private static final BlockPos WIDE_BOARD_COG = new BlockPos(2, BASE_Y + 1, 6);
+    private static final BlockPos WIDE_BOARD_MOTOR = new BlockPos(2, BASE_Y + 1, 5);
+
     private static final ItemKey IRON = ItemKey.of(Items.IRON_INGOT);
     private static final ItemKey DIAMOND = ItemKey.of(Items.DIAMOND);
     private static final ItemKey EMERALD = ItemKey.of(Items.EMERALD);
+    private static final ItemKey LOG = ItemKey.of(Items.OAK_LOG);
+    private static final ItemKey PLANK = ItemKey.of(Items.OAK_PLANKS);
+    private static final ItemKey GOLD = ItemKey.of(Items.GOLD_INGOT);
+    /** What the safety stop holds in the rules test: four items no rule governs. */
+    private static final List<ItemKey> STOPPED = List.of(PLANK, ItemKey.of(Items.STICK), ItemKey.of(Items.GLASS),
+            ItemKey.of(Items.BRICK));
 
     private DisplayLinkGameTests() {
     }
@@ -198,14 +272,15 @@ public final class DisplayLinkGameTests {
     // --- registration ----------------------------------------------------------------------------------------------
 
     /**
-     * The six sources are in Create's registry under their {@code wareworks} ids, their names use exactly the lang keys
-     * the generated English carries, and every bound block offers them in the declared order while rail, input and
+     * The seven sources are in Create's registry under their {@code wareworks} ids, their names use exactly the lang
+     * keys the generated English carries, and every bound block offers them in the declared order while rail, input and
      * production station and stock keeper offer none.
      * <p>
      * The <b>order</b> is the load-bearing part since M25 (issue #16): a Display Link screen preselects the first
      * source a block offers, so "Crane Status" has to stay first on the dock, and "Warehouse Summary" first on the
      * controller and the terminal, or every link a player has already hung there would quietly change what it shows.
-     * That is exactly why "Fluid Stock" is the <b>third</b> entry of those two blocks and not the first (M30).
+     * That is exactly why "Fluid Stock" is the <b>third</b> entry of those two blocks and not the first (M30), and
+     * "Warehouse Number" the fourth (issue #32).
      */
     @GameTest(template = EMPTY_7X5X7)
     public static void displaysourcesregistered(GameTestHelper helper) {
@@ -221,6 +296,8 @@ public final class DisplayLinkGameTests {
                 WareworksLang.DISPLAY_SOURCE_CRANE_THROUGHPUT);
         assertRegistered(helper, WareworksDisplaySources.FLUID_STOCK, "fluid_stock",
                 WareworksLang.DISPLAY_SOURCE_FLUID_STOCK);
+        assertRegistered(helper, WareworksDisplaySources.WAREHOUSE_NUMBER, "warehouse_number",
+                WareworksLang.DISPLAY_SOURCE_WAREHOUSE_NUMBER);
 
         List<BlockState> blocks = List.of(WareworksBlocks.STACKER_CRANE.getDefaultState(),
                 WareworksBlocks.WAREHOUSE_RAIL.getDefaultState(), WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState(),
@@ -232,11 +309,11 @@ public final class DisplayLinkGameTests {
                 List.of(WareworksDisplaySources.CRANE_STATUS.get(), WareworksDisplaySources.CRANE_THROUGHPUT.get()),
                 List.of(),
                 List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get(),
-                        WareworksDisplaySources.FLUID_STOCK.get()),
+                        WareworksDisplaySources.FLUID_STOCK.get(), WareworksDisplaySources.WAREHOUSE_NUMBER.get()),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()), List.of(),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()),
                 List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get(),
-                        WareworksDisplaySources.FLUID_STOCK.get()),
+                        WareworksDisplaySources.FLUID_STOCK.get(), WareworksDisplaySources.WAREHOUSE_NUMBER.get()),
                 List.of(), List.of());
         for (int i = 0; i < blocks.size(); i++) {
             BlockPos pos = SOURCE_BLOCKS[i];
@@ -471,7 +548,7 @@ public final class DisplayLinkGameTests {
 
     /**
      * Degraded aisle summary: a controller without a dock shows only its status line, and a terminal that belongs to no
-     * aisle shows "No aisle" — one line each, never a stale count.
+     * aisle shows "No warehouse" — one line each, never a stale count.
      */
     @GameTest(template = AISLE_16X10X7)
     public static void aislesummarydegraded(GameTestHelper helper) {
@@ -806,6 +883,10 @@ public final class DisplayLinkGameTests {
      * fluid because of it. Asserted on a lectern, which keeps the components, so the two arguments can be read — the
      * second of them is Create's pre-formatted amount with its unit, which is what keeps a German word out of the
      * line.
+     * <p>
+     * The "Locations" line above it counts a fluid bay as in use while it holds fluid (issue #32): a bay is one of the
+     * locations in the total, so before that the line read {@code 1 / 3} for a chest and two bays that were all full,
+     * and a warehouse with a fluid bay could never read full.
      */
     @GameTest(template = AISLE_16X10X7)
     public static void aislesummarywithfluid(GameTestHelper helper) {
@@ -818,6 +899,8 @@ public final class DisplayLinkGameTests {
                     link(helper, aisle.controllerPos(), Direction.UP, LECTERN, WareworksDisplaySources.AISLE_SUMMARY);
                     helper.assertValueEqual(lecternPages(helper, LECTERN).size(), 4,
                             "no fluid, no fluid line");
+                    // Two empty bays: only the chest of buckets is in use.
+                    assertFullSummary(helper, lecternPages(helper, LECTERN), 1, 3, 1, STORED_BUCKETS);
                     fillBay(helper, aisle, LAVA_BAY, LAVA, LAVA_MB);
                     fillBay(helper, aisle, WATER_BAY, WATER, WATER_MB);
                 })
@@ -827,9 +910,10 @@ public final class DisplayLinkGameTests {
                     linkAt(helper, aisle.controllerPos().relative(Direction.UP)).updateGatheredData();
                     List<Component> lines = lecternPages(helper, LECTERN);
                     helper.assertValueEqual(lines.size(), 5, "the fluid line is added to the four counts");
-                    // The four core lines are exactly what they were: three storage locations, one of them in use,
-                    // one item type, seventeen items. A fluid bay is a storage location that holds no items.
-                    assertFullSummary(helper, lines.subList(0, 4), 1, 3, 1, STORED_BUCKETS);
+                    // Three storage locations, and now all three in use: the chest of buckets and both bays, which hold
+                    // fluid. The item lines are what they were, one item type and seventeen items, because a fluid bay
+                    // is a storage location that holds no items.
+                    assertFullSummary(helper, lines.subList(0, 4), 3, 3, 1, STORED_BUCKETS);
                     assertKey(helper, lines.get(4), WareworksLang.DISPLAY_AISLE_LINE_FLUIDS, "fluid line");
                     Object[] args = argsOf(helper, lines.get(4), "fluid line");
                     helper.assertValueEqual(args.length, 2, "the line carries the types and the amount");
@@ -1084,6 +1168,468 @@ public final class DisplayLinkGameTests {
                 .thenSucceed();
     }
 
+    // --- warehouse number (issue #32) ----------------------------------------------------------------------------
+
+    /**
+     * The stock numbers of "Warehouse Number" — items, item types, fluid, locations in use, locations in total and the
+     * share in use — through a real link on the <b>controller</b> onto a nixie row and a real link on the
+     * <b>terminal</b> onto a lectern, so both blocks that offer the source are read for every number and must agree.
+     * <p>
+     * All fourteen numbers are read ({@link #assertNumbers}), and the six this fixture is built for differ from every
+     * other one of it (52 items of 2 types, 59 buckets of fluid, 3 of 5 counted locations in use, so 60 %), so a
+     * number wired to the wrong field cannot pass. The three locations in use are the chest that holds items <b>and</b>
+     * the two fluid bays that hold fluid: a bay is in the total, so it has to count as in use too, or a warehouse with
+     * a fluid bay could never read full. The counts are asserted against the literals this fixture builds <b>and</b>
+     * against the controller's own numbers, which the goggles show.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void warehousenumberstock(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS);
+        for (RackPosition bay : List.of(LAVA_BAY, WATER_BAY))
+            helper.setBlock(aisle.rackPos(bay), WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                    .setValue(FluidBayBlock.FACING, aisle.sideDirection(bay)));
+        aisle.build(false);
+        aisle.storage(STOCKED, IRON.toStack(STORED_IRON), DIAMOND.toStack(STORED_DIAMONDS));
+        aisle.storage(EMPTY_STORAGE);
+        aisle.storage(SECOND_EMPTY_STORAGE);
+        aisle.terminal(TERMINAL);
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(NUMBER_COUNTED_LOCATIONS, 0, 1))
+                .thenExecute(() -> {
+                    fillBay(helper, aisle, LAVA_BAY, LAVA, LAVA_MB);
+                    fillBay(helper, aisle, WATER_BAY, WATER, NUMBER_WATER_MB);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().fluidStockIndex().distinctKeys(), 2,
+                        "both bays indexed"))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    long items = STORED_IRON + STORED_DIAMONDS;
+                    helper.assertValueEqual(controller.stockIndex().totalItems(), items, "the controller's items");
+                    helper.assertValueEqual(controller.stockIndex().distinctKeys(), 2, "and item types");
+                    helper.assertValueEqual(controller.stockIndex().occupiedLocations(), 1, "one chest holds items");
+                    helper.assertValueEqual(controller.fluidStockIndex().occupiedLocations(), 2,
+                            "both bays hold fluid");
+                    helper.assertValueEqual(controller.occupiedStorageLocationCount(), NUMBER_USED_LOCATIONS,
+                            "the chest and both bays are in use");
+                    helper.assertValueEqual(controller.countedStorageLocationCount(), NUMBER_COUNTED_LOCATIONS,
+                            "three chests and two fluid bays are counted");
+
+                    NumberLinks links = numberLinks(helper, aisle.controllerPos(), aisle.rackPos(TERMINAL), tube);
+                    Map<WarehouseNumber, String> expected = zeroes();
+                    expected.put(WarehouseNumber.ITEMS, number(items));
+                    expected.put(WarehouseNumber.ITEM_TYPES, number(2));
+                    expected.put(WarehouseNumber.FLUID, fluidAmount(LAVA_MB + NUMBER_WATER_MB));
+                    expected.put(WarehouseNumber.LOCATIONS_USED, number(NUMBER_USED_LOCATIONS));
+                    expected.put(WarehouseNumber.LOCATIONS_TOTAL, number(NUMBER_COUNTED_LOCATIONS));
+                    expected.put(WarehouseNumber.LOCATIONS_USED_SHARE, share(NUMBER_SHARE));
+                    assertNumbers(helper, links, expected, EnumSet.of(WarehouseNumber.ITEMS,
+                            WarehouseNumber.ITEM_TYPES, WarehouseNumber.FLUID, WarehouseNumber.LOCATIONS_USED,
+                            WarehouseNumber.LOCATIONS_TOTAL, WarehouseNumber.LOCATIONS_USED_SHARE));
+
+                    // The share is the mod's one percent key, translated on the client like every other share, and
+                    // not a sign this source writes itself.
+                    assertShows(helper, links, WarehouseNumber.LOCATIONS_USED_SHARE, share(NUMBER_SHARE),
+                            "share in use");
+                    Component share = lecternPages(helper, LECTERN).get(0);
+                    assertKey(helper, share, WareworksLang.GOGGLES_PERCENT, "the share on the lectern");
+                    helper.assertValueEqual(argText(argsOf(helper, share, "the share")[0]), number(NUMBER_SHARE),
+                            "the share's number");
+                })
+                .thenExecute(() -> retireBays(helper, aisle))
+                .thenSucceed();
+    }
+
+    /**
+     * Open requests and open production orders, the two numbers that were on the controller's goggles alone before
+     * issue #32. The crane is parked (no motor), so an iron request and a plank order stay open exactly as they were
+     * made: two requests, one of which made one production order. The stock is three item types in three chests, so
+     * neither 2 nor 1 is a number anything else of this fixture reads either.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void warehousenumberorders(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        stockNumberChests(aisle);
+        aisle.output(OUTPUT);
+        aisle.production(NUMBER_PRODUCTION);
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(NUMBER_CHESTS.size(), 0, 1);
+                    helper.assertValueEqual(aisle.controller().countOf(LOG), (long) LOGS_IN_STOCK, "logs in stock");
+                    helper.assertValueEqual(aisle.controller().productionStations().size(), 1, "the station");
+                })
+                .thenExecute(() -> {
+                    WarehouseProductionBlockEntity station = aisle.productionAt(NUMBER_PRODUCTION);
+                    helper.assertTrue(station.setPatternEntry(0, 0, LOG, 1), "one log");
+                    helper.assertTrue(station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, PLANK,
+                            PLANKS_PER_LOG), "makes four planks");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(aisle.controller().producibleKeys().contains(PLANK),
+                        "planks are producible"))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    BlockPos output = aisle.absoluteRackPos(OUTPUT);
+                    helper.assertTrue(controller.request(output, IRON, REQUESTED_IRON).isAccepted(), "iron requested");
+                    RequestResult planks = controller.request(output, PLANK, ORDERED_PLANKS);
+                    helper.assertTrue(planks.isAccepted(), "planks ordered");
+                    helper.assertValueEqual(planks.producing(), ORDERED_PLANKS, "all of them are made");
+                    helper.assertValueEqual(controller.openRequestCount(), 2, "the goggles count two requests");
+                    helper.assertValueEqual(controller.openProductionOrderCount(), 1, "and one production order");
+                    helper.assertValueEqual(controller.openProductionOrders().size(), 1, "the order book agrees");
+                    assertNumberChests(helper, controller);
+
+                    NumberLinks links = numberLinks(helper, aisle.controllerPos(), null, tube);
+                    Map<WarehouseNumber, String> expected = numberChestTable();
+                    expected.put(WarehouseNumber.OPEN_REQUESTS, number(2));
+                    expected.put(WarehouseNumber.PRODUCTION_ORDERS, number(1));
+                    assertNumbers(helper, links, expected,
+                            EnumSet.of(WarehouseNumber.OPEN_REQUESTS, WarehouseNumber.PRODUCTION_ORDERS));
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The stock rule numbers and the stopped products. Two rules call for an item the warehouse is short of and one
+     * refuses its item at its maximum; four items are held by the safety stop. The stops are written into the
+     * controller's own save and read back the way a {@code /data merge} or a world load does, because arming four of
+     * them for real would take four broken machines: what is under test here is the number, and the stop itself is
+     * covered by {@code ProductionPlanFailureGameTests} and {@code StockRestockGameTests}. The stock is the same three
+     * item types in three chests as in {@link #warehousenumberorders}, so 2, 1 and 4 read apart from it.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void warehousenumberrules(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        stockNumberChests(aisle);
+        aisle.stockKeeper(KEEPER);
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(NUMBER_CHESTS.size(), 0, 0))
+                .thenExecute(() -> {
+                    WarehouseStockKeeperBlockEntity keeper = aisle.stockKeeperAt(KEEPER);
+                    keeper.editRule(0, StockKeeperRules.FIELD_ITEM, EMERALD, 0L);
+                    keeper.editRule(0, StockKeeperRules.FIELD_MINIMUM, null, RULE_MINIMUM);
+                    keeper.editRule(1, StockKeeperRules.FIELD_ITEM, GOLD, 0L);
+                    keeper.editRule(1, StockKeeperRules.FIELD_MINIMUM, null, RULE_MINIMUM);
+                    keeper.editRule(2, StockKeeperRules.FIELD_ITEM, IRON, 0L);
+                    keeper.editRule(2, StockKeeperRules.FIELD_MAXIMUM, null, RULE_MAXIMUM);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().governingStockRuleCount(), 3,
+                        "all three rules govern"))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(aisle.controller().stockRulesBelowMinimum(), 2, "two rules call");
+                    helper.assertValueEqual(aisle.controller().stockRulesAtMaximum(), 1, "one rule refuses");
+                    NumberLinks links = numberLinks(helper, aisle.controllerPos(), null, tube);
+                    assertShows(helper, links, WarehouseNumber.RULES_BELOW_MINIMUM, number(2), "below minimum");
+                    assertShows(helper, links, WarehouseNumber.RULES_AT_MAXIMUM, number(1), "at maximum");
+                    assertShows(helper, links, WarehouseNumber.STOPPED_PRODUCTS, number(0), "nothing stopped yet");
+                    stopThroughTheSave(helper, aisle.controller());
+                })
+                .thenWaitUntil(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(controller.pausedStockRuleCount(), STOPPED.size(), "the stops are read");
+                    helper.assertValueEqual(controller.governingStockRuleCount(), 3, "and the rules govern again");
+                    aisle.assertReady(NUMBER_CHESTS.size(), 0, 0);
+                })
+                .thenExecute(() -> {
+                    assertNumberChests(helper, aisle.controller());
+                    NumberLinks links = new NumberLinks(linkAt(helper, aisle.controllerPos().above()),
+                            linkAt(helper, aisle.controllerPos().north()), tube);
+                    Map<WarehouseNumber, String> expected = numberChestTable();
+                    expected.put(WarehouseNumber.RULES_BELOW_MINIMUM, number(2));
+                    expected.put(WarehouseNumber.RULES_AT_MAXIMUM, number(1));
+                    expected.put(WarehouseNumber.STOPPED_PRODUCTS, number(STOPPED.size()));
+                    assertNumbers(helper, links, expected, EnumSet.of(WarehouseNumber.RULES_BELOW_MINIMUM,
+                            WarehouseNumber.RULES_AT_MAXIMUM, WarehouseNumber.STOPPED_PRODUCTS));
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The port numbers and the misaligned blocks: two accepting ports, one collecting port and three interfaces
+     * turned along the aisle instead of away from it, so the three values differ from each other and from the zeroes
+     * of a warehouse that stores nothing.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void warehousenumberports(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        for (RackPosition port : NUMBER_PORTS)
+            aisle.output(port);
+        for (RackPosition turned : MISALIGNED)
+            helper.setBlock(aisle.rackPos(turned), WareworksBlocks.WAREHOUSE_INTERFACE.getDefaultState()
+                    .setValue(WarehouseInterfaceBlock.FACING, AisleFixture.AISLE));
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(0, 0, NUMBER_PORTS.size());
+                    helper.assertValueEqual(aisle.controller().misalignedCount(), MISALIGNED.size(), "turned blocks");
+                })
+                .thenExecute(() -> {
+                    helper.assertTrue(aisle.outputAt(NUMBER_PORTS.get(0)).setPortRank(-1), "the first port accepts");
+                    helper.assertTrue(aisle.outputAt(NUMBER_PORTS.get(1)).setPortRank(-2), "the second port accepts");
+                    helper.assertTrue(aisle.outputAt(NUMBER_PORTS.get(2)).setPortRank(PortSettings.COLLECT_RANK),
+                            "the third port collects");
+                    helper.assertValueEqual(aisle.outputAt(NUMBER_PORTS.get(0)).portDirection(), PortDirection.ACCEPT,
+                            "an overflow rank accepts");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.controller().acceptingPortCount(), 2, "two accepting ports");
+                    helper.assertValueEqual(aisle.controller().collectingPortCount(), 1, "one collecting port");
+                })
+                .thenExecute(() -> {
+                    NumberLinks links = numberLinks(helper, aisle.controllerPos(), null, tube);
+                    Map<WarehouseNumber, String> expected = zeroes();
+                    expected.put(WarehouseNumber.ACCEPTING_PORTS, number(2));
+                    expected.put(WarehouseNumber.COLLECTING_PORTS, number(1));
+                    expected.put(WarehouseNumber.MISALIGNED, number(MISALIGNED.size()));
+                    assertNumbers(helper, links, expected, EnumSet.of(WarehouseNumber.ACCEPTING_PORTS,
+                            WarehouseNumber.COLLECTING_PORTS, WarehouseNumber.MISALIGNED));
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Create's own "Label" text box puts a player's word in front of the number: {@code "Items 52"} on a nixie row and
+     * a lectern, and on a display board a section of its own for the label beside the number section — Create's
+     * labelled {@code "Number"} layout, which only a board reaches ({@code provideFlapDisplayText}).
+     * <p>
+     * The board is also where an index no number has (a link saved by a later build) has to be told apart: Create's
+     * labelled path would still write the label there and leave the last number standing in its section, so the
+     * source gives it Create's unlabelled layout with one blank section, and a known number brings the label back.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void warehousenumberlabel(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        aisle.storage(STOCKED, IRON.toStack(STORED_IRON), DIAMOND.toStack(STORED_DIAMONDS));
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+        wideBoard(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 0))
+                .thenWaitUntil(() -> {
+                    FlapDisplayBlockEntity board = wideBoardAt(helper);
+                    helper.assertTrue(board.isController, "the westmost block leads the board");
+                    helper.assertValueEqual(board.xSize, WIDE_BOARD_BLOCKS, "the blocks are one board");
+                    helper.assertTrue(board.isSpeedRequirementFulfilled(), "the board turns fast enough");
+                })
+                .thenExecute(() -> {
+                    String items = number(STORED_IRON + STORED_DIAMONDS);
+                    NumberLinks links = numberLinks(helper, aisle.controllerPos(), null, tube);
+                    for (DisplayLinkBlockEntity link : List.of(links.onTubes(), links.onLectern()))
+                        link.getSourceConfig().putString(LABEL, NUMBER_LABEL);
+                    assertShows(helper, links, WarehouseNumber.ITEMS, NUMBER_LABEL + " " + items, "a labelled number");
+
+                    DisplayLinkBlockEntity onBoard = link(helper, aisle.controllerPos(), Direction.SOUTH, WIDE_BOARD,
+                            WareworksDisplaySources.WAREHOUSE_NUMBER);
+                    List<FlapDisplaySection> plain = wideBoardAt(helper).getLines().get(0).getSections();
+                    helper.assertValueEqual(plain.size(), 1, "without a label the number has the row to itself");
+                    helper.assertValueEqual(plain.get(0).getText().getString(), items, "the number");
+
+                    onBoard.getSourceConfig().putString(LABEL, NUMBER_LABEL);
+                    onBoard.updateGatheredData();
+                    assertLabelledBoard(helper, items, "a labelled number");
+                    int chars = wideBoardAt(helper).getMaxCharCount();
+                    List<FlapDisplaySection> labelled = wideBoardAt(helper).getLines().get(0).getSections();
+                    helper.assertValueEqual((int) (labelled.get(0).getSize() / FlapDisplaySection.MONOSPACE),
+                            NUMBER_LABEL.length() + 1, "the label section holds the label and a space");
+                    helper.assertValueEqual((int) (labelled.get(1).getSize() / FlapDisplaySection.MONOSPACE),
+                            chars - NUMBER_LABEL.length() - 1, "and the number has the rest of the row");
+
+                    // An index no number has, with the label still set: nothing on the board, neither the label nor
+                    // the number that stood in the labelled layout's number section a pull ago.
+                    for (int unknown : new int[] {WarehouseNumber.values().length, -1}) {
+                        onBoard.getSourceConfig().putInt(WarehouseNumberDisplaySource.MODE, unknown);
+                        onBoard.updateGatheredData();
+                        List<FlapDisplaySection> blank = wideBoardAt(helper).getLines().get(0).getSections();
+                        helper.assertValueEqual(blank.size(), 1, "index " + unknown + " drops the labelled layout");
+                        helper.assertValueEqual(blank.get(0).getText().getString(), "",
+                                "index " + unknown + " writes no label and no number");
+                    }
+                    onBoard.getSourceConfig().putInt(WarehouseNumberDisplaySource.MODE, WarehouseNumber.ITEMS.index());
+                    onBoard.updateGatheredData();
+                    assertLabelledBoard(helper, items, "a known number again");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The order of the numbers is a save format: a link keeps the index a player picked, so the list may only grow at
+     * its end. Pinned three ways — the values in their order, the selector's options in the same order, and a link
+     * whose settings carry a literal index under the literal key {@code "Mode"} that still means the same number after
+     * the link was saved and loaded. The share it then shows is two of three, 66 % and not 67 %, so the reload pins
+     * that the source rounds down, too.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void warehousenumbermodeorder(GameTestHelper helper) {
+        List<String> order = new ArrayList<>();
+        for (WarehouseNumber number : WarehouseNumber.values())
+            order.add(number.name());
+        helper.assertValueEqual(order, NUMBER_ORDER, "a new number goes at the end, never in between");
+        helper.assertValueEqual(WarehouseNumberDisplaySource.MODE, SAVED_MODE_KEY,
+                "the key a saved link carries its index under is a save format too");
+
+        List<Component> options = WarehouseNumberDisplaySource.numberNames();
+        helper.assertValueEqual(options.size(), NUMBER_ORDER.size(), "one option per number");
+        for (int i = 0; i < options.size(); i++)
+            assertKey(helper, options.get(i),
+                    WareworksLang.displayNumberKey(WarehouseNumber.valueOf(NUMBER_ORDER.get(i))), "option " + i);
+
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        aisle.storage(STOCKED, IRON.toStack(STORED_IRON));
+        aisle.storage(SECOND_STOCKED, DIAMOND.toStack(STORED_DIAMONDS));
+        aisle.storage(EMPTY_STORAGE);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 0))
+                .thenExecute(() -> {
+                    DisplayLinkBlockEntity link = link(helper, aisle.controllerPos(), Direction.UP, tube,
+                            WareworksDisplaySources.WAREHOUSE_NUMBER);
+                    assertNumber(helper, tube, STORED_IRON + STORED_DIAMONDS,
+                            "a link nobody has configured shows the items");
+                    // Index 5 under "Mode" is "locations in use (%)" in every world ever saved: two of three is 66 %,
+                    // rounded down, never 67.
+                    link.getSourceConfig().putInt(SAVED_MODE_KEY, SAVED_SHARE_INDEX);
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag saved = link.saveWithFullMetadata(registries);
+                    BlockPos linkPos = aisle.controllerPos().above();
+                    BlockEntity copy = BlockEntity.loadStatic(helper.absolutePos(linkPos),
+                            helper.getBlockState(linkPos), saved, registries);
+                    if (copy == null)
+                        helper.fail("the saved link does not load again", linkPos);
+                    helper.getLevel().setBlockEntity(copy);
+                    DisplayLinkBlockEntity reloaded = linkAt(helper, linkPos);
+                    helper.assertTrue(reloaded != link, "the link was replaced by its saved copy");
+                    helper.assertTrue(reloaded.activeSource == WareworksDisplaySources.WAREHOUSE_NUMBER.get(),
+                            "the copy reads the warehouse number");
+                    helper.assertValueEqual(reloaded.getSourceConfig().getInt(SAVED_MODE_KEY), SAVED_SHARE_INDEX,
+                            "and keeps the index");
+                    reloaded.updateGatheredData();
+                    helper.assertValueEqual(nixieText(helper, tube).getString(), share(66),
+                            "index 5 is the share in use, rounded down");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Degraded cases: a terminal that belongs to no warehouse writes the Warehouse Summary's own "No warehouse", not
+     * an invented {@code 0}; a controller that never had a dock writes the same, because it has no warehouse to count;
+     * and an index no number has (a link saved by a later build) writes nothing on a nixie row, not even the label.
+     * The board half of that last case is in {@link #warehousenumberlabel}, where a labelled board already stands.
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void warehousenumberdegraded(GameTestHelper helper) {
+        BlockPos controller = new BlockPos(0, BASE_Y, AISLE_Z);
+        helper.setBlock(controller, WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState()
+                .setValue(WarehouseControllerBlock.FACING, AisleFixture.AISLE));
+        helper.setBlock(STRAY_TERMINAL, WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState());
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenIdle(PAUSE_SETTLE_TICKS)
+                .thenExecute(() -> {
+                    link(helper, STRAY_TERMINAL, Direction.UP, LECTERN, WareworksDisplaySources.WAREHOUSE_NUMBER);
+                    assertKey(helper, lecternPages(helper, LECTERN).get(0), WareworksLang.DISPLAY_AISLE_NO_AISLE,
+                            "a terminal outside a warehouse");
+
+                    DisplayLinkBlockEntity link = link(helper, controller, Direction.UP, tube,
+                            WareworksDisplaySources.WAREHOUSE_NUMBER);
+                    assertKey(helper, nixieText(helper, tube), WareworksLang.DISPLAY_AISLE_NO_AISLE,
+                            "a controller without a dock counts no items");
+                    link.getSourceConfig().putInt(WarehouseNumberDisplaySource.MODE,
+                            WarehouseNumber.LOCATIONS_USED_SHARE.index());
+                    link.updateGatheredData();
+                    assertKey(helper, nixieText(helper, tube), WareworksLang.DISPLAY_AISLE_NO_AISLE,
+                            "and no share of nothing");
+
+                    link.getSourceConfig().putString(LABEL, NUMBER_LABEL);
+                    for (int unknown : new int[] {WarehouseNumber.values().length, -1}) {
+                        link.getSourceConfig().putInt(WarehouseNumberDisplaySource.MODE, unknown);
+                        helper.assertTrue(provideText(helper, link, WareworksDisplaySources.WAREHOUSE_NUMBER, 1)
+                                == DisplaySource.EMPTY, "index " + unknown + " writes nothing");
+                        link.updateGatheredData();
+                        helper.assertValueEqual(nixieText(helper, tube).getString(), "",
+                                "index " + unknown + " leaves the row blank, without the label");
+                    }
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The dock of a working warehouse is broken under a board that counts on it. Before, the controller's link shows
+     * two rules below their minimum and four stopped products; after, it writes "No warehouse" for every one of the
+     * fourteen numbers, exactly what a link on the same warehouse's terminal writes at that moment — and not the last
+     * rule counts, which the rule tick no longer refreshes, nor the safety stops, which are kept on purpose (the stop
+     * has to outlive a missing dock) but are no number about a warehouse that is not there.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void warehousenumberdocklost(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        stockNumberChests(aisle);
+        aisle.stockKeeper(KEEPER);
+        aisle.terminal(TERMINAL);
+        lectern(helper, LECTERN);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(NUMBER_CHESTS.size(), 0, 1))
+                .thenExecute(() -> {
+                    WarehouseStockKeeperBlockEntity keeper = aisle.stockKeeperAt(KEEPER);
+                    keeper.editRule(0, StockKeeperRules.FIELD_ITEM, EMERALD, 0L);
+                    keeper.editRule(0, StockKeeperRules.FIELD_MINIMUM, null, RULE_MINIMUM);
+                    keeper.editRule(1, StockKeeperRules.FIELD_ITEM, GOLD, 0L);
+                    keeper.editRule(1, StockKeeperRules.FIELD_MINIMUM, null, RULE_MINIMUM);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().stockRulesBelowMinimum(), 2,
+                        "both rules call"))
+                .thenExecute(() -> stopThroughTheSave(helper, aisle.controller()))
+                .thenWaitUntil(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(controller.pausedStockRuleCount(), STOPPED.size(), "the stops are read");
+                    helper.assertValueEqual(controller.stockRulesBelowMinimum(), 2, "and both rules call again");
+                    aisle.assertReady(NUMBER_CHESTS.size(), 0, 1);
+                })
+                .thenExecute(() -> {
+                    NumberLinks links = numberLinks(helper, aisle.controllerPos(), aisle.rackPos(TERMINAL), tube);
+                    assertShows(helper, links, WarehouseNumber.RULES_BELOW_MINIMUM, number(2), "below minimum");
+                    assertShows(helper, links, WarehouseNumber.STOPPED_PRODUCTS, number(STOPPED.size()),
+                            "stopped products");
+                })
+                .thenExecute(() -> aisle.breakBlock(aisle.dockPos()))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().status(), ControllerStatus.NO_DOCK,
+                        "the warehouse is gone"))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(controller.pausedStockRuleCount(), STOPPED.size(),
+                            "the safety stops outlive the dock");
+                    helper.assertValueEqual(controller.stockRulesBelowMinimum(), 0,
+                            "but no rule calls for a warehouse that is not there");
+                    DisplayLinkBlockEntity onTubes = linkAt(helper, aisle.controllerPos().above());
+                    DisplayLinkBlockEntity onLectern = linkAt(helper, aisle.rackPos(TERMINAL).above());
+                    for (WarehouseNumber number : WarehouseNumber.values()) {
+                        for (DisplayLinkBlockEntity link : List.of(onTubes, onLectern)) {
+                            link.getSourceConfig().putInt(WarehouseNumberDisplaySource.MODE, number.index());
+                            link.updateGatheredData();
+                        }
+                        assertKey(helper, nixieText(helper, tube), WareworksLang.DISPLAY_AISLE_NO_AISLE,
+                                number + " on the controller without its dock");
+                        assertKey(helper, lecternPages(helper, LECTERN).get(0), WareworksLang.DISPLAY_AISLE_NO_AISLE,
+                                number + " on the terminal of the same warehouse");
+                    }
+                })
+                .thenSucceed();
+    }
+
     // --- sign ----------------------------------------------------------------------------------------------------
 
     /**
@@ -1326,6 +1872,163 @@ public final class DisplayLinkGameTests {
         Couple<MutableComponent> amount = FluidFormatter.asComponents(millibuckets, shortened);
         return amount.getFirst().getString() + amount.getSecond().getString() + " "
                 + new FluidStack(fluid, 1).getHoverName().getString();
+    }
+
+    // --- helpers: warehouse number (issue #32) --------------------------------------------------------------------
+
+    /**
+     * The two links a warehouse number test reads: one on the controller's top onto the nixie row, and one onto the
+     * lectern — on the terminal's top when there is a terminal to read, otherwise on the controller's north face.
+     */
+    private record NumberLinks(DisplayLinkBlockEntity onTubes, DisplayLinkBlockEntity onLectern, BlockPos tube) {
+    }
+
+    private static NumberLinks numberLinks(GameTestHelper helper, BlockPos controller, BlockPos terminal,
+            BlockPos tube) {
+        DisplayLinkBlockEntity onTubes = link(helper, controller, Direction.UP, tube,
+                WareworksDisplaySources.WAREHOUSE_NUMBER);
+        DisplayLinkBlockEntity onLectern = terminal == null
+                ? link(helper, controller, Direction.NORTH, LECTERN, WareworksDisplaySources.WAREHOUSE_NUMBER)
+                : link(helper, terminal, Direction.UP, LECTERN, WareworksDisplaySources.WAREHOUSE_NUMBER);
+        return new NumberLinks(onTubes, onLectern, tube);
+    }
+
+    /**
+     * Picks {@code number} on both links the way the Display Link screen saves it — its index under {@code "Mode"} —
+     * pulls both, and reads the nixie row (the line after its trip through JSON) and the lectern's first page (the
+     * component as it was built).
+     */
+    private static void assertShows(GameTestHelper helper, NumberLinks links, WarehouseNumber number, String expected,
+            String what) {
+        for (DisplayLinkBlockEntity link : List.of(links.onTubes(), links.onLectern())) {
+            link.getSourceConfig().putInt(WarehouseNumberDisplaySource.MODE, number.index());
+            link.updateGatheredData();
+        }
+        helper.assertValueEqual(nixieText(helper, links.tube()).getString(), expected, what + " on the nixie row");
+        helper.assertValueEqual(lecternPages(helper, LECTERN).get(0).getString(), expected, what + " on the lectern");
+    }
+
+    /**
+     * Reads every one of the fourteen numbers through both links ({@link #assertShows}) against {@code expected}, which
+     * has to name all of them. It checks the fixture first: each number in {@code builtFor} must read differently from
+     * every other number of the table, so a value wired to the wrong field fails rather than passing on a coincidence.
+     */
+    private static void assertNumbers(GameTestHelper helper, NumberLinks links, Map<WarehouseNumber, String> expected,
+            Set<WarehouseNumber> builtFor) {
+        helper.assertValueEqual(expected.keySet(), EnumSet.allOf(WarehouseNumber.class),
+                "the table names every number");
+        for (WarehouseNumber tested : builtFor)
+            for (Map.Entry<WarehouseNumber, String> other : expected.entrySet())
+                if (other.getKey() != tested && other.getValue().equals(expected.get(tested)))
+                    helper.fail("the fixture reads '" + other.getValue() + "' for " + tested + " and for "
+                            + other.getKey() + ", so a link that showed one for the other would pass");
+        for (Map.Entry<WarehouseNumber, String> entry : expected.entrySet())
+            assertShows(helper, links, entry.getKey(), entry.getValue(), entry.getKey().name());
+    }
+
+    /**
+     * What a warehouse with nothing to count reads for every number: {@code 0}, the fluid as {@code 0 mB} and the share
+     * as {@code 0%}. A fixture puts the numbers it builds on top.
+     */
+    private static Map<WarehouseNumber, String> zeroes() {
+        Map<WarehouseNumber, String> table = new EnumMap<>(WarehouseNumber.class);
+        for (WarehouseNumber number : WarehouseNumber.values())
+            table.put(number, number(0));
+        table.put(WarehouseNumber.FLUID, fluidAmount(0));
+        table.put(WarehouseNumber.LOCATIONS_USED_SHARE, share(0));
+        return table;
+    }
+
+    /** Iron, diamonds and logs, one type per chest of {@link #NUMBER_CHESTS}. */
+    private static void stockNumberChests(AisleFixture aisle) {
+        aisle.storage(NUMBER_CHESTS.get(0), IRON.toStack(STORED_IRON));
+        aisle.storage(NUMBER_CHESTS.get(1), DIAMOND.toStack(STORED_DIAMONDS));
+        aisle.storage(NUMBER_CHESTS.get(2), LOG.toStack(LOGS_IN_STOCK));
+    }
+
+    /** The controller counts what {@link #stockNumberChests} built: 3 item types in 3 of 3 inventories. */
+    private static void assertNumberChests(GameTestHelper helper, WarehouseControllerBlockEntity controller) {
+        helper.assertValueEqual(controller.stockIndex().totalItems(), (long) NUMBER_CHEST_ITEMS, "items in the chests");
+        helper.assertValueEqual(controller.stockIndex().distinctKeys(), NUMBER_CHESTS.size(), "one type per chest");
+        helper.assertValueEqual(controller.occupiedStorageLocationCount(), NUMBER_CHESTS.size(), "every chest in use");
+        helper.assertValueEqual(controller.countedStorageLocationCount(), NUMBER_CHESTS.size(), "and counted");
+    }
+
+    /** The numbers of a warehouse that holds what {@link #stockNumberChests} built and nothing else to count. */
+    private static Map<WarehouseNumber, String> numberChestTable() {
+        Map<WarehouseNumber, String> table = zeroes();
+        table.put(WarehouseNumber.ITEMS, number(NUMBER_CHEST_ITEMS));
+        table.put(WarehouseNumber.ITEM_TYPES, number(NUMBER_CHESTS.size()));
+        table.put(WarehouseNumber.LOCATIONS_USED, number(NUMBER_CHESTS.size()));
+        table.put(WarehouseNumber.LOCATIONS_TOTAL, number(NUMBER_CHESTS.size()));
+        table.put(WarehouseNumber.LOCATIONS_USED_SHARE, share(100));
+        return table;
+    }
+
+    /**
+     * Holds every item of {@link #STOPPED} in the safety stop by writing the stops into the controller's own save and
+     * loading it again, the path a {@code /data merge} and a world load take.
+     */
+    private static void stopThroughTheSave(GameTestHelper helper, WarehouseControllerBlockEntity controller) {
+        HolderLookup.Provider registries = helper.getLevel().registryAccess();
+        CompoundTag saved = controller.saveWithFullMetadata(registries);
+        ListTag stops = new ListTag();
+        for (ItemKey stopped : STOPPED) {
+            CompoundTag stop = new CompoundTag();
+            stop.put("Item", stopped.save(registries));
+            stop.putString("Cause", StockRulePause.Cause.ORDER_TIMED_OUT.name());
+            stop.putLong("Unrecovered", 1L);
+            stops.add(stop);
+        }
+        saved.put("StockPauses", stops);
+        controller.loadWithComponents(saved, registries);
+    }
+
+    /** The wide board's first row in Create's labelled layout: the label and a space, then {@code number}. */
+    private static void assertLabelledBoard(GameTestHelper helper, String number, String what) {
+        List<FlapDisplaySection> sections = wideBoardAt(helper).getLines().get(0).getSections();
+        helper.assertValueEqual(sections.size(), 2, what + ": the label and the number in sections of their own");
+        helper.assertValueEqual(sections.get(0).getText().getString(), NUMBER_LABEL + " ", what + ": the label");
+        helper.assertValueEqual(sections.get(1).getText().getString(), number, what + ": the number beside it");
+    }
+
+    /** A share as every share in the mod reads, through {@code gui.goggles.percent}. */
+    private static String share(int percent) {
+        return WareworksLang.percent(percent).component().getString();
+    }
+
+    /** Fluid in Create's own short form with the space the Warehouse Summary's fluid line puts in, "59.0 B". */
+    private static String fluidAmount(long millibuckets) {
+        Couple<MutableComponent> amount = FluidFormatter.asComponents(millibuckets, true);
+        return amount.getFirst().getString() + " " + amount.getSecond().getString();
+    }
+
+    /**
+     * A display board {@value #WIDE_BOARD_BLOCKS} blocks wide facing south, driven by a creative motor through a
+     * cogwheel above its westmost block, which is the block that leads it ({@code FlapDisplayBlockEntity}).
+     */
+    private static void wideBoard(GameTestHelper helper) {
+        helper.setBlock(WIDE_BOARD_MOTOR,
+                AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.SOUTH));
+        helper.setBlock(WIDE_BOARD_COG,
+                AllBlocks.COGWHEEL.getDefaultState().setValue(RotatedPillarKineticBlock.AXIS, Direction.Axis.Z));
+        for (int i = 0; i < WIDE_BOARD_BLOCKS; i++)
+            helper.setBlock(WIDE_BOARD.east(i), AllBlocks.DISPLAY_BOARD.getDefaultState()
+                    .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, Direction.SOUTH));
+        CreativeMotorBlockEntity motor =
+                AllBlockEntityTypes.MOTOR.getNullable(helper.getLevel(), helper.absolutePos(WIDE_BOARD_MOTOR));
+        if (motor == null)
+            helper.fail("missing creative motor block entity", WIDE_BOARD_MOTOR);
+        motor.generatedSpeed.setValue(BOARD_RPM);
+        wideBoardAt(helper).updateControllerStatus();
+    }
+
+    private static FlapDisplayBlockEntity wideBoardAt(GameTestHelper helper) {
+        FlapDisplayBlockEntity board =
+                AllBlockEntityTypes.FLAP_DISPLAY.getNullable(helper.getLevel(), helper.absolutePos(WIDE_BOARD));
+        if (board == null)
+            helper.fail("missing display board block entity", WIDE_BOARD);
+        return board;
     }
 
     // --- helpers: assertions ----------------------------------------------------------------------------------------

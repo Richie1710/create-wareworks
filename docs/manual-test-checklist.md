@@ -3244,3 +3244,60 @@ you get tired of waiting, and put it back before judging check 160.
     enough?** Then, still connected, set `stressImpact = 8.0` in the same file, save, and break and place the shaft
     under the dock: the Stressometer reads 4,192,256 / 4,194,304 SU, while the dock's goggles still show 1024 SU at
     current speed; after a rejoin they show 2048 SU. Neither log has an error mentioning `wareworks`.
+
+## BC. One warehouse number on a display ([issue #32](https://github.com/Richie1710/create-wareworks/issues/32))
+
+> The controller and the terminal offer a fourth Display Link source, **"Warehouse Number"**, last in the list, which
+> writes one number: a selector in the Display Link screen picks which (ADR-026, amendment). The GameTests
+> `warehousenumberstock`, `warehousenumberorders`, `warehousenumberrules` and `warehousenumberports` read every one of
+> the fourteen numbers through real links onto a nixie row and a lectern, `warehousenumberlabel` the "Label" box on
+> both and on a display board, `warehousenumbermodeorder` that a saved link keeps its number,
+> `warehousenumberdegraded` a block outside a warehouse and a saved number this build does not know, and
+> `warehousenumberdocklost` a controller whose dock was broken. `WarehouseNumberTextTest` measures every name against
+> the selector in English and German, and the visual scenario `display` opens the real screen in both languages,
+> checks what it preselects and that every name fits, and shoots a board with a labelled share. What no test does:
+> pick numbers with your own mouse, judge whether the names say what they count, read a board from where you stand,
+> play on a dedicated server, and open a world built with 0.12.1.
+>
+> Setup: `./gradlew runClient`, the aisle of sections B–F, stocked, with a fluid bay holding some fluid, a warehouse
+> output, a production station with a pattern, a stock keeper with a rule and Engineer's Goggles. From Create's tab:
+> Display Links, a row of eight Nixie Tubes (each tube shows two characters, so the row holds 16, like the GameTests'
+> row), a display board four blocks wide driven by a motor, a lectern with a book and a sign.
+
+313. **The screen.** Select the nixie row with the link item and place the link on the controller. Open it: the source
+    still starts on "Warehouse Summary", and "Warehouse Number" is the last entry. Pick it: the first line below is
+    Create's "Label" box, the second the selector, which starts on "Items stored". Hover the selector: its tooltip
+    "Number shown" lists all fourteen names. Scroll through them: each one stays inside its box. Confirm, and within
+    about five seconds the nixie row shows the number. **Is the selector easy to find, and does every name say what it
+    counts?**
+314. **Every number against the goggles.** Pick each number in turn and compare it with the controller's goggles (and
+    the Warehouse Summary for the locations): items stored, item types, fluid stored (`48.0 B`, or `250 mB` below a
+    bucket), locations in use and in total (the summary's `Locations: 3 / 30`; the fluid bay counts as in use while it
+    holds fluid, so empty it with a bucket and the first number drops by one while the total stays), locations in use
+    as a share (`10%` there), open requests (request something while the dock's motor is stopped), production orders
+    (order the pattern's result), rules below minimum and at maximum, stopped products, accepting and collecting ports
+    (set a port's rank), misaligned blocks (turn an interface along the aisle with the wrench). Each one follows a
+    change within about five seconds. **Is any of them a surprise?**
+315. **Label and board.** Type `Items` into the "Label" box: the nixie row reads `Items 176` (a row of only four tubes
+    would cut it to `Items 17`, which is Create's width and not a bug). Point a second link at the four-block display
+    board: the label stands in a column of its own on the left and the number beside it, and with an empty label the
+    number has the row to itself. A sign and a lectern show `Items 176` as well. **Is the board
+    readable from where you would stand?**
+316. **The terminal and a stray block.** A link on the terminal gives the same numbers as on the controller. Place a
+    terminal away from every aisle, put a new link on it, point it at the nixie row, pick "Warehouse Number" (a new link
+    starts on "Warehouse Summary") and leave the Label box empty: the row shows `No warehouse`. Break the warehouse's
+    crane dock: within about five seconds the links on its controller and on its terminal show `No warehouse` for every
+    number, stopped products included; place the dock again and the numbers come back.
+317. **Old worlds and saves.** Open a world with display links built in 0.12.1-beta: every link shows what it showed,
+    and a new link placed on a controller still starts on "Warehouse Summary". Pick "Open requests" with a label, leave
+    the world and open it again: the link still shows open requests, with the label.
+318. **German (`de_de`).** The source reads "Lagerkennzahl", the selector's title "Angezeigte Zahl", and the names
+    "Gelagerte Gegenstände", "Gegenstandsarten", "Gelagerte Flüssigkeit", "Belegte Lagerplätze", "Lagerplätze
+    insgesamt", "Belegte Lagerplätze (%)", "Offene Anforderungen", "Produktionsaufträge", "Regeln unter Minimum",
+    "Regeln am Maximum", "Angehaltene Produkte", "Aufnehmende Anschlüsse", "Abholende Anschlüsse" and "Verdrehte
+    Blöcke". The share reads `10 %`, with a space, and a block outside a warehouse `Kein Lager` (read on the nixie row
+    or the lectern, with an empty label). Try GUI scale 2 and the largest your window allows. **Does any name run out
+    of its box, and do they read like German?**
+319. **On a dedicated server.** Start `./gradlew runServer`, join with `./gradlew runClient`, set up a link with a
+    number and a label, leave and join again: the screen opens on the same number and label, and the display shows it.
+    Neither log has an error mentioning `wareworks`.

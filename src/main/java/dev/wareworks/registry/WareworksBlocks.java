@@ -100,7 +100,8 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .transform(WareworksDisplaySources.bind(WareworksDisplaySources.AISLE_SUMMARY,
-                            WareworksDisplaySources.STOCK_LIST, WareworksDisplaySources.FLUID_STOCK))
+                            WareworksDisplaySources.STOCK_LIST, WareworksDisplaySources.FLUID_STOCK,
+                            WareworksDisplaySources.WAREHOUSE_NUMBER))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
@@ -231,7 +232,8 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .transform(WareworksDisplaySources.bind(WareworksDisplaySources.AISLE_SUMMARY,
-                            WareworksDisplaySources.STOCK_LIST, WareworksDisplaySources.FLUID_STOCK))
+                            WareworksDisplaySources.STOCK_LIST, WareworksDisplaySources.FLUID_STOCK,
+                            WareworksDisplaySources.WAREHOUSE_NUMBER))
                     .blockstate(WareworksBlockStateGen.terminalBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "item"))

@@ -1276,8 +1276,8 @@ public final class WareworksLang {
     /** What the {@code x} at the end of a chain's line does, on its tooltip. */
     public static final String TERMINAL_PLAN_CANCEL_HINT = "gui.terminal.plan.cancel_hint";
     /**
-     * Name of the aisle summary display source in Create's Display Link screen. The five display source names must
-     * carry exactly these keys: Create builds them as {@code <namespace>.display_source.<registry path>}
+     * Name of the aisle summary display source in Create's Display Link screen. Every display source name has to
+     * carry a key of exactly this shape: Create builds them as {@code <namespace>.display_source.<registry path>}
      * ({@code DisplaySource#getName}), so the path of the registry entry and the tail of the key are the same string.
      */
     public static final String DISPLAY_SOURCE_AISLE_SUMMARY = "display_source.aisle_summary";
@@ -1302,12 +1302,30 @@ public final class WareworksLang {
      * the two would be read as one scale.
      */
     public static final String DISPLAY_SOURCE_FLUID_STOCK = "display_source.fluid_stock";
+    /**
+     * Name of the warehouse number display source (issue #32). Its tail is the registry path
+     * {@code warehouse_number}, by the rule above; the names of its values live under
+     * {@link #DISPLAY_NUMBER_PREFIX}.
+     */
+    public static final String DISPLAY_SOURCE_WAREHOUSE_NUMBER = "display_source.warehouse_number";
+    /**
+     * {@code "Number shown"}: the title of the selector in the Display Link screen that picks which number the
+     * warehouse number source shows, like Create's own {@code display_source.kinetic_stress.display}.
+     */
+    public static final String DISPLAY_NUMBER_SHOWN = "display_source.number.shown";
+    /**
+     * Prefix of the name of every {@code WarehouseNumber} value in that selector, {@code display_source.number.items}
+     * and so on ({@link #displayNumberKey}). A name has to fit the selector's box, 137 px wide, in every language
+     * ({@code WarehouseNumberTextTest}), because Create's label draws past the box rather than cutting it.
+     */
+    public static final String DISPLAY_NUMBER_PREFIX = "display_source.number.";
     /** {@code "Aisle %1$s: %2$s"}: aisle letter and short status on a display. */
     public static final String DISPLAY_AISLE_LINE_AISLE = "display_source.aisle.line_aisle";
     /**
-     * {@code "Locations: %1$s / %2$s"}: inventories of the aisle holding something, of all the aisle counts. Both
-     * numbers exclude shared-inventory aliases, which never hold counts of their own
-     * ({@code WarehouseControllerBlockEntity#countedStorageLocationCount()}).
+     * {@code "Locations: %1$s / %2$s"}: storage locations of the warehouse holding something (an inventory with at
+     * least one item, a fluid bay with fluid), of all it counts. Both numbers exclude shared-inventory aliases, which
+     * never hold counts of their own ({@code WarehouseControllerBlockEntity#occupiedStorageLocationCount()} and
+     * {@code #countedStorageLocationCount()}).
      */
     public static final String DISPLAY_AISLE_LINE_LOCATIONS = "display_source.aisle.line_locations";
     /** {@code "Item types: %1$s"}. */
@@ -1510,6 +1528,11 @@ public final class WareworksLang {
     /** Relative lang key of a planning result text, e.g. {@code gui.goggles.no_job_reason.warehouse_full}. */
     public static String noJobReasonKey(NoJobReason reason) {
         return GOGGLES_NO_JOB_REASON_PREFIX + reason.name().toLowerCase(Locale.ROOT);
+    }
+
+    /** Relative lang key of a warehouse number's name, e.g. {@code display_source.number.open_requests}. */
+    public static String displayNumberKey(dev.wareworks.core.warehouse.WarehouseNumber number) {
+        return DISPLAY_NUMBER_PREFIX + number.langKey();
     }
 
     /** Relative lang key of a discovery stop reason, e.g. {@code gui.goggles.network_stop.max_junctions}. */

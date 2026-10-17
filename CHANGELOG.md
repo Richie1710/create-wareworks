@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A Display Link on the Warehouse Controller or the Warehouse Terminal can show one number about the warehouse.** The
+  new source "Warehouse Number" has a selector in the Display Link screen for what it shows: items stored, item types,
+  fluid stored, locations in use, locations in total, locations in use as a percentage, open requests, production
+  orders, rules below their minimum, rules at their maximum, stopped products, accepting ports, collecting ports and
+  misaligned blocks. Nixie Tubes can now show "Items 176" instead of only "Warehouse A: Ready", and open requests and
+  production orders, which only the controller's goggles showed, can go on a display too. Locations in use count a
+  Fluid Bay that holds fluid, as the Warehouse Summary now does. The "Label" box puts your own word in front of the
+  number, and a display board gives the label and the number columns of their own. A block that belongs to no
+  warehouse, and a controller whose crane dock is missing, shows "No warehouse". The Display Link screen still opens on
+  the Warehouse Summary, and existing links keep the source they had
+
 ### Changed
 
 - **The hover tip of a storage location's filter slot now says how to reach the priority and which way it ranks.** It
@@ -31,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes nothing; a button held down elsewhere that slides onto the slot sets nothing either. A Create filter item is
   still taken from your hand and the one it replaces given back. The priority board opens when you hold the click with
   an empty hand or a wrench, and a short click with an empty hand still clears the filter
+- **The Warehouse Summary's "Locations" line counts a Fluid Bay that holds fluid as in use, so a warehouse with fluid
+  bays can read full.** A fluid bay was counted in the total but never as in use, however full it was, so a chest of
+  items and two full bays read "Locations: 1 / 3". An empty bay still counts as free
 
 ## [0.12.1-beta] - 2026-10-17
 

@@ -35,8 +35,8 @@ dev.wareworks
 │                              WareworksCapabilities, WareworksTags, WareworksStress, WareworksMenuTypes;
 │                              WareworksArmInteractionPoints (Create mechanical arm interaction point types of the
 │                              stations, registered into Create's registry, M12, ADR-025);
-│                              WareworksDisplaySources (the five Create display link sources and the transformer that
-│                              binds two of them to one block in a fixed order, M14, ADR-026);
+│                              WareworksDisplaySources (the seven Create display link sources and the transformer
+│                              that binds several of them to one block in a fixed order, M14, ADR-026);
 │                              WareworksAttachments (the mod's NeoForge data attachment types, i.e. state that belongs
 │                              to a **player** and not to a block: today only TERMINAL_PREFERENCES, saved inside that
 │                              player's own playerdata, copied on death and never synced, M24, issue #17, ADR-037);
@@ -73,6 +73,9 @@ dev.wareworks
 │   │                          validator, so a save, a packet and every surface necessarily agree) and AisleNames (the
 │   │                          table, keyed by aisle letter and bounded by that key space, whose rename is a swap so a
 │   │                          scrolled letter can never destroy a name);
+│   │                          WarehouseNumber (issue #32, ADR-026 amendment: the numbers the "Warehouse Number"
+│   │                          display source can show, in the order a Display Link saves them as an index, so the
+│   │                          list only ever grows at its end, plus the rounded-down share);
 │   │                          the rail network as pure integer maths (M21/M22, issues #1 and #2, ADR-033, ADR-035):
 │   │                          RailGraph (a set of dock-relative rail offsets flooded from the dock and decomposed into
 │   │                          maximal straight branches; the rails may split and close on themselves since M22),
@@ -362,11 +365,14 @@ dev.wareworks
 │                              saved); a recipe laid from JEI (ADR-063): TerminalCraftLay (what the terminal tells the
 │                              picker — its buffer read once, the aisle's player stock and producible items asked on
 │                              demand, and vanilla's plain-item rule; reads, never writes)
-│   └── display                the five Create display link sources a player may read off a Wareworks block
+│   └── display                the seven Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
-│                              FilteredStockDisplaySource, CraneStatusDisplaySource and, since M25 (issue #16,
-│                              ADR-039), CraneThroughputDisplaySource. Common code, server side only
+│                              FilteredStockDisplaySource, CraneStatusDisplaySource, since M25 (issue #16,
+│                              ADR-039) CraneThroughputDisplaySource, since M30 FluidStockDisplaySource and since
+│                              issue #32 WarehouseNumberDisplaySource (one number picked in the Display Link screen;
+│                              its selector is the one @OnlyIn(Dist.CLIENT) override). Common code, server side
+│                              only
 ├── network                    WareworksNetwork (payload registration), the terminal screen payloads:
 │                              TerminalStockPayload, TerminalStatusPayload (server → client),
 │                              TerminalRequestPayload (client → server), TerminalResultPayload (M6, ADR-019; since
@@ -491,8 +497,9 @@ dev.wareworks
 │                              player's machine, refusal, cancel, timeout and persistence, M11;
 │                              MechanicalArmGameTests: arm interaction point types, their fixed modes and real
 │                              powered arms at the stations, M12;
-│                              DisplayLinkGameTests: the five display sources, read through real display links on
-│                              lecterns, nixie tubes, a display board and a sign, M14;
+│                              DisplayLinkGameTests: the seven display sources, read through real display links on
+│                              lecterns, nixie tubes, display boards and a sign, M14 (the warehouse number's
+│                              fourteen numbers, its label and its saved order since issue #32);
 │                              StockKeeperGameTests, StockRuleEnforcementGameTests, StockRestockGameTests and
 │                              TerminalConfirmationGameTests: the stock rules, what they do to a moving warehouse,
 │                              automatic restocking with its safety stop, and the terminal's confirmation, M15;
@@ -598,7 +605,8 @@ dev.wareworks
 │                              the setting switched off mid hold - every tick with a leak probe against NeoForge's own
 │                              ticket count, every item move bracketed by a census),
 │                              DisplayVisualScenario (a wall of display boards and a nixie row fed by real display
-│                              links, asserted against the controller's own numbers, M14),
+│                              links, asserted against the controller's own numbers, M14; since issue #32 also the
+│                              warehouse number board and the real Display Link screen, in English and German),
 │                              StockKeeperVisualScenario (the keeper block and five rules in five states, its screen
 │                              edited through the real payload path), StockRulesVisualScenario (the three numbers of a
 │                              stock rule enforced in a real aisle, M15 part 1) and RestockVisualScenario (the warehouse
@@ -1593,6 +1601,75 @@ Lecterns, nixie tubes and display boards keep the component and are translated p
 feature; the interface gains a second reason for its filter slot to be read, which `warehouse-system.md` §10 states
 next to ADR-021's storing rule. No Ponder scene was added: the teaching pass of M13 covered the blocks, and a display
 link is Create's own mechanic, taught by Create's own scene.
+
+*Amendment — one number per link, picked in the Display Link screen
+([issue #32](https://github.com/Richie1710/create-wareworks/issues/32)):*
+*Context:* asked for in #28 as "all data from the warehouse controller displayed via a display link". Every warehouse
+source wrote several lines or a list, and a row of nixie tubes shows one: the Warehouse Summary there only read
+"Warehouse A: Ready", "Items: 176" could not be shown at all, and open requests and open production orders were on the
+controller's goggles alone. Create's own answer to "one of several numbers" is a single-line source with a selector in
+the screen's second line (`KineticStressDisplaySource`: `initConfigurationWidgets` and
+`ModularGuiLineBuilder#addSelectionScrollInput`, the pick saved as an index under `Mode`).
+
+*Decision:*
+* **A seventh source, `wareworks:warehouse_number`, named "Warehouse Number"**, on the warehouse controller and the
+  warehouse terminal, bound **after** their three older sources in the same `bind` callback, so the screen still
+  preselects the Warehouse Summary and no existing link changes. The registry path is the name in snake case (unlike
+  `aisle_summary`, which kept its path when M22 renamed that source), and it is now a save format like every other
+  source's.
+* **A `NumericSingleLineDisplaySource` with a selector**, like Create's item count and stress sources: Create's "Label"
+  box puts a player's word in front of the number, a display board gets Create's labelled `Number` layout, and the
+  second line of the screen gets a `SelectionScrollInput` of fourteen numbers (`core.warehouse.WarehouseNumber`): items
+  stored, item types, fluid stored, locations in use, locations in total, locations in use as a share, open requests,
+  production orders, rules below minimum, rules at maximum, stopped products, accepting ports, collecting ports and
+  misaligned blocks.
+* **The order of the numbers is a save format and may only grow at its end.** The selector saves its index, so the
+  enum's ordinal is what a world on disk says, and the key `Mode` with it; `WarehouseNumberTest` and the GameTest
+  `warehousenumbermodeorder` pin both, and an index this build has no number for writes nothing rather than another
+  number, on a display board too: there the source overrides `provideFlapDisplayText` and `loadFlapDisplayLayout`,
+  because Create's labelled path would still write the label and keep the last number in its section.
+* **Only cached state, the same fields the other surfaces show.** Every number is a field of the controller or a count
+  its indexes keep (the open production orders are counted in its order book in memory, the port counts over its port
+  settings), so a pull stays a handful of reads, and a board never disagrees with the goggles or the summary. The share
+  is drawn from the summary's population on both sides and rounded down; the fluid is Create's short form, as on the
+  summary's fluid line. Create's default refresh of 100 ticks is kept.
+* **A fluid bay holding fluid is a location in use**, in this source and in the summary's "Locations" line alike,
+  through one accessor, `WarehouseControllerBlockEntity#occupiedStorageLocationCount()`: the item index's occupied
+  count plus the fluid index's. A bay is a storage location and so in `countedStorageLocationCount()`, but its item
+  snapshot has zero slots, so the item index alone never counts it occupied, and since M30 a warehouse with a fluid bay
+  could never read full — the mixing of populations the M14 consequences above rule out for aliases, from the other
+  side. Nothing is counted twice: the fluid index holds exactly the bays that hold fluid, none of which is ever
+  occupied in the item index. Dropping the bays from the total instead was refused, because "locations in total" would
+  then no longer say how many locations the warehouse counts.
+* **No warehouse, no number.** A block that belongs to no loaded warehouse writes the summary's own `No warehouse`
+  rather than the `0` of the filtered stock source, because a number about the whole warehouse that cannot be read
+  would be a number made up. A controller without an aisle (`NO_DOCK`, `DOCK_MISALIGNED`) writes the same line for
+  every number, at the point where the summary and the goggles stop before every count: it is no longer registered, so
+  a terminal of its warehouse already writes `No warehouse`, and the safety stops it keeps on purpose (they have to
+  outlive a missing dock) would otherwise stay on the board as a number about a warehouse that is not there. The
+  summary's status words would say more, but the German ones do not fit a three-block board. Its derived rule counts
+  are reset with the aisle as well, because the rule tick that would refresh them does not run without one.
+* **The selector is the source's one client part.** `initConfigurationWidgets` is `@OnlyIn(Dist.CLIENT)` like the
+  method it overrides, so FML's dist cleaner strips it and its lambda on a dedicated server, as for Create's own stress
+  source; the rest of the class is common code, loaded at registration on both sides.
+
+*Reason:* The selector is Create's own pattern for exactly this question, so a player who has set up a stress gauge
+link needs to learn nothing, and it keeps the link list short: fourteen sources would have made the screen's source
+selector the place to scroll through, and every number added later another registry id. Reading the very fields the
+goggles read is what makes the board trustworthy and the pull free. The names in the selector are the goggles' words
+where they fit the box (137 px, Create's label never cuts its text, `WarehouseNumberTextTest`), so a player who reads
+"Production orders" on the goggles finds the same words in the screen.
+
+*Consequences:* one new registry id and 16 lang keys (English generated, German hand-written; the selector's names live
+under `display_source.number.`), one new pure class (`core.warehouse.WarehouseNumber`) and two new accessors
+(`WarehouseControllerBlockEntity#openProductionOrderCount` and `#occupiedStorageLocationCount`). No change to saves or
+to the network protocol: a link already saves its source settings, and the finished text travels to the target as
+before. One existing display changes on purpose: the summary's "Locations" line of a warehouse with a fluid bay now
+counts the bay as in use while it holds fluid. GameTests `warehousenumberstock`, `warehousenumberorders`,
+`warehousenumberrules`, `warehousenumberports` (each reads all fourteen numbers, and the ones a fixture is built for
+differ from every other one of it), `warehousenumberlabel`, `warehousenumbermodeorder`, `warehousenumberdegraded` and
+`warehousenumberdocklost`, plus `aislesummarywithfluid` for the summary's line; the visual scenario `display` adds a
+board for the source and checks and shoots the real Display Link screen in English and German.
 
 ### ADR-027 — Stock rules live in one block with three numbers per item; the reserve protects the warehouse from itself, and the minimum drives production behind a safety stop (M15, issue #3)
 *Context:* Up to M14 a Wareworks warehouse had no opinion about **how much** of anything it should hold. It stored
