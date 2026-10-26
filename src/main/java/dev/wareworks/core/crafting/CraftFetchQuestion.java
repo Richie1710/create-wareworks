@@ -399,7 +399,8 @@ public record CraftFetchQuestion<K>(int asked, int ready, int stockRuns, int mad
      * a measurement costs at most {@code 9} lookups and about {@code 18} plans over the buffer's slots.
      *
      * @param grid         the recipe as laid; must not be empty
-     * @param crafts       how many crafts the player asked for (the screen's amount field), at least 1
+     * @param crafts       how many crafts the player asked for (the screen's amount field rounded up to whole
+     *                     crafts), at least 1
      * @param buffer       the terminal's buffer slots as they are now: what it holds of each key is read from them
      * @param available    what a player may take of a key out of the racks; a negative answer counts as 0
      * @param openRequests the remaining amount of every open request to this terminal, in the order to simulate

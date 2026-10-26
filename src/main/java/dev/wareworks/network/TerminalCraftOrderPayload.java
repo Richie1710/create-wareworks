@@ -32,7 +32,8 @@ import net.minecraft.resources.ResourceLocation;
  * @param action            what they pressed
  * @param cells             for {@link Action#FETCH}: the grid as laid, row-major
  * @param hint              for {@link Action#FETCH}: the recipe the screen last showed for this grid, if any
- * @param crafts            for {@link Action#FETCH}: the amount field, how many crafts to fetch for
+ * @param crafts            for {@link Action#FETCH}: how many crafts to fetch for, the amount field's result items
+ *                          rounded up to whole crafts by the client (issue #33)
  * @param acceptedProducing for {@link Action#FETCH}: the production total the player accepted when they were asked;
  *                          0 for a first press
  * @param answering         for {@link Action#FETCH}: whether this Fetch is the Yes to the question the server asked,

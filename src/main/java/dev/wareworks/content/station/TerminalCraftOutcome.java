@@ -19,7 +19,8 @@ import dev.wareworks.core.production.PlanRefusal;
  * <b>For a Fetch</b> ({@link TerminalCraftResult#isFetch()}) {@link #crafted()} is a number of <b>crafts</b>, never of
  * items: the crafts the started order fetches for ({@link TerminalCraftResult#STARTED}), the crafts the buffer already
  * holds ({@link TerminalCraftResult#NOTHING_TO_FETCH}), and the crafts that can be had at all for a question or a
- * refusal ({@link CraftFetchQuestion#possible()}), which is the hint a player can set the amount field to.
+ * refusal ({@link CraftFetchQuestion#possible()}), which times the result's count is the hint a player can set the
+ * amount field to. The client shows every one of them in result items (issue #33); the wire stays in crafts.
  * <p>
  * {@link #about()} is the item the sentence names: the result for {@link TerminalCraftResult#CRAFTED},
  * {@link TerminalCraftResult#STARTED} and {@link TerminalCraftResult#NOTHING_TO_FETCH}, the missing ingredient for

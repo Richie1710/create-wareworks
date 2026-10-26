@@ -58,7 +58,8 @@ class TerminalCraftTextWidthTest {
     /**
      * The widest number any of these texts is asked to show, as the screen formats it in each language: the ceiling of
      * {@code maxTerminalRequestAmount}, which the visual run's rows are measured with too. A craft count stays far
-     * below it (the buffer's slots times a stack of results).
+     * below it (the buffer's slots times a stack of results), and a number of result items (issue #33) passes it by
+     * less than one craft, with as many digits.
      */
     private static final Map<String, String> WIDEST_NUMBER = Map.of("en_us", "65,536", "de_de", "65.536");
     private static final String TITLE = "title";
@@ -66,7 +67,7 @@ class TerminalCraftTextWidthTest {
     private static final Set<String> TOOLTIP_LINES = Set.of("toggle", "toggle_hint", "clear", "per_craft",
             "available", "short", "missing", "makeable", "cell_empty", "cell_empty_shift", "cell_clear", "stock_hint",
             "ready", "once", "all", "fetch_hint", "button.answer", "button.resume", "button.cancel", "cancel_mark",
-            "progress", "in_flight");
+            "progress", "in_flight", "crafts");
     /** An argument that is an item's name: it gives way first wherever the text stands, so it is measured empty. */
     private static final char NAME = 'n';
     /** An argument that is a number, measured at its widest. */
@@ -82,7 +83,7 @@ class TerminalCraftTextWidthTest {
     /** The lines of the question a Fetch, or one portion of the craft order, raises, with their argument kinds. */
     private static final Map<String, String> DIALOG_LINES = Map.of("confirm_item", "#n", "question.title", "n#",
             "question.room", "##", "question.stock", "##", "question.line", "n##", "question.made", "n#",
-            "question.without", "#", "question.without_hint", "#");
+            "question.without", "#", "question.without_hint", "#", "crafts", "##");
     /**
      * The confirmation panel's text width: the row without the panel's padding on either side
      * ({@code WarehouseTerminalScreen#confirmTextWidth}).

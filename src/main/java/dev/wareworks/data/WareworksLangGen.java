@@ -687,8 +687,13 @@ public final class WareworksLangGen {
         // the buffer already holds. Where a line names an item, the name gives way first; the question's lines wrap.
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_FETCH), "Fetch the ingredients for %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_TO_FETCH), "%1$s: %2$s to fetch");
+        // The amount field counts result items, as everywhere else in the terminal (issue #33); the client rounds it
+        // up to whole crafts, and every "x%2$s" of the panel about the grid's result is a number of result items. The
+        // crafts line says what the rounding did, only for a recipe that makes more than one item; a label, because
+        // the lang format has no plural selection.
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_FETCH_HINT),
-                "The amount field sets how many crafts");
+                "The amount field sets how many items");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CRAFTS), "Crafts: %1$s (%2$s each)");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_ANSWER), "Answer the question about this fetch");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_RESUME), "Try the rest of the fetch again");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_CANCEL), "Stop fetching the ingredients");
@@ -720,8 +725,9 @@ public final class WareworksLangGen {
         // One sentence per way a craft click can end. The ones that name an item take it as %1$s; "crafted" takes the
         // result and the number of items made. A refusal that stops a Shift-click after some crafts stands after
         // TERMINAL_CRAFT_PARTIAL, so each is a whole sentence of its own.
-        // The Fetch button's answers (issue #24, slice 2) follow the same rule: an item as %1$s, a number of crafts as
-        // %2$s. Every one of them fits the status row with the widest number (TerminalCraftTextWidthTest).
+        // The Fetch button's answers (issue #24, slice 2) follow the same rule: an item as %1$s, a number of result
+        // items as %2$s (the client multiplies the server's crafts by the result's count, issue #33). Every one of
+        // them fits the status row with the widest number (TerminalCraftTextWidthTest).
         // A recipe laid from a recipe viewer (slice 4) names its result as %1$s, like a craft does.
         for (TerminalCraftResult result : TerminalCraftResult.values()) {
             lang.accept(WareworksLang.key(result.langKey()), switch (result) {

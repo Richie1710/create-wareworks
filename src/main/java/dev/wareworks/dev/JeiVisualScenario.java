@@ -53,6 +53,7 @@ import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftAmounts;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.terminal.ListOrderState;
@@ -63,6 +64,8 @@ import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
+import dev.wareworks.util.WareworksLang;
+import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -181,8 +184,14 @@ public final class JeiVisualScenario implements VisualScenario {
     private static final CraftGrid<ItemKey> FIRE_CHARGE_GRID = CraftGrid.of(GUNPOWDER, BLAZE_POWDER, null, CHARCOAL);
     /** One chest's worth of planks: what the buffer must hold for the buffer to decide. */
     private static final int PLANKS_PER_CHEST = 8;
-    /** The fire charges the Fetch that locks the grid is for. */
-    private static final int FIRE_CHARGES = 1;
+    /**
+     * The fire charges the amount field asks for: one craft of a recipe that makes three, so the JEI-laid recipe shows
+     * that the field counts result items (issue #33).
+     */
+    private static final int FIRE_CHARGES_WANTED = 3;
+    private static final int FIRE_CHARGES_PER_CRAFT = 3;
+    /** The crafts the Fetch that locks the grid is for, and what each ingredient it brings counts. */
+    private static final int FIRE_CHARGE_CRAFTS = 1;
 
     private static final String GERMAN = "de_de";
     private static final String ENGLISH = "en_us";
@@ -368,7 +377,8 @@ public final class JeiVisualScenario implements VisualScenario {
     }
 
     /**
-     * A Fetch for one fire charge opens a craft order, which locks the grid. With the ticks frozen while it runs, JEI's
+     * A Fetch for three fire charges — one craft, which the Fetch tooltip says (issue #33) — opens a craft order,
+     * which locks the grid. With the ticks frozen while it runs, JEI's
      * "+" on the Chest is visible and greyed out, a click on it lays nothing, and the shot hovers it so JEI draws the
      * transfer handler's reason. Then the ticks run again with JEI's screen still open, and the fetch finishes behind
      * it: the terminal it covers hears that the order is done and gets the stock the crane took, so its stock list
@@ -377,10 +387,12 @@ public final class JeiVisualScenario implements VisualScenario {
      * the fire charge.
      */
     private void lockedSteps(VisualScript script, String suffix) {
-        amount(script, FIRE_CHARGES);
-        script.server("jei: census before the Fetch", (server, context) -> assertCensus(server, context,
+        amount(script, FIRE_CHARGES_WANTED);
+        script.client("jei: CHECK x" + FIRE_CHARGES_WANTED + " fire charges are one craft",
+                        JeiVisualScenario::checkFireChargeAmount)
+                .server("jei: census before the Fetch", (server, context) -> assertCensus(server, context,
                         "before the Fetch"))
-                .client("jei: click Fetch for one fire charge", context -> {
+                .client("jei: click Fetch for one craft of fire charges", context -> {
                     WarehouseTerminalScreen screen = screen(context);
                     if (screen.craftOrderAction() != TerminalCraftOrderPayload.Action.FETCH
                             || screen.craftPanel().shownResult().isEmpty())
@@ -394,12 +406,14 @@ public final class JeiVisualScenario implements VisualScenario {
                 context -> CraftVisualScenario.describePanel(screen(context)));
         script.client("jei: CHECK the Fetch started the craft order", context -> {
             TerminalCraftAnswerPayload answer = screen(context).craftFetchAnswer();
-            if (answer == null || answer.result() != TerminalCraftResult.STARTED || answer.crafted() != FIRE_CHARGES)
-                throw new VisualTestException("the Fetch was answered " + answer + ", not STARTED x" + FIRE_CHARGES);
+            if (answer == null || answer.result() != TerminalCraftResult.STARTED
+                    || answer.crafted() != FIRE_CHARGE_CRAFTS)
+                throw new VisualTestException("the Fetch was answered " + answer + ", not STARTED x"
+                        + FIRE_CHARGE_CRAFTS);
         });
         ArmVisualScenario.untilOrFail(script, "jei: the screen shows the craft order", context -> {
             TerminalCraftOrderState order = screen(context).craftOrderState();
-            return order.isOpen() && order.crafts() == FIRE_CHARGES && order.cells().equals(FIRE_CHARGE_GRID)
+            return order.isOpen() && order.crafts() == FIRE_CHARGE_CRAFTS && order.cells().equals(FIRE_CHARGE_GRID)
                     && screen(context).isCraftGridLocked();
         }, SCREEN_TIMEOUT_TICKS, context -> CraftVisualScenario.describePanel(screen(context)));
         script.freeze(true)
@@ -448,8 +462,8 @@ public final class JeiVisualScenario implements VisualScenario {
             return order.active() && order.state() == ListOrderState.DONE;
         }, DELIVERY_TIMEOUT_TICKS, context -> CraftVisualScenario.describePanel(screen(terminalUnderJei)));
         expectBuffer(script, "the fire charge's ingredients", now -> SceneItemCensus.plus(SceneItemCensus.plus(
-                SceneItemCensus.plus(now, GUNPOWDER, FIRE_CHARGES), BLAZE_POWDER, FIRE_CHARGES), CHARCOAL,
-                FIRE_CHARGES));
+                SceneItemCensus.plus(now, GUNPOWDER, FIRE_CHARGE_CRAFTS), BLAZE_POWDER, FIRE_CHARGE_CRAFTS), CHARCOAL,
+                FIRE_CHARGE_CRAFTS));
         script.server("jei: the warehouse's stock of the fire charge's ingredients after the fetch",
                 (server, context) -> stockAfterFetch = serverStockTotals(serverMenu(server, context)));
         ArmVisualScenario.untilOrFail(script, "jei: the covered stock list shows what the fetch left", context -> {
@@ -756,6 +770,29 @@ public final class JeiVisualScenario implements VisualScenario {
                 })
                 .waitTicks(SETTLE_TICKS)
                 .shot(label);
+    }
+
+    /**
+     * The amount field at x{@value #FIRE_CHARGES_WANTED} for the fire charge JEI laid: one craft, and the Fetch tooltip
+     * opens with the result items that craft makes and the crafts line (issue #33).
+     */
+    private static void checkFireChargeAmount(VisualContext context) {
+        WarehouseTerminalScreen screen = screen(context);
+        TerminalCraftPanel panel = screen.craftPanel();
+        if (panel.resultPerCraft() != FIRE_CHARGES_PER_CRAFT || screen.fetchCrafts() != FIRE_CHARGE_CRAFTS)
+            throw new VisualTestException("x" + FIRE_CHARGES_WANTED + " fire charges are " + screen.fetchCrafts()
+                    + " crafts of " + panel.resultPerCraft() + ", not " + FIRE_CHARGE_CRAFTS + " of "
+                    + FIRE_CHARGES_PER_CRAFT);
+        List<String> wanted = List.of(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH,
+                FIRE_CHARGE.toStack().getHoverName(), LangNumberFormat.format(
+                        CraftAmounts.itemsFor(FIRE_CHARGE_CRAFTS, FIRE_CHARGES_PER_CRAFT))).getString(),
+                TerminalCraftPanel.craftsText(FIRE_CHARGE_CRAFTS, FIRE_CHARGES_PER_CRAFT).getString());
+        List<String> lines = panel.fetchTooltip().stream().map(Component::getString).toList();
+        if (lines.size() < wanted.size() || !lines.subList(0, wanted.size()).equals(wanted))
+            throw new VisualTestException("the Fetch tooltip for the laid fire charge is " + lines + ", not opening "
+                    + "with " + wanted);
+        LOGGER.info(PREFIX + "jei: CHECK PASS x{} fire charges are {} craft, the Fetch tooltip opens with {}",
+                FIRE_CHARGES_WANTED, FIRE_CHARGE_CRAFTS, wanted);
     }
 
     /** The amount field to {@code amount}, one notch of the wheel per tick, as in the craft scenario. */

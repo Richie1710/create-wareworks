@@ -51,7 +51,7 @@ import net.minecraft.world.item.crafting.RecipeHolder;
  * panel before JEI let go of the screen; the laid grid follows a moment later.
  * <p>
  * <b>Shift on "+"</b> ({@code maxTransfer}) is ignored on purpose. "As many as possible" is about items a transfer
- * moves, and laying moves none: the number of crafts is the terminal's amount field, which Fetch reads, and letting
+ * moves, and laying moves none: the amount field says how many result items Fetch brings ingredients for, and letting
  * JEI's Shift start a fetch would send the crane on trips from a click meant to look at a recipe.
  * <p>
  * Only the six-argument {@code transferRecipe} of JEI 19.21's API is implemented. JEI 19.52 deprecated it for removal

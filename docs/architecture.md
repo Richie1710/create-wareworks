@@ -153,10 +153,12 @@ dev.wareworks
 │   │                          chain offer also the search for the largest fetch whose chains hold, through its Chains
 │   │                          seam, and the item one craft more falls short of) and BufferFit (whether a demand still
 │   │                          fits the buffer once every open request has put its items down, and the most crafts
-│   │                          that do); for JEI's "+" (ADR-063): IngredientPicker (one key per cell out of a recipe
-│   │                          viewer's candidate lists: cells of one list alike, a plain item first, then the buffer,
-│   │                          the stock, what a station makes and the recipe's order, in whole crafts; never fails;
-│   │                          at most four distinct keys per hash code, so a client's keys cost linear work)
+│   │                          that do), and CraftAmounts (the amount field's result items to crafts, rounded up,
+│   │                          and back; issue #33); for JEI's "+" (ADR-063): IngredientPicker (one key per cell out
+│   │                          of a recipe viewer's candidate lists: cells of one list alike, a plain item first,
+│   │                          then the buffer, the stock, what a station makes and the recipe's order, in whole
+│   │                          crafts; never fails; at most four distinct keys per hash code, so a client's keys cost
+│   │                          linear work)
 │   ├── production             production patterns and orders (M11, ADR-024): ProductionEntry, ProductionPattern
 │   │                          (3x3 grid → ingredient multiset via fromGrid), SupplyLine (one ingredient an order
 │   │                          owes), ProductionOrder / ProductionOrderState (the order state machine),
@@ -5310,6 +5312,50 @@ tooltip became "None available, and nothing here makes it", and four lang keys w
 be made first", "Without making" and its hint), German keeping "herstellen" for production and "fertigen" for the
 player's craft.
 
+*Amendment — the amount field counts result items
+([issue #33](https://github.com/Richie1710/create-wareworks/issues/33)):*
+*Context:* the Fetch read the window's amount field as a number of crafts. For a recipe that makes more than one item
+that is not what the field means anywhere else in the terminal — a click in the stock list asks for that many items —
+and not what a player expects: Stone Bricks x4 fetched sixteen Stone and made sixteen bricks.
+
+*Decision:*
+* **The field counts result items in the panel too**, and the client turns it into crafts **rounded up**, the rule a
+  production order already follows (`ProductionPattern#runsFor`): `core.crafting.CraftAmounts#craftsFor` (at least 1,
+  saturating) and `#itemsFor`. `WarehouseTerminalScreen#fetchCrafts()` is the one place the field is read for the
+  panel; it still returns crafts, so the cell colours, the to-fetch lines and the Fetch itself follow without a change.
+* **Items per craft are the count of the result the server resolved for exactly the grid on screen**
+  (`TerminalCraftPanel#resultPerCraft`, from `shownResult()`), and 1 while none is known. A Fetch is only sent while
+  the view describes the grid, so the crafts on the wire are always rounded with the real count. The question, its
+  CHANGED repeat and the STARTED answer use the count of the result the Fetch was sent with (`SentFetch`).
+* **The wire, the measurement and the save stay in crafts.** `TerminalCraftOrderPayload.crafts`, the Fetch answers'
+  `crafted`, `CraftFetchQuestion`, `TerminalCraftOrderState` and the saved `CraftOrder` are unchanged, and so is
+  `WareworksNetwork.VERSION` (`"14"`). The client converts at the edge: every "xN" the panel shows about the grid's
+  result — the Fetch tooltip's title, the ready count and its tooltip, the STARTED answer, the status row while the
+  order is open, and the question's title, room, stock, "Without making" and "Set x…" numbers — is `crafts × perCraft`.
+  Ingredient numbers were always items, and a craft's own answer already counted the items it made.
+* **One line says what the rounding did**, "Crafts: 2 (4 each)" (`gui.terminal.craft.crafts`), under the Fetch
+  tooltip's title, the ready count (while the buffer holds a craft) and the question's title, and only for a recipe
+  that makes more than one item, so a one-item recipe reads exactly as before. The Fetch hint now says the field sets
+  how many items.
+* **"Set x…" round-trips.** It shows `withoutMaking × perCraft`, which `craftsFor` turns back into exactly
+  `withoutMaking` crafts, and it is always below the field the player typed (`withoutMaking < asked = ⌈F / perCraft⌉`),
+  so it fits under the field's maximum. `CraftAmountsTest` pins both, and that `craftsFor` agrees with `runsFor`.
+* **The field's range is unchanged**, 1 to `maxTerminalRequestAmount` items. Since the crafts never exceed the items,
+  the server's own clamp never cuts a Fetch the client announced; the largest Fetch for a multi-output recipe is now
+  that many items rather than that many crafts (1024 planks by default instead of 4096).
+
+*Rejected:*
+* **Send items and let the server round.** A payload change and a version bump, and the server's answers would still
+  have to speak crafts for the Yes to name exactly what it agreed to; the client has the result's count anyway.
+* **A second amount field in the panel for crafts.** Two fields next to each other that mean different things, and the
+  stock list's field would still mean items.
+* **Round down.** A Fetch for five bricks would bring four, less than asked, and x1 of a four-item recipe would fetch
+  nothing; production rounds up for the same reason.
+
+*Consequences:* one lang key added and one changed (`fetch_hint`), both inside `TerminalCraftTextWidthTest`'s widths.
+The craft visual run gained Oak Planks (x4 is one craft, x5 two crafts and eight planks, two shots per language), and
+the JEI run asks for three fire charges and checks that they are one craft. No server, payload or save change.
+
 ### ADR-063 — JEI is an optional, client-only, compile-only dependency, and its "+" only hands the server candidates (M32, [issue #24](https://github.com/Richie1710/create-wareworks/issues/24))
 
 *Context:* The last part of issue #24 is JEI's "+" on a crafting recipe: it lays that recipe into the terminal's
@@ -5413,7 +5459,8 @@ recipe screen hands the terminal back, where JEI's item list ends) was read in t
   **greyed out** with the panel's own sentence ("Cancel the fetch to change the recipe", in red) while a craft order
   locks the grid, which the server would refuse anyway (`ALREADY_RUNNING`).
 * **Shift on the "+" (`maxTransfer`) is ignored.** JEI means "as many as possible" of the items a transfer moves, and a
-  lay moves none: the number of crafts is the window's amount field, which Fetch reads. A Shift that started a Fetch
+  lay moves none: the number of result items is the window's amount field, which Fetch reads (rounded up to whole
+  crafts since issue #33, ADR-062's amendment). A Shift that started a Fetch
   would send the crane on trips from a click meant to look at a recipe, and one that set the amount field would change
   the number a click in the stock list requests.
 * **A lay moves nothing, orders nothing and saves nothing.** The accepted grid becomes the menu's grid, with the

@@ -2924,12 +2924,16 @@ makes ingredients, never the grid's result.
    * With **JEI** installed, its **+** on a crafting recipe lays the whole recipe at once and folds the panel out; the
      server picks the planks (*Lay a recipe from JEI*, below).
 3. **The grid answers** five client ticks after the last edit: the result cell shows a Chest, every cell is tinted for
-   the next craft, and "x0" under the result is the number of crafts the buffer holds right now.
+   the next craft, and "x0" under the result is the number of result items the crafts the buffer holds right now
+   would make.
 4. **Fetch the ingredients.** Set x3 in the window's amount field and hover **Fetch** under the grid: "Fetch the
    ingredients for Chest x3", "Oak Planks: 24 to fetch". Press it: the crane makes real trips, the progress row counts
    "0/24" up, the status row says "Fetching for Chest x3" and the grid is locked. When the order is done the row says
    "Delivered: click the result to craft", the cells are solid and the count is "x3". A cake x4 with nine buffer slots
    asks first — "Fetch the ingredients for Cake x2?" / "Only x2 of x4 fit here." — and Yes fetches exactly x2.
+   The amount is in **result items** (issue #33), rounded up to whole crafts: set x5 for Oak Planks, where one log
+   makes four, and Fetch says "Fetch the ingredients for Oak Planks x8" and "Crafts: 2 (4 each)" and brings two logs;
+   x4 would be one craft and one log.
    Sticks with no planks in the racks, but logs and a saw with a planks pattern: the plank cells show a blue "+", and
    Fetch asks "Oak Planks x4 will be made first."; Yes has the saw make them and the crane bring two into the buffer.
    Ingredients may still come the old way, by a click in the list or a clipboard, and the panel counts them the same.
@@ -3000,11 +3004,15 @@ their key in grid order, and the warehouse's available items the cells after tho
   into the crafting grid".
 * "Here" and the ready count (`CraftGrid#craftsFrom`) are counted **on the client** from the synced buffer slots, so
   they react the moment an item arrives or is taken out. The server stays authoritative at the craft.
-* **N** is the number a Fetch would fetch for: the window's amount field (the same field a click in the list requests
-  with, clamped to `1..maxTerminalRequestAmount`), or the open craft order's crafts. So after requesting 24 planks the
-  chest's cells are measured against x24. While a craft order is open, a cell not yet here shows as Available — its
-  items are being fetched — unless the order's last refusal names that item. That cell is drawn by what the racks hold
-  (stopped, short or missing), never makeable, because no Fetch can ask anything while the order is open, and a
+* **N** is the number of crafts a Fetch would fetch for: the window's amount field (the same field a click in the list
+  requests with, clamped to `1..maxTerminalRequestAmount`) counts result items, and N is that rounded up to whole crafts
+  of the result the server resolved for the grid — one per craft while no result is known (issue #33,
+  `CraftAmounts#craftsFor`, the rule of `ProductionPattern#runsFor`) — or the open craft order's crafts. So after
+  requesting 24 planks the chest's cells are measured against x24, and Stone Bricks x5 against two crafts. N is what the
+  Fetch sends and the server measures, stores and saves: the wire stays in crafts, and every "xN" the panel shows about
+  the grid's result is N times that result's count. While a craft order is open, a cell not yet here shows as Available
+  — its items are being fetched — unless the order's last refusal names that item. That cell is drawn by what the racks
+  hold (stopped, short or missing), never makeable, because no Fetch can ask anything while the order is open, and a
   producible item's tooltip gives the refusal's own sentence — the status row's "No free order for Oak Planks" — in
   place of "Can be made here: Fetch asks first".
 
@@ -3150,13 +3158,15 @@ and survives a reload; it crafts nothing and moves no item itself, and it ends w
 **The button and its tooltip.** One `IconButton` at button place 0 cycles exactly like the list button (§3.4.4):
 **Fetch** (`I_PLAY`) while no craft order is open, **Answer** (`I_CONFIRM`) while a portion's question waits, **Resume**
 (`I_REFRESH`) while the order is parked, **Cancel** (`I_STOP`) while it runs, green while it runs, and greyed out as
-Fetch while the grid is empty. N is the window's amount field, clamped to `1..maxTerminalRequestAmount`. The tooltip is
-the panel's own, so it also shows over the greyed-out button: "Fetch the ingredients for Chest x3", one "Oak Planks: 24
-to fetch" line per ingredient, worked out from the synced buffer slots (`CraftGrid#toFetch`; in its cell's colour: grey
-when the racks cover it, blue when a station makes it, red while its making is stopped, otherwise gold when the
-warehouse holds too few and red when it holds none), "Already here: click the result to craft" when the buffer holds
-everything, and the hint that the amount field sets the number of crafts. Like a craft click, a Fetch goes out only for
-a grid the server has already answered; before that it sends the waiting preview and sounds the refusal.
+Fetch while the grid is empty. N is the window's amount field, clamped to `1..maxTerminalRequestAmount` and rounded up
+to whole crafts (above). The tooltip is the panel's own, so it also shows over the greyed-out button: "Fetch the
+ingredients for Chest x3" with the result items N crafts make, "Crafts: 2 (4 each)" in grey under it for a recipe that
+makes more than one item, one "Oak Planks: 24 to fetch" line per ingredient, worked out from the synced buffer slots
+(`CraftGrid#toFetch`; in its cell's colour: grey when the racks cover it, blue when a station makes it, red while its
+making is stopped, otherwise gold when the warehouse holds too few and red when it holds none), "Already here: click the
+result to craft" when the buffer holds everything, and the hint that the amount field sets the number of items. Like a
+craft click, a Fetch goes out only for a grid the server has already answered; before that it sends the waiting preview
+and sounds the refusal.
 
 **Entry and checks.** The client sends `TerminalCraftOrderPayload(containerId, FETCH, cells, hint, crafts,
 acceptedProducing = 0, answering = false)`. `WarehouseTerminalMenu#submitCraftOrder` checks it like a craft click —
@@ -3204,9 +3214,12 @@ more to be had would otherwise be asked "fetch x1?", and the Yes would find noth
 anything; every other answer leaves the aisle's requests exactly as they were.
 
 **The question** is a third kind of question in the screen's existing two-button panel, beside a click's and a list's,
-and one dialog is up at a time: a new question from the server, or a clipboard question, replaces it. Its lines:
+and one dialog is up at a time: a new question from the server, or a clipboard question, replaces it. The question
+counts crafts; every number in it about the grid's result is shown in result items of the result the Fetch was sent
+for (issue #33), so a cake reads as before and Stone Bricks read x8 for two crafts. Its lines:
 
-* "Fetch the ingredients for Cake x2?", with `possible`, not N, because that is what the Yes starts;
+* "Fetch the ingredients for Cake x2?", with `possible`, not N, because that is what the Yes starts, and under it
+  "Crafts: 2 (4 each)" for a recipe that makes more than one item;
 * above it, "The warehouse has changed since you were asked:" when the server answered `CHANGED`;
 * when the room binds: "Only x2 of x4 fit here.";
 * when the stock binds: "Only x2 of x4 are available:", then "Iron Ingot: 6 available, 12 needed" per short
@@ -3217,7 +3230,8 @@ and one dialog is up at a time: a new question from the server, or a clipboard q
 * when something would be made and the racks alone serve more crafts than the buffer already holds, but fewer than
   the Yes starts: "Without making: x1", then in dark grey italics "Set x1 to fetch only that." (`withoutMaking`,
   `CraftFetchQuestion#offersWithoutMaking`). With one craft already in the buffer and none in the racks, x1 would
-  fetch nothing, so neither line is shown.
+  fetch nothing, so neither line is shown. The number is `withoutMaking` crafts in result items, so typing it into the
+  amount field asks for exactly those crafts again, and it is always below the number the player typed.
 
 A question raised by production alone — every craft possible, but something would be made — has no room or stock
 line: the title, the made lines and, where it applies, what the racks alone serve. The Chain x4 of the `craft` scenario
@@ -3514,7 +3528,8 @@ server reads the grid on screen before the lay replaces it, and then `TerminalCr
 hint, cells, foldOut = true)`, the hint being JEI's recipe id. The handler returns success, and JEI closes its recipe
 screen inside the same click with `setScreen(parent)`: the very same terminal screen instance comes back and is laid out
 again, already folded out. **Shift** on the "+" (`maxTransfer`) does the same as a plain click (ADR-063): a lay moves no
-items, and the number of crafts is the amount field.
+items, and the amount field says how many result items Fetch brings ingredients for (rounded up to whole crafts,
+issue #33).
 
 **On the server** (`WarehouseTerminalMenu#submitCraftLay`, then `#layRecipe`). Dropped without an answer, as a craft
 click is: a payload of another shape (the decoder already refuses one, and a client that sends one is disconnected: at

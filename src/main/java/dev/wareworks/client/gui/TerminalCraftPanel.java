@@ -23,6 +23,7 @@ import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.core.crafting.CraftAmounts;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.production.PlanRefusal;
@@ -71,7 +72,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * <p>
  * <b>Fetch</b> (slice 2 of the issue, ADR-062). The button at {@link TerminalMenuLayout#FETCH_BUTTON} — the screen's
  * widget, whose action and tooltip come from here ({@link #fetch()}, {@link #fetchTooltip()}) — sends the grid with the
- * window's amount field as the number of crafts, and the server starts the terminal's <b>craft order</b>, which brings
+ * window's amount field turned into crafts, and the server starts the terminal's <b>craft order</b>, which brings
  * what the buffer is missing for them by ordinary crane trips. While that order is open its grid is the one every
  * screen at the terminal shows ({@link #adopt}), and no edit of it is taken: the screen says why instead. The progress
  * row under the buttons counts what has arrived, and its cancel mark gives the order up ({@link #cancelAt}).
@@ -86,6 +87,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * lists of candidate items ({@link TerminalRecipeLay}); the server picks one item per cell, checks the grid against its
  * own recipes and sends the grid it accepted back with the crafting view, which the panel then takes like an edit
  * ({@link #adoptLay}). Laying moves nothing and orders nothing, exactly like laying a grid by hand.
+ * <p>
+ * <b>Items, not crafts</b> (issue #33). The amount field counts result items, as it does for a click in the list; the
+ * panel rounds it up to whole crafts of the result the server resolved ({@link #resultPerCraft()},
+ * {@link CraftAmounts}), and every "xN" it shows about that result is a number of result items, with a
+ * {@code "Crafts: 2 (4 each)"} line where a craft makes more than one. Everything sent to and kept by the server stays
+ * in crafts.
  */
 public final class TerminalCraftPanel {
     /** Client ticks between a player's last edit of the grid and the preview that tells the server about it. */
@@ -502,10 +509,10 @@ public final class TerminalCraftPanel {
     }
 
     /**
-     * The Fetch button (slice 2): asks the server to bring what the buffer is missing for the amount field's number of
-     * crafts of this grid ({@link WarehouseTerminalScreen#fetchCrafts()}). Nothing is decided here — the server
-     * measures the fetch against the warehouse and the buffer, starts it, refuses it or asks first, and the answer
-     * comes back to the screen.
+     * The Fetch button (slice 2): asks the server to bring what the buffer is missing for the crafts of this grid the
+     * amount field's items round up to ({@link WarehouseTerminalScreen#fetchCrafts()}, issue #33). Nothing is decided
+     * here — the server measures the fetch against the warehouse and the buffer, starts it, refuses it or asks first,
+     * and the answer comes back to the screen.
      * <p>
      * Like a craft, <b>only for a grid the server has answered</b>: the Fetch tooltip names the result the player is
      * fetching for, and a press while the view is of an earlier grid would fetch for something not on screen. Such a
@@ -642,6 +649,43 @@ public final class TerminalCraftPanel {
     /** How many crafts the buffer holds right now ({@link CraftGrid#craftsFrom}); 0 for an empty grid. */
     public int readyCrafts() {
         return grid.craftsFrom(hereCounts());
+    }
+
+    /** The result items the crafts the buffer holds would make: the "x8" under the result (issue #33). */
+    public long readyItems() {
+        return CraftAmounts.itemsFor(readyCrafts(), resultPerCraft());
+    }
+
+    /**
+     * How many result items one craft of the grid makes (issue #33): the count of the result the server resolved for
+     * exactly this grid ({@link #shownResult()}), and 1 while none is known — an edit waiting for its view, a grid
+     * without a recipe, an empty grid. The amount field's items are turned into crafts with it
+     * ({@link WarehouseTerminalScreen#fetchCrafts()}); a Fetch is only ever sent while the view describes the grid, so
+     * the crafts it sends are always rounded with the real count.
+     */
+    public int resultPerCraft() {
+        ItemStack result = shownResult();
+        return result.isEmpty() ? 1 : Math.max(1, result.getCount());
+    }
+
+    /**
+     * How many result items one craft of the result the last Fetch was sent for makes ({@link #fetchedResult()}), 1
+     * if it named none: the count the question and the answers of that Fetch, which the server counts in crafts, are
+     * shown in items with.
+     */
+    public int fetchedPerCraft() {
+        ItemStack result = fetchedResult();
+        return result.isEmpty() ? 1 : Math.max(1, result.getCount());
+    }
+
+    /**
+     * {@code "Crafts: 2 (4 each)"}: what rounding an amount of result items up to whole crafts did (issue #33). The
+     * panel and the question show it only for a recipe that makes more than one item, so a one-item recipe reads
+     * exactly as it did. Public and static for the visual run, like the screen's sentence builders.
+     */
+    public static Component craftsText(int crafts, int perCraft) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_CRAFTS, LangNumberFormat.format(crafts),
+                LangNumberFormat.format(perCraft));
     }
 
     /**
@@ -881,11 +925,14 @@ public final class TerminalCraftPanel {
                     resultY + ITEM_INSET + ITEM_SIZE, COLOR_LOCKED);
             pose.popPose();
         }
-        renderReady(graphics, font, left, top, ready);
+        renderReady(graphics, font, left, top, CraftAmounts.itemsFor(ready, resultPerCraft()));
     }
 
-    /** "x3" under the result: green while the buffer holds a craft, grey while it holds none. */
-    private void renderReady(GuiGraphics graphics, Font font, int left, int top, int ready) {
+    /**
+     * "x8" under the result: the result items the buffer's crafts make (issue #33), green while it holds a craft, grey
+     * while it holds none. The widest, nine slots of 64 crafts of 64, is "x36,864", well inside the panel.
+     */
+    private void renderReady(GuiGraphics graphics, Font font, int left, int top, long ready) {
         String text = "x" + LangNumberFormat.format(ready);
         float scale = WarehouseTerminalScreen.COUNT_SCALE;
         PoseStack pose = graphics.pose();
@@ -1035,13 +1082,14 @@ public final class TerminalCraftPanel {
 
     /**
      * What the warehouse says about the part of the fetch's {@code key} the buffer does not hold — {@code need} per
-     * craft times the amount field's crafts — the way {@link #stockState} draws it: what is available, or the shortfall
-     * and then what can be done about it — a production station makes it, and the Fetch will ask first; the safety
-     * stop holds the making of it, in the very sentence a Fetch is refused with; or nothing here makes it. Nothing when
-     * the buffer holds all of it, when the server has not described the item yet, or while the craft order is bringing
-     * it (the progress row counts that), unless the order's last portion was refused for this very item. A producible
-     * item the open order was refused for gets that refusal's sentence instead of the makeable hint — the status row's
-     * "No free order for Oak Planks" — because no Fetch can ask anything while the order is open.
+     * craft times the crafts the amount field rounds up to — the way {@link #stockState} draws it: what is available,
+     * or the shortfall and then what can be done about it — a production station makes it, and the Fetch will ask
+     * first; the safety stop holds the making of it, in the very sentence a Fetch is refused with; or nothing here
+     * makes it. Nothing when the buffer holds all of it, when the server has not described the item yet, or while the
+     * craft order is bringing it (the progress row counts that), unless the order's last portion was refused for this
+     * very item. A producible item the open order was refused for gets that refusal's sentence instead of the
+     * makeable hint — the status row's "No free order for Oak Planks" — because no Fetch can ask anything while the
+     * order is open.
      */
     private List<Component> stockLines(ItemKey key, int need, long here) {
         long lacking = (long) need * Math.max(1, screen.fetchCrafts()) - here;
@@ -1082,7 +1130,8 @@ public final class TerminalCraftPanel {
     }
 
     /**
-     * The result cell's tooltip: the result, how many crafts the buffer holds, the lock, and the two clicks; or, for a
+     * The result cell's tooltip: the result, how many result items the buffer's crafts make — with the crafts line
+     * when a craft makes more than one and the buffer holds any (issue #33) — the lock, and the two clicks; or, for a
      * grid the server found no recipe for, that sentence; or nothing while there is no answer for this grid yet.
      */
     public List<Component> resultTooltip() {
@@ -1095,8 +1144,12 @@ public final class TerminalCraftPanel {
         }
         List<Component> tooltip = new ArrayList<>(Screen.getTooltipFromItem(Minecraft.getInstance(), result));
         int ready = readyCrafts();
-        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_READY, LangNumberFormat.format(ready))
+        int perCraft = resultPerCraft();
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_READY,
+                LangNumberFormat.format(CraftAmounts.itemsFor(ready, perCraft)))
                 .withStyle(ready > 0 ? ChatFormatting.GREEN : ChatFormatting.GRAY));
+        if (ready > 0 && perCraft > 1)
+            tooltip.add(craftsText(ready, perCraft).copy().withStyle(ChatFormatting.GRAY));
         if (locked()) {
             tooltip.add(WareworksLang.translateDirect(TerminalCraftResult.LOCKED.langKey())
                     .withStyle(ChatFormatting.RED));
@@ -1112,12 +1165,13 @@ public final class TerminalCraftPanel {
     /**
      * The Fetch button's tooltip, which follows what the button does right now
      * ({@link WarehouseTerminalScreen#craftOrderAction()}): Answer, Resume or Cancel while the craft order is open, one
-     * line each; otherwise {@code "Fetch the ingredients for Chest x3"} and one line per item the Fetch would ask for,
-     * topped up against the buffer — in the colour of its cells: gold where the warehouse holds too few of it, blue
-     * where a production station would make up for it, red where it holds none or the safety stop holds the making
-     * of it — then how to set the number of crafts. A grid the server answered with no recipe, or with a locked one,
-     * shows only that refusal and the hint: the server refuses such a Fetch before it measures anything. Every line
-     * keeps to the window's row: an item's name gives way first.
+     * line each; otherwise {@code "Fetch the ingredients for Chest x3"} — the result items the Fetch is for, the amount
+     * field rounded up to whole crafts, followed by {@code "Crafts: 2 (4 each)"} for a recipe that makes more than one
+     * (issue #33) — and one line per item the Fetch would ask for, topped up against the buffer — in the colour of its
+     * cells: gold where the warehouse holds too few of it, blue where a production station would make up for it, red
+     * where it holds none or the safety stop holds the making of it — then how to set the number of items. A grid the
+     * server answered with no recipe, or with a locked one, shows only that refusal and the hint: the server refuses
+     * such a Fetch before it measures anything. Every line keeps to the window's row: an item's name gives way first.
      */
     public List<Component> fetchTooltip() {
         return switch (screen.craftOrderAction()) {
@@ -1133,13 +1187,16 @@ public final class TerminalCraftPanel {
             return List.of(WareworksLang.translateDirect(TerminalCraftResult.GRID_EMPTY.langKey())
                     .withStyle(ChatFormatting.GRAY));
         int crafts = screen.fetchCrafts();
-        String count = LangNumberFormat.format(crafts);
-        List<Component> tooltip = new ArrayList<>(CraftGrid.SIZE + 3);
+        int perCraft = resultPerCraft();
+        String count = LangNumberFormat.format(CraftAmounts.itemsFor(crafts, perCraft));
+        List<Component> tooltip = new ArrayList<>(CraftGrid.SIZE + 4);
         ItemStack result = shownResult();
-        if (!result.isEmpty())
+        if (!result.isEmpty()) {
             tooltip.add(fitName(name -> WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH, name, count),
                     result.getHoverName()));
-        else if (describesGrid())
+            if (perCraft > 1)
+                tooltip.add(craftsText(crafts, perCraft).copy().withStyle(ChatFormatting.GRAY));
+        } else if (describesGrid())
             tooltip.add(WareworksLang.translateDirect(TerminalCraftResult.NO_RECIPE.langKey())
                     .withStyle(ChatFormatting.RED));
         if (locked())

@@ -836,8 +836,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * the Fetch's own grid right before calling this — so the recipe is looked up where ADR-059 allows it and nowhere
      * else. No aisle, no Fetch ({@link TerminalCraftResult#NO_AISLE}).
      *
-     * @param crafts            the amount field: how many crafts to fetch for, clamped to
-     *                          {@code 1..maxTerminalRequestAmount}
+     * @param crafts            how many crafts to fetch for: the amount field's result items rounded up to whole
+     *                          crafts by the client (issue #33), clamped to {@code 1..maxTerminalRequestAmount}
      * @param acceptedProducing the production total a Yes agreed to; 0 for a Fetch nobody was asked about
      * @param answering         whether this Fetch is the Yes to a question the player was shown
      */

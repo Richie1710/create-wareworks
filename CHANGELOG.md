@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The crafting panel's amount field now counts the items you want, not crafts**
+  ([#33](https://github.com/Richie1710/create-wareworks/issues/33)). Asking for 4 Stone Bricks fetches one craft's
+  Stone (4 Stone for 4 bricks) instead of four crafts' worth. An amount that is not a whole number of crafts is rounded
+  up: 5 Stone Bricks fetch for 2 crafts, 8 bricks. The Fetch tooltip, the question, the status row and the result say
+  how many items you will get, with a "Crafts: 2 (4 each)" line for recipes that make more than one. The "Set x…"
+  number in the question asks for exactly what it offers, and a recipe laid with JEI's "+" follows the same rule.
+  Recipes that make one item work exactly as before. The largest fetch is now the amount field's maximum in items
+  (1024 planks by default instead of 4096)
+
 ## [0.13.0-beta] - 2026-10-17
 
 ### Added

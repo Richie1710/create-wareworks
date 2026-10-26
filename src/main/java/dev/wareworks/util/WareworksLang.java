@@ -1110,7 +1110,10 @@ public final class WareworksLang {
     public static final String TERMINAL_CRAFT_CELL_CLEAR = "gui.terminal.craft.cell_clear";
     /** The one line a stock cell's tooltip gains while the panel is folded out. */
     public static final String TERMINAL_CRAFT_STOCK_HINT = "gui.terminal.craft.stock_hint";
-    /** {@code "Ready to craft: x%1$s"}: the crafts the buffer holds right now, in the result's tooltip. */
+    /**
+     * {@code "Ready to craft: x%1$s"}: the result items the crafts the buffer holds right now would make, in the
+     * result's tooltip.
+     */
     public static final String TERMINAL_CRAFT_READY = "gui.terminal.craft.ready";
     /** {@code "Click: craft once"}: the result cell's first hint. */
     public static final String TERMINAL_CRAFT_ONCE = "gui.terminal.craft.once";
@@ -1124,12 +1127,21 @@ public final class WareworksLang {
     // The craft order (issue #24, slice 2, ADR-062): the panel's Fetch button, what it turns into while the order
     // runs, the progress row, the status row and the question a Fetch can raise. A name gives way first wherever one
     // stands in a row; the dialog wraps.
-    /** {@code "Fetch the ingredients for %1$s x%2$s"}: the Fetch button's tooltip title (result, crafts). */
+    /**
+     * {@code "Fetch the ingredients for %1$s x%2$s"}: the Fetch button's tooltip title (result, result items: the
+     * crafts times what one craft makes, issue #33).
+     */
     public static final String TERMINAL_CRAFT_FETCH = "gui.terminal.craft.fetch";
     /** {@code "%1$s: %2$s to fetch"}: one ingredient of the Fetch tooltip, topped up against the buffer. */
     public static final String TERMINAL_CRAFT_TO_FETCH = "gui.terminal.craft.to_fetch";
-    /** The Fetch tooltip's last line: the window's amount field is the number of crafts. */
+    /** The Fetch tooltip's last line: the window's amount field is the number of result items (issue #33). */
     public static final String TERMINAL_CRAFT_FETCH_HINT = "gui.terminal.craft.fetch_hint";
+    /**
+     * {@code "Crafts: %1$s (%2$s each)"}: how many crafts an amount of result items rounds up to, and what one craft
+     * makes (issue #33). Only for a recipe that makes more than one item, under the Fetch tooltip's title, the ready
+     * count in the result's tooltip and the Fetch question's title.
+     */
+    public static final String TERMINAL_CRAFT_CRAFTS = "gui.terminal.craft.crafts";
     /** The order button while a portion's question waits: put it up again. */
     public static final String TERMINAL_CRAFT_ANSWER = "gui.terminal.craft.button.answer";
     /** The order button while the order is parked: give it another try. */
@@ -1146,22 +1158,25 @@ public final class WareworksLang {
     public static final String TERMINAL_CRAFT_GRID_LOCKED = "gui.terminal.craft.grid_locked";
     /** The status row for a few seconds after the craft order finished: everything it fetched is here. */
     public static final String TERMINAL_CRAFT_DONE = "gui.terminal.craft.done";
-    /** {@code "Fetching for %1$s x%2$s"}: the status row while the craft order runs (result, crafts). */
+    /** {@code "Fetching for %1$s x%2$s"}: the status row while the craft order runs (result, items). */
     public static final String TERMINAL_CRAFT_STATUS_RUNNING = "gui.terminal.craft.status.running";
-    /** The status row while one portion's question waits for an answer (result, crafts). */
+    /** The status row while one portion's question waits for an answer (result, items). */
     public static final String TERMINAL_CRAFT_STATUS_ASKING = "gui.terminal.craft.status.asking";
-    /** The status row while the craft order is parked (result, crafts). */
+    /** The status row while the craft order is parked (result, items). */
     public static final String TERMINAL_CRAFT_STATUS_PARKED = "gui.terminal.craft.status.parked";
     /**
      * {@code "For the crafting grid: %1$s %2$s"}: the line naming amount and item in the question one portion of the
      * craft order raised, as {@link #TERMINAL_CONFIRM_LIST_ITEM} does for the clipboard order's.
      */
     public static final String TERMINAL_CRAFT_CONFIRM_ITEM = "gui.terminal.craft.confirm_item";
-    /** {@code "Fetch the ingredients for %1$s x%2$s?"}: the Fetch question's title, with the crafts a Yes starts. */
+    /** {@code "Fetch the ingredients for %1$s x%2$s?"}: the Fetch question's title, with the items a Yes starts. */
     public static final String TERMINAL_CRAFT_QUESTION_TITLE = "gui.terminal.craft.question.title";
-    /** {@code "Only x%1$s of x%2$s fit here."}: the buffer's room binds the fetch. */
+    /** {@code "Only x%1$s of x%2$s fit here."}: the buffer's room binds the fetch (result items). */
     public static final String TERMINAL_CRAFT_QUESTION_ROOM = "gui.terminal.craft.question.room";
-    /** {@code "Only x%1$s of x%2$s are available:"}: the warehouse's stock binds the fetch; the short items follow. */
+    /**
+     * {@code "Only x%1$s of x%2$s are available:"}: the warehouse's stock binds the fetch (result items); the short
+     * items follow.
+     */
     public static final String TERMINAL_CRAFT_QUESTION_STOCK = "gui.terminal.craft.question.stock";
     /** {@code "%1$s: %2$s available, %3$s needed"}: one item the warehouse falls short of. */
     public static final String TERMINAL_CRAFT_QUESTION_LINE = "gui.terminal.craft.question.line";
@@ -1171,8 +1186,8 @@ public final class WareworksLang {
      */
     public static final String TERMINAL_CRAFT_QUESTION_MADE = "gui.terminal.craft.question.made";
     /**
-     * {@code "Without making: x%1$s"}: the crafts the racks alone can supply, in a question that would have something
-     * made — shown only when that is more than the buffer already holds and less than the Yes starts
+     * {@code "Without making: x%1$s"}: the result items the racks alone can supply, in a question that would have
+     * something made — shown only when that is more than the buffer already holds and less than the Yes starts
      * ({@code CraftFetchQuestion#offersWithoutMaking}), so setting it really fetches something.
      */
     public static final String TERMINAL_CRAFT_QUESTION_WITHOUT = "gui.terminal.craft.question.without";

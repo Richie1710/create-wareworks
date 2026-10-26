@@ -2676,6 +2676,7 @@ you get tired of waiting, and put it back before judging check 160.
     the planks on the crane go back into the racks, and the grid unlocks with the table still laid. Read the server and
     the client log for errors mentioning `wareworks`. **The amount field is the one a click in the list requests with:
     once the panel is out, does it read naturally as "how many crafts", or do you trip over it after a request?**
+    (Since issue #33 the field counts result items in the panel too; section BD asks the same question again.)
 259. **Two real players at one terminal while a fetch runs.** Slow the crane down (a low-speed motor), so a click is
     still on its way a moment later. Two clients open the same terminal. Player B lays a crafting table and folds the
     panel **in**; player A lays a chest and clicks Oak Planks in the stock list for 8 with the amount field at 8. Right
@@ -2691,7 +2692,7 @@ you get tired of waiting, and put it back before judging check 160.
     recipe disappeared, and is laying it again an acceptable price?**
 260. **German at the real scale 6.** On the **5120x1440** monitor in fullscreen with the automatic GUI scale (6, so
     854 × 240 GUI px) and the game in German, lay a chest and set x3. Fetch's tooltip reads "Zutaten für Truhe x3
-    holen", "Eichenholzbretter: 24 zu holen" and "Das Mengenfeld gibt die Fertigungen an", every line on screen. Press
+    holen", "Eichenholzbretter: 24 zu holen" and "Das Mengenfeld gibt die Stückzahl an", every line on screen. Press
     it: the status row "Zutaten für Truhe x3 werden geholt", the bar's tooltip "Geliefert: 0 von 24" and "Unterwegs:
     24", over the x "Klick: aufgeben; Geliefertes bleibt hier", a right-click on a cell "Zum Ändern erst das Holen
     abbrechen", at the end "Geliefert: aufs Ergebnis klicken", and on the goggles "Werkbank-Zutaten: 0 von 24 (holt)".
@@ -3303,3 +3304,35 @@ you get tired of waiting, and put it back before judging check 160.
 319. **On a dedicated server.** Start `./gradlew runServer`, join with `./gradlew runClient`, set up a link with a
     number and a label, leave and join again: the screen opens on the same number and label, and the display shows it.
     Neither log has an error mentioning `wareworks`.
+
+## BD. Amount in items at the crafting panel ([issue #33](https://github.com/Richie1710/create-wareworks/issues/33))
+
+> The crafting panel's amount field counts the result items the player wants, as a click in the list does, and a Fetch
+> is for that many rounded up to whole crafts (ADR-062, amendment). `CraftAmountsTest` pins the rounding, that every
+> number the panel shows types back into the same crafts, and that it is a production order's rule. The visual
+> scenario `craft` lays Oak Planks in English and German: x4 is one craft, x5 shows "Oak Planks x8" and "Crafts: 2 (4
+> each)", fetches two logs, the status row and the result read x8, and a Shift-click makes eight planks. The `jei`
+> scenario asks for three fire charges on a JEI-laid recipe and checks that they are one craft. What no test does: read
+> the lines as a player, see a multi-output question with your own stock, and judge the German.
+>
+> Setup: the warehouse of section AR with Stone and Oak Logs in the racks, the terminal's crafting grid folded out.
+
+320. **One craft's worth.** Lay Stone Bricks (four Stone in a square) and set the amount field to **4**. Hover
+    **Fetch**: "Fetch the ingredients for Stone Bricks x4", "Crafts: 1 (4 each)", "Stone: 4 to fetch" and "The amount
+    field sets how many items". Press it: the status row says "Fetching for Stone Bricks x4", four Stone arrive, the
+    result reads x4, and a click on it gives four Stone Bricks.
+321. **Rounded up.** Set **5**: the tooltip says "Stone Bricks x8", "Crafts: 2 (4 each)" and "Stone: 8 to fetch".
+    Press Fetch: eight Stone arrive, the result reads "x8" and its tooltip "Ready to craft: x8" with "Crafts: 2 (4
+    each)" under it, and a Shift-click gives eight Stone Bricks. **Does "x8" for a request of 5 surprise you, or does
+    the crafts line make it clear?**
+322. **A question in items.** Leave only 8 Stone in the racks and set **20**. Fetch asks "Fetch the ingredients for
+    Stone Bricks x8?", "Crafts: 2 (4 each)" and "Only x8 of x20 are available:". Say No. With a planks pattern at a
+    production station and a recipe that needs planks, check that "Without making: x…" and "Set x… to fetch only that"
+    name items; type that number into the amount field and press Fetch: exactly those crafts are fetched and nothing is
+    made.
+323. **Nothing changed for one-item recipes, and JEI follows the rule.** Lay a Chest and set **3**: "Fetch the
+    ingredients for Chest x3", no crafts line, "Oak Planks: 24 to fetch", exactly as before. With JEI installed, lay
+    Oak Planks with its **+** and set **5**: the tooltip says "Oak Planks x8" and "Crafts: 2 (4 each)", and Fetch brings
+    two logs.
+324. **German (`de_de`).** Repeat 321 in German: "Fertigungen: 2 (je 4)" and "Das Mengenfeld gibt die Stückzahl an".
+    **Do both read naturally, and does any line run out of the tooltip at GUI scale 6?**

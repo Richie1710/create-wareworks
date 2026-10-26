@@ -50,6 +50,7 @@ import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crafting.CraftAmounts;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.inventory.InventorySnapshot;
@@ -106,13 +107,15 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * amount field is scrolled to x3 and a click on Fetch starts the terminal's craft order, which the crane works off
  * into the buffer while the grid is locked; the scene is frozen while the crane carries the planks, so the progress
  * row is shot mid-delivery. A click on the result crafts one chest, a Shift-click the other two. A second Fetch is
- * given up with the progress row's cancel mark while the crane carries its planks, which go back into the racks. A
- * chain x4 takes eight iron nuggets, of which the racks hold only a chain's worth (slice 3 of the issue,
- * {@link #offerSteps}): the nugget cells are drawn makeable, the Fetch asks whether nine nuggets should be made first,
- * the Yes has the player's machine make them (a production chain, ADR-032), and the four chains are crafted from the
- * buffer. A cake x4 does not fit the buffer: the server asks, the question names the room ("only x2 of x4"), Yes
- * fetches two cakes' worth, and the cake crafted from them shows the buckets it leaves in the buffer. Last, a crafting
- * table is refused because neither the buffer nor the inventory has room for it.
+ * given up with the progress row's cancel mark while the crane carries its planks, which go back into the racks. Oak
+ * Planks show that the amount field counts result items (issue #33, {@link #planksSteps}): one log makes four, so x4
+ * is one craft and x5 rounds up to two, eight planks from two logs. A chain x4 takes eight iron nuggets, of which the
+ * racks hold only a chain's worth (slice 3 of the issue, {@link #offerSteps}): the nugget cells are drawn makeable, the
+ * Fetch asks whether nine nuggets should be made first, the Yes has the player's machine make them (a production chain,
+ * ADR-032), and the four chains are crafted from the buffer. A cake x4 does not fit the buffer: the server asks, the
+ * question names the room ("only x2 of x4"), Yes fetches two cakes' worth, and the cake crafted from them shows the
+ * buckets it leaves in the buffer. Last, a crafting table is refused because neither the buffer nor the inventory has
+ * room for it.
  * <p>
  * <b>A view of an earlier grid is never shown.</b> The crafting table is laid in three steps that keep the item and
  * change what the grid makes — sticks, the same two planks moved side by side into a pressure plate, then two planks
@@ -218,6 +221,18 @@ public final class CraftVisualScenario implements VisualScenario {
     private static final CraftGrid<ItemKey> STICK_GRID = CraftGrid.of(PLANKS, null, null, PLANKS);
     /** The same two planks side by side: an oak pressure plate. */
     private static final CraftGrid<ItemKey> PLATE_GRID = CraftGrid.of(PLANKS, PLANKS);
+    // --- the amount in result items (issue #33): Oak Planks, four from one log --------------------------------------
+    private static final ItemKey OAK_LOG = ItemKey.of(Items.OAK_LOG);
+    /** One log in the middle cell: Oak Planks, a recipe that makes more than one item. */
+    private static final CraftGrid<ItemKey> LOG_GRID = CraftGrid.of(null, null, null, null, OAK_LOG);
+    private static final int LOG_CELL = 4;
+    private static final int PLANKS_PER_LOG = 4;
+    /** A whole craft's worth: x4 is one craft. */
+    private static final int PLANKS_EXACT = 4;
+    /** One plank more than a craft: x5 rounds up to two crafts, eight planks. */
+    private static final int PLANKS_ASKED = 5;
+    private static final int PLANK_CRAFTS = 2;
+
     /** Three chests are fetched for, so one click and one Shift-click both have something to craft. */
     private static final int CHESTS = 3;
     private static final int PLANKS_PER_CHEST = 8;
@@ -449,7 +464,7 @@ public final class CraftVisualScenario implements VisualScenario {
                 context -> describePanel(screen(context)));
         script.client("craft: check the cells and the result with the planks here",
                         context -> checkCells(context, CHEST_GRID, TerminalCraftPanel.CellState.HERE, CHESTS))
-                .client("craft: check the result's tooltip", CraftVisualScenario::checkResultTooltip);
+                .client("craft: check the result's tooltip", context -> checkResultTooltip(context, 1));
         shot(script, "craft-ready" + suffix);
 
         craft(script, new CraftCheck("craft one chest with a click on the result", TerminalCraftResult.CRAFTED, 1,
@@ -471,10 +486,88 @@ public final class CraftVisualScenario implements VisualScenario {
         shot(script, "craft-crafted-all" + suffix);
 
         cancelSteps(script, suffix);
+        planksSteps(script, suffix);
         offerSteps(script, suffix);
         cakeSteps(script, suffix);
         refusalSteps(script, suffix);
         sizeSteps(script, suffix);
+    }
+
+    /**
+     * The amount field counts result items (issue #33, {@code docs/warehouse-system.md} §3.4.5): Oak Planks, four from
+     * one log. x{@value #PLANKS_EXACT} is one craft; x{@value #PLANKS_ASKED} rounds up to {@value #PLANK_CRAFTS}, and
+     * the Fetch tooltip says what the player will get — "Oak Planks x8" and "Crafts: 2 (4 each)" — and that two logs
+     * are fetched ({@code craft-planks-fetch}). The Fetch asks for two crafts on the wire; its answer and the status
+     * row read eight planks. The buffer then holds exactly two logs, the result shows x8 with the crafts line under it
+     * ({@code craft-planks-ready}), and a Shift-click crafts eight planks: two logs out of the census, eight planks in.
+     */
+    private void planksSteps(VisualScript script, String suffix) {
+        int items = PLANK_CRAFTS * PLANKS_PER_LOG;
+        String what = PLANKS_ASKED + " planks";
+        clearGrid(script);
+        pickGhost(script, OAK_LOG);
+        stamp(script, LOG_CELL);
+        dropGhost(script);
+        laidSteps(script, "planks", LOG_GRID, Items.OAK_PLANKS);
+        script.client("craft: CHECK the panel counts " + PLANKS_PER_LOG + " planks per craft", context -> {
+            int perCraft = screen(context).craftPanel().resultPerCraft();
+            if (perCraft != PLANKS_PER_LOG)
+                throw new VisualTestException("the panel counts " + perCraft + " planks per craft, not "
+                        + PLANKS_PER_LOG);
+        });
+        amount(script, PLANKS_EXACT, 1);
+        script.client("craft: check the Fetch button's tooltip for " + PLANKS_EXACT + " planks",
+                context -> checkFetchTooltip(context, PLANKS, PLANKS_PER_LOG, 1, List.of(Map.entry(OAK_LOG, 1))));
+        amount(script, PLANKS_ASKED, PLANK_CRAFTS);
+        script.client("craft: check the Fetch button's tooltip for " + what, context -> checkFetchTooltip(context,
+                        PLANKS, PLANKS_PER_LOG, PLANK_CRAFTS, List.of(Map.entry(OAK_LOG, PLANK_CRAFTS))))
+                .client("craft: hover the Fetch button", context -> ScreenInput.hover(context.minecraft(),
+                        ScreenInput.terminalCraftFetch(screen(context))))
+                .waitTicks(SETTLE_TICKS)
+                .shot("craft-planks-fetch" + suffix);
+
+        fetch(script, what);
+        fetchAnswered(script, "the Fetch for " + what, TerminalCraftResult.STARTED, PLANK_CRAFTS);
+        orderOpened(script, LOG_GRID, PLANK_CRAFTS);
+        script.client("craft: CHECK the status row counts " + items + " planks, not " + PLANK_CRAFTS + " crafts",
+                context -> {
+                    WarehouseTerminalScreen screen = screen(context);
+                    // The name gives way first where the row is short (German), so only the words around it and
+                    // the number are compared: the sentence with an empty name, split where the name stands.
+                    String name = PLANKS.toStack().getHoverName().getString();
+                    String started = WarehouseTerminalScreen.craftFetchText(TerminalCraftResult.STARTED, items,
+                            Component.literal(name)).getString();
+                    int at = started.indexOf(name);
+                    String before = started.substring(0, at);
+                    String after = started.substring(at + name.length());
+                    String shown = screen.shownStatusLine().getString();
+                    if (!shown.startsWith(before) || !shown.endsWith(after) || !screen.statusTextsFit())
+                        throw new VisualTestException("the status row says '" + shown + "', not '" + started
+                                + "' (the name may be cut) inside the row");
+                    LOGGER.info(PREFIX + "craft: CHECK PASS the status row says '{}'", shown);
+                });
+        fetchDone(script, "the logs for " + items + " planks", LOG_GRID, Map.of(OAK_LOG, (long) PLANK_CRAFTS));
+        ArmVisualScenario.untilOrFail(script, "craft: the panel counts " + PLANK_CRAFTS + " crafts ready",
+                context -> screen(context).craftPanel().readyCrafts() == PLANK_CRAFTS, SCREEN_TIMEOUT_TICKS,
+                context -> describePanel(screen(context)));
+        script.client("craft: check the log's cell and the result with the logs here",
+                        context -> checkCells(context, LOG_GRID, TerminalCraftPanel.CellState.HERE, PLANK_CRAFTS))
+                .client("craft: CHECK the result counts " + items + " planks ready", context -> {
+                    long ready = screen(context).craftPanel().readyItems();
+                    if (ready != items)
+                        throw new VisualTestException("the result counts x" + ready + " ready, not x" + items);
+                    checkResultTooltip(context, PLANKS_PER_LOG);
+                })
+                .client("craft: hover the result", context -> ScreenInput.hover(context.minecraft(),
+                        ScreenInput.terminalCraftResult(screen(context))))
+                .waitTicks(SETTLE_TICKS)
+                .shot("craft-planks-ready" + suffix);
+
+        craft(script, new CraftCheck("craft the planks with a Shift-click on the result", TerminalCraftResult.CRAFTED,
+                items, PLANKS, Map.of(OAK_LOG, (long) -PLANK_CRAFTS, PLANKS, (long) items)), this::shiftClickResult);
+        ArmVisualScenario.untilOrFail(script, "craft: the buffer holds no log any more",
+                context -> screen(context).craftPanel().readyCrafts() == 0, SCREEN_TIMEOUT_TICKS,
+                context -> describePanel(screen(context)));
     }
 
     /**
@@ -506,7 +599,7 @@ public final class CraftVisualScenario implements VisualScenario {
         laidSteps(script, "chain", CHAIN_GRID, Items.CHAIN);
         script.server("craft: CHECK laying the chain requested and ordered nothing",
                 CraftVisualScenario::checkNothingOrdered);
-        amount(script, CHAINS);
+        amount(script, CHAINS, CHAINS);
         ArmVisualScenario.untilOrFail(script, "craft: the nugget cells are drawn makeable",
                 context -> screen(context).craftPanel().cellStates().equals(chainCells()), PREVIEW_TIMEOUT_TICKS,
                 context -> describePanel(screen(context)));
@@ -598,9 +691,9 @@ public final class CraftVisualScenario implements VisualScenario {
 
         // x4 does not fit the buffer: the server asks before it requests anything, and the Yes fetches what fits.
         String asked = CAKES_ASKED + " cakes";
-        amount(script, CAKES_ASKED);
+        amount(script, CAKES_ASKED, CAKES_ASKED);
         script.client("craft: check the Fetch button's tooltip for " + asked, context -> checkFetchTooltip(context,
-                CAKE, CAKES_ASKED, List.of(Map.entry(MILK, MILK_PER_CAKE * CAKES_ASKED),
+                CAKE, 1, CAKES_ASKED, List.of(Map.entry(MILK, MILK_PER_CAKE * CAKES_ASKED),
                         Map.entry(SUGAR, SUGAR_PER_CAKE * CAKES_ASKED), Map.entry(EGG, EGGS_PER_CAKE * CAKES_ASKED),
                         Map.entry(WHEAT, WHEAT_PER_CAKE * CAKES_ASKED))));
         fetch(script, asked);
@@ -885,10 +978,11 @@ public final class CraftVisualScenario implements VisualScenario {
     }
 
     /**
-     * Amount field to {@code amount}, one notch of the wheel per tick: the number of crafts the panel's Fetch is for
-     * ({@code WarehouseTerminalScreen#fetchCrafts}), the field a click in the list requests with.
+     * Amount field to {@code amount}, one notch of the wheel per tick, and a check that a Fetch is for {@code crafts}
+     * now ({@code WarehouseTerminalScreen#fetchCrafts}): the field counts result items, the field a click in the list
+     * requests with, and a Fetch is for that many items rounded up to whole crafts (issue #33).
      */
-    private static void amount(VisualScript script, int amount) {
+    private static void amount(VisualScript script, int amount, int crafts) {
         ArmVisualScenario.untilOrFail(script, "craft: scroll the amount field to " + amount, context -> {
             ScrollInput input = ScreenInput.terminalAmount(screen(context));
             int state = input.getState();
@@ -898,11 +992,11 @@ public final class CraftVisualScenario implements VisualScenario {
             return false;
         }, AMOUNT_TIMEOUT_TICKS, context -> "the amount field shows "
                 + ScreenInput.terminalAmount(screen(context)).getState());
-        script.client("craft: CHECK a Fetch is for x" + amount + " now", context -> {
-            int crafts = screen(context).fetchCrafts();
-            if (crafts != amount)
-                throw new VisualTestException("the amount field shows " + amount + ", but a Fetch would be for x"
-                        + crafts);
+        script.client("craft: CHECK a Fetch for x" + amount + " is for " + crafts + " crafts now", context -> {
+            int fetching = screen(context).fetchCrafts();
+            if (fetching != crafts)
+                throw new VisualTestException("the amount field shows " + amount + ", but a Fetch would be for "
+                        + fetching + " crafts, not " + crafts);
         });
     }
 
@@ -917,9 +1011,9 @@ public final class CraftVisualScenario implements VisualScenario {
      */
     private void fetchChestSteps(VisualScript script, String suffix) {
         String what = CHESTS + " chests";
-        amount(script, CHESTS);
+        amount(script, CHESTS, CHESTS);
         script.client("craft: check the Fetch button's tooltip for " + what, context -> checkFetchTooltip(context,
-                        CHEST, CHESTS, List.of(Map.entry(PLANKS, PLANKS_FETCHED))))
+                        CHEST, 1, CHESTS, List.of(Map.entry(PLANKS, PLANKS_FETCHED))))
                 .client("craft: hover the Fetch button", context -> ScreenInput.hover(context.minecraft(),
                         ScreenInput.terminalCraftFetch(screen(context))))
                 .waitTicks(SETTLE_TICKS)
@@ -928,7 +1022,7 @@ public final class CraftVisualScenario implements VisualScenario {
         fetchAnswered(script, "the Fetch for " + what, TerminalCraftResult.STARTED, CHESTS);
         orderOpened(script, CHEST_GRID, CHESTS);
         script.client("craft: CHECK the running fetch locks the grid and owns the status row",
-                context -> checkFetching(context, CHEST_GRID, CHEST, CHESTS));
+                context -> checkFetching(context, CHEST_GRID, CHEST, 1, CHESTS));
         carrying(script, PLANKS);
         script.client("craft: CHECK the progress row while the crane carries the planks",
                 CraftVisualScenario::checkProgress);
@@ -1248,9 +1342,26 @@ public final class CraftVisualScenario implements VisualScenario {
         checkLines(context, "the cell's tooltip", tooltip, 4);
     }
 
-    /** The result's tooltip while crafts are ready: the item, the count, and the two clicks. */
-    private static void checkResultTooltip(VisualContext context) {
-        checkLines(context, "the result's tooltip", screen(context).craftPanel().resultTooltip(), 4);
+    /**
+     * The result's tooltip while crafts are ready: the item, the count in result items — {@code perCraft} per craft —
+     * with the crafts line under it for a recipe that makes more than one (issue #33), and the two clicks.
+     */
+    private static void checkResultTooltip(VisualContext context, int perCraft) {
+        TerminalCraftPanel panel = screen(context).craftPanel();
+        int ready = panel.readyCrafts();
+        List<String> lines = texts(panel.resultTooltip());
+        String readyLine = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_READY,
+                LangNumberFormat.format(CraftAmounts.itemsFor(ready, perCraft))).getString();
+        int at = lines.indexOf(readyLine);
+        if (at < 0)
+            throw new VisualTestException("the result's tooltip does not say '" + readyLine + "': " + lines);
+        if (perCraft > 1) {
+            String crafts = TerminalCraftPanel.craftsText(ready, perCraft).getString();
+            if (at + 1 >= lines.size() || !lines.get(at + 1).equals(crafts))
+                throw new VisualTestException("the result's tooltip does not follow '" + readyLine + "' with '"
+                        + crafts + "': " + lines);
+        }
+        checkLines(context, "the result's tooltip", panel.resultTooltip(), perCraft > 1 ? 5 : 4);
     }
 
     /** At least {@code minimum} lines, none of them a raw lang key, each inside the terminal's row. */
@@ -1296,18 +1407,24 @@ public final class CraftVisualScenario implements VisualScenario {
     }
 
     /**
-     * The Fetch button's tooltip before the click: {@code "Fetch the ingredients for Chest x3"}, one line per item a
-     * Fetch asks for, in grid order and topped up against the buffer, and the hint about the amount field — every
-     * line inside the terminal's row, in the language that is loaded.
+     * The Fetch button's tooltip before the click: {@code "Fetch the ingredients for Chest x3"} with the result items
+     * {@code crafts} crafts of {@code perCraft} make, {@code "Crafts: 2 (4 each)"} under it for a recipe that makes
+     * more than one (issue #33), one line per item a Fetch asks for, in grid order and topped up against the buffer,
+     * and the hint about the amount field — every line inside the terminal's row, in the language that is loaded.
      */
-    private static void checkFetchTooltip(VisualContext context, ItemKey result, int crafts,
+    private static void checkFetchTooltip(VisualContext context, ItemKey result, int perCraft, int crafts,
             List<Map.Entry<ItemKey, Integer>> toFetch) {
         WarehouseTerminalScreen screen = screen(context);
         if (screen.craftOrderAction() != TerminalCraftOrderPayload.Action.FETCH)
             throw new VisualTestException("the order button is " + screen.craftOrderAction() + ", not Fetch");
+        if (screen.craftPanel().resultPerCraft() != perCraft)
+            throw new VisualTestException("the panel counts " + screen.craftPanel().resultPerCraft() + " "
+                    + id(result) + " per craft, not " + perCraft);
         List<String> wanted = new ArrayList<>();
         wanted.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_FETCH, result.toStack().getHoverName(),
-                LangNumberFormat.format(crafts)).getString());
+                LangNumberFormat.format(CraftAmounts.itemsFor(crafts, perCraft))).getString());
+        if (perCraft > 1)
+            wanted.add(TerminalCraftPanel.craftsText(crafts, perCraft).getString());
         for (Map.Entry<ItemKey, Integer> line : toFetch)
             wanted.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_TO_FETCH,
                     line.getKey().toStack().getHoverName(), LangNumberFormat.format(line.getValue())).getString());
@@ -1326,9 +1443,11 @@ public final class CraftVisualScenario implements VisualScenario {
     /**
      * The running fetch on screen: the grid is the order's and locked, the order button is Cancel and its tooltip says
      * so, the cells not yet here are plain ghosts, and the status row says what is being fetched for — first as the
-     * Fetch's answer, then as the order's own line, both inside the row.
+     * Fetch's answer, then as the order's own line, both inside the row and both in result items, {@code perCraft} per
+     * craft (issue #33).
      */
-    private static void checkFetching(VisualContext context, CraftGrid<ItemKey> grid, ItemKey result, int crafts) {
+    private static void checkFetching(VisualContext context, CraftGrid<ItemKey> grid, ItemKey result, int perCraft,
+            int crafts) {
         WarehouseTerminalScreen screen = screen(context);
         TerminalCraftOrderState order = screen.craftOrderState();
         if (order.state() != ListOrderState.RUNNING || !screen.isCraftGridLocked()
@@ -1342,11 +1461,12 @@ public final class CraftVisualScenario implements VisualScenario {
                     + ", not '" + cancel + "'");
         checkCells(context, grid, TerminalCraftPanel.CellState.AVAILABLE, 0);
         Component name = result.toStack().getHoverName();
-        String started = WarehouseTerminalScreen.craftFetchText(TerminalCraftResult.STARTED, crafts, name).getString();
+        long items = CraftAmounts.itemsFor(crafts, perCraft);
+        String started = WarehouseTerminalScreen.craftFetchText(TerminalCraftResult.STARTED, items, name).getString();
         String shown = screen.feedbackLine().map(Component::getString).orElse("");
         if (!shown.equals(started))
             throw new VisualTestException("the status row says '" + shown + "', not '" + started + "'");
-        Component running = WarehouseTerminalScreen.craftStatusText(ListOrderState.RUNNING, crafts, name);
+        Component running = WarehouseTerminalScreen.craftStatusText(ListOrderState.RUNNING, items, name);
         if (!screen.statusTextsFit() || !screen.fitsStatusRow(running))
             throw new VisualTestException("the fetch's status line does not fit the row: '" + shown + "', '"
                     + running.getString() + "'");
@@ -1453,12 +1573,13 @@ public final class CraftVisualScenario implements VisualScenario {
                 || question.bound() != CraftFetchQuestion.Bound.ROOM || question.producing() != 0L)
             throw new VisualTestException("the question is " + question + ", not x" + CAKES_FITTING + " of x"
                     + CAKES_ASKED + " bound by the room");
+        // A cake is one item per craft, so the question's numbers in result items (issue #33) are its crafts.
         Component cake = CAKE.toStack().getHoverName();
-        String possible = LangNumberFormat.format(CAKES_FITTING);
+        String possible = LangNumberFormat.format(CraftAmounts.itemsFor(CAKES_FITTING, 1));
         List<String> wanted = List.of(
                 WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_TITLE, cake, possible).getString(),
                 WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_ROOM, possible,
-                        LangNumberFormat.format(CAKES_ASKED)).getString());
+                        LangNumberFormat.format(CraftAmounts.itemsFor(CAKES_ASKED, 1))).getString());
         List<Component> lines = ScreenInput.terminalCraftConfirmationLines(screen);
         if (!texts(lines).equals(wanted))
             throw new VisualTestException("the question reads " + texts(lines) + ", not " + wanted);
@@ -1497,7 +1618,7 @@ public final class CraftVisualScenario implements VisualScenario {
             throw new VisualTestException("a makeable cell's tooltip is " + lines + ", not '" + shortLine
                     + "' followed by '" + makeable + "'");
         checkLines(context, "a makeable cell's tooltip", tooltip, 5);
-        checkFetchTooltip(context, IRON_CHAIN, CHAINS, List.of(Map.entry(NUGGET, needed),
+        checkFetchTooltip(context, IRON_CHAIN, 1, CHAINS, List.of(Map.entry(NUGGET, needed),
                 Map.entry(IRON, IRON_PER_CHAIN * CHAINS)));
         TextColor blue = tooltip.get(shortAt + 1).getStyle().getColor();
         List<Component> fetch = panel.fetchTooltip();
@@ -1537,10 +1658,12 @@ public final class CraftVisualScenario implements VisualScenario {
                 || question.chainRefusal().isPresent())
             throw new VisualTestException("the question is " + question + ", not x" + CHAINS + " with "
                     + NUGGETS_PER_INGOT + " nuggets made first and x" + withoutMaking + " without making");
-        String without = LangNumberFormat.format(withoutMaking);
+        // A chain is one item per craft: the result items the question names (issue #33) are its crafts.
+        String without = LangNumberFormat.format(CraftAmounts.itemsFor(withoutMaking, 1));
         List<String> wanted = List.of(
                 WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_TITLE,
-                        IRON_CHAIN.toStack().getHoverName(), LangNumberFormat.format(CHAINS)).getString(),
+                        IRON_CHAIN.toStack().getHoverName(), LangNumberFormat.format(CraftAmounts.itemsFor(CHAINS, 1)))
+                        .getString(),
                 WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_MADE,
                         NUGGET.toStack().getHoverName(), LangNumberFormat.format(NUGGETS_PER_INGOT)).getString(),
                 WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT, without).getString(),

@@ -36,6 +36,7 @@ import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.TerminalScreenStatus;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.core.crafting.CraftAmounts;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.port.DoorState;
@@ -132,8 +133,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * {@link TerminalCraftPanel}'s; this screen folds it, frames it and offers it each click in its turn
  * ({@link #mouseClicked}).
  * <p>
- * <b>Fetch</b> (issue #24, slice 2, ADR-062). The panel's order button fetches the grid's ingredients for the amount
- * field's number of crafts: the terminal's craft order, a second list order beside the clipboard's. The button then
+ * <b>Fetch</b> (issue #24, slice 2, ADR-062). The panel's order button fetches the grid's ingredients for the crafts
+ * the amount field's result items round up to (issue #33): the terminal's craft order, a second list order beside the clipboard's. The button then
  * turns into Answer, Resume or Cancel exactly as the list button does ({@link #craftOrderAction()}), the order's line
  * wins the status row like the list's, every screen at the terminal shows the order's grid and refuses to edit it
  * while it is open, and a Fetch that can bring fewer crafts than asked for puts its question up in this screen's one
@@ -1815,13 +1816,19 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /**
      * How many crafts the panel's Fetch is for: the open craft order's own, or else the window's amount field — the
-     * field a click in the list asks with, so "x3" means three crafts here. The cells' colours and every number of
-     * the Fetch tooltip are measured against it.
+     * field a click in the list asks with, so "x5" means five items here too — rounded up to whole crafts of the
+     * result the server resolved for the grid (issue #33, {@link TerminalCraftPanel#resultPerCraft()}): five Stone
+     * Bricks are two crafts of four. The cells' colours and every number of the Fetch tooltip are measured against it,
+     * and it is what a Fetch sends: the wire counts crafts.
+     * <p>
+     * The field runs up to {@code maxTerminalRequestAmount} items, so the crafts never exceed it either and the
+     * server's own clamp never cuts a Fetch the tooltip announced.
      */
     public int fetchCrafts() {
         if (craftOrderState.isOpen())
             return Math.max(1, craftOrderState.crafts());
-        return TerminalAmounts.clamp(selectedAmount, maxRequestAmount());
+        return CraftAmounts.craftsFor(TerminalAmounts.clamp(selectedAmount, maxRequestAmount()),
+                craftPanel.resultPerCraft());
     }
 
     /** Whether the terminal's open craft order locks the crafting grid (ADR-062): every edit is refused then. */
@@ -1914,7 +1921,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 ? answer.refusal().orElse(null) : null;
         if (refusal != null)
             return fitNames(names -> craftChainRefusalText(refusal, names.get(0)), name);
-        return fitNames(names -> craftFetchText(answer.result(), answer.crafted(), names.get(0)), name);
+        // The server counts a Fetch in crafts; the player reads result items (issue #33). The answer is about the
+        // result the Fetch was sent for, whose count the panel kept; any other result counts one per craft.
+        int perCraft = answer.about().filter(key -> key.matches(craftPanel.fetchedResult()))
+                .isPresent() ? craftPanel.fetchedPerCraft() : 1;
+        long items = CraftAmounts.itemsFor(answer.crafted(), perCraft);
+        return fitNames(names -> craftFetchText(answer.result(), items, names.get(0)), name);
     }
 
     /**
@@ -1927,12 +1939,13 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     /**
-     * The sentence of a Fetch answer: the item it names as the first argument, the number of crafts as the second
-     * (the rule {@code WareworksLangGen} writes every Fetch sentence to). Public and static for the row measurement of
-     * the visual run, like {@link #craftAnswerText}.
+     * The sentence of a Fetch answer: the item it names as the first argument, the number of result items as the
+     * second (the rule {@code WareworksLangGen} writes every Fetch sentence to; the caller has turned the server's
+     * crafts into items, issue #33). Public and static for the row measurement of the visual run, like
+     * {@link #craftAnswerText}.
      */
-    public static Component craftFetchText(TerminalCraftResult result, int crafts, Component name) {
-        return WareworksLang.translateDirect(result.langKey(), name, LangNumberFormat.format(crafts));
+    public static Component craftFetchText(TerminalCraftResult result, long items, Component name) {
+        return WareworksLang.translateDirect(result.langKey(), name, LangNumberFormat.format(items));
     }
 
     /** The answer to the last craft click, or {@code null} before the first one. */
@@ -2207,7 +2220,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /**
      * The lines of the Fetch question, in the order the player reads them (issue #24, slices 2 and 3): the question
-     * with the crafts a Yes starts — {@code "Fetch the ingredients for Cake x2?"} — then what binds it, named rather
+     * with the result items a Yes starts — {@code "Fetch the ingredients for Cake x2?"}, followed by
+     * {@code "Crafts: 2 (4 each)"} for a recipe that makes more than one (issue #33) — then what binds it, named rather
      * than described: the buffer's room ({@code "Only x2 of x4 fit here."}), or the warehouse's stock with every item
      * it falls short of and its two numbers and, when a production chain was tried for the item that binds, why that
      * chain does not hold, in the planner's own sentence ({@code "Oak Log is missing"}).
@@ -2220,18 +2234,26 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * holds, and less than the Yes starts ({@link CraftFetchQuestion#offersWithoutMaking()}). A question nothing binds —
      * every craft asked for is possible — is raised by production alone and holds the title and these lines. No Alt
      * hint: a Fetch is no click on an item.
+     * <p>
+     * The question counts crafts, as the server measured them; every number of it about the result is shown in result
+     * items of the result the Fetch was sent for (issue #33), so the "Set x…" number typed into the amount field asks
+     * for exactly those crafts again ({@link CraftAmounts}).
      */
     private List<Component> craftFetchConfirmationLines(CraftFetchQuestion<ItemKey> question) {
-        List<Component> lines = new ArrayList<>(6 + 2 * question.named().size());
+        List<Component> lines = new ArrayList<>(7 + 2 * question.named().size());
         ItemStack result = craftPanel.fetchedResult();
-        String possible = LangNumberFormat.format(Math.max(1, question.possible()));
-        String asked = LangNumberFormat.format(question.asked());
+        int perCraft = craftPanel.fetchedPerCraft();
+        int possibleCrafts = Math.max(1, question.possible());
+        String possible = LangNumberFormat.format(CraftAmounts.itemsFor(possibleCrafts, perCraft));
+        String asked = LangNumberFormat.format(CraftAmounts.itemsFor(question.asked(), perCraft));
         lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_TITLE,
                 result.isEmpty() ? Component.empty() : result.getHoverName(), possible).copy()
                 .withStyle(ChatFormatting.GOLD));
         if (costChanged)
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
                     .withStyle(ChatFormatting.GOLD));
+        if (perCraft > 1)
+            lines.add(TerminalCraftPanel.craftsText(possibleCrafts, perCraft).copy().withStyle(ChatFormatting.GRAY));
         switch (question.bound()) {
             case ROOM -> lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_ROOM, possible,
                     asked).copy().withStyle(ChatFormatting.WHITE));
@@ -2265,7 +2287,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // holds: what a No to the machines still leaves the player. Setting x1 for the one craft already here would
         // fetch nothing.
         if (question.offersWithoutMaking()) {
-            String count = LangNumberFormat.format(question.withoutMaking());
+            String count = LangNumberFormat.format(CraftAmounts.itemsFor(question.withoutMaking(), perCraft));
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT, count).copy()
                     .withStyle(ChatFormatting.WHITE));
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_QUESTION_WITHOUT_HINT, count).copy()
@@ -3115,27 +3137,30 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /**
      * {@code "Fetching for Chest x3"}: the craft order's line while it owns the status row, with the result the panel
-     * resolved for the order's grid — the panel shows that grid while the order is open — and its name cut first.
+     * resolved for the order's grid — the panel shows that grid while the order is open — and its name cut first. The
+     * order counts crafts; the line counts that result's items (issue #33), one per craft in the tick before the view
+     * arrives, when the name is missing too.
      */
     private Component craftStatusLine() {
         ItemStack result = craftPanel.grid().equals(craftOrderState.cells()) ? craftPanel.shownResult()
                 : ItemStack.EMPTY;
         Component name = result.isEmpty() ? Component.empty() : result.getHoverName();
-        return fitNames(names -> craftStatusText(craftOrderState.state(), craftOrderState.crafts(), names.get(0)),
-                name);
+        long items = CraftAmounts.itemsFor(craftOrderState.crafts(), result.isEmpty() ? 1 : result.getCount());
+        return fitNames(names -> craftStatusText(craftOrderState.state(), items, names.get(0)), name);
     }
 
     /**
-     * The craft order's status line for an order in {@code state}: fetching, waiting for an answer, or parked. Public
-     * and static for the row measurement of the visual run, like {@link #listStatusText}.
+     * The craft order's status line for an order in {@code state}: fetching, waiting for an answer, or parked, with the
+     * result items the order is for. Public and static for the row measurement of the visual run, like
+     * {@link #listStatusText}.
      */
-    public static Component craftStatusText(ListOrderState state, int crafts, Component name) {
+    public static Component craftStatusText(ListOrderState state, long items, Component name) {
         String key = switch (state) {
             case ASKING -> WareworksLang.TERMINAL_CRAFT_STATUS_ASKING;
             case PARKED -> WareworksLang.TERMINAL_CRAFT_STATUS_PARKED;
             default -> WareworksLang.TERMINAL_CRAFT_STATUS_RUNNING;
         };
-        return WareworksLang.translateDirect(key, name, LangNumberFormat.format(crafts));
+        return WareworksLang.translateDirect(key, name, LangNumberFormat.format(items));
     }
 
     /**
