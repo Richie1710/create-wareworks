@@ -156,7 +156,7 @@ item, and the warehouse even orders it from your own machines), a **maximum** it
 never hands to your automation. Details are in the **Stock rules** section below.
 
 Also included: goggle information on every block, Create-style item descriptions, Ponder scenes for all of them but the
-newest (the home point has none yet), English and German translations, and recipes at mid-game Create tier.
+home point (it has none yet), English and German translations, and recipes at mid-game Create tier.
 
 Items only ever move in the crane's grabber, and nothing is lost or duplicated when blocks break, chunks unload or the
 server restarts.
@@ -251,7 +251,7 @@ third: side aisles leaving one run in the middle of it, the junction block that 
 a straight run keeps through every junction, the machine driving straight over one junction and round the bend at
 another, goods from all three aisles arriving at the one output beside the dock, and the two racks beside a junction
 that only their facing tells apart. The seventeenth, **Packages at a Warehouse Door**, builds both package doors in
-front of you and teaches the one rule that decides their direction. And the last three belong to the **rack bays**,
+front of you and teaches the one rule that decides their direction. The eighteenth to twentieth belong to the **rack bays**,
 all three tiers, in the order a player meets the block rather than the order the warehouse would: **Storing Bulk Goods
 in a Rack Bay** shows one bay standing alone with no warehouse anywhere — both hand gestures, the one item type it
 learns and forgets, the load growing on its pallet, and the break that resets the bay and leaves its whole load on
