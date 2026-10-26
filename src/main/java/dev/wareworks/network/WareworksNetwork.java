@@ -133,8 +133,13 @@ public final class WareworksNetwork {
      * Create's warmup or sends its release {@code ValueSettingsPacket} for it. No payload's bytes changed, but the two
      * sides disagree about who applies the click: a newer client on an older server would set nothing and say nothing.
      * So the versions must not mix.
+     * <p>
+     * <b>{@code "15"} is issue #34</b> (the Warehouse Crafter Feeder, ADR-067): {@link ProductionScreenPayload}'s
+     * {@code ProductionScreenState} carries the crafter feeder flag and one pattern check per slot, appended after the
+     * stopped products, which a reader of the old shape would stop before and leave in the buffer; the check travels by
+     * ordinal ({@code CrafterPatternCheck}), which an older client could not read at all. No new payload type.
      */
-    public static final String VERSION = "14";
+    public static final String VERSION = "15";
 
     private WareworksNetwork() {
     }

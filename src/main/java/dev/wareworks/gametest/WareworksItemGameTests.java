@@ -88,6 +88,7 @@ public final class WareworksItemGameTests {
     private static final String COMPARATOR = "comparator";
     private static final String COPPER_CASING = "copper_casing";
     private static final String COPPER_SHEET = "copper_sheet";
+    private static final String CRAFTER = "crafter";
     private static final String ELECTRON_TUBE = "electron_tube";
     private static final String INDUSTRIAL_IRON_BLOCK = "industrial_iron_block";
     private static final String IRON_SHEET = "iron_sheet";
@@ -113,7 +114,7 @@ public final class WareworksItemGameTests {
             return new IngredientSpec(createId(createPath), null);
         }
 
-        /** A vanilla item, for the one ingredient that is not Create's ({@code minecraft:comparator}). */
+        /** A vanilla item, for the ingredients that are not Create's ({@code minecraft:comparator}, the Crafter). */
         static IngredientSpec ofVanilla(String path) {
             return new IngredientSpec(ResourceLocation.withDefaultNamespace(path), null);
         }
@@ -260,6 +261,10 @@ public final class WareworksItemGameTests {
         assertCrafts(helper, recipes, level, copperTank, WareworksBlocks.FLUID_BAY_COPPER.asItem(), ONE);
         assertCrafts(helper, recipes, level, brassTank, WareworksBlocks.FLUID_BAY_BRASS.asItem(), ONE);
         assertCrafts(helper, recipes, level, production, WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(), ONE);
+        // The crafter feeder is a column - mechanism, casing, the vanilla Crafter it feeds (issue #34) - so no other
+        // grid of brass casing and precision mechanism can be mistaken for it.
+        CraftingInput feeder = grid(1, 3, mechanism, brass, vanilla(CRAFTER));
+        assertCrafts(helper, recipes, level, feeder, WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(), ONE);
         assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
         assertCrafts(helper, recipes, level, homePoint, WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(), ONE);
 
@@ -330,6 +335,8 @@ public final class WareworksItemGameTests {
                 WareworksBlocks.FLUID_BAY_COPPER.asItem(), WareworksBlocks.FLUID_BAY_BRASS.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
+                // The crafter feeder directly after the station whose machine it is (issue #34).
+                WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem()),
                 "creative tab order");
         helper.assertTrue(tab.getIconItem().is(WareworksBlocks.STACKER_CRANE.asItem()), "creative tab icon: " + tab.getIconItem());
@@ -408,6 +415,11 @@ public final class WareworksItemGameTests {
                         List.of(IngredientSpec.of(BRASS_FUNNEL), IngredientSpec.of(BRASS_FUNNEL),
                                 IngredientSpec.of(BRASS_CASING), IngredientSpec.of(BRASS_FUNNEL),
                                 IngredientSpec.of(ANDESITE_ALLOY))),
+                // The crafter feeder (issue #34): a vanilla Crafter in a brass casing with a precision mechanism,
+                // because it is brass-tier automation around a machine the player already owns.
+                new ExpectedRecipe(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(PRECISION_MECHANISM), IngredientSpec.of(BRASS_CASING),
+                                IngredientSpec.ofVanilla(CRAFTER))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_STOCK_KEEPER, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.ofVanilla(COMPARATOR), IngredientSpec.of(ELECTRON_TUBE),
                                 IngredientSpec.of(BRASS_CASING), IngredientSpec.of(ELECTRON_TUBE),

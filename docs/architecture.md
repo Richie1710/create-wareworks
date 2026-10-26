@@ -172,7 +172,11 @@ dev.wareworks
 │   │                          fetch's lines walked in line order against one snapshot, each taking from the racks
 │   │                          at its own turn and a chain paying for the rest out of what the earlier lines and
 │   │                          chains left), FetchPreview (per line its take and its chain) and ChainPreview (what one
-│   │                          short line's chain would promise and make, or the refusal that names its item)
+│   │                          short line's chain would promise and make, or the refusal that names its item);
+│   │                          the crafter feeder (issue #34, ADR-067): CrafterGrid (pattern cell i is Crafter slot
+│   │                          i; runs in a grid), CrafterFeedPlan (which slot an order belongs to, the batch),
+│   │                          CrafterPatternCheck (the recipe check's verdict, by ordinal on the wire), FeederCycle
+│   │                          (the pulse: one rising edge per run, the pace), FeederStatus (what the goggles say)
 │   ├── port                   the policy of one warehouse port (M17, issue #12, ADR-029): PortDirection (request /
 │   │                          accept, derived from the sign of the rank; since M18 also collect, from one sentinel
 │   │                          rank), PortRedstone (on a pulse / while powered /
@@ -366,7 +370,14 @@ dev.wareworks
 │                              get) and TerminalPortionRefusal (why either order's last portion was refused, never
 │                              saved); a recipe laid from JEI (ADR-063): TerminalCraftLay (what the terminal tells the
 │                              picker — its buffer read once, the aisle's player stock and producible items asked on
-│                              demand, and vanilla's plain-item rule; reads, never writes)
+│                              demand, and vanilla's plain-item rule; reads, never writes);
+│                              the crafter feeder (issue #34, ADR-067): WarehouseCrafterFeederBlock / BlockEntity (a
+│                              kinetic block on a production station's back that lays one order at a time into the
+│                              vanilla Crafter in front of it and pulses it once per run; holds no items),
+│                              CrafterFeederAttachment (which station's back it touches, from block states),
+│                              CrafterRecipeCheck (the second class that may look up recipes: it evaluates and runs
+│                              none), CrafterOutputFit (whether a craft's result and remainders fit in front of the
+│                              Crafter), CrafterFeederGoggleSummary
 │   └── display                the seven Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -952,6 +963,7 @@ iron sheets already require a press and its brass casing already requires brass.
   * *Extended in M26 to seventeen scenes* (`warehouse/packages_at_the_door`, “Packages at a Warehouse Door”), Create packages at a warehouse door; registered for the **warehouse output and the warehouse input**, and last in both cases, so each block still opens on the scene it always did (ADR-040). Both stations show it because the build is the same Packager on either side of the warehouse and which station its back touches is the whole lesson, so a player who meets one door finds the other. It is a storyboard of its own for the reason M20 and M22 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because its build (two Packagers, a sign, a Smart Observer, a funnel) fits neither port schematic. Its stage is a new 9x7x9 plate in `scripts/gen_ponder_schematics.py`. Two things the plate itself taught, worth knowing before the next scene: a **standing sign** shows a scene its blank back unless `ROTATION` is set (6 points the writing at the plate's fixed camera), and a block's place on the plate is worth computing rather than guessing (screen-right ≈ −0.819·X + 0.574·Z, screen-up ≈ 0.329·X + 0.470·Z + 0.819·Y, from `PonderScene.SceneTransform`'s yRotation 145 / xRotation −35) — which is what shows, before any run, that a Packager on the **far** rack plane hides behind its own station. A ticking Create Packager in a scene is safe, which was doubted while this was being planned: `PackagerBlockEntity#lazyTick` returns at `if (level.isClientSide()) return;` before `recheckIfLinksPresent`, so the `setBlockAndUpdate` that worried it is unreachable from a `PonderLevel` — with or without a Stock Link beside it.
   * *Extended in M28 to twenty scenes* (`warehouse/rack_bay`, `warehouse/rack_wall`, `warehouse/bays_in_an_aisle`), the rack bay's three, in `client.ponder.scenes.RackBayScenes` and registered for **all three tiers** (ADR-048). They are the one block of this mod whose scenes are deliberately **not** in warehouse-first order: a wooden bay needs no machine to craft, so its first audience owns no crane, and the standalone block comes first, the wall second and the aisle last. Three things they had to learn, each of which the next aisle-free scene will need as well. A `PonderLevel` is **client-side**, so it derives neither of a bay's flags (`FILL`, `OVERLOADED`) and cannot spawn a pallet at all — the scenes write both flags into the block state and build the pallet through `createEntity` plus the new display hook `PalletEntity#showClientLoad`, the counterpart of `showClientPose`. A third thing, added in **M29 step 14** once a bay drew the item it stores (ADR-049): the goods have to be put in by hand as well, or a scene teaches "a bay keeps the first item type that lands in it" over anonymous cartons. `RackBayScenes#store` does it with `modifyBlockEntity` and the bay's own `insert`, which needs no hook at all — the change callback behind it returns at once on anything that is not a `ServerLevel`, so nothing is sent, no controller is told and the scene's own `FILL` stands. Ponder renders at **`30 * scaleFactor` units per block whatever the base plate is** (`PonderScene.SceneTransform#refreshMatrix`), so the plate only centres a scene and a single-block scene is made legible by `scaleSceneView` — `RackBayScenes.SINGLE_SCALE` is 2.0 on a square **3** plate, the largest scale and smallest plate in the mod. And the M22 caption rule is now written down rather than remembered (`RackBayScenes`' class comment): applying it found `warehouse/packages_at_the_door` still shipping the defect in one of its two trip beats, a caption shown 150 ticks longer than the scene then idled, drawn on top of the next one.
   * *Extended in M27* (`warehouse/ordering_to_a_door`, “Delivering to a Package Door”), the twenty-second scene, after M30's `warehouse/fluid_bay`: ordering goods to a package door at the terminal (ADR-065 D15). It is registered for the **warehouse terminal and the warehouse output**, because the door is chosen at the one and is the other, and **last** for both, so each block still opens on the scene it always did. It is a storyboard of its own for the reason M20, M22 and M26 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because it needs a terminal beside the door, which the `packages_at_the_door` stage has no room for; its own stage is another empty 9x7x9 plate. Like the terminal's own scenes it represents the screen it cannot open: `InputElementBuilder#showing` draws any Create icon in a control bubble, so the door button appears as itself (`AllIcons.I_SEND_ONLY`) on the terminal's display face.
+  * *Extended for issue #34* (`warehouse/crafter_feeder`, “Crafting with a Vanilla Crafter”), the twenty-third scene, in `client.ponder.scenes.CrafterFeederScenes` (ADR-067). It is registered for the **crafter feeder and the production station**, last for the station, so the station still opens on the scene it always did. Its stage is a new 9x7x9 plate in `scripts/gen_ponder_schematics.py`; the build is mirrored onto the left rack plane, whose back row is the one nearest Ponder's camera, so the feeder and the Crafter are in view without turning it. Like the station's own scenes it shows the pattern screen as icons and text, and the batch as item bubbles over the Crafter and each run as a redstone indication on it. The feeder joined the tag `wareworks:warehouse` and Create's `KINETIC_APPLIANCES` with it.
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
@@ -973,7 +985,7 @@ iron sheets already require a press and its brass casing already requires brass.
 * **Two scenes rather than one, for pacing.** Told as one story the keeper came to about a minute in which the three numbers — the part a player needs first — were over after the first third, and a player who only wanted to look up "what does the reserve do" had to sit through a production loop. The two now run **968** and **1051** ticks (about 48 s and 53 s) and each is watchable on its own, exactly as the terminal's placing/requesting pair is (`StockRuleScenes` carries the reason). The `text_n` renumbering rule above is why the split was made *before* release rather than later.
 * **The redstone in a scene is real block states.** A `PonderLevel` (`SchematicLevel`) runs no block ticks and no neighbour updates, so a comparator, a redstone lamp and a lever keep whatever state a scene sets, and `toggleRedstonePower` flips exactly their `POWERED`/`POWER`/`LIT`. The keeper is never in such a selection: its own `LIT` is a rule lamp and is written on its own, together with `PAUSED` for the safety stop — the same two block states the controller's rule tick writes in a real world.
 
-*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye. *M15:* keeper 2. *M17:* output 3. *M18:* output 4 and production 2, which is what pins that the collecting scene really reaches both of its subjects. *M20:* terminal 3 and production 3, which pins the same thing for the chain scene. It is also the only automated check that a storyboard compiles at all, which is why the chain scene was iterated three times against it: the first machine became a Mechanical Saw (two Mechanical Crafters made the rack row six identical brown boxes, because a crafter has to face away from the aisle to be fed from it), the two closing beats were lengthened so the 90 % shot always carries one of them, and the opening was merged into one beat.
+*Verification:* `runData` runs every storyboard once with `level == null`, which is why storyboard bodies must never touch the level (only instruction callbacks may). The `ponder` visual scenario (`dev.wareworks.dev.PonderVisualScenario`, `./gradlew runVisualTest -Pwareworks.visualTest=ponder`) opens the real Ponder UI per item, asserts the registered scene count and screenshots every scene at three moments; a broken storyboard throws out of `PonderUI.of` and fails the run. *M13:* its `SUBJECTS` list holds the per-item scene counts (crane 1, rail 1, controller 2, interface 3, input 1, output 1, terminal 2, production 1), so a scene registered for the wrong item fails the run rather than being noticed by eye. *M15:* keeper 2. *M17:* output 3. *M18:* output 4 and production 2, which is what pins that the collecting scene really reaches both of its subjects. *M20:* terminal 3 and production 3, which pins the same thing for the chain scene. *#34:* production 4 and feeder 1, which pins that the Crafter scene reaches both of its subjects. It is also the only automated check that a storyboard compiles at all, which is why the chain scene was iterated three times against it: the first machine became a Mechanical Saw (two Mechanical Crafters made the rack row six identical brown boxes, because a crafter has to face away from the aisle to be fed from it), the two closing beats were lengthened so the 90 % shot always carries one of them, and the opening was merged into one beat.
 
 *Reason:* Scenes built entirely from instructions keep the binary assets trivial and stable, and reusing the crane's own motion means the Ponder crane can never drift from how the machine really behaves.
 
@@ -6551,6 +6563,157 @@ test is added: everything new reads item stacks or Create's classes, so it is te
 * A filtered toolbox inside a stored package, a filter, a linked controller or an order context, a sand paper paused
   inside a shulker box, a package or a toolbox, and two kinds of wand on one block inside two shulker boxes behave as
   before (nested values, above).
+
+### ADR-067 — A vanilla Crafter behind a production station is fed by a Wareworks block that lays one order at a time and pulses once per run; Wareworks still crafts nothing (amends ADR-024 and ADR-059) ([issue #34](https://github.com/Richie1710/create-wareworks/issues/34))
+
+*Context:* A production station hands its ingredients to whatever machine a player built behind it (ADR-024). For the
+most common machine of all — "craft this 3 × 3 recipe" — that machine is a line of Mechanical Crafters, one filtered
+funnel and one hopper per slot, which is a lot of build for a torch. Minecraft 1.21 has a block that crafts a 3 × 3
+recipe on a redstone pulse, the **Crafter**, but nothing can lay a recipe into it: a hopper or a funnel fills its slots by
+the hopper-balancing rule, never "coal into slot 0, a stick into slot 3". Issue #34 asks for a block that does exactly
+that, with the owner's decisions: the name "Warehouse Crafter Feeder" ("Lager-Crafter-Zuführung"); it sits on the back
+of a production station with a vanilla Crafter in front of it and a Warehouse Input in front of the Crafter's output; it
+uses the station's existing patterns and serves one order at a time, laying several runs at once and giving one pulse
+per run, and only takes the next order when the Crafter is empty; patterns are checked against a real crafting recipe
+while a feeder is attached, and a refused one is red with a reason and never laid; rotation is required by default, with
+a config key for that and for the stress impact; its recipe is brass casing, a vanilla Crafter and a precision
+mechanism; and **Wareworks still crafts nothing** — the vanilla Crafter does, and Mechanical Crafters stay the tool for
+recipes larger than 3 × 3.
+
+What the sources say (Minecraft 1.21.1 decompiled and NeoForge 21.1 in `build/api-src`), and what follows:
+* **The Crafter's item capability is NeoForge's `InvWrapper`** (`CapabilityHooks`, `nonSidedVanillaContainers`), nine
+  slots in row-major order — the same order as a pattern's cells, so cell *i* is slot *i*. `InvWrapper#insertItem`
+  honours `CrafterBlockEntity#canPlaceItem`: a disabled slot takes nothing, an empty enabled slot takes anything, and a
+  non-empty slot refuses while a **later** enabled slot is empty or holds less of the same item (the hopper rule). So the
+  feeder inserts only into a completely empty grid, one insert per slot with the whole batch.
+* **Slot locking** (`setSlotState`) only works on an empty slot, enabling as well as disabling. Locking the slots a
+  layout leaves empty and restoring them afterwards is therefore always possible, because those slots are always empty.
+* **One rising signal edge gives at most one craft, four ticks later** (`CrafterBlock#neighborChanged` schedules one tick
+  and sets `TRIGGERED`; a second edge while it is pending adds nothing). A grid that matches no recipe consumes nothing.
+  Every craft takes one item from every filled slot, so every cell of a pattern the feeder lays must be exactly 1 item.
+* **What does not fit in front of the Crafter's output is dropped** as an item entity (`CrafterBlock#dispenseItem`,
+  through `VanillaInventoryCodeHooks#insertCrafterOutput` for a block that is no vanilla `Container`, which a Warehouse
+  Input is not). Remainders leave the same way, after the result.
+* **Redstone:** a weak signal on one face reaches the Crafter through `hasNeighborSignal` and stops there; a strong one
+  would be passed on to the Crafter's other neighbours.
+
+*Decision:*
+* **D1 — the block.** `wareworks:warehouse_crafter_feeder`, a Create kinetic consumer (`DirectionalAxisKineticBlock`:
+  six facings, the shaft through the two faces `axis_along_first` picks, so a column of feeders behind a rack wall shares
+  one vertical shaft), with one extra boolean, `powering`. `FACING` points at the Crafter. Rendered like Create's encased
+  shaft; hand-made models from `create:` textures; relocation protected, because it holds feed state.
+* **D2 — attachment.** The feeder serves the production station whose **back** touches one of its five faces other than
+  `FACING` (`CrafterFeederAttachment`, block states only). It may face any way but into that station, which allows the
+  straight build and the compact one the issue describes: facing along the rack wall puts the Crafter behind the next
+  rack position, the only place where a Warehouse Input can stand directly in front of its output. Two stations' backs
+  on one feeder: it serves neither and says so. Placement turns a facing into the station around.
+* **D3 — no items in the feeder.** Items move from the station's buffer straight into a Crafter slot in one server tick
+  (`StationBuffer#extract`, then `insertItem` on the Crafter's own capability), simulated first for every key and every
+  slot. The item-conservation invariant keeps its four places with the Crafter as the machine: buffer, Crafter, the block
+  in front of its output, dropped. What a slot refuses after a passed simulation goes back into the buffer the way the
+  crane delivers, and only what even that refuses is dropped at the feeder with a WARN log (`TerminalCrafting`'s rule).
+* **D4 — one order at a time.** The feeder loads the oldest `DELIVERED` order of its station that maps onto a valid
+  slot (`CrafterFeedPlan#match`), only into an empty grid, and lays batches of up to a stack per used slot
+  (`CrafterFeedPlan#batch`). The next order starts only once the grid is empty again, so two orders never mix.
+  **How many runs it loads is what is really left** (`CrafterFeedPlan#remainingRuns`): the runs the order is, less the
+  runs a feeder already laid of it, and never more than the result the order still waits for needs. The laid runs are
+  kept per order by the **station** (`FeederLaid` in its save, pruned to open orders), not by the feeder, because a
+  feeder can be broken and placed again, or its save dropped as unreadable, in the middle of an order. A new feeder
+  therefore also loads an order that waits for its result with some but not all runs laid, and lays only the rest. Without
+  that, it would load the full count, ask the buffer for runs that were crafted long ago, starve, time the order out with
+  delivered ingredients (arming the safety stop of an automatic order), and could take a later order's ingredients as
+  its own, which is the pool-level mix this decision rules out.
+* **D5 — before every pulse** the grid must be the loaded layout times a whole number of runs, nothing else may power
+  the Crafter, the Crafter's next craft must make the order's result in the amount one run makes, and the block in front
+  of the Crafter's output must take the result **and every remainder** (simulated, `CrafterOutputFit`). Otherwise the
+  feeder does not pulse and its goggles say why (`FeederStatus`). It never lets the vanilla Crafter drop anything.
+  **Before every batch** the loaded layout is checked against the recipes again: the check of D7 runs when an order is
+  loaded, and a `/reload` or a datapack can remove or change the recipe while it runs. A layout that no longer makes the
+  order's result is not laid any more (`RECIPE_CHANGED`, sent by name like every status, so no network version change);
+  the order times out as any order whose machine does nothing, and its ingredients stay in the buffer.
+* **D6 — slot locks.** While a layout is loaded, the Crafter slots it leaves empty are disabled and the used slots a
+  player had disabled are enabled; both are restored when the order is done, when the feeder is broken, and — for locks
+  a save could not tie to a feed any more — on the first tick after a load.
+* **D7 — the recipe check.** While a feeder is attached, every pattern slot is checked against the crafting recipes the
+  Crafter uses (`CrafterBlock.getPotentialResults`, its own lookup and cache): `VALID`, `CELL_NOT_ONE`, `NOT_A_RECIPE` or
+  `RESULT_DIFFERS` (`core.production.CrafterPatternCheck`, by ordinal on the wire). A refused slot is **dropped from
+  `WarehouseProductionBlockEntity#activePatterns`**, which is the one list the planner, the restocking rules and the
+  terminal read, so the warehouse never plans or fetches for it and no ingredient is wasted. The check is cached in the
+  station until a pattern changes or the recipe manager is replaced (a `/reload`). Without a feeder nothing is checked,
+  exactly as before.
+* **D8 — the order's life is unchanged.** The feeder tells the controller two things: progress per batch and per run
+  (`onCrafterFeederProgress`, which only pushes the deadline) and, with the **first** batch, that the machine has taken
+  the order on (`onCrafterFeederTookIngredients`, `DELIVERED` → `WAITING_FOR_RESULT`; later calls change nothing). Saying
+  it only after the last batch left a large order `DELIVERED` while it was crafted, ranked with an older order of the
+  same item that still waited for an ingredient, and the feeder's results were credited to that older order first. The
+  result is counted as any machine's, stored out of a warehouse input. Timeouts and the safety stop are untouched; a
+  blocked feeder simply waits under them. A feeder whose station is gone (breaking a station cancels its orders) never
+  pulses again and gives the Crafter its slots back as soon as the grid is empty, crafted or emptied by the player.
+* **D9 — config** (section `stations`): `crafterFeederRequiresRotation` (default `true`) and
+  `crafterFeederStressImpact` (2.0 SU per RPM, the Mechanical Crafter's own value, half the crane's), registered through
+  `WareworksStress#crafterFeederImpact`, which answers 0 while rotation is not required.
+* **D10 — pace.** One run every `max(8, ceil(256 / |RPM|))` ticks (8 ticks, 2.5 crafts a second, at 32 RPM and above);
+  without required rotation always 8. The pulse is 2 ticks high, and the grid is read 6 ticks after the edge: one run
+  fewer is a craft, none fewer a failed pulse and a back-off of 100 ticks (`FeederCycle`). The read happens on the first
+  tick after the pulse that reaches the grid, whatever phase the cycle is in by then, so a few ticks without a station or
+  a Crafter right after an edge delay the read instead of losing it.
+* **D11 — the recipe of the block is hand-written JSON**, a column of precision mechanism, brass casing and vanilla
+  Crafter. The issue said "(datagen)", but this repository has no recipe datagen: every recipe is hand-written and pinned
+  by `WareworksItemGameTests#recipesLoaded`, so the feeder's is too.
+* **D12 — `WareworksNetwork.VERSION` 14 → 15**: `ProductionScreenState` carries the feeder flag and one check per pattern
+  slot, appended after the stopped products.
+* **D13 — persistence.** The feeder saves the order it serves, the slot, a snapshot of the 9-cell layout, the result
+  item and how many one run makes, the runs not laid yet, and the side (not the position) of the Crafter it locked with
+  the two lock masks; a schematic print never overwrites a running feed. The station saves the runs laid per open order
+  (D4). What lies in the grid is never saved by Wareworks — it is in the
+  Crafter, and the feeder reads it back. The first tick after a load lowers a signal saved high; a craft the Crafter had
+  scheduled is in the chunk's tick list and still happens. Save data is bounded on read.
+* **D14 — a second class may look up recipes.** ADR-059's `RecipeExecutionBoundaryTest` allows recipe lookups only in
+  `TerminalCrafting`. `content.station.CrafterRecipeCheck` is now exempt from the lookup scan as well: it **evaluates**
+  (is a pattern a recipe, what does the Crafter's next craft output) and runs nothing — no crafting event, no insert, no
+  item set or dropped, no call into `TerminalCrafting`, which the new test `theCrafterCheckOnlyEvaluates` holds it to.
+  The amendment to ADR-024 and ADR-059 is exactly this: Wareworks evaluates a crafting recipe for the feeder; it still
+  never assembles one into the world.
+
+*Alternatives rejected:*
+* **Wareworks crafting the recipe itself** (the feeder as a crafting table): contradicts ADR-024 and ADR-059 and the
+  issue's own "Wareworks crafts nothing".
+* **A new pattern type for the feeder:** the station's patterns already are a 3 × 3 grid plus a result; a second kind
+  would split every screen, the planner and the terminal for no gain. The check filters instead.
+* **Inserting through the Crafter's hopper-balancing logic** (one item at a time into any slot): cannot lay a layout,
+  and two orders' items would end up mixed.
+* **A strong signal or a signal on every face:** would power the Crafter's other neighbours, including a player's own
+  redstone.
+* **One order per craft:** a 64-run order would be 64 orders and 64 round trips of the crane; batches keep the order as
+  the player made it.
+* **Leaving refused patterns in the planner and refusing them at the feeder:** the crane would fetch ingredients that no
+  machine will ever take, which is exactly the waste the issue forbids.
+
+*Consequences:*
+* A vanilla Crafter is a production machine for every 3 × 3 recipe, with a feeder, a Warehouse Input and a shaft. A
+  pattern that is no recipe is visible at once, at the station, and never costs an ingredient.
+* Two edges of the boundary of §3.5.4 are new and written down there: a batch already in the Crafter when its order ends
+  is still crafted and comes back as product (as long as its station stands), and a grid a player changed by hand is
+  never pulsed.
+* A second place in the code evaluates recipes; the guard names it and tests that it only evaluates.
+* Clients and servers of 0.13 and this version cannot talk to each other (D12).
+* The feeder's Shift tooltip is the tallest of the mod (15 lines in English, 16 in German within
+  `ItemTooltipLengthTest`'s budget), so a longer description would have to give something up.
+* Tests: JUnit `CrafterGridTest`, `CrafterFeedPlanTest` (including `remainingRuns`), `FeederCycleTest`,
+  `CrafterPatternCheckTest`, `CrafterFeederTextWidthTest`, the order tests and the boundary test; GameTests
+  `gametest.CrafterFeederGameTests` (the whole loop with the census on the craft ledger on every tick and the registered
+  stress impact, a three-step chain through one Crafter, the three refusals and the screen state through its codec, a
+  pattern edited into a refusal after its order was delivered, two orders of two patterns that provably overlapped and
+  two orders of one pattern served one after the other, an order of 68 runs laid as 64 + 4, the feeder replaced between
+  those two batches, a remainder (four empty bottles with a honey block) and an input that has room for the block but
+  not the bottles, rotation required and optional (impact 0), a full output, another signal, two stations, a disturbed
+  grid, the feeder, the Crafter and the station each broken mid-order, a reload taken inside a real pulse); the visual
+  scenario `feeder` (the pattern written with real clicks, the red slot, the terminal order, the whole order laid as one
+  batch with its locks, the lit Crafter, English and German); the Ponder scene `warehouse/crafter_feeder`; and a feeder
+  phase in `runRobustnessTest` (a batch with its locked slots rides a real chunk unload and a real save, quit and
+  rejoin; the order then completes on the craft ledger with all nine slots back). A `/reload` that changes the recipe
+  mid-order (D5) has no automated test: a GameTest cannot swap the recipe manager under a running test without
+  affecting every other test of its batch.
 
 ## Persistence & sync
 

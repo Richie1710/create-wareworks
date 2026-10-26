@@ -13,6 +13,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.StackerCraneBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
@@ -34,7 +35,8 @@ import net.minecraft.world.level.material.MapColor;
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
  * controller, interface, the three rack bays (wood, andesite, brass), the two fluid bays (copper, brass), input,
- * output, terminal, production station, stock keeper, home point (GameTest {@code creativetaborderandicon}). The bays
+ * output, terminal, production station, crafter feeder, stock keeper, home point (GameTest
+ * {@code creativetaborderandicon}). The bays
  * stand directly after the interface because they are the other half of the same answer: an interface turns somebody
  * else's inventory into a storage location, a bay <b>is</b> one — and the fluid bays stand directly after the item
  * ones, weakest first, because they are the same block for the other kind of goods. Recipes are hand-written JSON in
@@ -43,7 +45,7 @@ import net.minecraft.world.level.material.MapColor;
  * drops client-side listeners.
  * <p>
  * Conventions for new blocks: warehouse state blocks use {@code .transform(WareworksTags.relocationProtected())};
- * kinetic consumers use {@code .transform(WareworksStress.configuredImpact())}. A block a Display Link may read gets
+ * kinetic consumers register their stress impact through {@link WareworksStress}. A block a Display Link may read gets
  * its sources from {@link WareworksDisplaySources} — one {@code DisplaySource.displaySource(...)} transform, or
  * {@link WareworksDisplaySources#bind} where a block offers two, so their order in the link's screen is fixed.
  */
@@ -258,6 +260,30 @@ public final class WareworksBlocks {
                     .blockstate(WareworksBlockStateGen.productionBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
+                    .register();
+
+    /**
+     * Warehouse Crafter Feeder (issue #34, ADR-067): sits on the back of a production station, lays its patterns into the
+     * vanilla Crafter in front of it and triggers that Crafter once per run. Directly after the production station,
+     * because it is that station's machine. A kinetic consumer like Create's encased shaft
+     * ({@code DirectionalAxisKineticBlock}) with the configured stress impact ({@link WareworksStress#crafterFeederImpact});
+     * its own blockstate ({@link WareworksBlockStateGen#crafterFeederBlockProvider()}) over the hand-made
+     * {@code models/block/warehouse_crafter_feeder/horizontal.json} and {@code vertical.json} (authored with the Crafter
+     * side facing north), and the hand-made {@code item.json}. It holds no items but holds the order it is feeding, so it
+     * is protected from contraptions; it does not conduct redstone, so its own pulse reaches only the Crafter. Drops
+     * itself.
+     */
+    public static final BlockEntry<WarehouseCrafterFeederBlock> WAREHOUSE_CRAFTER_FEEDER =
+            REGISTRATE.block("warehouse_crafter_feeder", WarehouseCrafterFeederBlock::new)
+                    .initialProperties(SharedProperties::stone)
+                    .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK)
+                            .noOcclusion().isRedstoneConductor((state, level, pos) -> false))
+                    .transform(TagGen.pickaxeOnly())
+                    .transform(WareworksTags.relocationProtected())
+                    .transform(WareworksStress.crafterFeederImpact())
+                    .blockstate(WareworksBlockStateGen.crafterFeederBlockProvider())
+                    .item()
+                    .transform(ModelGen.customItemModel("_", "item"))
                     .register();
 
     /**

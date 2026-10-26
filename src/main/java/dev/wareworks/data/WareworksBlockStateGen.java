@@ -12,6 +12,7 @@ import com.tterrag.registrate.util.nullness.NonNullBiConsumer;
 
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.station.TerminalDisplaySide;
+import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
@@ -156,6 +157,40 @@ public final class WareworksBlockStateGen {
         if (lit != null)
             part.condition(WarehouseHomePointBlock.LIT, lit);
         part.end();
+    }
+
+    /**
+     * The Warehouse Crafter Feeder's blockstate (issue #34, ADR-067): Create's {@code directionalAxisBlock} for models
+     * authored with their front — the Crafter side — facing <b>north</b>, where Create's own models face the other way.
+     * <p>
+     * {@code vertical} has the shaft through its top and bottom, {@code horizontal} through east and west. A horizontal
+     * facing picks {@code vertical} when the rotation axis is Y (Create's rule: the facing's axis is X exactly when
+     * {@code axis_along_first} is set) and is turned onto the facing; an upward or downward facing uses
+     * {@code horizontal}, tipped up or down the way an observer is, and turned a quarter for an axis along Z.
+     * {@code powering} is a pulse of two ticks nobody can see, so both of its values share the model.
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            crafterFeederBlockProvider() {
+        return (context, provider) -> {
+            String folder = "block/" + context.getName() + "/";
+            ModelFile vertical = provider.models().getExistingFile(provider.modLoc(folder + "vertical"));
+            ModelFile horizontal = provider.models().getExistingFile(provider.modLoc(folder + "horizontal"));
+            provider.getVariantBuilder(context.getEntry()).forAllStates(state -> {
+                Direction facing = state.getValue(WarehouseCrafterFeederBlock.FACING);
+                boolean alongFirst = state.getValue(WarehouseCrafterFeederBlock.AXIS_ALONG_FIRST_COORDINATE);
+                if (facing.getAxis().isVertical())
+                    return ConfiguredModel.builder()
+                            .modelFile(horizontal)
+                            .rotationX(facing == Direction.UP ? 270 : 90)
+                            .rotationY(alongFirst ? 0 : 90)
+                            .build();
+                boolean shaftVertical = (facing.getAxis() == Direction.Axis.X) == alongFirst;
+                return ConfiguredModel.builder()
+                        .modelFile(shaftVertical ? vertical : horizontal)
+                        .rotationY(rotationOnto(facing))
+                        .build();
+            });
+        };
     }
 
     /**

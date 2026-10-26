@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.terminal.PlanMember;
@@ -32,9 +33,13 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
  *                 order. A station whose machine works carries an empty list and its screen reads exactly as it did
  *                 before; a station that has lost a batch is the one place a player can see it and lift it while
  *                 standing in front of the machine that swallowed it
+ * @param feeder   whether a Warehouse Crafter Feeder is attached to this station's back (issue #34, ADR-067)
+ * @param checks   the crafting recipe check of each pattern slot, in slot order; empty or
+ *                 {@link CrafterPatternCheck#NOT_CHECKED} entries without a feeder. A slot past the end of the list
+ *                 reads as not checked ({@link #check})
  */
 public record ProductionScreenState(List<PatternView> patterns, List<OrderView> orders,
-                                    List<StoppedProduct> stopped) {
+                                    List<StoppedProduct> stopped, boolean feeder, List<PatternCheckView> checks) {
     /**
      * Orders one payload carries; a station with more shows the first ones.
      * <p>
@@ -73,6 +78,15 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         patterns = List.copyOf(Objects.requireNonNull(patterns, "patterns"));
         orders = List.copyOf(Objects.requireNonNull(orders, "orders"));
         stopped = List.copyOf(Objects.requireNonNull(stopped, "stopped"));
+        checks = List.copyOf(Objects.requireNonNull(checks, "checks"));
+    }
+
+    /**
+     * A station without a Crafter Feeder: the shape every call site used before issue #34, so a caller that says nothing
+     * about the feeder keeps describing a station whose patterns nobody checks.
+     */
+    public ProductionScreenState(List<PatternView> patterns, List<OrderView> orders, List<StoppedProduct> stopped) {
+        this(patterns, orders, stopped, false, List.of());
     }
 
     /**
@@ -93,6 +107,41 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
     public record EntryView(int entry, ItemKey key, int count) {
         public EntryView {
             Objects.requireNonNull(key, "key");
+        }
+    }
+
+    /**
+     * The crafting recipe check of one pattern slot while a Crafter Feeder is attached (issue #34, ADR-067).
+     *
+     * @param check        the verdict; it travels by ordinal ({@link CrafterPatternCheck#byOrdinal})
+     * @param recipeResult what the recipe really makes, for {@link CrafterPatternCheck#RESULT_DIFFERS} only, as the
+     *                     result entry of the slot
+     */
+    public record PatternCheckView(CrafterPatternCheck check, Optional<EntryView> recipeResult) {
+        public static final PatternCheckView NOT_CHECKED =
+                new PatternCheckView(CrafterPatternCheck.NOT_CHECKED, Optional.empty());
+
+        public PatternCheckView {
+            Objects.requireNonNull(check, "check");
+            Objects.requireNonNull(recipeResult, "recipeResult");
+        }
+
+        void write(RegistryFriendlyByteBuf buffer) {
+            buffer.writeVarInt(check.ordinal());
+            buffer.writeBoolean(recipeResult.isPresent());
+            if (recipeResult.isPresent()) {
+                ItemKey.STREAM_CODEC.encode(buffer, recipeResult.get().key());
+                buffer.writeVarInt(recipeResult.get().count());
+            }
+        }
+
+        static PatternCheckView read(RegistryFriendlyByteBuf buffer) {
+            CrafterPatternCheck check = CrafterPatternCheck.byOrdinal(buffer.readVarInt());
+            if (!buffer.readBoolean())
+                return new PatternCheckView(check, Optional.empty());
+            ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
+            return new PatternCheckView(check, Optional.of(new EntryView(ProductionPatterns.RESULT_ENTRY, key,
+                    buffer.readVarInt())));
         }
     }
 
@@ -238,6 +287,12 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         buffer.writeVarInt(stoppedCount);
         for (int i = 0; i < stoppedCount; i++)
             stopped.get(i).write(buffer);
+        // Appended after the stopped products (issue #34): a station without a Crafter Feeder pays two zero bytes.
+        buffer.writeBoolean(feeder);
+        int checkCount = Math.min(checks.size(), ProductionPatterns.MAX_SLOTS);
+        buffer.writeVarInt(checkCount);
+        for (int i = 0; i < checkCount; i++)
+            checks.get(i).write(buffer);
     }
 
     /** Reads a state written by {@link #write}; bounded, and unknown ordinals fall back to the first state. */
@@ -262,7 +317,17 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         List<StoppedProduct> stopped = new ArrayList<>(stoppedCount);
         for (int i = 0; i < stoppedCount; i++)
             stopped.add(StoppedProduct.read(buffer));
-        return new ProductionScreenState(patterns, orders, stopped);
+        boolean feeder = buffer.readBoolean();
+        int checkCount = Math.min(Math.max(0, buffer.readVarInt()), ProductionPatterns.MAX_SLOTS);
+        List<PatternCheckView> checks = new ArrayList<>(checkCount);
+        for (int i = 0; i < checkCount; i++)
+            checks.add(PatternCheckView.read(buffer));
+        return new ProductionScreenState(patterns, orders, stopped, feeder, checks);
+    }
+
+    /** The crafting recipe check of pattern slot {@code pattern}; not checked without a feeder or past the list. */
+    public PatternCheckView check(int pattern) {
+        return pattern < 0 || pattern >= checks.size() ? PatternCheckView.NOT_CHECKED : checks.get(pattern);
     }
 
     /** The entry of a pattern slot, if it is set. */

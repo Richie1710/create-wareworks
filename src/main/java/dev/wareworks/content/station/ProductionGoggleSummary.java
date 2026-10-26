@@ -34,12 +34,16 @@ import net.minecraft.nbt.Tag;
  *                          order is nominally {@code WAITING_FOR_INGREDIENTS}, so without this flag the goggle line
  *                          would read as a crane that has forgotten it — and it would contradict the very same order's
  *                          row in the terminal's step panel and in this station's own screen
+ * @param feeder            whether a Warehouse Crafter Feeder is attached to this station's back (issue #34, ADR-067)
+ * @param refusedPatterns   complete patterns the feeder refuses because they are no crafting recipe it can lay
+ *                          ({@code CrafterPatternCheck#refused}); always 0 without a feeder
  */
 public record ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
                                       long missingIngredients, long awaitedResult, int stoppedProducts,
-                                      long unrecovered, boolean oldestWaitingForStep) {
+                                      long unrecovered, boolean oldestWaitingForStep, boolean feeder,
+                                      int refusedPatterns) {
     public static final ProductionGoggleSummary NONE =
-            new ProductionGoggleSummary(0, 0, Optional.empty(), 0L, 0L, 0, 0L, false);
+            new ProductionGoggleSummary(0, 0, Optional.empty(), 0L, 0L, 0, 0L, false, false, 0);
 
     private static final String PATTERNS = "Patterns";
     private static final String OPEN_ORDERS = "OpenOrders";
@@ -49,6 +53,8 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
     private static final String STOPPED = "Stopped";
     private static final String UNRECOVERED = "Unrecovered";
     private static final String WAITING_FOR_STEP = "WaitingForStep";
+    private static final String FEEDER = "Feeder";
+    private static final String REFUSED = "Refused";
 
     public ProductionGoggleSummary {
         patterns = Math.max(0, patterns);
@@ -62,6 +68,16 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
         // A flag about an order nobody reported says nothing, and clearing it here keeps two summaries that show the
         // same tooltip equal to each other (records compare by value, and equality is what gates the sync).
         oldestWaitingForStep = oldestWaitingForStep && oldestState.isPresent();
+        // Refused patterns exist only for a feeder, by the same reasoning as the flag above.
+        refusedPatterns = feeder ? Math.max(0, refusedPatterns) : 0;
+    }
+
+    /** A station without a Crafter Feeder: the shape every summary had before issue #34. */
+    public ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
+            long missingIngredients, long awaitedResult, int stoppedProducts, long unrecovered,
+            boolean oldestWaitingForStep) {
+        this(patterns, openOrders, oldestState, missingIngredients, awaitedResult, stoppedProducts, unrecovered,
+                oldestWaitingForStep, false, 0);
     }
 
     /**
@@ -100,6 +116,12 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
         // By the same rule: an aisle that runs no chains pays nothing for this flag (M20).
         if (oldestWaitingForStep)
             tag.putBoolean(WAITING_FOR_STEP, true);
+        // And a station without a Crafter Feeder pays nothing for it either (issue #34).
+        if (feeder) {
+            tag.putBoolean(FEEDER, true);
+            if (refusedPatterns > 0)
+                tag.putInt(REFUSED, refusedPatterns);
+        }
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -108,6 +130,6 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
                 ? ProductionOrderState.byName(tag.getString(STATE)) : Optional.empty();
         return new ProductionGoggleSummary(tag.getInt(PATTERNS), tag.getInt(OPEN_ORDERS), state, tag.getLong(MISSING),
                 tag.getLong(AWAITED), tag.getInt(STOPPED), tag.getLong(UNRECOVERED),
-                tag.getBoolean(WAITING_FOR_STEP));
+                tag.getBoolean(WAITING_FOR_STEP), tag.getBoolean(FEEDER), tag.getInt(REFUSED));
     }
 }

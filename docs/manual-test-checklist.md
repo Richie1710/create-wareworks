@@ -10,28 +10,29 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly **fifteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   lists exactly **sixteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
    interface, **wooden rack bay, andesite rack bay, brass rack bay**, **copper fluid bay, brass fluid bay**, warehouse
-   input, warehouse output, warehouse terminal, warehouse production station, warehouse stock keeper, warehouse home
-   point — the three rack bays stand directly after the interface, weakest first, and the two fluid bays directly
-   after them, weakest first again. (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from
-   there if the two ever disagree.)
+   input, warehouse output, warehouse terminal, warehouse production station, **warehouse crafter feeder**, warehouse
+   stock keeper, warehouse home point — the three rack bays stand directly after the interface, weakest first, the two
+   fluid bays directly after them, weakest first again, and the crafter feeder directly after the station it serves.
+   (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **fifteen** items shows a short Create-style description (issue #22): one sentence
-   what the block is, at most one note the Ponder scenes do not show; the stacker crane additionally shows its stress
-   impact. At
-   **2560x1440 or 5120x1440 with the automatic GUI scale**, in English and in German, hover each bay, the terminal,
-   the output and the crane in the **bottom row of your inventory**: the item name at the top of the Shift tooltip is
-   on screen. **Does each one tell you what the block is for without reading like a telegram?**
-4. JEI/EMI shows **thirteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
+3. Holding Shift on each of the **sixteen** items shows a short Create-style description (issue #22): one sentence what
+   the block is, at most one note the Ponder scenes do not show; the stacker crane and the crafter feeder additionally
+   show their stress impact. At **2560x1440 or 5120x1440 with the automatic GUI scale**, in English and in German, hover
+   each bay, the terminal, the output, the crane and the crafter feeder (the tallest tooltip of all) in the **bottom row
+   of your inventory**: the item name at the top of the Shift tooltip is on screen. **Does each one tell you what the
+   block is for without reading like a telegram?**
+4. JEI/EMI shows **sixteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
-   terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass
-   nuggets** the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an
-   andesite casing between two andesite alloy, with no electron tube and no precision mechanism). In the **vanilla recipe book** the other **nine** appear once you hold one of
-   their ingredients — the terminal shows up with a precision mechanism and the output with a brass nugget — while the
-   stacker crane never does, because mechanical crafting has no recipe-book category (Create's own mechanical crafting
-   recipes behave the same).
+   terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass nuggets**
+   the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an andesite casing between
+   two andesite alloy, with no electron tube and no precision mechanism), and the crafter feeder is one column: a
+   precision mechanism over a brass casing over a vanilla Crafter. In the **vanilla recipe book** the other **fifteen**
+   appear once you hold one of their ingredients — the terminal shows up with a precision mechanism and the output with
+   a brass nugget — while the stacker crane never does, because mechanical crafting has no recipe-book category
+   (Create's own mechanical crafting recipes behave the same).
 4a. Lay out the **input** recipe (funnel over casing) and then the **output** recipe (casing over funnel with a brass
     nugget on each side of the funnel) in a crafting table: each gives exactly its own block, and neither turns into
     the warehouse interface (casing + funnel + brass nugget, shapeless).
@@ -3336,3 +3337,75 @@ you get tired of waiting, and put it back before judging check 160.
     two logs.
 324. **German (`de_de`).** Repeat 321 in German: "Fertigungen: 2 (je 4)" and "Das Mengenfeld gibt die Stückzahl an".
     **Do both read naturally, and does any line run out of the tooltip at GUI scale 6?**
+
+## BE. The Crafter Feeder ([issue #34](https://github.com/Richie1710/create-wareworks/issues/34))
+
+> A **Warehouse Crafter Feeder** on the back of a production station lays the station's patterns into the **vanilla
+> Crafter** in front of it, one order at a time, and gives the Crafter one redstone pulse per run; the Crafter crafts
+> and its output goes into a warehouse input (ADR-067). While a feeder is attached, every pattern is checked against a
+> real crafting recipe, and a refused one is red in the screen and never ordered. The GameTests `crafterfeedertorch`
+> (slots, locks, one rising edge per run, the craft ledger on every tick, the stress impact), `crafterfeederchain` (logs
+> and coal to torches through one Crafter), `crafterfeederinvalidpattern` (three refusals, the screen state through its
+> codec, nothing checked without a feeder), `crafterfeederinvalidafterdelivery`, `crafterfeedertwoorders`,
+> `crafterfeedertwosameorders`, `crafterfeederbigorder` (68 runs laid as 64 + 4), `crafterfeederreplacedbetweenbatches`,
+> `crafterfeederremainder` and `crafterfeederremainderblocked` (honey bottles), `crafterfeederneedsrotation`,
+> `crafterfeederrotationoptional`, `crafterfeederblockedoutput`, `crafterfeederexternalsignal`,
+> `crafterfeedertwostations`, `crafterfeedergriddisturbed`, `crafterfeederbrokenmidorder`,
+> `crafterfeedercraftermissing`, `crafterfeederstationbrokenmidorder` and `crafterfeederreload` cover the behaviour;
+> `runRobustnessTest` carries a laid batch through a real chunk unload and a real save, quit and rejoin; and the visual
+> scenario `feeder` writes the pattern with real clicks, orders at the terminal and shoots the goggles, the red slot and
+> the lit Crafter in English and German. What no test does: build it with the block's own placement and a wrench, judge
+> the model and the Ponder scene, judge the pace of a large order and a cake, play on a dedicated server, and judge the
+> German.
+>
+> Setup: `./gradlew runClient`, the aisle of sections B–F with a production station at a right-hand rack position and a
+> warehouse input at the next one, coal and sticks in the racks, a terminal. From the Wareworks tab a Warehouse Crafter
+> Feeder, from vanilla a Crafter, from Create a creative motor (or a shaft from your network), Engineer's Goggles and a
+> wrench.
+
+325. **The build.** Place the **Crafter first**, before the input: stand in the empty rack position where the input will
+    go (or above it) and look out at the Crafter's spot behind it, so the Crafter's face points into the rack (a placed
+    Crafter faces the player, and neither the vanilla game nor a wrench turns it later). Then place the Warehouse Input
+    in that rack position. Stand outside the rack wall and place the feeder against the station's back so that it faces
+    along the rack towards the Crafter (sneak to reverse it, wrench to turn it). Give the feeder rotation through its
+    shaft. **Is it clear from the model which face points at the Crafter and where the shaft goes in?** Sneak-place a
+    second feeder against another station's back while looking at that station: it faces away from the station, never
+    into it.
+326. **A torch.** In the station's screen write coal into the top left cell, a stick below it and 4 torches as the
+    result. "Crafter Feeder" stands on the Patterns row and nothing is red. Order 16 torches at the terminal: the crane
+    brings 4 coal and 4 sticks, they appear in the Crafter's slots (open the Crafter: the other seven slots are switched
+    off), the Crafter crafts four times, 16 torches go through the input into the racks and on to the terminal, and
+    the Crafter's slots are all switched on again afterwards. Nothing lies on the floor.
+327. **The goggles.** While it works, the feeder's goggles say "Crafting Torch · runs left: 3" (counting down to 1)
+    above the kinetic stats; idle they say "Waiting for a delivered order". The station's goggles show "Crafter Feeder
+    at the back". Stop the rotation: "Needs rotation" in gold, and nothing is laid.
+328. **Red patterns.** Write dirt → diamond in a second slot, two coal in one cell of a torch in a third, and a torch
+    that claims 8 in a fourth. Each of those tabs gets a red bar, its grid a red frame and its arrow a red cross;
+    hovering tab or arrow says "Not a crafting recipe", "Each cell must hold exactly 1 item" or "The recipe makes Torch
+    x4", each with "The Crafter Feeder skips this pattern". Diamonds are not offered at the terminal, the station's
+    goggles count "Patterns the feeder skips: 3", and breaking the feeder makes all of them plain patterns again. **Is
+    it clear why a slot is red, and what to change?**
+329. **Blocked runs.** Stop the crane's motor, fill the input by hand and order torches with the motor running again
+    only for the delivery: the batch is laid, the feeder says "The Crafter's output is full" and the Crafter does not
+    craft until the crane has room in the input again. Take a coal out of the Crafter while a batch lies in it: "The
+    Crafter's grid was changed by hand" and no craft; put it back and it goes on. Put a redstone torch next to the
+    Crafter: "Something else powers the Crafter". Put a second station with its back against the feeder: "Touches two
+    production stations". Break the station while a batch lies in the Crafter: nothing more is crafted, and once you
+    have taken the items out of the Crafter all nine of its slots are switched on again.
+330. **A large order and a cake.** Order 400 torches: the feeder lays 64 runs, then the other 36 (the GameTest
+    `crafterfeederbigorder` checks the split with 68 runs), and at 32 RPM or more the Crafter crafts about 2.5 times a
+    second. Break the feeder and place it again while the 36 wait: it lays only those 36, and the order completes. Write
+    the cake (each cell one item: three milk buckets, two sugar, an egg, three wheat) and order one: the cake and the
+    three empty buckets come back through the input. **Does the pace feel right next to Create's own machines?**
+331. **Save and load.** Leave the world while a batch lies in the Crafter and open it again: the run goes on where it
+    stopped, every torch arrives once, and the Crafter gets its slots back at the end. Break the feeder mid-run: the
+    Crafter's slots are switched on again and what lies in it stays there.
+332. **German (`de_de`).** The block is "Lager-Crafter-Zuführung"; everywhere else the vanilla block is called by its
+    German name, "Werker" (the tooltip and the Ponder scene say "Werker (Crafter)" once). Its goggles read
+    "Crafter-Zuführung:" and "Fertigt Fackel · verbleibende Durchläufe: 3", the blocked statuses "Kein Werker davor",
+    "Die Ausgabe des Werkers ist voll" and "Leere den Werker, damit es losgeht"; the reasons are "Kein Werkbankrezept",
+    "Jedes Feld braucht genau 1 Gegenstand", "Das Rezept ergibt Fackel x4" and "Die Zuführung überspringt dieses
+    Muster". Hold Shift over the item at GUI scale 6. **Do they read like German, and does any line run out of its
+    box?**
+333. **On a dedicated server.** Start `./gradlew runServer`, join with `./gradlew runClient` and repeat 326 and 328:
+    the red slots and the goggles show the same, and neither log has an error mentioning `wareworks`.

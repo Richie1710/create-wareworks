@@ -369,7 +369,18 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             // block state are built from, so a player cannot be told one thing by the block and another by its screen.
             stopped = contentHolder.stoppedProducts(controller.get());
         }
-        return new ProductionScreenState(views, orders, stopped);
+        // The crafting recipe check of every slot while a Crafter Feeder is attached (issue #34, ADR-067): the same
+        // cached answer the station filters its planner patterns with, so the screen's red slot is exactly a slot the
+        // warehouse never orders.
+        boolean feeder = contentHolder.attachedFeeder().isPresent();
+        List<ProductionScreenState.PatternCheckView> checks = new ArrayList<>(patterns.size());
+        if (feeder) {
+            for (CrafterRecipeCheck.Result check : contentHolder.crafterChecks())
+                checks.add(new ProductionScreenState.PatternCheckView(check.check(), check.recipeResult()
+                        .map(made -> new ProductionScreenState.EntryView(ProductionPatterns.RESULT_ENTRY,
+                                ItemKey.of(made), made.getCount()))));
+        }
+        return new ProductionScreenState(views, orders, stopped, feeder, checks);
     }
 
     private long gameTime() {

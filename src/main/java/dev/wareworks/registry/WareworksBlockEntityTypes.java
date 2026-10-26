@@ -1,5 +1,7 @@
 package dev.wareworks.registry;
 
+import com.simibubi.create.content.kinetics.base.ShaftRenderer;
+import com.simibubi.create.content.kinetics.base.SingleAxisRotatingVisual;
 import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.tterrag.registrate.util.entry.BlockEntityEntry;
 
@@ -11,6 +13,7 @@ import dev.wareworks.client.render.WarehouseInterfaceRenderer;
 import dev.wareworks.client.render.WarehouseOutputRenderer;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.station.WarehouseCrafterFeederBlockEntity;
 import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
@@ -139,6 +142,19 @@ public final class WareworksBlockEntityTypes {
     public static final BlockEntityEntry<WarehouseProductionBlockEntity> WAREHOUSE_PRODUCTION = REGISTRATE
             .blockEntity("warehouse_production", WarehouseProductionBlockEntity::new)
             .validBlocks(WareworksBlocks.WAREHOUSE_PRODUCTION)
+            .register();
+
+    /**
+     * Warehouse Crafter Feeder (issue #34, ADR-067): a kinetic block entity drawn exactly like Create's encased shaft —
+     * the rotating shaft through the casing as a Flywheel visual ({@code SingleAxisRotatingVisual::shaft}), and
+     * {@code ShaftRenderer} where Flywheel is off or in Ponder (both lambdas are only evaluated on the client). No
+     * capability: it holds no items, it moves them from the station's buffer straight into the Crafter.
+     */
+    public static final BlockEntityEntry<WarehouseCrafterFeederBlockEntity> WAREHOUSE_CRAFTER_FEEDER = REGISTRATE
+            .blockEntity("warehouse_crafter_feeder", WarehouseCrafterFeederBlockEntity::new)
+            .visual(() -> SingleAxisRotatingVisual::shaft, false)
+            .validBlocks(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER)
+            .renderer(() -> ShaftRenderer::new)
             .register();
 
     /**

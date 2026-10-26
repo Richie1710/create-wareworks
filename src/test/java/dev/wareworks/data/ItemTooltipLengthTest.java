@@ -61,7 +61,7 @@ class ItemTooltipLengthTest {
      * Items whose tooltip also carries Create's kinetic stats — a blank line, "Kinetic Stress Impact:" and its bar —
      * which take those three lines from the description's budget.
      */
-    private static final Set<String> KINETIC_ITEMS = Set.of("stacker_crane");
+    private static final Set<String> KINETIC_ITEMS = Set.of("stacker_crane", "warehouse_crafter_feeder");
     private static final int KINETIC_STATS_LINES = 3;
 
     private static final Pattern ENTRY = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*(\"((?:[^\"\\\\]|\\\\.)*)\"|-?\\d+)");

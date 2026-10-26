@@ -1,0 +1,81 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"casing": "create:block/brass_casing",
+		"gearbox": "create:block/brass_gearbox",
+		"opening": "create:block/chute_hole",
+		"particle": "create:block/brass_casing"
+	},
+	"elements": [
+		{
+			"name": "Bottom",
+			"from": [0, 0, 0],
+			"to": [16, 2, 16],
+			"faces": {
+				"north": {"uv": [0, 14, 16, 16], "texture": "#casing", "cullface": "north"},
+				"east": {"uv": [0, 14, 16, 16], "texture": "#casing", "cullface": "east"},
+				"south": {"uv": [0, 14, 16, 16], "texture": "#casing", "cullface": "south"},
+				"west": {"uv": [0, 14, 16, 16], "texture": "#casing", "cullface": "west"},
+				"up": {"uv": [0, 0, 16, 16], "texture": "#casing"},
+				"down": {"uv": [0, 0, 16, 16], "texture": "#casing", "cullface": "down"}
+			}
+		},
+		{
+			"name": "Top",
+			"from": [0, 14, 0],
+			"to": [16, 16, 16],
+			"faces": {
+				"north": {"uv": [0, 0, 16, 2], "texture": "#casing", "cullface": "north"},
+				"east": {"uv": [0, 0, 16, 2], "texture": "#casing", "cullface": "east"},
+				"south": {"uv": [0, 0, 16, 2], "texture": "#casing", "cullface": "south"},
+				"west": {"uv": [0, 0, 16, 2], "texture": "#casing", "cullface": "west"},
+				"up": {"uv": [0, 0, 16, 16], "texture": "#casing", "cullface": "up"},
+				"down": {"uv": [0, 0, 16, 16], "texture": "#casing"}
+			}
+		},
+		{
+			"name": "Back",
+			"from": [0, 2, 13],
+			"to": [16, 14, 16],
+			"faces": {
+				"north": {"uv": [0, 2, 16, 14], "texture": "#casing"},
+				"east": {"uv": [0, 2, 3, 14], "texture": "#casing", "cullface": "east"},
+				"south": {"uv": [0, 2, 16, 14], "texture": "#casing", "cullface": "south"},
+				"west": {"uv": [13, 2, 16, 14], "texture": "#casing", "cullface": "west"}
+			}
+		},
+		{
+			"name": "FrontWest",
+			"from": [0, 2, 0],
+			"to": [3, 14, 3],
+			"faces": {
+				"north": {"uv": [13, 2, 16, 14], "texture": "#casing", "cullface": "north"},
+				"east": {"uv": [13, 2, 16, 14], "texture": "#casing"},
+				"south": {"uv": [0, 2, 3, 14], "texture": "#casing"},
+				"west": {"uv": [0, 2, 3, 14], "texture": "#casing", "cullface": "west"}
+			}
+		},
+		{
+			"name": "FrontEast",
+			"from": [13, 2, 0],
+			"to": [16, 14, 3],
+			"faces": {
+				"north": {"uv": [0, 2, 3, 14], "texture": "#casing", "cullface": "north"},
+				"east": {"uv": [13, 2, 16, 14], "texture": "#casing", "cullface": "east"},
+				"south": {"uv": [13, 2, 16, 14], "texture": "#casing"},
+				"west": {"uv": [0, 2, 3, 14], "texture": "#casing"}
+			}
+		},
+		{
+			"name": "Core",
+			"from": [0.95, 2, 3],
+			"to": [15.05, 14, 13],
+			"faces": {
+				"north": {"uv": [0.95, 2, 15.05, 14], "texture": "#opening"},
+				"east": {"uv": [3, 2, 13, 14], "texture": "#gearbox"},
+				"west": {"uv": [3, 2, 13, 14], "texture": "#gearbox"}
+			}
+		}
+	]
+}

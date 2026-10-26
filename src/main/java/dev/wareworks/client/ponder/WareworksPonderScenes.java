@@ -5,6 +5,7 @@ import com.tterrag.registrate.util.entry.ItemProviderEntry;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.client.ponder.scenes.CraneScenes;
+import dev.wareworks.client.ponder.scenes.CrafterFeederScenes;
 import dev.wareworks.client.ponder.scenes.FluidBayScenes;
 import dev.wareworks.client.ponder.scenes.NetworkScenes;
 import dev.wareworks.client.ponder.scenes.PackageScenes;
@@ -48,7 +49,8 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting,
  *       warehouse/production_chain, warehouse/fluid_bay, warehouse/ordering_to_a_door</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
- *       warehouse/production_chain</td></tr>
+ *       warehouse/production_chain, warehouse/crafter_feeder</td></tr>
+ *   <tr><td>warehouse_crafter_feeder</td><td>warehouse/crafter_feeder</td></tr>
  *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
  *       warehouse/port_accepting</td></tr>
  *   <tr><td>rack_bay_wood, rack_bay_andesite, rack_bay_brass</td><td>warehouse/rack_bay, warehouse/rack_wall,
@@ -192,5 +194,13 @@ public final class WareworksPonderScenes {
         scenes.forComponents(WareworksBlocks.WAREHOUSE_TERMINAL, WareworksBlocks.WAREHOUSE_OUTPUT)
                 .addStoryBoard("warehouse/ordering_to_a_door", PackageScenes::orderingToADoor,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // The Crafter Feeder (issue #34, ADR-067), and last for the same reason as every scene above: a player meets
+        // "a station feeds your machines" and "chains of orders" first, and "and a vanilla Crafter can be that machine"
+        // after. It belongs to <b>both</b> the feeder and the production station, because the feeder is that
+        // station's machine and its patterns are the station's; registered last, so no scene of the station moves.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, WareworksBlocks.WAREHOUSE_PRODUCTION)
+                .addStoryBoard("warehouse/crafter_feeder", CrafterFeederScenes::feeder,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
     }
 }

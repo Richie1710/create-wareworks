@@ -220,6 +220,24 @@ public final class ProductionOrders<K, L> {
     }
 
     /**
+     * A machine made progress on order {@code orderId} that no counter shows — a Warehouse Crafter Feeder laid a batch
+     * or saw a run crafted (issue #34, ADR-067) — so its timeout starts over ({@link ProductionOrder#withProgress}).
+     *
+     * @return the order after the change, or empty when it is unknown, finished or its deadline did not move
+     */
+    public Optional<ProductionOrder<K, L>> touch(UUID orderId, long now, long timeoutTicks) {
+        Objects.requireNonNull(orderId, "orderId");
+        ProductionOrder<K, L> order = orders.get(orderId);
+        if (order == null)
+            return Optional.empty();
+        ProductionOrder<K, L> next = order.withProgress(now, timeoutTicks);
+        if (next == order)
+            return Optional.empty();
+        store(next);
+        return Optional.of(next);
+    }
+
+    /**
      * What one observation did: the orders it changed, and how many result items it credited in total.
      *
      * @param changed  the orders whose state or counters changed (filter for {@link ProductionOrderState#COMPLETE} to

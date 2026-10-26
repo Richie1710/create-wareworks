@@ -371,6 +371,19 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
                 resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
     }
 
+    /**
+     * This order after a machine made visible progress on it without any count changing — a Warehouse Crafter Feeder
+     * laid a batch of its ingredients into a Crafter or saw a run crafted (issue #34, ADR-067): an open order's deadline
+     * moves out to {@code timeoutTicks} after {@code now}, and never earlier than it already was. A finished order is
+     * returned unchanged, because its deadline is the moment it ended.
+     */
+    public ProductionOrder<K, L> withProgress(long now, long timeoutTicks) {
+        if (!isOpen())
+            return this;
+        long next = Math.max(deadlineTick, deadline(now, timeoutTicks));
+        return next == deadlineTick ? this : withDeadline(next);
+    }
+
     /** Whether every ingredient line has been served completely. */
     public boolean allIngredientsDelivered() {
         for (SupplyLine<K> line : lines) {

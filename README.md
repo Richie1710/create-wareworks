@@ -119,6 +119,11 @@ teleported: every item you put in or take out is carried by the crane, where you
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
   at your own machines. Wareworks never crafts on its own; at a terminal you can craft by hand from what the crane
   delivered.
+* **Warehouse Crafter Feeder**: makes a **vanilla Crafter** the machine behind a production station. It sits on the
+  station's back, lays each order's ingredients into the Crafter exactly as the pattern's grid shows them and pulses the
+  Crafter once per run; the result goes into a Warehouse Input in front of the Crafter. While it is attached, the
+  station's patterns are checked against real crafting recipes, and one that is not a recipe is shown red and never
+  ordered. Needs rotation.
 * **Warehouse Stock Keeper**: holds the warehouse's stock rules — one item per row plus a **minimum**, a **maximum** and
   a **reserve**. It holds no items itself; a row's item is only a name, and nothing you click into it is used up.
 * **Warehouse Home Point**: says "wait here". Place it beside the rails where your next job usually starts and, on a
@@ -231,7 +236,7 @@ The build *is* the configuration; there is no setup screen.
 9. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
-Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Fourteen of the fifteen blocks have
+Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Fifteen of the sixteen blocks have
 one — the home point is the exception, it has no scene yet: the crane and the rail share the overview, the controller shows storing
 and retrieving, the interface adds addressing and storage filters, the terminal and the production station have their own
 scenes (placing and requesting, and feeding a machine from the warehouse), the output has three more for its port
@@ -259,7 +264,10 @@ ordinary stock** — ending on the two things a fluid bay is deliberately worse 
 cannot fill one and that breaking a full one loses the fluid. The twenty-second, **Delivering to a Package Door**,
 belongs to the terminal and the output: the port with a Packager at its back that is a door, the sign that names it,
 the terminal's door button that sends a click there, the crane filling the door and your redstone sending the box,
-what always comes to the terminal instead, and the Stock Link that takes a door out of the choice.
+what always comes to the terminal instead, and the Stock Link that takes a door out of the choice. The
+twenty-third, **Crafting with a Vanilla Crafter**, belongs to the Crafter Feeder and the production station: the feeder
+on the station's back, the Crafter in front of it and the input in front of the Crafter, an order of torches laid and
+crafted run by run, and the red pattern that is never fetched.
 
 ## Balancing the crane
 
@@ -620,13 +628,37 @@ Practical notes:
   between each funnel and its crafter to hold the next ingredient.
 * **Give a Mechanical Saw a recipe filter.** Saws also run stonecutting recipes and cycle through every matching
   recipe, so an unfiltered saw makes the wrong item most of the time.
-* **Wareworks does not check patterns against recipes.** A pattern whose machine cannot make the result never produces
-  anything, and the order times out.
+* **Wareworks does not check patterns against recipes** — unless a Crafter Feeder is attached (below). A pattern whose
+  machine cannot make the result never produces anything, and the order times out.
 * **A step is completed by items really arriving in the warehouse.** Putting the intermediate into a rack by hand does not
   finish a step — that is what keeps the safety stop honest — so let the chain run, or cancel it and order the parts
   separately.
 * **"Can be made now" only ever counts one level.** An item that only a chain can make is offered without a number; the
   click then plans the chain exactly and names the item in the way if it cannot.
+
+**A vanilla Crafter can be the machine.** Put a **Warehouse Crafter Feeder** on the back of a production station, a
+**Crafter** in front of the feeder and a **Warehouse Input** in front of the Crafter's output, and give the feeder
+rotation. The feeder faces any way but into its station; facing it along the rack wall puts the Crafter behind the next
+rack position, where the input stands right in front of it. A placed Crafter faces the player and cannot be turned
+later, so place it before the input: stand in the input's empty rack position and look out at the Crafter's spot. Every
+pattern of the station is now one recipe for the Crafter, cell for cell:
+
+* **The feeder lays one order at a time.** Once the crane has delivered an order's ingredients, they go straight from
+  the station into the Crafter's slots, up to a stack per slot, and the feeder pulses the Crafter once per run — one run
+  every 8 ticks at 32 RPM or more. The next order is laid only into an empty Crafter, so two orders never mix. The slots
+  the pattern leaves empty are switched off while it runs and switched back on afterwards; the feeder itself holds no
+  items.
+* **Patterns are checked against real crafting recipes while a feeder is attached.** A pattern that is no recipe, has
+  more than one item in a cell, or claims another result than the recipe makes is drawn red in the station's screen with
+  the reason, and the warehouse never offers or orders it, so no ingredient is fetched for nothing.
+* **It never lets the Crafter drop anything.** Before every pulse it checks that the result and every remainder (a
+  cake's buckets) fit into the block in front of the Crafter's output; if not, it waits and its goggles say why — as they
+  do for a missing Crafter, no rotation, a grid changed by hand or another redstone signal on the Crafter. The order's
+  usual timeouts and the safety stop still apply.
+* **Wareworks still crafts nothing itself**: the vanilla Crafter does. For recipes larger than 3 × 3, Create's
+  Mechanical Crafters stay the tool.
+* Server config: `crafterFeederRequiresRotation` (default on) and `crafterFeederStressImpact` (2.0, like a Mechanical
+  Crafter).
 
 ## Stock rules
 

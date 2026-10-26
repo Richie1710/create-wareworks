@@ -1712,6 +1712,31 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return id == null ? Optional.empty() : productionOrders.get(id);
     }
 
+    /**
+     * Server: a Warehouse Crafter Feeder laid a batch of order {@code orderId}'s ingredients into its Crafter or saw a
+     * run crafted (issue #34, ADR-067). Neither changes a count the order keeps, but both are a machine working on it, so
+     * its timeout starts over. Only the deadline moves, and deadlines are never saved, so the controller is not marked
+     * dirty for it.
+     */
+    public void onCrafterFeederProgress(UUID orderId) {
+        if (orderId == null || level == null || level.isClientSide)
+            return;
+        productionOrders.touch(orderId, level.getGameTime(), productionTimeoutTicks());
+    }
+
+    /**
+     * Server: a Warehouse Crafter Feeder took the last batch of order {@code orderId}'s ingredients out of its station
+     * (issue #34, ADR-067), so the order waits for its result now — the same step the dispatch cadence takes for any
+     * machine once the station holds none of the order's ingredients ({@link #tickProductionOrders}). Said directly,
+     * because a second order of the same items at the same station would keep that generic rule from ever seeing it.
+     */
+    public void onCrafterFeederTookIngredients(UUID orderId) {
+        if (orderId == null || level == null || level.isClientSide)
+            return;
+        if (productionOrders.ingredientsTaken(orderId, level.getGameTime(), productionTimeoutTicks()).isPresent())
+            setChanged();
+    }
+
     /** The open production orders of this aisle. */
     public List<ProductionOrder<ItemKey, RackPosition>> openProductionOrders() {
         return productionOrders.open();

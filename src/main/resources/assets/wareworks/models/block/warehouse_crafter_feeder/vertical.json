@@ -1,0 +1,81 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"casing": "create:block/brass_casing",
+		"gearbox": "create:block/brass_gearbox",
+		"opening": "create:block/chute_hole",
+		"particle": "create:block/brass_casing"
+	},
+	"elements": [
+		{
+			"name": "West",
+			"from": [0, 0, 0],
+			"to": [2, 16, 16],
+			"faces": {
+				"north": {"uv": [14, 0, 16, 16], "texture": "#casing", "cullface": "north"},
+				"east": {"uv": [0, 0, 16, 16], "texture": "#casing"},
+				"south": {"uv": [0, 0, 2, 16], "texture": "#casing", "cullface": "south"},
+				"west": {"uv": [0, 0, 16, 16], "texture": "#casing", "cullface": "west"},
+				"up": {"uv": [0, 0, 2, 16], "texture": "#casing", "cullface": "up"},
+				"down": {"uv": [0, 0, 2, 16], "texture": "#casing", "cullface": "down"}
+			}
+		},
+		{
+			"name": "East",
+			"from": [14, 0, 0],
+			"to": [16, 16, 16],
+			"faces": {
+				"north": {"uv": [0, 0, 2, 16], "texture": "#casing", "cullface": "north"},
+				"east": {"uv": [0, 0, 16, 16], "texture": "#casing", "cullface": "east"},
+				"south": {"uv": [14, 0, 16, 16], "texture": "#casing", "cullface": "south"},
+				"west": {"uv": [0, 0, 16, 16], "texture": "#casing"},
+				"up": {"uv": [14, 0, 16, 16], "texture": "#casing", "cullface": "up"},
+				"down": {"uv": [14, 0, 16, 16], "texture": "#casing", "cullface": "down"}
+			}
+		},
+		{
+			"name": "Back",
+			"from": [2, 0, 13],
+			"to": [14, 16, 16],
+			"faces": {
+				"north": {"uv": [2, 0, 14, 16], "texture": "#casing"},
+				"south": {"uv": [2, 0, 14, 16], "texture": "#casing", "cullface": "south"},
+				"up": {"uv": [2, 13, 14, 16], "texture": "#casing", "cullface": "up"},
+				"down": {"uv": [2, 0, 14, 3], "texture": "#casing", "cullface": "down"}
+			}
+		},
+		{
+			"name": "FrontDown",
+			"from": [2, 0, 0],
+			"to": [14, 3, 3],
+			"faces": {
+				"north": {"uv": [2, 13, 14, 16], "texture": "#casing", "cullface": "north"},
+				"south": {"uv": [2, 13, 14, 16], "texture": "#casing"},
+				"up": {"uv": [2, 0, 14, 3], "texture": "#casing"},
+				"down": {"uv": [2, 13, 14, 16], "texture": "#casing", "cullface": "down"}
+			}
+		},
+		{
+			"name": "FrontUp",
+			"from": [2, 13, 0],
+			"to": [14, 16, 3],
+			"faces": {
+				"north": {"uv": [2, 0, 14, 3], "texture": "#casing", "cullface": "north"},
+				"south": {"uv": [2, 0, 14, 3], "texture": "#casing"},
+				"up": {"uv": [2, 0, 14, 3], "texture": "#casing", "cullface": "up"},
+				"down": {"uv": [2, 13, 14, 16], "texture": "#casing"}
+			}
+		},
+		{
+			"name": "Core",
+			"from": [2, 0.95, 3],
+			"to": [14, 15.05, 13],
+			"faces": {
+				"north": {"uv": [2, 0.95, 14, 15.05], "texture": "#opening"},
+				"up": {"uv": [2, 3, 14, 13], "texture": "#gearbox"},
+				"down": {"uv": [2, 3, 14, 13], "texture": "#gearbox"}
+			}
+		}
+	]
+}

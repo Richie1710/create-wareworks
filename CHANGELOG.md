@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Warehouse Crafter Feeder: a vanilla Crafter can now be the machine behind a production station**
+  ([#34](https://github.com/Richie1710/create-wareworks/issues/34)). Put the feeder on the back of a Warehouse
+  Production Station, a Crafter in front of the feeder and a Warehouse Input in front of the Crafter's output, and give
+  the feeder rotation. When the crane has delivered an order's ingredients, the feeder lays them into the Crafter's slots
+  exactly as the pattern's 3 × 3 grid shows them, several runs at once, and gives the Crafter one redstone pulse per
+  run. The Crafter crafts, the result goes into the input and the warehouse stores it like any other product. Wareworks
+  itself still crafts nothing. The feeder serves one order at a time and only starts the next one when the Crafter is
+  empty, so two orders never mix. While a pattern is loaded, the Crafter slots it leaves empty are switched off and are
+  switched back on afterwards. Remainders such as the buckets of a cake leave with the result. The feeder holds no items
+  itself. A feeder can face any way except into its station: facing along the rack wall puts the Crafter behind the
+  next rack position, where the input stands in front of it. A feeder broken and placed again in the middle of a large
+  order lays only the runs that are left
+- **Patterns are checked against real crafting recipes while a Crafter Feeder is attached.** A pattern that is no
+  crafting recipe, that has more than one item in a cell, or whose result differs from what the recipe makes is drawn
+  red in the station's screen with the reason ("Not a crafting recipe", "Each cell must hold exactly 1 item", "The recipe
+  makes Torch x4"). The warehouse then never offers or orders it, so no ingredient is fetched for nothing. Without a
+  feeder nothing is checked, as before
+- **The feeder says why it waits.** Its goggles show the item and the runs still to craft, or the reason it is stopped:
+  no Crafter, a full or missing output, no rotation, a Crafter grid changed by hand, another redstone signal on the
+  Crafter, missing ingredients, or a recipe that a reload changed so it no longer fits the pattern (then nothing more is
+  laid). It never pulses while the Crafter could not put the whole result and every remainder
+  into the block in front of it, so the vanilla Crafter never drops a result on the floor. The station's goggles show
+  that a feeder is attached and how many patterns it skips
+- **Server config:** `crafterFeederRequiresRotation` (default `true`) and `crafterFeederStressImpact` (default 2.0, like
+  Create's Mechanical Crafter). At 32 RPM and above the feeder crafts one run every 8 ticks
+- Recipe: a precision mechanism over a brass casing over a vanilla Crafter, in one column. A Ponder scene, "Crafting
+  with a Vanilla Crafter", shows the build for the feeder and the production station
+
+### Changed
+
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because the production station's screen carries the pattern checks now
+
 ## [0.13.1-beta] - 2026-10-26
 
 ### Changed

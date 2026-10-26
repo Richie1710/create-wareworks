@@ -14,6 +14,7 @@ import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.StoppedProduct;
+import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.network.ProductionCancelPayload;
@@ -58,6 +59,13 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * says the machine is worth another batch ({@link ProductionResumePayload}); it is the way back that is reachable
  * whether or not a stock keeper's rule happens to govern the item, and it is the same action a sneak-click on the block
  * performs. A station whose machines work has no such row and reads exactly as it did before.
+ * <p>
+ * <b>A Crafter Feeder at the back checks the patterns</b> (issue #34, ADR-067). While one is attached, the "Patterns"
+ * row says so at its right end, and a pattern that is no crafting recipe the feeder can lay — no recipe at all, a cell
+ * that is not exactly one item, or a recipe for something else — is drawn <b>red</b>: a red frame around its grid and
+ * result with a red cross in place of the arrow, and a red bar under its tab, so it can be found without selecting it.
+ * The arrow's and the tab's tooltip give the reason and the consequence: the warehouse never orders that pattern, so
+ * nothing is fetched for it. The window's height budget is unchanged; the feeder adds no row.
  */
 public class WarehouseProductionScreen extends AbstractSimiContainerScreen<ProductionMenu> {
     private static final int TITLE_Y = 2;
@@ -78,6 +86,12 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private static final int COLOR_STOPPED_TINT = 0x60FF4040;
     private static final int COLOR_CELL_HOVER = 0x60FFFFFF;
     private static final int COLOR_TAB_SELECTED = 0x80FBDC7D;
+    /** A pattern the Crafter Feeder refuses (issue #34): the safety stop's red, because both mean "not made". */
+    private static final int COLOR_REFUSED = 0xFFFF4040;
+    /** Height of the red bar under the tab of a refused pattern. */
+    private static final int REFUSED_BAR = 2;
+    /** What stands in the arrow's place while the selected pattern is refused. */
+    private static final String REFUSED_ARROW = "x";
 
     /** Usable width of a row of text: the window without its two margins — 216 px, as in the terminal. */
     public static final int ROW_WIDTH = ProductionMenuLayout.WIDTH - 2 * ProductionMenuLayout.MARGIN;
@@ -272,11 +286,22 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                         COLOR_STOPPED_TINT);
             entry.ifPresent(view -> renderEntry(graphics, view, cellX + ITEM_INSET, cellY + ITEM_INSET));
         }
-        // The arrow between the grid and the result: this is a pattern, not a crafting grid.
-        int arrowX = leftPos + layout.arrowX() + ProductionMenuLayout.ARROW_WIDTH / 2 - font.width(">") / 2;
+        // The arrow between the grid and the result: this is a pattern, not a crafting grid. A pattern the Crafter
+        // Feeder refuses gets a red frame round grid and result and a red cross where the arrow was (issue #34).
+        boolean refused = refusedAt(selectedPattern).isPresent();
+        String arrow = refused ? REFUSED_ARROW : ">";
+        int arrowX = leftPos + layout.arrowX() + ProductionMenuLayout.ARROW_WIDTH / 2 - font.width(arrow) / 2;
         int arrowY = topPos + layout.patternCellY(ProductionMenuLayout.RESULT_CELL)
                 + ProductionMenuLayout.SLOT / 2 - font.lineHeight / 2;
-        graphics.drawString(font, ">", arrowX, arrowY, COLOR_ARROW, false);
+        graphics.drawString(font, arrow, arrowX, arrowY, refused ? COLOR_REFUSED : COLOR_ARROW, false);
+        if (refused) {
+            int left = leftPos + layout.patternCellX(0) - 1;
+            int top = topPos + layout.patternCellY(0) - 1;
+            int right = leftPos + layout.patternCellX(ProductionMenuLayout.RESULT_CELL) + ProductionMenuLayout.SLOT + 1;
+            int bottom = topPos + layout.patternCellY(ProductionMenuLayout.PATTERN_CELLS - 2)
+                    + ProductionMenuLayout.SLOT + 1;
+            graphics.renderOutline(left, top, right - left, bottom - top, COLOR_REFUSED);
+        }
     }
 
     /** One tab per pattern slot, showing that pattern's result. */
@@ -298,6 +323,11 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 graphics.fill(tabX, tabY, tabX + ProductionMenuLayout.SLOT, tabY + ProductionMenuLayout.SLOT,
                         COLOR_STOPPED_TINT);
             state.result(pattern).ifPresent(view -> renderEntry(graphics, view, tabX + ITEM_INSET, tabY + ITEM_INSET));
+            // A pattern the Crafter Feeder refuses is marked under its own tab, whichever pattern is selected, as a
+            // stopped product is (issue #34); a bar rather than a tint, so a tab can say both at once.
+            if (refusedAt(pattern).isPresent())
+                graphics.fill(tabX, tabY + ProductionMenuLayout.SLOT - REFUSED_BAR, tabX + ProductionMenuLayout.SLOT,
+                        tabY + ProductionMenuLayout.SLOT, COLOR_REFUSED);
         }
     }
 
@@ -330,6 +360,12 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         graphics.drawString(font, title, x + ProductionMenuLayout.MARGIN, y + TITLE_Y, COLOR_HEADER, false);
         graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.PRODUCTION_PATTERNS),
                 x + ProductionMenuLayout.MARGIN, y + layout.patternLabelY(), COLOR_DIM, false);
+        // Why patterns may be red: the Crafter Feeder at the back, at the right end of the same row (issue #34).
+        if (state.feeder()) {
+            Component feeder = WareworksLang.translateDirect(WareworksLang.PRODUCTION_FEEDER);
+            graphics.drawString(font, feeder, x + ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN
+                    - font.width(feeder), y + layout.patternLabelY(), COLOR_DIM, false);
+        }
         // The stopped row takes the buffer's label row in the one configuration that has no order line at all (see
         // renderOrders): the slots below it say what they are, while the stop is the only thing here that asks for an act.
         if (!(showsStoppedRow() && layout.orderLines() == 0))
@@ -535,6 +571,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_RESUME_HINT).copy()
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             });
+            refusedAt(tab).ifPresent(check -> tooltip.addAll(refusalLines(check)));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_TAB_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             return tooltip;
@@ -543,6 +580,11 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             tooltip.add(stoppedRow().copy().withStyle(ChatFormatting.RED));
             for (StoppedProduct stopped : state.stopped())
                 addStoppedLines(tooltip, stopped);
+            return tooltip;
+        }
+        // The arrow of a refused pattern says why it is red (issue #34); a pattern that is fine has nothing to say there.
+        if (isOverArrow(mouseX, mouseY)) {
+            refusedAt(selectedPattern).ifPresent(check -> tooltip.addAll(refusalLines(check)));
             return tooltip;
         }
         int cell = cellAt(mouseX, mouseY);
@@ -589,6 +631,44 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                     .withStyle(ChatFormatting.GOLD));
     }
 
+    /**
+     * The Crafter Feeder's check of pattern slot {@code pattern} if it refuses that pattern (issue #34, ADR-067): only
+     * while a feeder is attached, and only for a complete pattern that is no crafting recipe it can lay.
+     */
+    private Optional<ProductionScreenState.PatternCheckView> refusedAt(int pattern) {
+        if (!state.feeder())
+            return Optional.empty();
+        ProductionScreenState.PatternCheckView check = state.check(pattern);
+        return check.check().refused() ? Optional.of(check) : Optional.empty();
+    }
+
+    /** Whether the Crafter Feeder refuses pattern slot {@code pattern}, as the screen draws it (dev harness). */
+    public boolean isRefused(int pattern) {
+        return refusedAt(pattern).isPresent();
+    }
+
+    /** The reason a refused pattern is red, in red, and what that means for it, as a tooltip shows them. */
+    private static List<Component> refusalLines(ProductionScreenState.PatternCheckView check) {
+        return List.of(refusalText(check).copy().withStyle(ChatFormatting.RED),
+                WareworksLang.translateDirect(WareworksLang.PRODUCTION_CHECK_SKIPPED).copy()
+                        .withStyle(ChatFormatting.GRAY));
+    }
+
+    /**
+     * The reason the Crafter Feeder refuses a pattern, as the tooltips say it: "Not a crafting recipe", "Each cell must
+     * hold exactly 1 item", or "The recipe makes Torch x4" with what the recipe really makes. Public for the dev
+     * harness.
+     */
+    public static Component refusalText(ProductionScreenState.PatternCheckView check) {
+        if (check.check() != CrafterPatternCheck.RESULT_DIFFERS)
+            return WareworksLang.translateDirect(WareworksLang.crafterCheckKey(check.check()));
+        Component name = check.recipeResult().map(view -> view.key().toStack().getHoverName())
+                .orElse(Component.empty());
+        String amount = LangNumberFormat.format(check.recipeResult().map(ProductionScreenState.EntryView::count)
+                .orElse(0));
+        return WareworksLang.translateDirect(WareworksLang.PRODUCTION_CHECK_RESULT_DIFFERS, name, amount);
+    }
+
     // --- hit testing ---------------------------------------------------------------------------------------------
 
     private void clampSelection() {
@@ -625,6 +705,14 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 return line;
         }
         return NONE;
+    }
+
+    /** Whether the mouse is over the arrow between the selected pattern's grid and its result. */
+    private boolean isOverArrow(double mouseX, double mouseY) {
+        int left = leftPos + layout.arrowX();
+        int top = topPos + layout.patternCellY(ProductionMenuLayout.RESULT_CELL);
+        return mouseX >= left && mouseX < left + ProductionMenuLayout.ARROW_WIDTH && mouseY >= top
+                && mouseY < top + ProductionMenuLayout.SLOT;
     }
 
     /** Whether the mouse is over the stopped row — the resume affordance of a station that has lost a batch (M20). */

@@ -15,6 +15,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.fluid.FluidKey;
+import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
@@ -70,7 +71,8 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * and closed shapes a rail draws itself as (M21, ADR-033), the controller (display),
  * the interface (framed aisle plate; brass port at the back), input and output (aisle openings; intake on top, pull port at
  * the back), since M11 the copper-bodied production station (aisle opening) and, since M20, the same station with its
- * <b>stopped</b> lamp burning. The warehouse terminal is the one
+ * <b>stopped</b> lamp burning, and since issue #34 the Crafter Feeder in all six facings, each with the shaft axis a
+ * placement gives it. The warehouse terminal is the one
  * exhibit whose front is <b>not</b> its aisle side: since ADR-022 a player stands at its screen and the crane loads it
  * through the opposite face, so the front camera sees the screen and the back camera sees the arm port.
  * <p>
@@ -326,6 +328,16 @@ public final class BlocksVisualScenario implements VisualScenario {
                     WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
                             .setValue(WarehouseProductionBlock.FACING, Direction.SOUTH)
                             .setValue(WarehouseProductionBlock.STOPPED, true))),
+            // The Crafter Feeder (issue #34): one exhibit per facing, each with the shaft axis that facing takes when
+            // it is placed against a neighbour's shaft, so the front and back shots of the six together show every face
+            // of both models - the dark opening towards the Crafter, the recessed gearbox panels with the shaft's ends
+            // in them, the casing slabs - and the shaft through them with and without Flywheel.
+            feederExhibit("feeder_south", Direction.SOUTH, false),
+            feederExhibit("feeder_north", Direction.NORTH, true),
+            feederExhibit("feeder_east", Direction.EAST, true),
+            feederExhibit("feeder_west", Direction.WEST, false),
+            feederExhibit("feeder_up", Direction.UP, true),
+            feederExhibit("feeder_down", Direction.DOWN, false),
             // The stock keeper faces the aisle like the stations, so its panel looks at the front camera. Its lamp is
             // shown lit, which is the only state that differs from the item model (M15).
             new Exhibit("stock_keeper", (level, pos) -> level.setBlockAndUpdate(pos,
@@ -349,6 +361,17 @@ public final class BlocksVisualScenario implements VisualScenario {
             // column outwards and upwards so that every bay is placed beside one that is already standing, which is
             // how a player builds one (BayColumn#placementFacing).
             new Exhibit(WALL_LABEL, BlocksVisualScenario::wall));
+
+    /**
+     * A Crafter Feeder exhibit facing {@code facing}, its shaft axis picked by {@code alongFirst} as Create's
+     * {@code DirectionalAxisKineticBlock} reads it.
+     */
+    private static Exhibit feederExhibit(String label, Direction facing, boolean alongFirst) {
+        return new Exhibit(label, (level, pos) -> level.setBlockAndUpdate(pos,
+                WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.getDefaultState()
+                        .setValue(WarehouseCrafterFeederBlock.FACING, facing)
+                        .setValue(WarehouseCrafterFeederBlock.AXIS_ALONG_FIRST_COORDINATE, alongFirst)));
+    }
 
     /** A rail at {@code pos} with one rail on each named side, so the middle one draws the shape those sides make. */
     private static void rails(ServerLevel level, BlockPos pos, Direction... sides) {
@@ -784,6 +807,8 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.FLUID_BAY_COPPER.asItem(), WareworksBlocks.FLUID_BAY_BRASS.asItem(),
                 WareworksBlocks.WAREHOUSE_INPUT.asItem(), WareworksBlocks.WAREHOUSE_OUTPUT.asItem(),
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
+                // The Crafter Feeder directly after the station whose machine it is (issue #34).
+                WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem());
         if (!shown.equals(expected) || icon != WareworksBlocks.STACKER_CRANE.asItem())
             throw new VisualTestException("unexpected creative tab: icon " + icon + ", items " + shown);

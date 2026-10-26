@@ -27,7 +27,8 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
  * <b>is</b> the storage location (§3.8, M28). The views are final fields, so NeoForge's automatic
  * invalidation (placement, removal, chunk load/unload) is enough; a station only invalidates itself when a load changed
  * its slot count. The warehouse interface, controller and crane expose no item capability — an interface deliberately
- * exposes nothing, because the inventory it reads answers for itself. Create mechanical arms reach
+ * exposes nothing, because the inventory it reads answers for itself — and neither does the crafter feeder (issue #34):
+ * it holds no items, it moves them from its station's buffer straight into a Crafter. Create mechanical arms reach
  * the stations through these same views, via the interaction point types in {@link WareworksArmInteractionPoints}.
  * <p>
  * <b>The rack bay is the one entry here that is a storage location</b> (M28, §3.8). Everything else registered above is

@@ -92,7 +92,9 @@ public final class PonderVisualScenario implements VisualScenario {
             // M27 (issue #18, second half) adds ordering to a door: the door is chosen at the terminal and is the
             // output, so both blocks show it.
             new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 5),
-            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 3),
+            // Issue #34 adds the Crafter Feeder scene, which the station shows as well: the feeder is its machine.
+            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 4),
+            new Subject("feeder", WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, 1),
             new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3),
             // M28 (issue #20): all three tiers carry the same three scenes, and all three are toured rather than only
             // the wooden one. The tier is the block, so three registrations can be lost independently — and the tour

@@ -822,4 +822,16 @@ class ProductionOrdersTest {
                 order.state(), order.deadlineTick(), order.produced(), order.resultStockSeen(), order.backingRequest(),
                 order.promisedToRequest(), order.isRestock(), Optional.of(parentLine));
     }
+
+    @Test
+    void touchMovesOnlyAnOpenOrdersDeadline() {
+        ProductionOrder<String, String> order = newOrder(STATION_A, 1);
+        orders.add(order);
+        assertTrue(orders.touch(order.id(), START + 40L, TIMEOUT).isPresent(), "a Crafter Feeder's progress (#34)");
+        assertEquals(START + 40L + TIMEOUT, orders.get(order.id()).orElseThrow().deadlineTick());
+        assertTrue(orders.touch(order.id(), START + 10L, TIMEOUT).isEmpty(), "never earlier");
+        assertTrue(orders.touch(UUID.randomUUID(), START, TIMEOUT).isEmpty(), "an unknown order is no change");
+        orders.cancel(order.id(), START + 50L);
+        assertTrue(orders.touch(order.id(), START + 90L, TIMEOUT).isEmpty(), "a finished order keeps its end");
+    }
 }

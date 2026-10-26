@@ -542,4 +542,20 @@ class ProductionOrderTest {
             order = order.withDelivered(line.id(), line.required(), START, TIMEOUT);
         return order;
     }
+
+    @Test
+    void progressPushesAnOpenDeadlineOutAndNeverEarlier() {
+        ProductionOrder<String, String> order = order(planks(), 1, 0L);
+        long deadline = order.deadlineTick();
+        ProductionOrder<String, String> later = order.withProgress(START + 50L, TIMEOUT);
+        assertEquals(START + 50L + TIMEOUT, later.deadlineTick(), "a Crafter Feeder's progress (issue #34)");
+        assertSame(later, later.withProgress(START + 10L, TIMEOUT), "an earlier moment never pulls it back");
+        assertTrue(later.deadlineTick() > deadline);
+    }
+
+    @Test
+    void progressLeavesAFinishedOrderAlone() {
+        ProductionOrder<String, String> cancelled = order(planks(), 1, 0L).cancelled(START);
+        assertSame(cancelled, cancelled.withProgress(START + 500L, TIMEOUT));
+    }
 }

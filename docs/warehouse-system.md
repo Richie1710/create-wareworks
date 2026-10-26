@@ -4166,7 +4166,9 @@ the beat sets the Packager's `LINKED` state itself, because a client level deriv
 The station a player's machines are fed from. **Wareworks does not craft.** It *delivers* the ingredients a pattern
 names and *collects* the result that comes back; the crafting itself is done by the player's Create machinery
 (sawmill, press, mixer, mechanical crafter, anything), and nothing in Wareworks checks that a pattern matches a real
-recipe.
+recipe — **except** while a Warehouse Crafter Feeder sits on the station's back: then the machine is a vanilla
+Crafter, which only crafts real crafting recipes, and every pattern is checked against one (§3.5.7, issue #34,
+ADR-067).
 
 ```text
 terminal order ─▶ production order ─▶ SUPPLY jobs ─▶ production station ─▶ (player's funnel) ─▶ machine
@@ -4394,6 +4396,21 @@ exactly the same way. Three things bound it and none of them removes it:
   anything: every order above it has been handed nothing, and cancelling it costs zero.
 * **The safety stop keeps the next click from rebuilding the same chain** into the same machine, for every kind of order
   (§3.6.4).
+
+**A Crafter Feeder widens nothing, and draws two edges of its own** (§3.5.7, ADR-067). It lays an order's
+ingredients into the Crafter only after the crane has delivered all of them, so what it hands over is exactly what the
+order already owed the machine. Two cases are left, and both are written down rather than hidden:
+
+* **An order that ends while a batch lies in the Crafter** (cancelled, timed out, completed by another source): the
+  feeder lays nothing more of it, but what is already in the grid is still crafted and leaves as product through the
+  input — it was handed to the machine, and crafting it is the only way it ever returns to the warehouse. Ingredients not
+  laid yet stay in the station's buffer, as for any machine. The one exception is a **broken station**: without a
+  station the feeder never pulses, and once the grid is empty (the player takes the items out) the Crafter gets its
+  slots back.
+* **A grid a player changed by hand** (an item taken out or put in): the feeder never pulses a grid that is not the
+  loaded layout times a whole number of runs, because the Crafter would make something the order never planned. It
+  waits; once the grid is empty again it lays the next batch or lets the order go, and an order that lost items that
+  way yields less and times out like any order whose machine swallowed a batch.
 
 What a chain lost is reported as **one number**: `ProductionOrders#unrecoveredOf` sums the whole plan, the log line names
 it when a plan ends, the terminal's step panel says what giving the chain up would still cost, and each step's own loss
@@ -4980,6 +4997,92 @@ Tests:
   click that lifts it, and the chain run again); `-Pwareworks.visualTest=ponder` compiles the new scene against a real
   `PonderLevel`; `blocks` gained a `production_stopped` exhibit and `restock` asserts the station's lamp and its stopped
   row inside the real M15 story.
+
+#### 3.5.7 The Crafter Feeder: a vanilla Crafter as the machine (issue #34)
+
+> Status: **shipped**. Decision, alternatives and the API facts it rests on: **ADR-067**. The feeder is a Create kinetic
+> block, `content.station.WarehouseCrafterFeederBlock` / `WarehouseCrafterFeederBlockEntity`, with its pure parts in
+> `core.production` (`CrafterGrid`, `CrafterFeedPlan`, `CrafterPatternCheck`, `FeederCycle`, `FeederStatus`).
+
+A player's machine behind a production station is usually a line of Create blocks. The **Warehouse Crafter Feeder**
+lets it be the **vanilla Crafter** of Minecraft 1.21 instead, for every recipe that fits a 3 × 3 grid, without a funnel
+per slot. **Wareworks still crafts nothing**: the feeder moves items from the station's buffer into the Crafter's slots
+and gives the Crafter a redstone pulse; the Crafter crafts and puts the result into the block in front of its output.
+
+```text
+production order ─▶ SUPPLY jobs ─▶ station buffer ─▶ feeder (lays slot by slot) ─▶ vanilla Crafter
+                                                                                      │ one craft per pulse
+                       storage ◀── STORE job ◀── warehouse input ◀─────────────────────┘
+```
+
+* **Build.** The feeder sits on the station's **back** and faces the Crafter (`FACING`). It may face any way but into
+  that station: straight on (station → feeder → Crafter, the Crafter two blocks behind the rack plane) or along the
+  rack wall, which puts the Crafter behind the **next** rack position — the build the issue describes, because only
+  there can a Warehouse Input stand directly in front of the Crafter's output. It serves the one production station
+  whose back touches one of its five other faces (`CrafterFeederAttachment`); a feeder between the backs of two
+  stations serves neither and says so. It needs rotation (`crafterFeederRequiresRotation`, §9) and takes
+  `crafterFeederStressImpact` SU per RPM (registered through `WareworksStress`, so it follows the config).
+* **Patterns.** It uses the station's own patterns (up to `maxProductionPatterns`); there is no new pattern type. Cell
+  *i* of a pattern's grid is Crafter slot *i* (`CrafterGrid#slotOf`, pinned by `CrafterGridTest`).
+* **The recipe check.** While a feeder is attached, every pattern slot is checked against the crafting recipes the
+  Crafter itself uses (`CrafterBlock.getPotentialResults`, in `content.station.CrafterRecipeCheck`, cached in the station
+  until a pattern or the recipe manager changes): `VALID`, `CELL_NOT_ONE` (a filled cell holds more than one item — a
+  Crafter takes one item per slot per craft), `NOT_A_RECIPE`, or `RESULT_DIFFERS` (with what the recipe really makes).
+  **A refused slot is removed from `WarehouseProductionBlockEntity#activePatterns`**, the one list the planner, the
+  restocking rules and the terminal read, so the warehouse never offers, plans or fetches for it, and no ingredient is
+  wasted on it. The station's screen draws it red with the reason; its goggles count the skipped slots. Without a
+  feeder nothing is checked and every complete pattern is used, exactly as before.
+* **One order at a time.** Idle, the feeder looks every 10 ticks for the oldest order of its station whose ingredients
+  have **all** been delivered (`DELIVERED`) and that maps onto a valid slot (`CrafterFeedPlan#match`: same result, a
+  whole number of runs, every ingredient line exactly runs × the merged pattern count). It loads that order only into
+  an **empty** grid, so two orders never mix, and only for the runs that are really left
+  (`CrafterFeedPlan#remainingRuns`): the station saves how many runs of each open order a feeder has laid, so a feeder
+  that is broken and placed again in the middle of an order (it then also loads an order that waits for its result
+  with runs left to lay) lays only the rest, and never a later order's ingredients as its own. Loading switches off the Crafter slots the layout leaves empty and switches
+  on the used ones a player had switched off; both are restored when the order is done (the Crafter changes a slot's
+  state only while it is empty, and those slots always are).
+* **Laying.** Into the empty grid it lays a **batch** — up to a stack per used slot, several runs at once
+  (`CrafterFeedPlan#batch`) — one `insertItem` per slot with the whole batch, straight from the buffer: the vanilla
+  Crafter refuses to add to a non-empty slot while a later one is emptier (its hopper rule), which is why a batch only
+  ever goes into an empty grid. Before each batch the layout is checked against the recipes once more — a `/reload` can
+  change them while an order runs — and a layout that no longer makes the order's result is not laid ("The recipe no
+  longer fits the pattern"; the order times out with its ingredients in the buffer). Everything is simulated first, for
+  every key and every slot, so a refusal never leaves half a batch anywhere. **The feeder holds no items**: an item is in the buffer, in the Crafter, in the block in front
+  of the Crafter's output, or dropped — the §8 invariant with the Crafter as the machine.
+* **Pulsing.** One rising redstone edge gives the Crafter one craft, four ticks later. The feeder gives a **weak** signal
+  on its front face only, high for 2 ticks, and the next edge comes `max(8, ceil(256 / |RPM|))` ticks after the last
+  (8 ticks at 32 RPM and above; `FeederCycle`). Before every pulse it checks that the grid is the loaded layout times a
+  whole number of runs, that nothing else powers the Crafter, that the Crafter's next craft makes the order's result,
+  and that the block in front of the Crafter's output takes the result **and every remainder** (a cake's buckets) —
+  simulated, because the vanilla Crafter drops whatever does not fit. Six ticks after the edge (or on the first tick
+  after that which reaches the grid) it reads the grid again: one run fewer is a craft (the order's timeout starts
+  over), none fewer is "the Crafter did not craft" and a back-off.
+* **What the warehouse hears.** Nothing new about the order's life: the feeder reports progress per batch and per run
+  (`WarehouseControllerBlockEntity#onCrafterFeederProgress`, which only pushes the deadline) and, with the first batch,
+  that the machine has taken the order on (`#onCrafterFeederTookIngredients`, `DELIVERED` → `WAITING_FOR_RESULT`), so
+  results arriving while later batches are crafted are credited to it before an older order of the same item that still
+  waits for an ingredient. The result is counted as any machine's: stored out of the warehouse input. Timeouts and the safety stop are the warehouse's own and unchanged.
+* **Blocked.** A blocked feeder stops pulsing and says why on its goggles (`FeederStatus`): no station, two stations, no
+  warehouse, no Crafter, nothing or something full in front of the Crafter's output, no rotation, a grid that is not
+  empty when an order waits, a grid changed by hand, another signal on the Crafter, missing ingredients, a pulse that
+  crafted nothing, a recipe that no longer fits the pattern. The order waits under its usual timeout.
+* **Persistence.** The feeder saves the order it serves, the slot, a snapshot of the 9-cell layout (a later pattern edit
+  does not change a running feed), the result item and how many one run makes, the runs not laid yet and the side and
+  lock masks of the Crafter it locked; the station saves the runs laid per open order. What lies in the grid is never saved by Wareworks: it is in the Crafter, and the feeder reads it back. The
+  first tick after a load lowers a signal saved high; a craft the Crafter had already scheduled is in the chunk's tick
+  list and still happens. Breaking the feeder gives the Crafter its slots back and leaves the grid to the player.
+* **Not done, deliberately.** Recipes larger than 3 × 3 stay the Mechanical Crafters' (§3.5, ADR-024); the feeder does
+  not choose between two slots with the same items in another arrangement (the first valid one is used, both are real
+  recipes for the same result); an order planned before a feeder was attached, or before its slot was edited, maps onto
+  no valid slot and times out as any order whose machine does nothing.
+* **Tests.** JUnit `CrafterGridTest`, `CrafterFeedPlanTest`, `FeederCycleTest`, `CrafterPatternCheckTest`,
+  `CrafterFeederTextWidthTest`; GameTests `gametest.CrafterFeederGameTests` (the whole loop with the craft ledger on
+  every tick, a three-step chain through one Crafter, the refusals before and after delivery, two orders of two
+  patterns and of one pattern, an order of 68 runs in two batches and the feeder replaced between them, remainders and an
+  input without room for them, rotation, a full output, another signal, two stations, a disturbed grid, the feeder, the
+  Crafter and the station broken mid-order, a reload inside a pulse); a feeder phase in `runRobustnessTest`; the visual
+  scenario `feeder`; the Ponder scene `warehouse/crafter_feeder` ("Crafting with a Vanilla Crafter", for the feeder and
+  the production station).
 
 ### 3.6 Warehouse Stock Keeper (`content.station`, M15)
 
@@ -7265,6 +7368,8 @@ The table above is covered by automated tests. What only a running game can reac
 | `collectPollIntervalTicks` | 20 | how often a controller re-reads the inventory behind a gated-open **collecting** warehouse port without being told to (M18, issue #13). It covers the machines that change their inventory without notifying their neighbours — a furnace's result slot, several Create blocks; a change hint always overtakes it, and a port whose gate is shut is not read at all. Range 1–1200: the cost of a lower value is at most one bounded read per collecting port per interval, out of `maxSnapshotsPerTick` (§3.2.4) |
 | `productionBufferSlots` | 9 | buffer of a warehouse production station (M11, world restart) |
 | `maxProductionPatterns` | 4 | pattern slots of one production station; a pattern is a 3x3 grid plus one result (M11) |
+| `crafterFeederRequiresRotation` | `true` | whether a Warehouse Crafter Feeder needs rotation (issue #34, §3.5.7). `false` runs it at its fastest pace, one craft every 8 ticks, with no stress |
+| `crafterFeederStressImpact` | 2.0 | SU per RPM of a Crafter Feeder while it needs rotation — what Create's Mechanical Crafter takes. Read when the feeder joins a kinetic network, like the crane's `stressImpact` |
 | `maxProductionOrders` | 12 | production orders one controller runs at the same time; each promises its ingredients (M11). **8 → 12 in M20**, because a chain holds one order per step and 8 slots made a three-step plan plus one restock order the whole aisle. It is also the real ceiling on a chain's length: a plan that does not fit the **free** slots is refused with `PRODUCTION_BUSY` (§3.5.6) |
 | `productionOrderTimeoutTicks` | 6000 | ticks an order may make no progress before it gives up (5 minutes). Every delivery, state change and arriving result pushes the deadline out, so only a genuinely stuck order times out (§3.5.3). An order **waiting for a step of its own chain** has no running deadline at all and starts its timeout over when its last step ends, so the worst-case lifetime of a chain is its step count times this number (§3.5.6) |
 | `maxProductionPlanSteps` | 32 | production orders **one order** may create, the ordered item's own included (M20, issue #4) — the bound on how long a chain may be, since every level costs at least one step. **1 switches recursion off completely** and the warehouse orders exactly as it did before M20. There is deliberately **no** depth key: termination comes from the planner's cycle check, not from a counter (§3.5.6). Hard-capped at 1024 |
@@ -7294,7 +7399,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 |---|---|---|
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks`, `maxNetworkRails`, `maxBranches`, `maxJunctions` | 1–128, 1–64, 1–1200, 16–1024, 1–26, 0–128 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `turnPenaltyBlocks`, `returnHomeIdleTicks`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 0–16, 0–72000, 1–200, 1–27, 1–1728 |
-| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `maxTerminalUsageEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–256; 1–16; 1–1200; 0–432000; 1–8 |
+| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `maxTerminalUsageEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns`, `crafterFeederRequiresRotation`, `crafterFeederStressImpact` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–256; 1–16; 1–1200; 0–432000; 1–8; boolean; 0–1024 |
 | `storage` (M28, M30) | `woodBayStacks`, `andesiteBayStacks`, `brassBayStacks`; `copperFluidBayBuckets`, `brassFluidBayBuckets`, `fluidBayPipeExtraction` | 1–4096 each; 1–65536 each, boolean |
 | `controller` | `snapshotIntervalTicks`, `snapshotCycleTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 0–432000, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |

@@ -1230,6 +1230,33 @@ public final class WareworksLang {
      * goggle line — have to say the same thing about the same order.
      */
     public static final String PRODUCTION_WAITING_FOR_STEP = "gui.production.waiting_for_step";
+    /**
+     * {@code "Crafter Feeder"}: dim label at the right end of the "Patterns" row of a production station's screen while
+     * a Warehouse Crafter Feeder is attached to its back (issue #34, ADR-067). It says why some patterns may be red.
+     */
+    public static final String PRODUCTION_FEEDER = "gui.production.feeder";
+    /**
+     * {@code "The Crafter Feeder skips this pattern"}: the line under the reason of a refused pattern, in its tab's and
+     * its arrow's tooltip. It is the consequence the red says: the warehouse never orders it, so nothing is wasted.
+     */
+    public static final String PRODUCTION_CHECK_SKIPPED = "gui.production.check.skipped";
+    /**
+     * {@code "The recipe makes %1$s x%2$s"}: the reason of a pattern whose grid is a crafting recipe for another result
+     * or amount, with what the recipe really makes. The other two reasons have keys of their own
+     * ({@link #crafterCheckKey}).
+     */
+    public static final String PRODUCTION_CHECK_RESULT_DIFFERS = "gui.production.check.result_differs";
+    /** {@code "Crafter Feeder:"}: goggle header of a Warehouse Crafter Feeder. */
+    public static final String GOGGLES_CRAFTER_FEEDER = "gui.goggles.crafter_feeder";
+    /**
+     * {@code "Crafting %1$s · runs left: %2$s"}: the feeder's goggle line while it runs an order, with the item the order
+     * makes and the runs not crafted yet (laid or not). Without a known item the bare status line stands instead.
+     */
+    public static final String CRAFTER_FEEDER_FEEDING = "gui.crafter_feeder.feeding";
+    /** {@code "Crafter Feeder at the back"}: a production station's goggle line while a feeder is attached to it. */
+    public static final String GOGGLES_PRODUCTION_FEEDER = "gui.goggles.production_feeder";
+    /** {@code "Patterns the feeder skips: %1$s"}: the same station's count of patterns that are no crafting recipe. */
+    public static final String GOGGLES_PRODUCTION_REFUSED = "gui.goggles.production_refused";
     /** {@code "Can be produced here"}: a terminal item that is not in stock but has a pattern. */
     public static final String TERMINAL_PRODUCIBLE = "gui.terminal.producible";
     /** {@code "Can be made now: %1$s"}: how many of a producible item the ingredients in stock allow right now. */
@@ -1548,6 +1575,15 @@ public final class WareworksLang {
     /** Relative lang key of a warehouse number's name, e.g. {@code display_source.number.open_requests}. */
     public static String displayNumberKey(dev.wareworks.core.warehouse.WarehouseNumber number) {
         return DISPLAY_NUMBER_PREFIX + number.langKey();
+    }
+
+    /**
+     * Relative lang key of the reason a Crafter Feeder refuses a pattern (issue #34), e.g.
+     * {@code gui.production.check.not_a_recipe}. Only the refused checks have a sentence; {@code RESULT_DIFFERS} takes
+     * the recipe's real result as arguments ({@link #PRODUCTION_CHECK_RESULT_DIFFERS}).
+     */
+    public static String crafterCheckKey(dev.wareworks.core.production.CrafterPatternCheck check) {
+        return "gui.production.check." + check.name().toLowerCase(Locale.ROOT);
     }
 
     /** Relative lang key of a discovery stop reason, e.g. {@code gui.goggles.network_stop.max_junctions}. */

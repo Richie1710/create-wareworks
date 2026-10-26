@@ -51,4 +51,14 @@ public final class WareworksStress {
     public static <B extends Block, P> NonNullUnaryOperator<BlockBuilder<B, P>> configuredImpact() {
         return impact(WareworksConfig::stressImpact);
     }
+
+    /**
+     * Registers the Warehouse Crafter Feeder impact from the server config (issue #34, ADR-067):
+     * {@code stations.crafterFeederStressImpact} while {@code stations.crafterFeederRequiresRotation} is on, and none at
+     * all while a feeder runs without rotation. Both fall back to their defaults while the config is not loaded.
+     */
+    public static <B extends Block, P> NonNullUnaryOperator<BlockBuilder<B, P>> crafterFeederImpact() {
+        return impact(() -> WareworksConfig.crafterFeederRequiresRotation()
+                ? WareworksConfig.crafterFeederStressImpact() : 0.0);
+    }
 }

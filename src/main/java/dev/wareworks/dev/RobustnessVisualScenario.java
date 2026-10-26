@@ -9,9 +9,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
+import com.simibubi.create.content.kinetics.base.DirectionalAxisKineticBlock;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
@@ -39,6 +41,15 @@ import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
+import dev.wareworks.content.station.ProductionPatterns;
+import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
+import dev.wareworks.content.station.WarehouseCrafterFeederBlockEntity;
+import dev.wareworks.content.station.WarehouseProductionBlock;
+import dev.wareworks.content.station.WarehouseProductionBlockEntity;
+import dev.wareworks.core.production.CrafterPatternCheck;
+import dev.wareworks.core.production.FeederStatus;
+import dev.wareworks.core.production.ProductionOrder;
+import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
@@ -68,6 +79,7 @@ import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.FrontAndTop;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -77,7 +89,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.entity.CrafterBlockEntity;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.material.Fluids;
@@ -107,6 +121,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *       warehouse's package door at the terminal and walks away, and the order rides a chunk unload and a save, quit
  *       and rejoin, each in the middle of a crane trip to the door, and ends with exactly what was ordered in the
  *       door's port and nothing in the terminal;</li>
+ *   <li><b>a crafter feeder order interrupted twice</b> (issue #34, ADR-067) — a vanilla Crafter fed by a Warehouse
+ *       Crafter Feeder crafts torches for an order, and the batch lying in the Crafter with its unused slots locked
+ *       rides a chunk unload and a save, quit and rejoin; the order then completes with the Crafter's slots restored
+ *       and the census on the craft ledger;</li>
  *   <li><b>blocks broken at defined moments</b> — the controller is broken while the crane carries items, and later the
  *       dock itself, which drops the handling head at the dock.</li>
  * </ol>
@@ -294,6 +312,33 @@ public final class RobustnessVisualScenario implements VisualScenario {
         return stacks;
     }
 
+    /**
+     * The crafter feeder of the feeder phase (issue #34, ADR-067), one level up beside the dock on the left, above the
+     * door's sign: the production station at level 1, the feeder behind it facing up, the vanilla Crafter above the
+     * feeder behind level 2, and the warehouse input the Crafter outputs into at level 2. A creative motor beside the
+     * feeder turns it, slowly while the order is interrupted, so a batch still lies in the Crafter for both
+     * interruptions.
+     */
+    private static final RackPosition FEEDER_STATION = RackPosition.of(0, 1, Side.LEFT);
+    private static final RackPosition FEEDER_RETURN = RackPosition.of(0, 2, Side.LEFT);
+    private static final ItemKey FEEDER_COAL = ItemKey.of(Items.COAL);
+    private static final ItemKey FEEDER_STICK = ItemKey.of(Items.STICK);
+    private static final ItemKey FEEDER_TORCH = ItemKey.of(Items.TORCH);
+    private static final int TORCHES_PER_RUN = 4;
+    /** Runs of the feeder order: one batch, since a stack of coal and of sticks fits a Crafter slot each. */
+    private static final int FEEDER_RUNS = 16;
+    /** 1 RPM: a run every 256 ticks, so the batch is still in the Crafter at both interruptions. */
+    private static final int FEEDER_SLOW_RPM = 1;
+    /** The fastest pace, for the runs that are left after the rejoin. */
+    private static final int FEEDER_FAST_RPM = 64;
+    private static final int TOP_LEFT = 0;
+    private static final int MIDDLE_LEFT = 3;
+
+    /** The coal and the sticks of the feeder order. */
+    private static List<ItemStack> feederFill() {
+        return List.of(FEEDER_COAL.toStack(FEEDER_RUNS), FEEDER_STICK.toStack(FEEDER_RUNS));
+    }
+
     private static final CameraView AFTERMATH = CameraView.of("aftermath", 9.5, 6.0, 6.5, 3.0, 1.0, 0.5);
 
     /** Set by a server step, read by later server steps (and the shot status on the client). */
@@ -331,6 +376,13 @@ public final class RobustnessVisualScenario implements VisualScenario {
     /** What the door order had delivered into the door's port when the last interruption began. */
     private volatile int doorDeliveredBefore;
 
+    /** The feeder before the camera flies away during the feeder order; see {@link #dockBeforeUnload}. */
+    private volatile WarehouseCrafterFeederBlockEntity feederBeforeUnload;
+    /** The production order the feeder serves in the feeder phase. */
+    private volatile UUID feederOrder;
+    /** Torch crafts the census has accounted for so far ({@link #feederCensus}). */
+    private volatile int feederCrafted;
+
     @Override
     public String name() {
         return NAME;
@@ -367,6 +419,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         saveAndReload(script);
         craftFetch(script);
         doorOrder(script);
+        feederOrder(script);
         chunkHold(script);
         brokenBlocks(script);
 
@@ -611,6 +664,73 @@ public final class RobustnessVisualScenario implements VisualScenario {
     }
 
     /**
+     * <b>A crafter feeder order survives a chunk unload and a save, quit and rejoin</b> (issue #34, ADR-067).
+     * <p>
+     * The feeder's saved state is the order it serves, the layout, the runs not laid yet and the Crafter slots it
+     * locked; the station keeps how many runs of the order were laid, the controller the order with its deadline, and
+     * the vanilla Crafter its grid and its disabled slots. They live in four block entities, so only a real chunk unload
+     * and a real world reload prove that they come back together. The phase stores coal and sticks, writes the torch
+     * pattern and orders {@value #FEEDER_RUNS} runs of torches to the terminal; once the whole order lies in the Crafter
+     * as one batch it flies the camera away until the dock and the feeder have really been unloaded, comes back and
+     * requires a <b>new</b> feeder serving the same order with the batch still in the grid and the seven unused slots
+     * still locked; then it saves while a batch still lies there, quits, rejoins and requires the same. Then the feeder
+     * is sped up, and the order must complete with the torches in the terminal, all nine Crafter slots enabled again and
+     * the census exactly {@value #FEEDER_RUNS} torch crafts away from where it was. Every census in the phase is on the
+     * craft ledger ({@link #feederCensus}).
+     */
+    private void feederOrder(VisualScript script) {
+        script.server("robustness: store coal and sticks for the crafter feeder",
+                        (server, context) -> refill(server, context, feederFill()))
+                .serverUntil("robustness: wait until the coal and sticks are stored", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census before the feeder order",
+                        (server, context) -> census(server, "the coal and sticks for the feeder order were stored"))
+                .server("robustness: write the torch pattern and order torches through the crafter feeder",
+                        this::startFeederOrder)
+                .serverUntil("robustness: wait until the feeder laid the whole order into the Crafter",
+                        this::feederLaid, JOB_TIMEOUT_TICKS)
+                .server("robustness: remember dock and feeder and move the camera far away", (server, context) -> {
+                    requireFeederBatch(server, context, "before the camera left");
+                    dockBeforeUnload = crane(server, context);
+                    feederBeforeUnload = feeder(server, context);
+                    moveAway(server, context);
+                })
+                .serverUntil("robustness: wait until the aisle chunks with the feeder really unload",
+                        this::feederUnloaded, UNLOAD_TIMEOUT_TICKS)
+                .waitTicks(UNLOADED_TICKS)
+                .server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded again", this::sceneLoaded, CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the feeder was read from the save again", (server, context) -> {
+                    if (feeder(server, context) == feederBeforeUnload)
+                        throw new VisualTestException("the feeder block entity was never unloaded and read again");
+                    requireFeederBatch(server, context, "after the chunk round trip");
+                })
+                .server("robustness: census after the chunk round trip during the feeder order",
+                        (server, context) -> feederCensus(server, "chunk unload and reload while a batch lay in the "
+                                + "Crafter"))
+                .server("robustness: save the world while a batch lies in the Crafter", (server, context) -> {
+                    requireFeederBatch(server, context, "before the save");
+                    server.saveEverything(true, true, true);
+                });
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the feeder order came back after the rejoin",
+                        (server, context) -> requireFeederBatch(server, context, "after the save, quit and rejoin"))
+                .server("robustness: census after save, quit and rejoin during the feeder order",
+                        (server, context) -> feederCensus(server, "save, quit and rejoin while a batch lay in the "
+                                + "Crafter"))
+                .server("robustness: speed the feeder up for the runs that are left",
+                        (server, context) -> feederMotor(server.overworld(), context.origin()).generatedSpeed
+                                .setValue(FEEDER_FAST_RPM))
+                .serverUntil("robustness: wait until the feeder order finished", this::feederOrderDone,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: the feeder order completed and the Crafter has its slots back",
+                        this::assertFeederDone);
+    }
+
+    /**
      * With chunk loading switched on (M19, issue #10), a job that is running when the player leaves <b>finishes while
      * nobody is anywhere near the aisle</b>, and afterwards the idle aisle lets its chunks go again.
      * <p>
@@ -743,6 +863,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(layout.rackPos(TERMINAL), WareworksBlocks.WAREHOUSE_TERMINAL.getDefaultState()
                 .setValue(WarehouseTerminalBlock.FACING, layout.sideDirection(TERMINAL.side()).getOpposite()));
         buildDoor(level, layout);
+        buildFeeder(level, layout);
         for (Side side : Side.values()) {
             Direction outward = layout.sideDirection(side);
             for (int x = STORAGE_FIRST_POSITION; x <= RAILS; x++) {
@@ -791,6 +912,35 @@ public final class RobustnessVisualScenario implements VisualScenario {
             throw new VisualTestException("the sign that names the door at " + sign + " could not be written");
     }
 
+    /**
+     * The crafter feeder machine (issue #34): a production station at {@link #FEEDER_STATION}, the feeder behind it facing
+     * up, a creative motor beside the feeder against the aisle direction, the vanilla Crafter above the feeder with its
+     * output towards the aisle, and a warehouse input at {@link #FEEDER_RETURN} in front of that output.
+     */
+    private static void buildFeeder(ServerLevel level, BranchLayout layout) {
+        Direction outward = layout.sideDirection(FEEDER_STATION.side());
+        BlockPos station = layout.rackPos(FEEDER_STATION);
+        BlockPos feeder = station.relative(outward);
+        BlockPos crafter = feeder.above();
+        level.setBlockAndUpdate(station, WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
+                .setValue(WarehouseProductionBlock.FACING, outward.getOpposite()));
+        level.setBlockAndUpdate(feeder, WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.getDefaultState()
+                .setValue(WarehouseCrafterFeederBlock.FACING, Direction.UP)
+                .setValue(DirectionalAxisKineticBlock.AXIS_ALONG_FIRST_COORDINATE, true));
+        level.setBlockAndUpdate(feeder.relative(AISLE.getOpposite()),
+                AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, AISLE));
+        level.setBlockAndUpdate(crafter, Blocks.CRAFTER.defaultBlockState().setValue(BlockStateProperties.ORIENTATION,
+                FrontAndTop.fromFrontAndTop(outward.getOpposite(), Direction.UP)));
+        level.setBlockAndUpdate(layout.rackPos(FEEDER_RETURN), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
+                .setValue(WarehouseInputBlock.FACING, outward.getOpposite()));
+        if (!crafter.equals(layout.rackPos(FEEDER_RETURN).relative(outward)))
+            throw new VisualTestException("the Crafter at " + crafter + " is not behind the feeder's input");
+        CreativeMotorBlockEntity motor = AllBlockEntityTypes.MOTOR.getNullable(level, feeder.relative(AISLE.getOpposite()));
+        if (motor == null)
+            throw new VisualTestException("the creative motor beside the feeder is missing");
+        motor.generatedSpeed.setValue(FEEDER_SLOW_RPM);
+    }
+
     /** Fills the rack bay through its own item capability, the way a funnel or a player's hand would. */
     private void fillBay(ServerLevel level, BlockPos pos) {
         IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
@@ -815,7 +965,9 @@ public final class RobustnessVisualScenario implements VisualScenario {
         int storage = (RAILS - STORAGE_FIRST_POSITION + 1) * Side.values().length - bayBroken;
         return controller != null && crane != null && controller.status() == ControllerStatus.READY
                 && !controller.isMembershipDirty() && controller.pendingSnapshotCount() == 0
-                && controller.storageLocations().size() == storage && controller.inputStations().size() == 1
+                // The input and the one the feeder's Crafter outputs into (issue #34).
+                && controller.storageLocations().size() == storage && controller.inputStations().size() == 2
+                && controller.productionStations().size() == 1
                 // The terminal and the package door (M27).
                 && controller.outputStations().size() == 2 && crane.isControllerLinked()
                 && crane.aisleLength() == RAILS;
@@ -1397,6 +1549,157 @@ public final class RobustnessVisualScenario implements VisualScenario {
         if (controller == null)
             throw new VisualTestException("the warehouse controller at " + controllerPos(context) + " is gone");
         return controller;
+    }
+
+    // --- the crafter feeder (issue #34) ------------------------------------------------------------------------
+
+    /** Writes the torch pattern into the feeder's station and orders {@value #FEEDER_RUNS} runs to the terminal. */
+    private void startFeederOrder(MinecraftServer server, VisualContext context) {
+        WarehouseProductionBlockEntity station = feederStation(server, context);
+        if (!station.setPatternEntry(0, TOP_LEFT, FEEDER_COAL, 1)
+                || !station.setPatternEntry(0, MIDDLE_LEFT, FEEDER_STICK, 1)
+                || !station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, FEEDER_TORCH, TORCHES_PER_RUN))
+            throw new VisualTestException("the torch pattern could not be written into the station");
+        if (station.crafterCheck(0).check() != CrafterPatternCheck.VALID)
+            throw new VisualTestException("the torch pattern is not checked as a recipe: " + station.crafterCheck(0));
+        if (!feeder(server, context).running())
+            throw new VisualTestException("the feeder has no rotation");
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        RequestResult result = controller.request(terminal(server, context).getBlockPos(), FEEDER_TORCH,
+                FEEDER_RUNS * TORCHES_PER_RUN);
+        if (!result.isAccepted() || result.producing() != FEEDER_RUNS * TORCHES_PER_RUN)
+            throw new VisualTestException("the torch order was not produced in full: " + result);
+        feederOrder = controller.productionOrders().stream()
+                .filter(order -> order.isOpen() && order.result().equals(FEEDER_TORCH)).map(ProductionOrder::id)
+                .findFirst().orElseThrow(() -> new VisualTestException("no production order for the torches"));
+        feederCrafted = 0;
+        LOGGER.info(PREFIX + "robustness: ordered {} torches through the crafter feeder (order {})",
+                FEEDER_RUNS * TORCHES_PER_RUN, feederOrder);
+    }
+
+    /** The feeder serves the order and has laid all of it: nothing is left to lay and a batch lies in the Crafter. */
+    private boolean feederLaid(MinecraftServer server, VisualContext context) {
+        WarehouseCrafterFeederBlockEntity feeder = feeder(server, context);
+        return feeder.feedOrder().isPresent() && feeder.runsToLay() == 0
+                && crafterBlock(server, context).getItem(TOP_LEFT).getCount() > 0;
+    }
+
+    /**
+     * Requires the feeder to serve the order, whole torch runs in the Crafter's grid, slots 0 and 3 open and the other
+     * seven locked; fails naming {@code moment} otherwise.
+     */
+    private void requireFeederBatch(MinecraftServer server, VisualContext context, String moment) {
+        WarehouseCrafterFeederBlockEntity feeder = feeder(server, context);
+        if (!feeder.feedOrder().equals(Optional.of(feederOrder)))
+            throw new VisualTestException("the feeder serves " + feeder.feedOrder() + " instead of " + feederOrder
+                    + " " + moment);
+        CrafterBlockEntity crafter = crafterBlock(server, context);
+        ItemStack coal = crafter.getItem(TOP_LEFT);
+        ItemStack sticks = crafter.getItem(MIDDLE_LEFT);
+        if (!FEEDER_COAL.matches(coal) || !FEEDER_STICK.matches(sticks) || coal.getCount() != sticks.getCount())
+            throw new VisualTestException("no batch of whole torch runs lies in the Crafter " + moment + ": " + coal
+                    + ", " + sticks);
+        for (int slot = 0; slot < 9; slot++) {
+            boolean used = slot == TOP_LEFT || slot == MIDDLE_LEFT;
+            if (crafter.isSlotDisabled(slot) == used)
+                throw new VisualTestException("Crafter slot " + slot + " is " + (used ? "locked" : "open") + " "
+                        + moment);
+        }
+        LOGGER.info(PREFIX + "robustness: PASS {}: the feeder serves the order, {} runs lie in the Crafter, the seven "
+                + "unused slots are locked ({} runs to lay, status {})", moment, coal.getCount(), feeder.runsToLay(),
+                feeder.status());
+    }
+
+    /** The dock and the feeder were really unloaded ({@link #dockUnloaded}). */
+    private boolean feederUnloaded(MinecraftServer server, VisualContext context) {
+        WarehouseCrafterFeederBlockEntity feeder = feederBeforeUnload;
+        return dockUnloaded(server, context) && feeder != null && feeder.isRemoved()
+                && !server.overworld().isLoaded(feeder.getBlockPos());
+    }
+
+    private boolean feederOrderDone(MinecraftServer server, VisualContext context) {
+        Optional<ProductionOrder<ItemKey, RackPosition>> order = controller(server, context)
+                .productionOrder(feederOrder);
+        WarehouseCrafterFeederBlockEntity feeder = feeder(server, context);
+        return order.isPresent() && order.get().state() == ProductionOrderState.COMPLETE
+                && feeder.feedOrder().isEmpty() && feeder.status() == FeederStatus.IDLE
+                && controller(server, context).requestsFor(terminal(server, context).getBlockPos()).isEmpty()
+                && craneIdleAndEmpty(server, context);
+    }
+
+    private void assertFeederDone(MinecraftServer server, VisualContext context) {
+        CrafterBlockEntity crafter = crafterBlock(server, context);
+        for (int slot = 0; slot < 9; slot++) {
+            if (crafter.isSlotDisabled(slot) || !crafter.getItem(slot).isEmpty())
+                throw new VisualTestException("the Crafter's slot " + slot + " was not given back empty");
+        }
+        long torches = terminal(server, context).bufferedItems().count(FEEDER_TORCH);
+        if (torches != (long) FEEDER_RUNS * TORCHES_PER_RUN)
+            throw new VisualTestException("the terminal holds " + torches + " torches instead of "
+                    + FEEDER_RUNS * TORCHES_PER_RUN);
+        int crafted = feederCensus(server, "the feeder order finished after both interruptions");
+        if (crafted != FEEDER_RUNS)
+            throw new VisualTestException(crafted + " torch crafts on the ledger instead of " + FEEDER_RUNS);
+        LOGGER.info(PREFIX + "robustness: PASS the feeder order completed: {} torches in the terminal, {} crafts on the "
+                + "ledger, the Crafter has all nine slots back", torches, crafted);
+    }
+
+    /**
+     * The census on the craft ledger: the torches gained since the last census must be a whole number of runs, at most
+     * as many as the order has left, and the expectation moves by exactly that many runs (one coal and one stick fewer,
+     * four torches more each) before both censuses are asserted as usual. Returns the crafts accounted for so far.
+     */
+    private int feederCensus(MinecraftServer server, String step) {
+        Map<ItemKey, Long> actual = SceneItemCensus.take(server.overworld(), censusBox);
+        long gained = actual.getOrDefault(FEEDER_TORCH, 0L) - expected.getOrDefault(FEEDER_TORCH, 0L);
+        if (gained < 0 || gained % TORCHES_PER_RUN != 0 || gained / TORCHES_PER_RUN > FEEDER_RUNS - feederCrafted)
+            throw new VisualTestException("robustness FAIL (" + step + "): " + gained
+                    + " torches are no whole number of the runs left (" + (FEEDER_RUNS - feederCrafted) + ")");
+        int runs = (int) (gained / TORCHES_PER_RUN);
+        Map<ItemKey, Long> next = SceneItemCensus.plus(expected, FEEDER_COAL, -runs);
+        next = SceneItemCensus.plus(next, FEEDER_STICK, -runs);
+        expected = SceneItemCensus.plus(next, FEEDER_TORCH, gained);
+        feederCrafted += runs;
+        census(server, step + " (" + feederCrafted + " torch crafts on the ledger)");
+        return feederCrafted;
+    }
+
+    private static WarehouseProductionBlockEntity feederStation(MinecraftServer server, VisualContext context) {
+        BlockPos pos = layout(context.origin()).rackPos(FEEDER_STATION);
+        WarehouseProductionBlockEntity station = WareworksBlockEntityTypes.WAREHOUSE_PRODUCTION
+                .getNullable(server.overworld(), pos);
+        if (station == null)
+            throw new VisualTestException("the feeder's production station at " + pos + " is gone");
+        return station;
+    }
+
+    private static BlockPos feederPos(BlockPos dock) {
+        BranchLayout layout = layout(dock);
+        return layout.rackPos(FEEDER_STATION).relative(layout.sideDirection(FEEDER_STATION.side()));
+    }
+
+    private static WarehouseCrafterFeederBlockEntity feeder(MinecraftServer server, VisualContext context) {
+        BlockPos pos = feederPos(context.origin());
+        WarehouseCrafterFeederBlockEntity feeder = WareworksBlockEntityTypes.WAREHOUSE_CRAFTER_FEEDER
+                .getNullable(server.overworld(), pos);
+        if (feeder == null)
+            throw new VisualTestException("the crafter feeder at " + pos + " is gone");
+        return feeder;
+    }
+
+    private static CrafterBlockEntity crafterBlock(MinecraftServer server, VisualContext context) {
+        BlockPos pos = feederPos(context.origin()).above();
+        if (!(server.overworld().getBlockEntity(pos) instanceof CrafterBlockEntity crafter))
+            throw new VisualTestException("the Crafter at " + pos + " is gone");
+        return crafter;
+    }
+
+    private static CreativeMotorBlockEntity feederMotor(ServerLevel level, BlockPos dock) {
+        CreativeMotorBlockEntity motor = AllBlockEntityTypes.MOTOR.getNullable(level,
+                feederPos(dock).relative(AISLE.getOpposite()));
+        if (motor == null)
+            throw new VisualTestException("the creative motor beside the feeder is missing");
+        return motor;
     }
 
     /** Position of the warehouse controller: one block behind the dock, against the aisle direction. */

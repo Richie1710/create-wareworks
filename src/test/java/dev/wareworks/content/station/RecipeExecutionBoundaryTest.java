@@ -35,7 +35,10 @@ import org.junit.jupiter.api.Test;
  * build too, not only one that ran a recipe itself.</li>
  * </ol>
  * The {@code gametest} package is exempt from both: tests check recipes and drive the entry points, they do not craft
- * in game. A call that really belongs somewhere else needs a decision recorded as an ADR first, and then a change to
+ * in game. One class is exempt from the first scan by ADR-067 (issue #34): {@code content/station/CrafterRecipeCheck.java}
+ * <b>evaluates</b> recipes for the Warehouse Crafter Feeder — is a pattern a crafting recipe, and does what a vanilla
+ * Crafter is about to output fit in front of it — and runs none: the vanilla Crafter crafts. It is held to that by
+ * {@link #theCrafterCheckOnlyEvaluates}. A call that really belongs somewhere else needs a decision recorded as an ADR first, and then a change to
  * these lists. Two more tests keep the guard from going quiet: the allowed places really are where the calls are, so a
  * renamed or moved class cannot empty a scan, and the patterns really catch every form they are meant to.
  * <p>
@@ -45,6 +48,8 @@ class RecipeExecutionBoundaryTest {
     private static final Path MAIN_SOURCES = Path.of("src/main/java");
     /** The one class allowed to run a recipe, relative to {@link #MAIN_SOURCES}. */
     private static final Path TERMINAL_CRAFTING = Path.of("dev/wareworks/content/station/TerminalCrafting.java");
+    /** The one class allowed to evaluate a recipe without running it (ADR-067), relative to {@link #MAIN_SOURCES}. */
+    private static final Path CRAFTER_RECIPE_CHECK = Path.of("dev/wareworks/content/station/CrafterRecipeCheck.java");
     /** The GameTests, relative to {@link #MAIN_SOURCES}: they check recipes, they do not craft in game. */
     private static final Path GAME_TESTS = Path.of("dev/wareworks/gametest");
     /** The links of the one way in, relative to {@link #MAIN_SOURCES}. */
@@ -99,7 +104,8 @@ class RecipeExecutionBoundaryTest {
         List<String> offenders = new ArrayList<>();
         for (Path file : mainSources()) {
             Path relative = MAIN_SOURCES.relativize(file);
-            if (relative.equals(TERMINAL_CRAFTING) || relative.startsWith(GAME_TESTS))
+            if (relative.equals(TERMINAL_CRAFTING) || relative.equals(CRAFTER_RECIPE_CHECK)
+                    || relative.startsWith(GAME_TESTS))
                 continue;
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
             for (int line = 0; line < lines.size(); line++) {
@@ -142,6 +148,22 @@ class RecipeExecutionBoundaryTest {
             assertTrue(source.contains(call), "TerminalCrafting no longer calls " + call);
             assertTrue(RECIPE_CALL.matcher(call).find(), "the recipe scan does not catch " + call);
         }
+    }
+
+    /**
+     * The crafter feeder's recipe check (ADR-067) really is where the feeder's recipe lookups are, so a renamed class
+     * cannot empty the exemption, and it only evaluates: it fires no crafting event, takes no recipe through the
+     * terminal's way in, and puts nothing anywhere.
+     */
+    @Test
+    void theCrafterCheckOnlyEvaluates() throws IOException {
+        String source = source(CRAFTER_RECIPE_CHECK);
+        for (String call : List.of(".assemble(", ".getRemainingItems(", "getRecipeManager("))
+            assertTrue(source.contains(call), "CrafterRecipeCheck no longer calls " + call);
+        for (String forbidden : List.of("firePlayerCraftingEvent", "onCraftedBy", "insertItem(", "setItem(",
+                "popResource(", "addFreshEntity(", "TerminalCrafting.", "TerminalCrafting::"))
+            assertFalse(source.contains(forbidden), "CrafterRecipeCheck must only evaluate recipes, but uses "
+                    + forbidden);
     }
 
     /** Every link of the way in is still where the scan allows it, so a renamed link cannot empty the guard. */

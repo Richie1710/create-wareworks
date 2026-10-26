@@ -235,6 +235,19 @@ public final class WareworksConfig {
         return get(SERVER.maxProductionPatterns);
     }
 
+    /**
+     * Whether a Warehouse Crafter Feeder needs rotation to run (issue #34, ADR-067). Without it, it runs at its fastest
+     * pace and takes no stress ({@code WareworksStress#crafterFeederImpact}).
+     */
+    public static boolean crafterFeederRequiresRotation() {
+        return get(SERVER.crafterFeederRequiresRotation);
+    }
+
+    /** Stress impact of a Warehouse Crafter Feeder per RPM, while it needs rotation at all (issue #34, ADR-067). */
+    public static double crafterFeederStressImpact() {
+        return get(SERVER.crafterFeederStressImpact);
+    }
+
     /** Rule rows one warehouse stock keeper offers ({@code docs/warehouse-system.md} §3.6, M15). */
     public static int stockKeeperRows() {
         return get(SERVER.stockKeeperRows);
@@ -521,6 +534,8 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue terminalListStallTicks;
         public final ModConfigSpec.IntValue productionBufferSlots;
         public final ModConfigSpec.IntValue maxProductionPatterns;
+        public final ModConfigSpec.BooleanValue crafterFeederRequiresRotation;
+        public final ModConfigSpec.DoubleValue crafterFeederStressImpact;
         public final ModConfigSpec.IntValue stockKeeperRows;
 
         public final ModConfigSpec.IntValue woodBayStacks;
@@ -738,6 +753,20 @@ public final class WareworksConfig {
                                     + "them all, so lowering this never loses a pattern.")
                     .worldRestart()
                     .defineInRange("maxProductionPatterns", 4, 1, 8);
+            crafterFeederRequiresRotation = builder
+                    .comment("Whether a Warehouse Crafter Feeder needs rotation to lay a production station's patterns "
+                            + "into a vanilla Crafter and trigger it.",
+                            "Set to false to let it run without any rotation; it then runs at its fastest pace (one "
+                                    + "craft every 8 ticks) and takes no stress.")
+                    .define("crafterFeederRequiresRotation", true);
+            crafterFeederStressImpact = builder
+                    .comment("[in Stress Units] Stress impact of a Warehouse Crafter Feeder per RPM, while it needs "
+                            + "rotation: the default 2 is what Create's Mechanical Crafter takes, half the stacker "
+                            + "crane's.",
+                            "Create reads it when the feeder joins a kinetic network and keeps that value, so a running "
+                                    + "network counts a change only once the feeder joins it again: break its shaft "
+                                    + "and place it again, or change the speed at the source.")
+                    .defineInRange("crafterFeederStressImpact", 2.0, 0.0, 1024.0);
             stockKeeperRows = builder
                     .comment("Rule rows of a warehouse stock keeper: how many different items one keeper governs.",
                             "A row is one item plus a minimum, a maximum and a reserve; an aisle may hold several "

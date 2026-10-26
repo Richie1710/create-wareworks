@@ -61,6 +61,10 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 # The door ordering scene (M27) uses the shared square 9 plate too: the terminal and the door's port on the rack plane
 #   LEFT at positions 1 and 4, the door's Packager in front of the port with its sign, Smart Observer and Stock Link
 #   around it, and the racks the iron comes from on the plane RIGHT (dev.wareworks.client.ponder.scenes.PackageScenes).
+# The Crafter Feeder scene (issue #34) uses the shared square 9 plate: the input and the production station on the rack
+#   plane LEFT at positions 2 and 3, the Crafter and the feeder behind them at z = 2 (the feeder's creative motor set
+#   into the plate under it), and the racks the coal and sticks come from on the plane RIGHT
+#   (dev.wareworks.client.ponder.scenes.CrafterFeederScenes).
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
@@ -84,6 +88,7 @@ TEMPLATES = {
     "warehouse/bays_in_an_aisle": (9, 7, 9),
     "warehouse/fluid_bay": (9, 7, 9),
     "warehouse/ordering_to_a_door": (9, 7, 9),
+    "warehouse/crafter_feeder": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

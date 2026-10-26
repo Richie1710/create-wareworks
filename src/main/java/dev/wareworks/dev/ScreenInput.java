@@ -86,6 +86,11 @@ final class ScreenInput {
             double.class, double.class);
     private static final Method PRODUCTION_TOOLTIP_AT = method(WarehouseProductionScreen.class, "tooltipAt", int.class,
             int.class);
+    /** The pattern tab and the arrow of the production screen, for the Crafter Feeder's red patterns (issue #34). */
+    private static final Method PRODUCTION_TAB_AT = method(WarehouseProductionScreen.class, "tabAt", double.class,
+            double.class);
+    private static final Method PRODUCTION_OVER_ARROW = method(WarehouseProductionScreen.class, "isOverArrow",
+            double.class, double.class);
     private static final Method KEEPER_ROW_AT = method(WarehouseStockKeeperScreen.class, "rowAt", double.class,
             double.class);
     private static final Method KEEPER_FIELD_AT = method(WarehouseStockKeeperScreen.class, "numberFieldAt",
@@ -566,6 +571,36 @@ final class ScreenInput {
         if (hit != cell)
             throw new VisualTestException("the production screen's hit test puts " + point + " on cell " + hit
                     + ", not " + cell);
+        return point;
+    }
+
+    /**
+     * The centre of the tab of pattern slot {@code pattern} of the production screen, checked with the screen's own hit
+     * test. A click there selects the slot; a cursor resting there draws the slot's tooltip, which names why a Crafter
+     * Feeder skips it (issue #34).
+     */
+    static Point productionTab(WarehouseProductionScreen screen, int pattern) {
+        ProductionMenuLayout layout = (ProductionMenuLayout) get(PRODUCTION_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + layout.tabX(pattern) + ProductionMenuLayout.SLOT / 2.0,
+                screen.getGuiTop() + layout.tabY(pattern) + ProductionMenuLayout.SLOT / 2.0);
+        int hit = (Integer) invoke(PRODUCTION_TAB_AT, screen, point.x(), point.y());
+        if (hit != pattern)
+            throw new VisualTestException("the production screen's hit test puts " + point + " on tab " + hit
+                    + ", not " + pattern);
+        return point;
+    }
+
+    /**
+     * The centre of the arrow between the selected pattern's grid and its result, checked with the screen's own hit
+     * test: the place a refused pattern draws its red cross and explains it (issue #34).
+     */
+    static Point productionArrow(WarehouseProductionScreen screen) {
+        ProductionMenuLayout layout = (ProductionMenuLayout) get(PRODUCTION_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + layout.arrowX() + ProductionMenuLayout.ARROW_WIDTH / 2.0,
+                screen.getGuiTop() + layout.patternCellY(ProductionMenuLayout.RESULT_CELL)
+                        + ProductionMenuLayout.SLOT / 2.0);
+        if (!(Boolean) invoke(PRODUCTION_OVER_ARROW, screen, point.x(), point.y()))
+            throw new VisualTestException("the production screen's hit test does not put " + point + " on its arrow");
         return point;
     }
 

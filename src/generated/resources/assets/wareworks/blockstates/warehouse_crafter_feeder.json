@@ -1,0 +1,100 @@
+{
+  "variants": {
+    "axis_along_first=false,facing=down,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 90,
+      "y": 90
+    },
+    "axis_along_first=false,facing=down,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 90,
+      "y": 90
+    },
+    "axis_along_first=false,facing=east,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "y": 90
+    },
+    "axis_along_first=false,facing=east,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "y": 90
+    },
+    "axis_along_first=false,facing=north,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical"
+    },
+    "axis_along_first=false,facing=north,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical"
+    },
+    "axis_along_first=false,facing=south,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical",
+      "y": 180
+    },
+    "axis_along_first=false,facing=south,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical",
+      "y": 180
+    },
+    "axis_along_first=false,facing=up,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 270,
+      "y": 90
+    },
+    "axis_along_first=false,facing=up,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 270,
+      "y": 90
+    },
+    "axis_along_first=false,facing=west,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "y": 270
+    },
+    "axis_along_first=false,facing=west,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "y": 270
+    },
+    "axis_along_first=true,facing=down,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 90
+    },
+    "axis_along_first=true,facing=down,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 90
+    },
+    "axis_along_first=true,facing=east,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical",
+      "y": 90
+    },
+    "axis_along_first=true,facing=east,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical",
+      "y": 90
+    },
+    "axis_along_first=true,facing=north,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal"
+    },
+    "axis_along_first=true,facing=north,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal"
+    },
+    "axis_along_first=true,facing=south,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "y": 180
+    },
+    "axis_along_first=true,facing=south,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "y": 180
+    },
+    "axis_along_first=true,facing=up,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 270
+    },
+    "axis_along_first=true,facing=up,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/horizontal",
+      "x": 270
+    },
+    "axis_along_first=true,facing=west,powering=false": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical",
+      "y": 270
+    },
+    "axis_along_first=true,facing=west,powering=true": {
+      "model": "wareworks:block/warehouse_crafter_feeder/vertical",
+      "y": 270
+    }
+  }
+}

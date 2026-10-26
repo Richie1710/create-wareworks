@@ -14,6 +14,8 @@ import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.production.CrafterPatternCheck;
+import dev.wareworks.core.production.FeederStatus;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.RestockOutcome;
@@ -279,6 +281,33 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_MISSING), "Ingredients still to fetch: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_AWAITED), "Waiting for results: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_STATIONS), "Production stations: %1$s");
+        // The Warehouse Crafter Feeder (issue #34, ADR-067): the station's two lines about it, the feeder's own
+        // goggles, and one line per status. Every status is generated, so none can resolve to a raw key. The blocked
+        // ones say what is wrong in the words a player fixes it with; the goggles show them in gold.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FEEDER), "Crafter Feeder at the back");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_REFUSED), "Patterns the feeder skips: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRAFTER_FEEDER), "Crafter Feeder:");
+        // Count last, with no plural noun after it: the count reaches 1 on every order's last run.
+        lang.accept(WareworksLang.key(WareworksLang.CRAFTER_FEEDER_FEEDING), "Crafting %1$s \u00b7 runs left: %2$s");
+        for (FeederStatus status : FeederStatus.values()) {
+            lang.accept(WareworksLang.key(status.langKey()), switch (status) {
+                case IDLE -> "Waiting for a delivered order";
+                case FEEDING -> "Crafting";
+                case NO_STATION -> "Not on the back of a production station";
+                case TWO_STATIONS -> "Touches two production stations";
+                case NO_WAREHOUSE -> "The station is in no warehouse";
+                case NO_CRAFTER -> "No Crafter in front";
+                case NO_OUTPUT -> "Nothing takes the Crafter's output";
+                case OUTPUT_FULL -> "The Crafter's output is full";
+                case NO_ROTATION -> "Needs rotation";
+                case GRID_NOT_EMPTY -> "Empty the Crafter to start";
+                case GRID_DISTURBED -> "The Crafter's grid was changed by hand";
+                case EXTERNAL_SIGNAL -> "Something else powers the Crafter";
+                case MISSING_INGREDIENTS -> "Ingredients are missing from the station";
+                case CRAFT_FAILED -> "The Crafter did not craft";
+                case RECIPE_CHANGED -> "The recipe no longer fits the pattern";
+            });
+        }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_RESUMED), "The warehouse makes %1$s again");
         // "Delivered and never came back" rather than "stayed in the machine": the number is what the crane dropped into
         // the *station*, and part of it may still be in the station's own buffer, which a player can empty by hand.
@@ -773,6 +802,20 @@ public final class WareworksLangGen {
         // fetches nothing at all until the step below it is done. One sentence for the terminal's step panel, a
         // station's own order rows and that station's goggle line, so the three can never disagree.
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_WAITING_FOR_STEP), "waiting for an earlier step");
+        // A pattern a Crafter Feeder refuses (issue #34, ADR-067): the screen's label, one reason per refused check and
+        // the consequence. They are tooltip lines of a 216 px window, measured by CrafterFeederTextWidthTest.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FEEDER), "Crafter Feeder");
+        for (CrafterPatternCheck check : CrafterPatternCheck.values()) {
+            if (!check.refused())
+                continue;
+            lang.accept(WareworksLang.key(WareworksLang.crafterCheckKey(check)), switch (check) {
+                case CELL_NOT_ONE -> "Each cell must hold exactly 1 item";
+                case NOT_A_RECIPE -> "Not a crafting recipe";
+                case RESULT_DIFFERS -> "The recipe makes %1$s x%2$s";
+                default -> throw new IllegalStateException("no reason text for " + check);
+            });
+        }
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_CHECK_SKIPPED), "The Crafter Feeder skips this pattern");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RULES), "Rules");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_EMPTY_ROW), "Empty row");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM), "Minimum");
@@ -1035,6 +1078,13 @@ public final class WareworksLangGen {
                         + "Arm_.",
                 "When a batch is lost",
                 "The ring turns _red_; _Sneak-Right-Click_ restarts it.");
+
+        // Issue #34: what the block is and the one thing the Ponder scene cannot show a player holding the item.
+        tooltip(lang, "block.wareworks.warehouse_crafter_feeder",
+                "Lays a _production station's_ patterns into a _Crafter_ and triggers it once per run. Goes on the "
+                        + "station's _back_; needs _rotation_.",
+                "Where the result goes",
+                "Put a _Warehouse Input_ in front of the _Crafter's_ output.");
 
         tooltip(lang, "block.wareworks.warehouse_stock_keeper",
                 "Sets a _minimum_, a _maximum_ and a _reserve_ of the warehouse for each item.");

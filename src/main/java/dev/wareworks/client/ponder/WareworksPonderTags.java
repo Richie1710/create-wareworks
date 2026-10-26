@@ -47,6 +47,8 @@ public final class WareworksPonderTags {
                 .add(WareworksBlocks.WAREHOUSE_OUTPUT)
                 .add(WareworksBlocks.WAREHOUSE_TERMINAL)
                 .add(WareworksBlocks.WAREHOUSE_PRODUCTION)
+                // The Crafter Feeder is the production station's machine (issue #34), so it stands beside it.
+                .add(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER)
                 .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
                 // A rack bay is a storage location that is the block itself (M28, issue #20), so all three tiers
                 // belong in the index beside the interface.
@@ -67,7 +69,9 @@ public final class WareworksPonderTags {
 
         // The dock is a kinetic appliance: it consumes rotational force and its speed depends on the RPM.
         entries.addToTag(AllCreatePonderTags.KINETIC_APPLIANCES)
-                .add(WareworksBlocks.STACKER_CRANE);
+                .add(WareworksBlocks.STACKER_CRANE)
+                // So is the Crafter Feeder (issue #34): it needs rotation and runs faster with more of it.
+                .add(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER);
         // Interface and stations move items around, so they belong next to Create's logistics blocks.
         entries.addToTag(AllCreatePonderTags.LOGISTICS)
                 .add(WareworksBlocks.WAREHOUSE_INTERFACE)

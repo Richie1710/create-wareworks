@@ -1,10 +1,17 @@
 package dev.wareworks.content.station;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Predicate;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -17,6 +24,7 @@ import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
@@ -27,6 +35,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -34,6 +43,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
@@ -54,7 +64,10 @@ import net.neoforged.neoforge.items.IItemHandler;
  * <b>The patterns live here</b> ({@link ProductionPatterns}), which answers "which machine gets these ingredients"
  * without any extra configuration: they get them here, and the player's machinery is whatever they hooked up to this
  * block. The controller reads them to decide what its aisle can produce; nothing in Wareworks checks that a pattern
- * matches a real recipe.
+ * matches a real recipe — <b>except</b> while a Warehouse Crafter Feeder is attached to this station's back
+ * ({@link #attachedFeeder()}, issue #34, ADR-067): the feeder lays the patterns into a vanilla Crafter, which crafts
+ * only real crafting recipes, so then every pattern is checked against one ({@link #crafterCheck}) and only the ones
+ * that pass reach the planner ({@link #activePatterns()}).
  * <p>
  * <b>No ticker, no redstone.</b> Patterns are edited in the screen ({@link #openScreen}), and the station only reacts
  * to insertions, extractions, goggle observation and lifecycle events like every other station.
@@ -62,10 +75,38 @@ import net.neoforged.neoforge.items.IItemHandler;
 public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBlockEntity implements IInteractionChecker {
     /** NBT key of the goggle data that is specific to this station (client packets only). */
     public static final String PRODUCTION_SUMMARY_TAG = "ProductionSummary";
+    /** NBT key of {@link #feederLaid}. */
+    private static final String FEEDER_LAID_TAG = "FeederLaid";
+    private static final String FEEDER_LAID_ORDER = "Order";
+    private static final String FEEDER_LAID_RUNS = "Runs";
+    /** Most orders whose laid runs are read back from a save, which is untrusted. */
+    private static final int MAX_FEEDER_LAID = 256;
+    /** Most runs one order can have laid: as many as a loaded feed may claim. */
+    private static final int MAX_FEEDER_RUNS = WarehouseCrafterFeederBlockEntity.MAX_RUNS;
 
     private final ProductionPatterns patterns;
     /** Derived goggle state, never saved; synced with the shared station summary. */
     private ProductionGoggleSummary productionSummary = ProductionGoggleSummary.NONE;
+    /**
+     * Bumped by every pattern change ({@link #setPatternEntry}, {@link #clearPattern}, a full load), so the crafter
+     * recipe checks below know when their answers are stale. Never saved.
+     */
+    private int patternsRevision;
+    /** Cached crafter recipe checks per pattern slot (null = not computed yet), valid for {@link #checksRevision}. */
+    private CrafterRecipeCheck.Result[] checks = new CrafterRecipeCheck.Result[0];
+    private int checksRevision = -1;
+    /**
+     * The recipe manager the cached checks were computed against. A {@code /reload} replaces it, which is how the cache
+     * notices new or removed recipes without listening for anything — the approach of vanilla's own {@code RecipeCache}.
+     */
+    private WeakReference<Object> checksRecipes = new WeakReference<>(null);
+    /**
+     * Runs of each open order the attached Crafter Feeder has laid into its Crafter (issue #34, ADR-067). Kept here and
+     * saved with the station rather than with the feeder, so a feeder that is broken and placed again, or whose save
+     * could not be read, knows how much of an order is already in the Crafter or crafted and never lays it twice.
+     * Pruned by the feeder to orders that are still open.
+     */
+    private final Map<UUID, Integer> feederLaid = new LinkedHashMap<>();
 
     public WarehouseProductionBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.productionBufferSlots());
@@ -96,9 +137,135 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         return patterns;
     }
 
-    /** The complete patterns of this station, in slot order. */
+    /**
+     * The patterns the warehouse may plan with, in slot order: every complete pattern — or, while a Warehouse Crafter
+     * Feeder is attached ({@link #attachedFeeder()}, issue #34, ADR-067 D7), only those whose crafting recipe check
+     * passed. This one filter is what keeps the controller's planner, the restocking rules and the terminal from ever
+     * fetching ingredients for a pattern the Crafter would not craft: a pattern that is not offered is never ordered.
+     */
     public List<ProductionPattern<ItemKey>> activePatterns() {
-        return patterns.patterns();
+        if (level == null || level.isClientSide || attachedFeeder().isEmpty())
+            return patterns.patterns();
+        List<ProductionPattern<ItemKey>> usable = new ArrayList<>(patterns.size());
+        for (int slot = 0; slot < patterns.size(); slot++) {
+            Optional<ProductionPattern<ItemKey>> pattern = patterns.patternAt(slot);
+            if (pattern.isPresent() && checkOf(slot).check() == CrafterPatternCheck.VALID)
+                usable.add(pattern.get());
+        }
+        return List.copyOf(usable);
+    }
+
+    // --- the crafter feeder (issue #34, ADR-067) ---------------------------------------------------------------------
+
+    /**
+     * Server: the Warehouse Crafter Feeder attached to this station's back, if there is one: the block behind the station
+     * is a feeder that does not face the station, and that feeder resolves its station to this one
+     * ({@link CrafterFeederAttachment}) — a feeder between the backs of two stations serves neither. A handful of block
+     * state reads and one block entity lookup, no search.
+     */
+    public Optional<WarehouseCrafterFeederBlockEntity> attachedFeeder() {
+        if (level == null || level.isClientSide || isRemoved())
+            return Optional.empty();
+        BlockPos behind = worldPosition.relative(facing().getOpposite());
+        if (!level.isLoaded(behind))
+            return Optional.empty();
+        BlockState state = level.getBlockState(behind);
+        if (!(state.getBlock() instanceof WarehouseCrafterFeederBlock))
+            return Optional.empty();
+        CrafterFeederAttachment.Result attachment = CrafterFeederAttachment.resolve(level, behind,
+                state.getValue(WarehouseCrafterFeederBlock.FACING));
+        if (attachment.kind() != CrafterFeederAttachment.Kind.ONE
+                || !attachment.station().map(worldPosition::equals).orElse(false))
+            return Optional.empty();
+        return level.getBlockEntity(behind) instanceof WarehouseCrafterFeederBlockEntity feeder && !feeder.isRemoved()
+                ? Optional.of(feeder) : Optional.empty();
+    }
+
+    /**
+     * Server: the crafting recipe check of pattern slot {@code slot} ({@link CrafterRecipeCheck}) -
+     * {@link CrafterPatternCheck#NOT_CHECKED} while no feeder is attached, because then nothing is checked at all.
+     * Cached until the patterns or the recipes change.
+     */
+    public CrafterRecipeCheck.Result crafterCheck(int slot) {
+        if (level == null || level.isClientSide || attachedFeeder().isEmpty())
+            return CrafterRecipeCheck.Result.NOT_CHECKED;
+        return checkOf(slot);
+    }
+
+    /** Server: {@link #crafterCheck} for every pattern slot, in slot order (the station screen). */
+    public List<CrafterRecipeCheck.Result> crafterChecks() {
+        boolean attached = level != null && !level.isClientSide && attachedFeeder().isPresent();
+        List<CrafterRecipeCheck.Result> all = new ArrayList<>(patterns.size());
+        for (int slot = 0; slot < patterns.size(); slot++)
+            all.add(attached ? checkOf(slot) : CrafterRecipeCheck.Result.NOT_CHECKED);
+        return List.copyOf(all);
+    }
+
+    /** The cached check of {@code slot}, computed on first use after a pattern or recipe change. */
+    private CrafterRecipeCheck.Result checkOf(int slot) {
+        if (slot < 0 || slot >= patterns.size() || level == null)
+            return CrafterRecipeCheck.Result.INCOMPLETE;
+        Object recipes = CrafterRecipeCheck.recipeSet(level);
+        if (checksRevision != patternsRevision || checks.length != patterns.size() || checksRecipes.get() != recipes) {
+            checks = new CrafterRecipeCheck.Result[patterns.size()];
+            checksRevision = patternsRevision;
+            checksRecipes = new WeakReference<>(recipes);
+        }
+        CrafterRecipeCheck.Result cached = checks[slot];
+        if (cached == null) {
+            cached = CrafterRecipeCheck.check(level, patterns, slot);
+            checks[slot] = cached;
+        }
+        return cached;
+    }
+
+    /** Items of {@code key} in the buffer: what the feeder may still take of it. */
+    long bufferCount(ItemKey key) {
+        return buffer.countOf(key);
+    }
+
+    /**
+     * Feeder: takes up to one stack of {@code key} out of the buffer ({@link StationBuffer#extract}). The items go
+     * straight into a Crafter slot in the same tick; nothing in between holds them (ADR-067 D3).
+     */
+    ItemStack extractForFeeder(ItemKey key, int amount, boolean simulate) {
+        return buffer.extract(key, amount, simulate);
+    }
+
+    /** The aisle's controller, for the feeder attached to this station. */
+    Optional<WarehouseControllerBlockEntity> controllerForFeeder() {
+        return controller();
+    }
+
+    /** Server: runs of order {@code order} a feeder has laid into its Crafter so far; 0 for one it never touched. */
+    public int feederLaidRuns(UUID order) {
+        return feederLaid.getOrDefault(order, 0);
+    }
+
+    /** A feeder laid {@code runs} more runs of order {@code order}. */
+    void addFeederLaidRuns(UUID order, int runs) {
+        if (runs <= 0)
+            return;
+        feederLaid.merge(order, runs, (before, added) -> Math.min(MAX_FEEDER_RUNS, before + added));
+        setChanged();
+    }
+
+    /** Forgets the laid runs of every order {@code open} does not accept any more. */
+    void pruneFeederLaid(Predicate<UUID> open) {
+        boolean changed = false;
+        for (Iterator<UUID> it = feederLaid.keySet().iterator(); it.hasNext();) {
+            if (!open.test(it.next())) {
+                it.remove();
+                changed = true;
+            }
+        }
+        if (changed)
+            setChanged();
+    }
+
+    private void patternsChanged() {
+        patternsRevision++;
+        Arrays.fill(checks, null);
     }
 
     /**
@@ -112,6 +279,7 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             return false;
         if (!patterns.setEntry(pattern, entry, key, count))
             return false;
+        patternsChanged();
         setChanged();
         return true;
     }
@@ -122,6 +290,7 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             return false;
         if (!patterns.clearPattern(pattern))
             return false;
+        patternsChanged();
         setChanged();
         return true;
     }
@@ -347,8 +516,16 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
 
     private ProductionGoggleSummary createProductionSummary() {
         Optional<WarehouseControllerBlockEntity> found = controller();
+        // The feeder flag and how many complete patterns it refuses (issue #34): numbers only, like the rest.
+        boolean feeder = attachedFeeder().isPresent();
+        int refused = 0;
+        if (feeder) {
+            for (int slot = 0; slot < patterns.size(); slot++)
+                refused += checkOf(slot).check().refused() ? 1 : 0;
+        }
         if (found.isEmpty())
-            return new ProductionGoggleSummary(patterns.patternCount(), 0, Optional.empty(), 0L, 0L);
+            return new ProductionGoggleSummary(patterns.patternCount(), 0, Optional.empty(), 0L, 0L, 0, 0L, false,
+                    feeder, refused);
         List<StoppedProduct> stopped = stoppedProducts(found.get());
         long unrecovered = 0L;
         for (StoppedProduct entry : stopped)
@@ -374,7 +551,7 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             awaited += order.outstandingResult();
         }
         return new ProductionGoggleSummary(patterns.patternCount(), open, oldest, missing, awaited, stopped.size(),
-                unrecovered, oldestWaitingForStep);
+                unrecovered, oldestWaitingForStep, feeder, refused);
     }
 
     /**
@@ -391,6 +568,15 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         else
             WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_NO_PATTERNS).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
+        // A Crafter Feeder at the back (issue #34, ADR-067) changes what the patterns are: the ones that are no
+        // crafting recipe are skipped, and that count is what tells a player why an item vanished from the terminal.
+        if (production.feeder()) {
+            WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_FEEDER).style(ChatFormatting.GRAY)
+                    .forGoggles(tooltip, 1);
+            if (production.refusedPatterns() > 0)
+                WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_REFUSED, production.refusedPatterns())
+                        .style(ChatFormatting.GOLD).forGoggles(tooltip, 2);
+        }
         // The safety stop outranks everything else the station could say, exactly as it does on the keeper's lamp and in
         // its screen: it is the one state a player has to act on, and the pause has already cancelled the orders that
         // would otherwise be reported below (M20, ADR-032).
@@ -442,6 +628,16 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             return;
         }
         tag.put(ProductionPatterns.PATTERNS_TAG, patterns.save(registries));
+        if (!feederLaid.isEmpty()) {
+            ListTag laid = new ListTag();
+            for (Map.Entry<UUID, Integer> entry : feederLaid.entrySet()) {
+                CompoundTag entryTag = new CompoundTag();
+                entryTag.putUUID(FEEDER_LAID_ORDER, entry.getKey());
+                entryTag.putInt(FEEDER_LAID_RUNS, entry.getValue());
+                laid.add(entryTag);
+            }
+            tag.put(FEEDER_LAID_TAG, laid);
+        }
     }
 
     @Override
@@ -454,8 +650,18 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         // A tag that is no full save is a schematic print landing on a station that is already standing (isFullSave,
         // issue #25, ADR-061): patterns do not travel in a schematic, so such a tag says nothing about them and must
         // not wipe the ones a player wrote. Every save writes the list, even an empty one.
-        if (isFullSave(tag))
+        if (isFullSave(tag)) {
             patterns.load(tag.getList(ProductionPatterns.PATTERNS_TAG, Tag.TAG_COMPOUND), registries);
+            patternsChanged();
+            feederLaid.clear();
+            ListTag laid = tag.getList(FEEDER_LAID_TAG, Tag.TAG_COMPOUND);
+            for (int i = 0; i < laid.size() && feederLaid.size() < MAX_FEEDER_LAID; i++) {
+                CompoundTag entryTag = laid.getCompound(i);
+                int runs = Math.min(MAX_FEEDER_RUNS, entryTag.getInt(FEEDER_LAID_RUNS));
+                if (entryTag.hasUUID(FEEDER_LAID_ORDER) && runs > 0)
+                    feederLaid.put(entryTag.getUUID(FEEDER_LAID_ORDER), runs);
+            }
+        }
     }
 
     /**
