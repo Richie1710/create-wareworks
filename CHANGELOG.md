@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1-beta] - 2026-10-26
+
 ### Changed
 
 - **The crafting panel's amount field now counts the items you want, not crafts**
@@ -15,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up: 5 Stone Bricks fetch for 2 crafts, 8 bricks. The Fetch tooltip, the question, the status row and the result say
   how many items you will get, with a "Crafts: 2 (4 each)" line for recipes that make more than one. The "Set x…"
   number in the question asks for exactly what it offers, and a recipe laid with JEI's "+" follows the same rule.
-  Recipes that make one item work exactly as before. The largest fetch is now the amount field's maximum in items
-  (1024 planks by default instead of 4096)
+  Recipes that make one item work exactly as before. The largest fetch is now the amount field's maximum in items,
+  rounded up to a whole craft (1024 planks by default instead of 4096)
 
 ## [0.13.0-beta] - 2026-10-17
 
@@ -1242,7 +1244,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.13.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.13.1-beta...HEAD
+[0.13.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.13.0-beta...v0.13.1-beta
 [0.13.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.12.1-beta...v0.13.0-beta
 [0.12.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.12.0-beta...v0.12.1-beta
 [0.12.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.11.1-beta...v0.12.0-beta
