@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A production station can now hold up to 36 patterns**
+  ([#35](https://github.com/Richie1710/create-wareworks/issues/35)). The server config `maxProductionPatterns` goes up
+  to 36 (the default is still 4) and applies to stations placed from then on. Up to 9 patterns the station's screen
+  looks exactly as before; 10 to 18 patterns get a wider tab strip, and above 18 the tabs scroll by rows with the mouse
+  wheel over them, with a slim bar beside them that also marks hidden rows with a red pattern and, in gold, the
+  selected pattern's row while it is scrolled out of view. Selecting a pattern always brings its tab into view.
+  Opening a world in an older version of the mod keeps only the first 8 patterns of each station, and saving it there
+  deletes the others for good, so back up the world before downgrading
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because the production station's screen can carry more than 8 patterns now
+
 ## [0.14.0-beta] - 2026-10-26
 
 ### Added

@@ -45,7 +45,7 @@ import net.minecraft.nbt.Tag;
  */
 public final class ProductionPatterns {
     /** Hard cap on pattern slots, whatever {@code maxProductionPatterns} says. */
-    public static final int MAX_SLOTS = 8;
+    public static final int MAX_SLOTS = 36;
     /** Cells of the authoring grid: indices {@code 0..}{@value ProductionPattern#GRID_SIZE}{@code -1}. */
     public static final int GRID_CELLS = ProductionPattern.GRID_SIZE;
     /** Entries of one pattern: its {@value #GRID_CELLS} grid cells plus the result. */

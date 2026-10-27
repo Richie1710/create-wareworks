@@ -2,6 +2,8 @@ package dev.wareworks.gametest;
 
 import static dev.wareworks.gametest.WareworksGameTests.AISLE_16X10X7;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -11,6 +13,8 @@ import java.util.UUID;
 
 import com.simibubi.create.AllBlocks;
 
+import io.netty.buffer.Unpooled;
+
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.RequestRejection;
@@ -19,24 +23,29 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.ProductionPatterns;
+import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
 import dev.wareworks.core.warehouse.LocationKind;
+import dev.wareworks.network.ProductionScreenPayload;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -48,6 +57,7 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
+import net.neoforged.neoforge.network.connection.ConnectionType;
 
 /**
  * GameTests of production patterns and production orders ({@code docs/warehouse-system.md} §3.5, ADR-024).
@@ -778,6 +788,109 @@ public final class ProductionGameTests {
                             "and saving under the lowered cap keeps it");
                 })
                 .thenSucceed();
+    }
+
+    /**
+     * <b>36 full patterns</b> (issue #35, ADR-068): a station built under the new cap holds 36 nine-ingredient patterns,
+     * keeps every entry through a save and a load, keeps them all hidden but not lost when the cap is lowered again, and
+     * its screen state carries all 36 patterns and checks through the real codec. The encoded size is logged.
+     */
+    @GameTest(template = AISLE_16X10X7, batch = CONFIG_BATCH, timeoutTicks = TIMEOUT_TICKS)
+    public static void productionThirtySixPatternsSurviveAReload(GameTestHelper helper) {
+        AisleFixture aisle = build(helper);
+        helper.startSequence()
+                .thenExecute(() -> {
+                    ServerLevel level = helper.getLevel();
+                    HolderLookup.Provider registries = level.registryAccess();
+                    int max = ProductionPatterns.MAX_SLOTS;
+                    helper.assertValueEqual(max, 36, "the hard cap");
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxProductionPatterns, max);
+                    WarehouseProductionBlockEntity built = aisle.productionAt(PRODUCTION_RACK);
+                    level.setBlockEntity(loadCopy(helper, built, built.saveWithFullMetadata(registries),
+                            WarehouseProductionBlockEntity.class));
+                    WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+                    helper.assertValueEqual(station.patterns().size(), max, "a station built now has 36 slots");
+
+                    // 36 distinct results and 9 distinct ingredients each, none of them a result: every slot full.
+                    List<ItemKey> items = BuiltInRegistries.ITEM.stream()
+                            .filter(item -> item != Items.AIR)
+                            .sorted(Comparator.comparing(item -> BuiltInRegistries.ITEM.getKey(item).toString()))
+                            .map(ItemKey::of)
+                            .limit(max * ProductionPatterns.ENTRIES_PER_PATTERN)
+                            .toList();
+                    helper.assertValueEqual(items.size(), max * ProductionPatterns.ENTRIES_PER_PATTERN,
+                            "enough distinct items");
+                    for (int slot = 0; slot < max; slot++) {
+                        for (int entry = 0; entry < ProductionPatterns.ENTRIES_PER_PATTERN; entry++)
+                            helper.assertTrue(station.setPatternEntry(slot, entry, thirtySixItem(items, slot, entry),
+                                    entry + 1 == ProductionPatterns.ENTRIES_PER_PATTERN ? 2 : 1),
+                                    "slot " + slot + " entry " + entry + " is written");
+                    }
+                    helper.assertValueEqual(station.activePatterns().size(), max, "36 complete patterns");
+
+                    CompoundTag saved = station.saveWithFullMetadata(registries);
+                    level.setBlockEntity(loadCopy(helper, station, saved, WarehouseProductionBlockEntity.class));
+                    assertThirtySix(helper, aisle.productionAt(PRODUCTION_RACK), items, "after a reload");
+
+                    // A lowered cap hides the upper slots and loses none of them, and a further save keeps them too.
+                    ConfigOverrides.set(helper, WareworksConfig.SERVER.maxProductionPatterns, 4);
+                    level.setBlockEntity(loadCopy(helper, aisle.productionAt(PRODUCTION_RACK), saved,
+                            WarehouseProductionBlockEntity.class));
+                    WarehouseProductionBlockEntity lowered = aisle.productionAt(PRODUCTION_RACK);
+                    level.setBlockEntity(loadCopy(helper, lowered, lowered.saveWithFullMetadata(registries),
+                            WarehouseProductionBlockEntity.class));
+                    WarehouseProductionBlockEntity again = aisle.productionAt(PRODUCTION_RACK);
+                    assertThirtySix(helper, again, items, "under a lowered cap, saved again");
+
+                    // The screen: the menu has 36 tabs, and its state crosses the wire whole.
+                    ProductionMenu menu = openMenu(playerAt(helper, aisle.rackPos(PRODUCTION_RACK)), again);
+                    helper.assertValueEqual(menu.patternSlots(), max, "the menu offers every slot the station has");
+                    ProductionScreenState state = menu.screenState();
+                    List<ProductionScreenState.PatternCheckView> checks = new ArrayList<>(max);
+                    for (int slot = 0; slot < max; slot++)
+                        checks.add(new ProductionScreenState.PatternCheckView(slot % 2 == 0
+                                ? CrafterPatternCheck.VALID : CrafterPatternCheck.NOT_A_RECIPE, Optional.empty()));
+                    ProductionScreenState sent = new ProductionScreenState(state.patterns(), state.orders(),
+                            state.stopped(), true, checks);
+                    RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(Unpooled.buffer(), level.registryAccess(),
+                            ConnectionType.NEOFORGE);
+                    ProductionScreenPayload.STREAM_CODEC.encode(buffer, new ProductionScreenPayload(1, sent));
+                    int bytes = buffer.readableBytes();
+                    ProductionScreenState received = ProductionScreenPayload.STREAM_CODEC.decode(buffer).state();
+                    helper.assertValueEqual(buffer.readableBytes(), 0, "the payload reads exactly what it wrote");
+                    helper.assertValueEqual(received.patterns().size(), max, "36 patterns arrive");
+                    helper.assertValueEqual(received.patterns(), sent.patterns(), "every entry unchanged");
+                    helper.assertValueEqual(received.checks(), checks, "and every pattern's check");
+                    helper.assertValueEqual(received.result(max - 1).map(ProductionScreenState.EntryView::key),
+                            Optional.of(thirtySixItem(items, max - 1, ProductionPatterns.RESULT_ENTRY)),
+                            "the last tab names its own result");
+                    Wareworks.LOGGER.info("Production screen state with {} full patterns and checks: {} bytes", max,
+                            bytes);
+                })
+                .thenSucceed();
+    }
+
+    /** The item of entry {@code entry} of slot {@code slot} in {@link #productionThirtySixPatternsSurviveAReload}. */
+    private static ItemKey thirtySixItem(List<ItemKey> items, int slot, int entry) {
+        if (entry == ProductionPatterns.RESULT_ENTRY)
+            return items.get(slot);
+        return items.get(ProductionPatterns.MAX_SLOTS + (slot * ProductionPatterns.GRID_CELLS + entry)
+                % (items.size() - ProductionPatterns.MAX_SLOTS));
+    }
+
+    private static void assertThirtySix(GameTestHelper helper, WarehouseProductionBlockEntity station,
+            List<ItemKey> items, String when) {
+        int max = ProductionPatterns.MAX_SLOTS;
+        helper.assertValueEqual(station.patterns().size(), max, when + ": the station keeps all 36 slots");
+        for (int slot = 0; slot < max; slot++) {
+            for (int entry = 0; entry < ProductionPatterns.ENTRIES_PER_PATTERN; entry++) {
+                helper.assertValueEqual(station.patterns().keyAt(slot, entry),
+                        Optional.of(thirtySixItem(items, slot, entry)), when + ": slot " + slot + " entry " + entry);
+                helper.assertValueEqual(station.patterns().countAt(slot, entry),
+                        entry == ProductionPatterns.RESULT_ENTRY ? 2 : 1, when + ": its count");
+            }
+        }
+        helper.assertValueEqual(station.activePatterns().size(), max, when + ": 36 complete patterns");
     }
 
     /** Restores the config even when a config-batch test fails before its own restore. */

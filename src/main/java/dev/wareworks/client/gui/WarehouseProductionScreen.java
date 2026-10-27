@@ -66,6 +66,14 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * result with a red cross in place of the arrow, and a red bar under its tab, so it can be found without selecting it.
  * The arrow's and the tab's tooltip give the reason and the consequence: the warehouse never orders that pattern, so
  * nothing is fetched for it. The window's height budget is unchanged; the feeder adds no row.
+ * <p>
+ * <b>Up to 36 patterns</b> (issue #35, ADR-068). The tab strip widens from three to six columns as the station holds
+ * more patterns, and above 18 it shows three rows at a time and <b>scrolls by rows</b> with the mouse wheel over it,
+ * with a slim scroll bar beside it. The scroll position is this screen's own view state: it is never sent or saved.
+ * Every change of the selection goes through {@link #select}, which scrolls the selected tab into view, and so does
+ * every (re)opening of the window; the wheel itself may scroll the selected tab out of view again, so that a player can
+ * browse. A hidden row that holds a stopped or refused pattern is marked with a red tick on the scroll bar, so those
+ * can still be found without scrolling.
  */
 public class WarehouseProductionScreen extends AbstractSimiContainerScreen<ProductionMenu> {
     private static final int TITLE_Y = 2;
@@ -92,6 +100,12 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private static final int REFUSED_BAR = 2;
     /** What stands in the arrow's place while the selected pattern is refused. */
     private static final String REFUSED_ARROW = "x";
+    /** The tab strip's scroll bar track (issue #35). */
+    private static final int COLOR_SCROLL_TRACK = 0xFF2B2B2B;
+    /** The tab strip's scroll bar thumb. */
+    private static final int COLOR_SCROLL_THUMB = 0xFFC8C8C8;
+    /** The scroll bar's tick for the selected pattern's row while the wheel has scrolled it out of view. */
+    private static final int COLOR_SCROLL_SELECTED = 0xFFFBDC7D;
 
     /** Usable width of a row of text: the window without its two margins — 216 px, as in the terminal. */
     public static final int ROW_WIDTH = ProductionMenuLayout.WIDTH - 2 * ProductionMenuLayout.MARGIN;
@@ -106,6 +120,8 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private ProductionScreenState state = ProductionScreenState.NONE;
     private ProductionMenuLayout layout;
     private int selectedPattern;
+    /** First visible tab row of a scrolling tab strip (issue #35); client-only view state, never sent or saved. */
+    private int tabScroll;
 
     public WarehouseProductionScreen(ProductionMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
@@ -116,7 +132,8 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         layout = menu.layout();
         setWindowSize(ProductionMenuLayout.WIDTH, layout.height());
         super.init();
-        clampSelection();
+        // A (re)opened or resized window always starts with the selected tab in view.
+        select(selectedPattern);
         if (menu.station() == null && minecraft != null && minecraft.player != null)
             minecraft.player.closeContainer(); // the block entity is gone: nothing to edit
     }
@@ -137,6 +154,52 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         return selectedPattern;
     }
 
+    /** The first visible row of the pattern tab strip (0 unless it scrolls; issue #35). */
+    public int tabScroll() {
+        return tabScroll;
+    }
+
+    /**
+     * The rows of a scrolling tab strip that are out of view and hold a stopped or a refused pattern: the rows the
+     * scroll bar marks with a red tick (issue #35). Empty while the strip does not scroll.
+     */
+    public List<Integer> hiddenRedRows() {
+        List<Integer> rows = new ArrayList<>();
+        if (layout == null || !layout.scrolls())
+            return rows;
+        for (int row = 0; row < layout.tabRows(); row++) {
+            if (!rowVisible(row) && rowIsRed(row))
+                rows.add(row);
+        }
+        return rows;
+    }
+
+    /**
+     * The selected pattern's tab row while the wheel has scrolled it out of view, or -1 while it is visible or the
+     * strip does not scroll. The scroll bar marks it, so the pattern the grid is showing can always be found.
+     */
+    public int hiddenSelectedRow() {
+        if (layout == null || !layout.scrolls())
+            return -1;
+        int row = layout.tabRow(selectedPattern);
+        return rowVisible(row) ? -1 : row;
+    }
+
+    private boolean rowVisible(int row) {
+        return row >= tabScroll && row < tabScroll + layout.visibleTabRows();
+    }
+
+    /**
+     * Selects pattern slot {@code pattern} (clamped to the station's slots) and scrolls its tab into view. Every change
+     * of the selection goes through here — a click on a tab, a selection the server's state made invalid, and the dev
+     * harness standing in for a selection made elsewhere — so the selected tab is never left hidden by a selection.
+     */
+    public void select(int pattern) {
+        selectedPattern = Math.max(0, Math.min(pattern, menu.patternSlots() - 1));
+        if (layout != null)
+            tabScroll = layout.clampTabScroll(layout.scrollToShow(selectedPattern, tabScroll));
+    }
+
     // --- interaction ---------------------------------------------------------------------------------------------
 
     @Override
@@ -147,7 +210,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 send(ProductionPatternPayload.clearPattern(menu.containerId, tab));
                 return true;
             }
-            selectedPattern = tab;
+            select(tab);
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.4F);
             return true;
         }
@@ -189,7 +252,11 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
-    /** Scrolling over a filled pattern cell changes that cell's amount. An empty cell has no amount to change. */
+    /**
+     * Scrolling over a filled pattern cell changes that cell's amount. An empty cell has no amount to change. Scrolling
+     * over a tab strip that has more rows than it shows moves it by one row per notch (issue #35); the event is taken
+     * there even at either end, so the wheel never reaches what lies behind the strip.
+     */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (scrollY == 0)
@@ -203,6 +270,10 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 send(ProductionPatternPayload.set(menu.containerId, selectedPattern, cell, view.get().key(), count));
                 return true;
             }
+        }
+        if (layout.scrolls() && isOverTabStrip(mouseX, mouseY)) {
+            tabScroll = layout.clampTabScroll(tabScroll - (int) Math.signum(scrollY));
+            return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
     }
@@ -304,12 +375,14 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         }
     }
 
-    /** One tab per pattern slot, showing that pattern's result. */
+    /** One tab per pattern slot, showing that pattern's result; only the visible rows of a scrolling strip. */
     private void renderTabs(GuiGraphics graphics, int mouseX, int mouseY) {
         int hovered = tabAt(mouseX, mouseY);
         for (int pattern = 0; pattern < menu.patternSlots(); pattern++) {
+            if (!layout.tabVisible(pattern, tabScroll))
+                continue;
             int tabX = leftPos + layout.tabX(pattern);
-            int tabY = topPos + layout.tabY(pattern);
+            int tabY = topPos + layout.tabY(pattern, tabScroll);
             AllGuiTextures.STOCK_KEEPER_REQUEST_SLOT.render(graphics, tabX, tabY);
             if (pattern == selectedPattern)
                 graphics.fill(tabX, tabY, tabX + ProductionMenuLayout.SLOT, tabY + ProductionMenuLayout.SLOT,
@@ -329,6 +402,43 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 graphics.fill(tabX, tabY + ProductionMenuLayout.SLOT - REFUSED_BAR, tabX + ProductionMenuLayout.SLOT,
                         tabY + ProductionMenuLayout.SLOT, COLOR_REFUSED);
         }
+        if (layout.scrolls())
+            renderScrollbar(graphics);
+    }
+
+    /**
+     * The tab strip's scroll bar (issue #35): a dark track the height of the pattern block, a light thumb for the
+     * visible rows, and a red tick at every <b>hidden</b> row that holds a stopped or a refused pattern — the promise
+     * that a red tab can be found without selecting it holds for tabs scrolled out of view too. A gold tick marks the
+     * selected pattern's row while the wheel has scrolled it out of view, drawn last so it wins over a red one.
+     */
+    private void renderScrollbar(GuiGraphics graphics) {
+        int x = leftPos + layout.scrollbarX();
+        int top = topPos + layout.scrollbarY();
+        int width = ProductionMenuLayout.SCROLLBAR_WIDTH;
+        graphics.fill(x, top, x + width, top + layout.scrollbarHeight(), COLOR_SCROLL_TRACK);
+        for (int row : hiddenRedRows())
+            renderScrollTick(graphics, x, row, COLOR_REFUSED);
+        int selectedRow = hiddenSelectedRow();
+        if (selectedRow >= 0)
+            renderScrollTick(graphics, x, selectedRow, COLOR_SCROLL_SELECTED);
+        int thumbY = topPos + layout.thumbY(tabScroll);
+        graphics.fill(x, thumbY, x + width, thumbY + layout.thumbHeight(), COLOR_SCROLL_THUMB);
+    }
+
+    private void renderScrollTick(GuiGraphics graphics, int x, int row, int color) {
+        int tickY = topPos + layout.scrollbarRowY(row) + (layout.scrollbarRowHeight() - REFUSED_BAR) / 2;
+        graphics.fill(x, tickY, x + ProductionMenuLayout.SCROLLBAR_WIDTH, tickY + REFUSED_BAR, color);
+    }
+
+    /** Whether tab row {@code row} holds a stopped product or a pattern the Crafter Feeder refuses. */
+    private boolean rowIsRed(int row) {
+        int first = row * layout.tabColumns();
+        for (int pattern = first; pattern < first + layout.tabColumns() && pattern < menu.patternSlots(); pattern++) {
+            if (stoppedAt(pattern).isPresent() || refusedAt(pattern).isPresent())
+                return true;
+        }
+        return false;
     }
 
     /** One ghost item with its per-run amount. */
@@ -671,8 +781,16 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
 
     // --- hit testing ---------------------------------------------------------------------------------------------
 
+    /**
+     * After a state push: a selection the station no longer has is moved (and its tab shown, through {@link #select});
+     * an unchanged selection keeps the strip where the player scrolled it.
+     */
     private void clampSelection() {
-        selectedPattern = Math.max(0, Math.min(selectedPattern, menu.patternSlots() - 1));
+        int clamped = Math.max(0, Math.min(selectedPattern, menu.patternSlots() - 1));
+        if (clamped != selectedPattern)
+            select(clamped);
+        else if (layout != null)
+            tabScroll = layout.clampTabScroll(tabScroll);
     }
 
     /** The pattern cell under the mouse ({@code 0..8} grid, {@value ProductionMenuLayout#RESULT_CELL} result). */
@@ -684,13 +802,22 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         return NONE;
     }
 
-    /** The pattern tab under the mouse. */
-    private int tabAt(double mouseX, double mouseY) {
+    /** The pattern tab under the mouse; a tab scrolled out of view is never hit. Public for the dev harness. */
+    public int tabAt(double mouseX, double mouseY) {
         for (int pattern = 0; pattern < menu.patternSlots(); pattern++) {
-            if (isOver(mouseX, mouseY, leftPos + layout.tabX(pattern), topPos + layout.tabY(pattern)))
+            if (layout.tabVisible(pattern, tabScroll)
+                    && isOver(mouseX, mouseY, leftPos + layout.tabX(pattern), topPos + layout.tabY(pattern, tabScroll)))
                 return pattern;
         }
         return NONE;
+    }
+
+    /** Whether the mouse is over the tab strip or its scroll bar: the mouse wheel's target. Public for the dev harness. */
+    public boolean isOverTabStrip(double mouseX, double mouseY) {
+        int left = leftPos + layout.tabStripX();
+        int top = topPos + layout.tabStripY();
+        return mouseX >= left && mouseX < left + layout.tabStripWidth() && mouseY >= top
+                && mouseY < top + layout.tabStripHeight();
     }
 
     /** The index within {@link #shownOrders()} of the order line under the mouse. */

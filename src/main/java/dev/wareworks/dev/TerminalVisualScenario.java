@@ -289,7 +289,10 @@ public final class TerminalVisualScenario implements VisualScenario {
     private static final int WIDEST_AMOUNT = 65536;
     /** The widest entry count a clipboard order can show: the ceiling of {@code maxTerminalListEntries}. */
     private static final int WIDEST_ENTRIES = 1024;
-    /** The widest number of stopped products the station's stopped row can name (a station has at most 8 patterns). */
+    /**
+     * The widest number of stopped products the station's stopped row can name (a station has at most
+     * {@link ProductionPatterns#MAX_SLOTS} = 36 patterns, so two digits always suffice).
+     */
     private static final int WIDEST_STOPPED = 99;
     /** Steps a chain's badge counts, when this run cannot read the server config; the shipped default. */
     private static final int DEFAULT_PLAN_STEPS = 32;

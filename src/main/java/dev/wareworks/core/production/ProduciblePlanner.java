@@ -20,6 +20,9 @@ import java.util.function.ToLongFunction;
  * ({@code WarehouseControllerBlockEntity#availableStock}, which already subtracts reservations, open requests and the
  * ingredients other production orders promised). Cost per query: one pass over the patterns times their ingredients,
  * i.e. at most {@code maxProductionPatterns} × {@value ProductionPattern#MAX_INGREDIENTS} per production station.
+ * Measured at the cap (issue #35, ADR-068, {@code ProductionScaleTest}): the core of the terminal's producible pass
+ * (this planner over a map of stock; the controller's reservation lookup and station resolution are not included) over
+ * 8 stations × 36 nine-ingredient patterns takes about 0.01 ms; it grew × 4.7 for × 4.5 the patterns of the old cap.
  */
 public final class ProduciblePlanner {
     private ProduciblePlanner() {

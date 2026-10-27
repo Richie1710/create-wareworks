@@ -138,8 +138,13 @@ public final class WareworksNetwork {
      * {@code ProductionScreenState} carries the crafter feeder flag and one pattern check per slot, appended after the
      * stopped products, which a reader of the old shape would stop before and leave in the buffer; the check travels by
      * ordinal ({@code CrafterPatternCheck}), which an older client could not read at all. No new payload type.
+     * <p>
+     * <b>{@code "16"} is issue #35</b> (up to 36 production patterns, ADR-068): {@link ProductionScreenPayload}'s
+     * {@code ProductionScreenState} may carry up to 36 patterns, pattern checks and stopped products (was 8). The bytes
+     * did not change, but a reader with the old bound of 8 stops in the middle of the 9th pattern and reads its entries
+     * as the order count, so the versions must not mix. No new payload type, no new field.
      */
-    public static final String VERSION = "15";
+    public static final String VERSION = "16";
 
     private WareworksNetwork() {
     }

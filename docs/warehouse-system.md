@@ -4212,7 +4212,8 @@ terminal order ─▶ production order ─▶ SUPPLY jobs ─▶ production stat
 #### 3.5.1 Patterns
 
 A pattern is **a 3 x 3 grid of ingredient cells plus one result**, authored like a vanilla crafting recipe because
-that is how a player already reads one. A station holds `maxProductionPatterns` of them (config, default 4).
+that is how a player already reads one. A station holds `maxProductionPatterns` of them (config, default 4, at
+most 36 since issue #35, ADR-068).
 
 * **The grid is for reading; the planner gets a multiset.** `ProductionPattern.fromGrid` merges the cells that name
   the same item into one ingredient, so three cells of one plank are "3 planks". That merge is not cosmetic: the crane
@@ -4459,6 +4460,19 @@ Classes:
   of every chunk packet (§3.1.1). The goggles get numbers and one enum name (`ProductionGoggleSummary`).
   * The window shows **one pattern at a time** with a tab strip beside the grid; showing every pattern's grid at once
     would need `maxProductionPatterns × 54` pixels and could not fit the height vanilla guarantees at every GUI scale.
+    The tab strip never grows taller than the grid's three rows (issue #35, ADR-068): up to 9 patterns it has 3
+    columns, exactly the look of every station before; 10 to 18 patterns get `ceil(n / 3)` columns, up to 6; above 18
+    it shows 6 × 3 tabs and **scrolls by rows** with the mouse wheel over it (one row per notch, the event is taken
+    even at either end), with a 3 px scroll bar beside it. The scroll position is client-only view state, never sent
+    or saved. **Every change of the selection scrolls the selected tab into view** (a click on a tab, a selection the
+    server's state made invalid, and every (re)opening or resize of the window); the wheel itself may scroll the
+    selected tab out of view again, so a player can browse, and a server refresh with the same selection does not
+    snap it back. A **hidden** row that holds a stopped product or a pattern the Crafter Feeder refuses gets a red
+    tick on the scroll bar, so those can still be found without scrolling; while the wheel has scrolled the selected
+    tab out of view, its row gets a gold tick (drawn over a red one), so the pattern the grid shows and edits can
+    always be found. Every position comes from
+    `ProductionMenuLayout`, shared by both sides; the pattern block stays 54 px high at every count, so the window's
+    height is the same as with 8 patterns.
     The **order lines** are the flexible part of the layout (2 down to 0), the trade the terminal makes with its stock
     grid.
   * A client may only *ask*: `submitPattern` and `submitCancel` resolve the payload against the menu that player
@@ -7367,7 +7381,7 @@ The table above is covered by automated tests. What only a running game can reac
 | `maxSnapshotsPerTick` | 4 | queued storage location reads per tick: joins, content hints, load verification (M2 review addition). Since M18 the reads of the inventories behind **collecting** ports share this one budget (§3.2.4), and since the M28 review the **last** unit of it is reserved for them whenever it is larger than one — at `1` the stock index keeps all of it |
 | `collectPollIntervalTicks` | 20 | how often a controller re-reads the inventory behind a gated-open **collecting** warehouse port without being told to (M18, issue #13). It covers the machines that change their inventory without notifying their neighbours — a furnace's result slot, several Create blocks; a change hint always overtakes it, and a port whose gate is shut is not read at all. Range 1–1200: the cost of a lower value is at most one bounded read per collecting port per interval, out of `maxSnapshotsPerTick` (§3.2.4) |
 | `productionBufferSlots` | 9 | buffer of a warehouse production station (M11, world restart) |
-| `maxProductionPatterns` | 4 | pattern slots of one production station; a pattern is a 3x3 grid plus one result (M11) |
+| `maxProductionPatterns` | 4 | pattern slots of one production station; a pattern is a 3x3 grid plus one result (M11). Up to 36 (issue #35); above 18 the station's tabs scroll |
 | `crafterFeederRequiresRotation` | `true` | whether a Warehouse Crafter Feeder needs rotation (issue #34, §3.5.7). `false` runs it at its fastest pace, one craft every 8 ticks, with no stress |
 | `crafterFeederStressImpact` | 2.0 | SU per RPM of a Crafter Feeder while it needs rotation — what Create's Mechanical Crafter takes. Read when the feeder joins a kinetic network, like the crane's `stressImpact` |
 | `maxProductionOrders` | 12 | production orders one controller runs at the same time; each promises its ingredients (M11). **8 → 12 in M20**, because a chain holds one order per step and 8 slots made a three-step plan plus one restock order the whole aisle. It is also the real ceiling on a chain's length: a plan that does not fit the **free** slots is refused with `PRODUCTION_BUSY` (§3.5.6) |
@@ -7399,7 +7413,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 |---|---|---|
 | `aisle` | `maxAisleLength`, `maxMastHeight`, `geometryRefreshTicks`, `maxNetworkRails`, `maxBranches`, `maxJunctions` | 1–128, 1–64, 1–1200, 16–1024, 1–26, 0–128 |
 | `crane` | `stressImpact`, `travelBlocksPerTickPerRpm`, `liftBlocksPerTickPerRpm`, `armExtendPerTickPerRpm`, `maxBlocksPerTick`, `turnPenaltyBlocks`, `returnHomeIdleTicks`, `transferTicks`, `grabberStacks`, `grabberMaxItems` | 0–1024, 0–1, 0–1, 0–1, 0.01–4, 0–16, 0–72000, 1–200, 1–27, 1–1728 |
-| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `maxTerminalUsageEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns`, `crafterFeederRequiresRotation`, `crafterFeederStressImpact` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–256; 1–16; 1–1200; 0–432000; 1–8; boolean; 0–1024 |
+| `stations` | `inputBufferSlots`, `outputBufferSlots`, `terminalBufferSlots`, `productionBufferSlots`, `stockKeeperRows` (all world restart), `maxTerminalRequestAmount`, `maxTerminalStockEntries`, `maxTerminalListEntries`, `maxTerminalUsageEntries`, `terminalListOpenRequests`, `terminalListIntervalTicks`, `terminalListStallTicks`, `maxProductionPatterns`, `crafterFeederRequiresRotation`, `crafterFeederStressImpact` | 1–27 each; 1–16; 1–65536; 16–4096; 1–1024; 1–256; 1–16; 1–1200; 0–432000; 1–36; boolean; 0–1024 |
 | `storage` (M28, M30) | `woodBayStacks`, `andesiteBayStacks`, `brassBayStacks`; `copperFluidBayBuckets`, `brassFluidBayBuckets`, `fluidBayPipeExtraction` | 1–4096 each; 1–65536 each, boolean |
 | `controller` | `snapshotIntervalTicks`, `snapshotCycleTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 0–432000, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |

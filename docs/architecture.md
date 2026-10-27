@@ -688,6 +688,10 @@ dev.wareworks
 │                              buffer-picked chest, JEI's every-tick check laying nothing, one lay per click, the
 │                              terminal back from JEI already folded out, and JEI's window ending where the panel
 │                              does; it needs -Pwareworks.jei and fails at once without JEI, M32, ADR-063),
+│                              PatternStripVisualScenario (the production station's tab strip at 9, 12, 18 and 36
+│                              patterns: 3, 4 and 6 columns, the wheel scrolling by rows, a click on tab 36, a hidden
+│                              tab failing its hit test, a selection scrolling it back, the red tick of a hidden
+│                              refused row, the 320 x 240 floor and the German tooltip, issue #35, ADR-068),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -1384,7 +1388,8 @@ turns items into other items is a crafting mod, not a warehouse.
   checked against a recipe.)*
 * **The patterns live in the station**, which is what answers "which machine gets these ingredients" without any
   further configuration: *this* station, and whatever the player attached to it. A controller-side mapping would have
-  needed its own UI, its own persistence and its own rules for a station that is broken or moved.
+  needed its own UI, its own persistence and its own rules for a station that is broken or moved. *(Amended by
+  ADR-068: a station holds up to 36 patterns, and its tab strip widens to six columns and then scrolls.)*
 * **A pattern is a 3 x 3 grid plus a result, and the planner gets a multiset.** The grid is for authoring and
   readability: a player already reads recipes as grids. What planning needs is one
   number per item, because the crane carries one item key per trip, so `ProductionPattern.fromGrid` merges cells that
@@ -6714,6 +6719,82 @@ What the sources say (Minecraft 1.21.1 decompiled and NeoForge 21.1 in `build/ap
   rejoin; the order then completes on the craft ledger with all nine slots back). A `/reload` that changes the recipe
   mid-order (D5) has no automated test: a GameTest cannot swap the recipe manager under a running test without
   affecting every other test of its batch.
+
+### ADR-068 — A production station holds up to 36 patterns; the tab strip widens to six columns and then scrolls (amends ADR-024) ([issue #35](https://github.com/Richie1710/create-wareworks/issues/35))
+
+*Context:* ADR-024 put the patterns into the station, and M11 capped them at 8 (`ProductionPatterns.MAX_SLOTS`,
+`maxProductionPatterns` 1–8, default 4). No ADR chose that number: it was the screen's limit, recorded as a deviation in
+`warehouse-system.md` §3.5 — three columns of 18 px tabs beside the 3 × 3 grid fit 9 tabs into the grid's own 54 px of
+height, and the window has to fit vanilla's smallest scaled screen, 320 × 240, at every configuration. The owner asked
+for more patterns per station, with a tab strip that scrolls. Nothing in the planners was ever sized to 8: every
+pattern list they read is walked once per question, and the candidates of an item are ranked once per plan.
+
+*Decision:*
+* **The hard cap is 36** (`MAX_SLOTS`), and `maxProductionPatterns` goes up to it (range 1–36, the bound written as the
+  constant, not as a literal); **the default stays 4**. Every other bound follows the constant: the constructor, the
+  bounded load and its `growTo`, the menu's clamp of the slot count, the `ProductionScreenState` read and write bounds
+  of patterns, pattern checks and stopped products (`MAX_STOPPED`), and the feeder's saved-slot clamp. No per-pattern
+  bitmask exists anywhere: the feeder's `1 << slot` masks are the Crafter's nine cells, and the checks are a list.
+* **The tab strip never grows taller than the grid** (`ProductionMenuLayout`, shared by both sides). Up to 9 patterns
+  it has 3 columns and every position is exactly what it was, so every existing station and both visual scenarios that
+  click its tabs are unchanged; 10–18 patterns get `ceil(n / 3)` columns, up to 6 (block widths 170, 188, 206 px
+  against 216 px of inner width); above 18 the strip shows 6 × 3 tabs and **scrolls by rows**, with a 3 px scroll bar
+  2 px beside it (block width 211 px, left edge 9 px from the frame). The pattern block stays 54 px high, so the
+  window's height and everything below the block are identical at every count.
+* **The scroll is client-only view state** (`WarehouseProductionScreen#tabScroll`), never sent and never saved. One
+  wheel notch over the strip moves one row, and the strip takes the event even at either end. Every change of the
+  selection goes through `WarehouseProductionScreen#select`, which scrolls the selected tab into view — a click on a
+  tab, a selection the server's state made invalid, and every (re)opening or resize of the window (`init`). The owner's
+  "the selected tab is always in view" is read as "whenever the selection changes": the wheel itself may scroll the
+  selected tab out of view, or it could not browse, and a server refresh with an unchanged selection does not snap the
+  strip back. Today a click is the only way to select; a future keyboard or server selection must call `select`.
+* **A hidden red row is marked on the bar.** A stopped product (M20) and a pattern the Crafter Feeder refuses
+  (ADR-067) must be findable without selecting their tab; a tab scrolled out of view cannot show its tint or its bar,
+  so the scroll bar gets a 2 px red tick at the row of every hidden row that holds one. **The hidden selected row is
+  marked too:** once the wheel scrolls the selected tab away, nothing else in the window says which pattern the grid
+  shows and edits (the label above it has no number), so its row gets a gold tick, drawn last so it wins over a red
+  one. No new lang key: the bar has no text and the tabs already say "Pattern 36". The rows to tick come from the
+  screen's `hiddenRedRows()` and `hiddenSelectedRow()`, which the scenario asserts.
+* **`WareworksNetwork.VERSION` 15 → 16.** The bytes of `ProductionScreenPayload` did not change, but a reader with the
+  old bound of 8 stops in the middle of the 9th pattern and reads its entries as the order count, so the versions must
+  not mix. The save format did not change either: `Patterns: [{Slot, Entries}]` already carries each slot's number, and a
+  lowered cap still hides slots and never deletes them. An older mod version loads only the first 8 slots, and its next
+  save drops the rest.
+
+*Alternatives rejected:*
+* **A second page of tabs behind arrow buttons.** Two more widgets, two more lang keys and a hidden page with no hint of
+  what is on it; the wheel plus a bar with red ticks does the same with nothing to click.
+* **A taller window.** The window is already at the 240 px budget with a large buffer (ADR-024's order lines are the
+  flexible part and drop to 0 at 25 buffer slots); a taller tab strip would have to come out of the buffer or the order
+  lines.
+* **Paging the whole grid instead of the tabs.** The tabs are what tells a player which patterns exist and which of
+  them are red; hiding them behind the grid's page loses exactly that.
+* **A cap of 27 or 18.** Only worth it if the planners did not scale; they do (below).
+
+*Consequences:*
+* **Measured planner cost** (`core.production.ProductionScaleTest`, JUnit, median of 1000 runs after warm-up, one
+  developer machine): 8 stations × 36 patterns of 9 distinct ingredients (288 patterns), results in chains 4 levels
+  deep with 4 patterns per result of which 2 are dead ends, against the same shape at 8 and at 18 patterns per
+  station (8 → 18 → 36). The core of the terminal's producible pass (`ProduciblePlanner` over a map of stock; the
+  controller's reservation-aware availability lookup, resolving the aisle's stations and a Crafter Feeder's recipe
+  checks are not included) 0.002 → 0.0045 → 0.009 ms, `ProductionPlanner.plan` with the default limits
+  0.057 → 0.065 → 0.074 ms (unbounded 0.037 → 0.045 → 0.054 ms), the crafting panel's preview of 9 needs
+  (`SequentialPlans.preview`) 0.17 → 0.23 → 0.44 ms, and a restock pass with one rule per result
+  0.003 → 0.007 → 0.015 ms. For × 4.5 the patterns they grew × 1.3 to × 4.7, never faster than the pattern count, and
+  stayed far below the 2 ms per question the design set as the line to lower the cap at, so 36 stays.
+* A `ProductionScreenState` with 36 full patterns of plain items and 36 checks is logged by the GameTest
+  (`productionThirtySixPatternsSurviveAReload`); it is pushed at most every 10 ticks and only on change, to the one
+  player who has the screen open.
+* Clients and servers of 0.14 and this version cannot talk to each other.
+* Tests: JUnit `ProductionMenuLayoutTest` (the column table, every count 1–36 × buffer 1–27 × every scroll value: the
+  230 × ≤ 240 window, both margins, no tab over a grid cell, the result, the arrow or another tab, the thumb inside its
+  track, every tab reachable and `scrollToShow` moving the strip as little as it can, and the unchanged positions up to
+  9 patterns) and `ProductionScaleTest`; the GameTest above (36 full patterns through a save and a load, hidden but not
+  lost under a lowered cap, the menu's 36 slots, the screen state through the real codec); the visual scenario
+  `patterns` (stations at 9, 12, 18 and 36 patterns, the wheel through `ScreenInput`, a click on tab 36, a hidden tab
+  failing its hit test, `select` scrolling it back, the red tick of a hidden refused row and only that one, no tick
+  once it is in view, the gold tick of the hidden selected row, the 320 × 240 floor and the German tooltip). The layout
+  test also keeps every row's tick inside the scroll bar's track at 19–36 patterns.
 
 ## Persistence & sync
 

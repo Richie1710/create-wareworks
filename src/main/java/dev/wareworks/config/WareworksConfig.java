@@ -4,6 +4,7 @@ import org.apache.commons.lang3.tuple.Pair;
 
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
+import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.core.crane.HomeReturn;
 import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.production.PlanLimits;
@@ -750,9 +751,10 @@ public final class WareworksConfig {
                                     + "Wareworks never crafts it; it only delivers the ingredients here and waits for "
                                     + "the result to come back through a warehouse input.",
                             "Applies to stations placed from now on. A station that already holds more patterns keeps "
-                                    + "them all, so lowering this never loses a pattern.")
+                                    + "them all, so lowering this never loses a pattern.",
+                            "Above 18 the station's pattern tabs scroll with the mouse wheel.")
                     .worldRestart()
-                    .defineInRange("maxProductionPatterns", 4, 1, 8);
+                    .defineInRange("maxProductionPatterns", 4, 1, ProductionPatterns.MAX_SLOTS);
             crafterFeederRequiresRotation = builder
                     .comment("Whether a Warehouse Crafter Feeder needs rotation to lay a production station's patterns "
                             + "into a vanilla Crafter and trigger it.",

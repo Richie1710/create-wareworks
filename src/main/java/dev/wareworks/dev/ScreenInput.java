@@ -86,9 +86,10 @@ final class ScreenInput {
             double.class, double.class);
     private static final Method PRODUCTION_TOOLTIP_AT = method(WarehouseProductionScreen.class, "tooltipAt", int.class,
             int.class);
-    /** The pattern tab and the arrow of the production screen, for the Crafter Feeder's red patterns (issue #34). */
-    private static final Method PRODUCTION_TAB_AT = method(WarehouseProductionScreen.class, "tabAt", double.class,
-            double.class);
+    /**
+     * The arrow of the production screen, for the Crafter Feeder's red patterns (issue #34). Its tab hit test is public
+     * since the tab strip scrolls (issue #35), so it needs no handle.
+     */
     private static final Method PRODUCTION_OVER_ARROW = method(WarehouseProductionScreen.class, "isOverArrow",
             double.class, double.class);
     private static final Method KEEPER_ROW_AT = method(WarehouseStockKeeperScreen.class, "rowAt", double.class,
@@ -577,16 +578,30 @@ final class ScreenInput {
     /**
      * The centre of the tab of pattern slot {@code pattern} of the production screen, checked with the screen's own hit
      * test. A click there selects the slot; a cursor resting there draws the slot's tooltip, which names why a Crafter
-     * Feeder skips it (issue #34).
+     * Feeder skips it (issue #34). With a scrolling strip (issue #35) the tab sits where the screen's current scroll
+     * puts it, and a tab scrolled out of view fails, because the screen's own hit test does not find it there.
      */
     static Point productionTab(WarehouseProductionScreen screen, int pattern) {
         ProductionMenuLayout layout = (ProductionMenuLayout) get(PRODUCTION_LAYOUT, screen);
         Point point = new Point(screen.getGuiLeft() + layout.tabX(pattern) + ProductionMenuLayout.SLOT / 2.0,
-                screen.getGuiTop() + layout.tabY(pattern) + ProductionMenuLayout.SLOT / 2.0);
-        int hit = (Integer) invoke(PRODUCTION_TAB_AT, screen, point.x(), point.y());
+                screen.getGuiTop() + layout.tabY(pattern, screen.tabScroll()) + ProductionMenuLayout.SLOT / 2.0);
+        int hit = screen.tabAt(point.x(), point.y());
         if (hit != pattern)
             throw new VisualTestException("the production screen's hit test puts " + point + " on tab " + hit
-                    + ", not " + pattern);
+                    + ", not " + pattern + " (tab scroll " + screen.tabScroll() + ")");
+        return point;
+    }
+
+    /**
+     * The centre of the production screen's pattern tab strip, the mouse wheel's target for scrolling it (issue #35),
+     * checked with the screen's own hit test.
+     */
+    static Point productionTabStrip(WarehouseProductionScreen screen) {
+        ProductionMenuLayout layout = (ProductionMenuLayout) get(PRODUCTION_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + layout.tabStripX() + layout.tabStripWidth() / 2.0,
+                screen.getGuiTop() + layout.tabStripY() + layout.tabStripHeight() / 2.0);
+        if (!screen.isOverTabStrip(point.x(), point.y()))
+            throw new VisualTestException("the production screen's hit test does not put " + point + " on its tab strip");
         return point;
     }
 

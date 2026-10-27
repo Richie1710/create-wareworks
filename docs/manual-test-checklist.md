@@ -3409,3 +3409,33 @@ you get tired of waiting, and put it back before judging check 160.
     box?**
 333. **On a dedicated server.** Start `./gradlew runServer`, join with `./gradlew runClient` and repeat 326 and 328:
     the red slots and the goggles show the same, and neither log has an error mentioning `wareworks`.
+
+## BF. More pattern slots ([issue #35](https://github.com/Richie1710/create-wareworks/issues/35))
+
+> A production station can hold up to 36 patterns (`maxProductionPatterns` 1–36, default 4, ADR-068). Up to 9 the tab
+> strip has 3 columns as before, 10 to 18 get up to 6 columns, and above 18 the strip shows 6 x 3 tabs and scrolls by
+> rows with the mouse wheel, with a slim scroll bar that marks hidden red rows. The JUnit test `ProductionMenuLayoutTest`
+> checks every count, buffer size and scroll position against the 230 x 240 budget, `ProductionScaleTest` measures the
+> planners with 8 stations x 36 patterns, the GameTest `productionthirtysixpatternssurviveareload` saves and loads 36
+> full patterns and sends them through the screen's codec, and the visual scenario `patterns` scrolls, clicks and
+> resizes the real screen (stations at 9, 12, 18 and 36 patterns, English and German). What is left is what only a
+> player can judge.
+
+334. **36 patterns.** Set `maxProductionPatterns = 36` in `run/config/wareworks-server.toml` (or the world's
+     `serverconfig`), restart and place a new station. The screen shows 6 x 3 tabs and a slim bar on their right. Turn
+     the mouse wheel over the tabs: one row per notch, the bar's light part moves, and it stops at the top and the
+     bottom. The wheel over the grid still changes a cell's amount. Fill a pattern in the last row and order it at the
+     terminal: it is made like any other.
+335. **Selection.** Click a tab in the last row, scroll up until it is hidden: the grid still shows that pattern, and the
+     bar shows a gold tick at the bottom where its row is. Close the screen and open it again: the first pattern is
+     selected and its row is at the top, with no error in the log. Resize the window while a tab in the last row is selected: its row is scrolled into view again.
+336. **Small screens.** At GUI scale 4 make the window 1280 x 960 (320 x 240, the smallest scaled screen vanilla
+     allows) and then 1920 x 1080 (480 x 270): the window fits, all 6 columns and the bar are inside the frame, and
+     nothing overlaps the grid, the arrow or the result.
+337. **The other counts.** With 9, 12 and 18 patterns the strip has 3, 4 and 6 columns, no bar, and the wheel over it
+     does nothing. A station placed with 4 patterns looks exactly as it did in 0.14.0. With a Crafter Feeder behind a
+     36-pattern station, write one pattern that is no recipe into the last row and scroll to the top: the bar shows a
+     red tick at the bottom. **By eye:** does the bar read as a scroll bar, and is the red tick seen?
+338. **Versions.** A dedicated server with this version refuses a 0.14.0 client and the other way round. With matching
+     versions on a dedicated server (`./gradlew runServer` and `./gradlew runClient`), 334 and 335 behave the same and
+     neither log has an error mentioning `wareworks`.
