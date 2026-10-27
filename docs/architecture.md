@@ -201,6 +201,8 @@ dev.wareworks
 │   ├── handtruck              the hand truck's pure numbers (issue #37, ADR-070): HandTruckPenalty (the movement input
 │   │                          scaled by the speed multiplier, the forward impulse capped below a sprint's 0.8, the
 │   │                          one-tick carry window) and HandTruckLimits (the size budget of one carried container)
+│   ├── kinetics               OverstressRecheck (issue #38, ADR-071): when an overstressed kinetic consumer has its
+│   │                          network recomputed, and whether the recomputed totals show its flag is stale
 │   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
 │                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
 │                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
@@ -391,6 +393,9 @@ dev.wareworks
 │   │                          second copy), HandTruckSpill (a loaded truck as plain stacks), HandTruckCarry (the carry
 │   │                          stamp and the server half of the penalty), HandTruckSlotGuard (a menu listener that
 │   │                          hands a loaded truck back) and HandTruckHooks (every game-bus listener)
+│   ├── kinetics               StaleOverstressCheck (issue #38, ADR-071): clears an overstress Create keeps after the
+│   │                          network has the capacity again; one per stacker crane dock and Crafter Feeder, called
+│   │                          from their server tick
 │   └── display                the seven Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -7026,6 +7031,65 @@ portable chest inside a chest, or a second copy when a cancelled placement resto
   against an empty-truck control (half the walking speed, no sprint) and the glide against one, refuses the drop key,
   a barrel slot and a second truck, in English and German, with Flywheel on and off; the `ponder` scenario compiles the
   scene `hand_truck/carrying`.
+
+### ADR-071 — An overstressed Wareworks kinetic consumer has Create recompute its network until the overstress is real ([issue #38](https://github.com/Richie1710/create-wareworks/issues/38))
+
+*Context:* On the owner's server (three Large Water Wheels into a Rotation Speed Controller at 128 RPM, the warehouse
+far away) every crane showed "Paused: overstressed" after each restart, until a large cogwheel of the network was broken
+and placed again. Create 6.0.10 (`KineticBlockEntity`, `KineticNetwork`) keeps the overstress per member: `read` sets
+`overStressed` from that member's own saved capacity and stress; on load the first member calls `initFromTE` with its
+saved totals while the network has no members yet, so its sync reaches nobody, and every member joins through
+`addSilently`, which never syncs. Only `updateNetwork` (via `networkDirty`, a member `add`/`remove`) or a generator's
+`updateGeneratedRotation` hands out the real totals again, and a steady network triggers neither: a water wheel
+recomputes its flow but returns early when the score is unchanged, a speed controller with a fixed target does nothing.
+A creative motor recomputes on every load, which is why a creative-motor test never shows it. How the state gets into the
+save was reproduced (`restart-stale`): the generators' chunk unloads for real while the warehouse keeps ticking, any
+network change follows, `calculateCapacity` drops the unloaded generators without counting them as unloaded capacity and
+syncs capacity 0 into every loaded member, and the generators then come back through `addSilently`. The members stay
+overstressed in the same session already; the save carries that into every restart. What changed the network on the
+owner's server is not known, and does not need to be: the fix targets the part that does not recover.
+
+*Decision:*
+* **A Wareworks kinetic consumer that is overstressed recomputes its network itself.** `content.kinetics.StaleOverstressCheck`,
+  one per stacker crane dock and Warehouse Crafter Feeder, runs in their server tick (the dock's before its execution, so a
+  cleared crane resumes in the same tick; never on a virtual Ponder block entity). Schedule (`core.kinetics.OverstressRecheck`,
+  pure): nothing while the member is not overstressed; the first recheck 40 ticks after the first overstressed tick
+  (after a load: the first tick, leaving the neighbouring chunks time to load and their generators time to join), then
+  one every 100 ticks for as long as it stays overstressed.
+* **A recheck is two public Create calls.** `KineticNetwork#updateNetwork` recomputes the totals from the loaded members and
+  syncs every member when they changed. If they did not change (a network started from the save of a member that was
+  fine, so its stored totals are already right) but this member is still flagged against totals that are not overstressed,
+  `KineticNetwork#sync` hands the totals to every member, which clears every stale member of that network, Create's own
+  shafts and gearboxes included.
+* **A real overstress stays.** The recomputation gets the same totals, the flag stays and the crane keeps reporting
+  `OVERSTRESSED`; no state of ours decides overstress.
+
+*Alternatives rejected:*
+* **Marking the network dirty once after load** (the first plan). It clears a restart only if the generators have joined
+  when it fires. It misses the generators' chunk loading later than the warehouse (Wareworks' chunk tickets or
+  `/forceload` restored at start-up, the player arriving later: `restart-late`) and the same silent join within a session.
+* **A mixin into `KineticNetwork#addSilently` or `KineticBlockEntity#initialize`.** It would fix Create's members too, but
+  would be the mod's first mixin (ADR-066, ADR-070 rejected one for less) against private Create internals.
+* **Recomputing on every tick, or periodically while not overstressed.** Pays per tick for a healthy network, and while
+  the generators' chunk is unloaded a recomputation would itself drop them and overstress a network that was fine; a
+  recheck that runs only while already overstressed never causes what it repairs.
+* **Setting `networkDirty` instead of calling `updateNetwork`.** Same result one tick later, but without the sync fallback
+  for equal totals.
+
+*Consequences:*
+* Cost: one counter per tick per dock and feeder; while overstressed, one `updateNetwork` (two iterations over the
+  members, two more only when the flag survives it) every 100 ticks. The recomputation looks members up with `Level#getBlockEntity` as Create does on every
+  network change, which for a generator in an unloaded chunk loads that chunk once and drops it from the network; this
+  can only happen while the member is already overstressed.
+* A network whose own machines only (no Wareworks consumer) were saved overstressed is still Create's behaviour.
+* A stale overstress lasts at most about 40 ticks after a load and about 100 ticks after the generators came back; until
+  then the goggles say "overstressed".
+* Tests: JUnit `OverstressRecheckTest` (the schedule, the stale verdict); GameTests `StaleOverstressGameTests` (a dock and
+  a feeder flagged overstressed against unchanged network totals are cleared within 42 ticks, the crane pauses
+  `OVERSTRESSED` and then runs); visual scenarios `restart` (plain restart), `restart-stale` (dock saved overstressed
+  beside loaded wheels) and `restart-late` (wheels loaded after the rejoin), both of which fail without the recheck and
+  assert that a really overstressed dock stays overstressed for 250 ticks (`dev.RestartPowerVisualScenario`; a GameTest
+  cannot unload a chunk or rejoin).
 
 ## Persistence & sync
 

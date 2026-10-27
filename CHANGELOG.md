@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stacker crane no longer stays "Paused: overstressed" after a server restart although its kinetic network has
+  the capacity** ([#38](https://github.com/Richie1710/create-wareworks/issues/38)). Create keeps the overstress a machine was saved with, and a steady
+  network (water wheels with an unchanged flow, a fixed Rotation Speed Controller) never recomputes it. A crane that
+  had been overstressed once, for example while the chunk of its generators was unloaded and the network changed, so
+  stayed paused after every restart until a block of the network was broken and placed again. An overstressed crane
+  now has its network recomputed two seconds after it is loaded and then every five seconds for as long as it stays
+  overstressed, so it resumes on its own once the capacity is there, also when the generators' chunk loads later than
+  the warehouse. A network that really lacks capacity stays overstressed, and a crane that is not overstressed does
+  nothing extra. The Warehouse Crafter Feeder does the same. Breaking and replacing a cogwheel is no longer needed.
+
 ## [0.17.0-beta] - 2026-10-27
 
 ### Added

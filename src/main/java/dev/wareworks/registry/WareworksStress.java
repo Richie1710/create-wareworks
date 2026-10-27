@@ -31,6 +31,12 @@ import net.minecraft.world.level.block.Block;
  * {@code updateStress}/{@code updateNetwork}, for example a generator's {@code updateGeneratedRotation} or a member
  * joining or leaving; a creative motor runs the former in its {@code initialize}, which sees the dock's new impact only
  * if the dock has initialised first.
+ * <p>
+ * The same holds for the overstress flag: after a load every member keeps the flag of its own save, and a steady network
+ * (water wheels, a fixed speed controller) never recomputes it. Since issue #38 (ADR-071) a dock or a Crafter Feeder
+ * that is overstressed recomputes its network itself ({@code content.kinetics.StaleOverstressCheck}, two seconds after
+ * the first overstressed tick and then every five seconds while it lasts), which also takes in a changed impact; a
+ * member that is not overstressed still sees a new value only on the network's next change.
  */
 public final class WareworksStress {
     private WareworksStress() {

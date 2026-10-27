@@ -23,6 +23,7 @@ import dev.wareworks.content.crane.head.HandlingHead;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.kinetics.StaleOverstressCheck;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.BranchGeometry;
 import dev.wareworks.core.address.Heading;
@@ -217,6 +218,8 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     // --- server only (M3) ---
     private final InventoryGrabber head = new InventoryGrabber(this::onHeadChanged);
     private final CraneExecution execution = new CraneExecution(this);
+    /** Server: clears an overstress Create keeps after the network has the capacity again (issue #38, ADR-071). */
+    private final StaleOverstressCheck staleOverstress = new StaleOverstressCheck();
     /**
      * Server: the throughput snapshot that goes out with the next client packet, or {@code null} while <b>nobody has
      * looked at this dock through goggles</b> and the numbers therefore do not exist as far as any client is concerned
@@ -910,8 +913,11 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
             refreshGeometry();
             validateControllerLink();
         }
-        if (!isVirtual() && !isRemoved())
+        if (!isVirtual() && !isRemoved()) {
+            // Before the execution, so a cleared stale overstress resumes the crane in the same tick.
+            staleOverstress.serverTick(this);
             execution.tick(level);
+        }
     }
 
     /**

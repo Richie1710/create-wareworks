@@ -15,6 +15,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.kinetics.StaleOverstressCheck;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.production.CrafterFeedPlan;
 import dev.wareworks.core.production.CrafterGrid;
@@ -165,6 +166,8 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
     @Nullable
     private LockRelease orphanLocks;
     private final FeederCycle cycle = new FeederCycle();
+    /** Clears an overstress Create keeps after the network has the capacity again (issue #38, ADR-071). */
+    private final StaleOverstressCheck staleOverstress = new StaleOverstressCheck();
     /** Runs in the grid at the last rising edge, so the read after the craft can tell whether one was crafted. */
     private int runsAtEdge = -1;
     /** Runs lying in the grid at the last read, for the goggles. */
@@ -233,6 +236,7 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
         super.tick();
         if (level == null || level.isClientSide || isVirtual() || isRemoved())
             return;
+        staleOverstress.serverTick(this);
         serverTick();
     }
 

@@ -3521,3 +3521,22 @@ you get tired of waiting, and put it back before judging check 160.
 352. **JEI and German.** JEI shows the recipe (a shaft over andesite alloy over cogwheel, iron sheet, cogwheel). With a
      German client the item is "Sackkarre", the loaded one "Sackkarre mit Truhe", the messages are German, the Shift
      tooltip fits the screen, and the Ponder scene (hold W over the truck) reads in German.
+
+## BI. Overstressed after a restart ([issue #38](https://github.com/Richie1710/create-wareworks/issues/38))
+
+> A crane or Crafter Feeder that is overstressed has Create recompute its network 40 ticks later and then every 100
+> ticks (ADR-071). The JUnit test `OverstressRecheckTest`, the GameTests in `StaleOverstressGameTests` and the visual
+> scenarios `restart`, `restart-stale` and `restart-late` (three Large Water Wheels, a speed controller at 128 RPM, the
+> wheels' chunk really unloaded, a real save and rejoin) check it. What is left is the owner's real server.
+
+353. **The owner's server.** Update the server to this version and restart it without touching anything. Within a few
+     seconds of the warehouse's chunks loading, the crane goggles no longer say "Paused: overstressed", the cranes turn
+     and take jobs. The large cogwheel at the speed controller does not need to be broken and placed again. Restart the
+     server twice more: the cranes resume each time.
+354. **Generators far away.** Walk far enough away that the water wheels' chunks unload while the warehouse stays loaded
+     (its own chunk loading or `/forceload`), break and place one shaft on the warehouse side, and come back: the
+     goggles may say "overstressed" while the wheels are away, and within about five seconds of the wheels' chunk loading
+     the cranes run again.
+355. **A real overstress stays.** Add more consumers than the wheels can carry (or set the speed controller higher): the
+     network is overstressed, the cranes stay "Paused: overstressed" and the Stressometer agrees. Remove the load: the
+     cranes run again within about five seconds.
