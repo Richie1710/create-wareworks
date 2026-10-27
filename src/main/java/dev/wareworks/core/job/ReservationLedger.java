@@ -42,6 +42,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       the source, so the stock reservation ends). A {@code STORE} job is excluded, so items on their way into an
  *       accepting warehouse port hold capacity there rather than transit (M17, issue #12), and a {@code COLLECT} job is
  *       excluded for the same reason — its items were never indexed and nobody asked for them (M18, issue #13);</li>
+ *   <li>picked, items held, a {@code FILL} trip that still serves its fill request (M31, issue #21):
+ *       {@link Reservation.Kind#FILLING} of the held amount, with the request — whether the head holds the empty
+ *       containers or the filled ones. It counts towards the request and towards no per-key total;</li>
  *   <li>picked, items held, any other target: {@link Reservation.Kind#CAPACITY} of the held amount at the target;</li>
  *   <li>nothing held: no reservation.</li>
  * </ul>
@@ -213,6 +216,13 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
         int held = job.heldAmount();
         if (held == 0)
             return List.of();
+        // A fill trip's containers are neither stock nor transit of their key (M31): empty, they left the racks for a
+        // bay; filled, they exist only for the fill request. Only the request may count them, so the planner does not
+        // send a second trip for containers already on their way. Detached from its request (rerouted, cancelled), a
+        // fill trip's carry is room promised at its new target like any other leftover, below.
+        if (job.type() == JobType.FILL && job.requestId().isPresent())
+            return List.of(new Reservation<>(job.id(), Reservation.Kind.FILLING, job.target(), job.key(), held,
+                    job.requestId()));
         // TRANSIT means "items that have left the indexed stock and are owed to whoever asked for them", so only a type
         // that really waits for somebody qualifies (M17, issue #12; M18, issue #13): an accepting warehouse port is an
         // LocationKind#OUTPUT, but a store job's items were never indexed and nobody asked for them, so they are room
@@ -436,6 +446,12 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
                     add(committedByRequest, reservation.requestId().get(), delta);
                 }
                 totalTransit += delta;
+            }
+            // Only the request counts a fill trip's containers (M31): no per-key aggregate and no total, so neither an
+            // item's availability nor a location's room changes by the trip in flight.
+            case FILLING -> {
+                if (reservation.backsRequest())
+                    add(committedByRequest, reservation.requestId().get(), delta);
             }
         }
     }

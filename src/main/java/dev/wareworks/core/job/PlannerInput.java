@@ -2,6 +2,7 @@ package dev.wareworks.core.job;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
@@ -142,6 +143,10 @@ import dev.wareworks.core.inventory.StockView;
  *                             every key, which is what an aisle without rules answers, so the planner behaves exactly
  *                             as it did before M15. Never consulted by {@link JobPlanner#planReroute}: items already
  *                             in the handling head must always find a target, or the crane holds for ever
+ * @param fillSupply           what fill trips can be made of (M31, issue #21, ADR-073): the empty container and fluid of a
+ *                             filled key, the bays holding that fluid and their live fill. Consulted only for a
+ *                             {@link RequestKind#FILL} request; the default {@link FillSupply#none()} makes an input
+ *                             built without it <b>literally</b> the input the planner received before M31
  * @param liveSimulationBudget maximum number of live callback calls per planner run (bounds the cost of a full
  *                             warehouse or a long fall-through)
  * @param <K>                  item key type
@@ -159,7 +164,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         BiPredicate<? super L, ? super K> extractRefused, Predicate<? super L> allOrNothing,
         Predicate<? super L> roomBound, ToIntFunction<? super K> stackSize,
         BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
-        ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, int liveSimulationBudget) {
+        ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, FillSupply<K, L> fillSupply,
+        int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
      * the builder's default, so an aisle without rules plans exactly as it did before M15.
@@ -250,6 +256,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Objects.requireNonNull(storePriority, "storePriority");
         Objects.requireNonNull(portRank, "portRank");
         Objects.requireNonNull(storeHeadroom, "storeHeadroom");
+        Objects.requireNonNull(fillSupply, "fillSupply");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
     }
@@ -265,13 +272,96 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
      * @param <K>       item key type
      * @param <L>       location type
      */
-    public record OpenRequest<K, L>(UUID id, K key, int remaining, L output) {
+    public record OpenRequest<K, L>(UUID id, K key, int remaining, L output, RequestKind kind) {
         public OpenRequest {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(output, "output");
+            Objects.requireNonNull(kind, "kind");
             if (remaining < 1)
                 throw new IllegalArgumentException("remaining must be at least 1: " + remaining);
+        }
+
+        /** A {@link RequestKind#STOCK} request: served out of the racks, as every request was before M31. */
+        public OpenRequest(UUID id, K key, int remaining, L output) {
+            this(id, key, remaining, output, RequestKind.STOCK);
+        }
+    }
+
+    /**
+     * What a fill trip can be made of (M31, issue #21, ADR-073): which empty container and how much fluid a filled key
+     * stands for, which bays hold that fluid with room to give, and the bay's live answer. The content layer answers it
+     * from the fluid index, the fill ledger and the bay's own {@code simulateFill}; the planner only ranks.
+     * <p>
+     * {@link #none()} is the builder's default and answers "nothing can be filled" without ever being asked: it is only
+     * consulted for a {@link RequestKind#FILL} request, so an input built without it is <b>literally</b> the input the
+     * planner received before M31.
+     *
+     * @param <K> item key type
+     * @param <L> location type
+     */
+    public interface FillSupply<K, L> {
+        /** The empty container and the millibuckets per container of {@code filledKey}; empty if it cannot be filled. */
+        Optional<FillRecipe<K>> recipe(K filledKey);
+
+        /**
+         * The bays that hold the fluid of {@code filledKey}, each with how many whole containers of it it can still give
+         * after what other fill trips already counted on (index order); empty when the fluid is not in the warehouse or
+         * all of it is promised.
+         */
+        List<FillBay<L>> bays(K filledKey);
+
+        /** How many of up to {@code amount} empty containers of {@code emptyKey} the bay could fill right now (live). */
+        int liveFill(L bay, K emptyKey, int amount);
+
+        /** Nothing can be filled: the answer of a warehouse without fill requests, and every input before M31. */
+        static <K, L> FillSupply<K, L> none() {
+            return new FillSupply<>() {
+                @Override
+                public Optional<FillRecipe<K>> recipe(K filledKey) {
+                    return java.util.Optional.empty();
+                }
+
+                @Override
+                public List<FillBay<L>> bays(K filledKey) {
+                    return List.of();
+                }
+
+                @Override
+                public int liveFill(L bay, K emptyKey, int amount) {
+                    return 0;
+                }
+            };
+        }
+    }
+
+    /**
+     * What one filled container is made of.
+     *
+     * @param emptyKey     the empty container that is filled
+     * @param millibuckets how much fluid one container takes, at least 1
+     * @param <K>          item key type
+     */
+    public record FillRecipe<K>(K emptyKey, int millibuckets) {
+        public FillRecipe {
+            Objects.requireNonNull(emptyKey, "emptyKey");
+            if (millibuckets < 1)
+                throw new IllegalArgumentException("millibuckets must be at least 1: " + millibuckets);
+        }
+    }
+
+    /**
+     * A fluid bay a fill trip may fill at.
+     *
+     * @param bay              the bay
+     * @param wholeContainers  how many whole containers it can still give, at least 1
+     * @param <L>              location type
+     */
+    public record FillBay<L>(L bay, int wholeContainers) {
+        public FillBay {
+            Objects.requireNonNull(bay, "bay");
+            if (wholeContainers < 1)
+                throw new IllegalArgumentException("wholeContainers must be at least 1: " + wholeContainers);
         }
     }
 
@@ -351,6 +441,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private ToIntFunction<? super L> storePriority = NO_PRIORITY;
         private ToIntFunction<? super L> portRank = NO_PORT_RANK;
         private ToLongFunction<? super K> storeHeadroom = UNLIMITED_HEADROOM;
+        private FillSupply<K, L> fillSupply = FillSupply.none();
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
         private Builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
@@ -554,6 +645,15 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * What fill trips can be made of ({@link PlannerInput#fillSupply()}). Left out, it is {@link FillSupply#none()}
+         * — the answer of a warehouse without fill requests, and the input the planner received before M31.
+         */
+        public Builder<K, L> fillSupply(FillSupply<K, L> fillSupply) {
+            this.fillSupply = fillSupply;
+            return this;
+        }
+
         public Builder<K, L> liveSimulationBudget(int liveSimulationBudget) {
             this.liveSimulationBudget = liveSimulationBudget;
             return this;
@@ -567,7 +667,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     inputBuffers, inputCursor, LocationAvailability.of(available),
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, roomBound,
                     stackSize, storeFilter, storePriority,
-                    portRank, storeHeadroom, liveSimulationBudget);
+                    portRank, storeHeadroom, fillSupply, liveSimulationBudget);
         }
     }
 }

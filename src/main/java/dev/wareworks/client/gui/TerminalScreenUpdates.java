@@ -7,6 +7,7 @@ import dev.wareworks.network.TerminalCraftAnswerPayload;
 import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalDoorsPayload;
+import dev.wareworks.network.TerminalFluidQuestionPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
@@ -58,6 +59,14 @@ public final class TerminalScreenUpdates {
      */
     public static void onConfirm(TerminalConfirmPayload payload) {
         screen(payload.containerId()).ifPresent(screen -> screen.onConfirm(payload));
+    }
+
+    /**
+     * What a click on a fluid cell of the open screen would mean (M31, issue #21). A question that arrives after the
+     * screen was closed is dropped like every other late payload, and because nothing was requested, that loses nothing.
+     */
+    public static void onFluidQuestion(TerminalFluidQuestionPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onFluidQuestion(payload));
     }
 
     /**

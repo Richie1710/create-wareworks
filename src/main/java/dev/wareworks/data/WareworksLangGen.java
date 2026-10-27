@@ -379,6 +379,9 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PENDING_REQUESTS), "Items requested: %1$s (requests: %2$s)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_NO_PENDING_REQUEST), "No pending request");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_LAST_REJECTION), "Last request refused: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_REQUESTS_FILL), "(filled from the fluid bays)");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_FILL_NO_EMPTIES),
+                "The warehouse has the fluid and no empty container");
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_REQUEST_FILTER), "Requested Item");
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_REQUEST_AMOUNT), "Requested Amount");
         lang.accept(WareworksLang.key(WareworksLang.OUTPUT_ACCEPT_FILTER), "Accepted Item");
@@ -477,6 +480,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_RETRIEVE), "Retrieving %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_HAND_OVER), "Handing over %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_COLLECT), "Collecting %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_FILL), "Filling %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_ROUTE), "From %1$s to %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HOLDING), "Holding:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HEAD_EMPTY), "Grabber empty");
@@ -502,6 +506,7 @@ public final class WareworksLangGen {
                 case OUTPUT_FULL -> "an output is full";
                 case PRODUCTION_FULL -> "a production station cannot take more ingredients";
                 case NOT_IN_STOCK -> "a requested item is not in stock";
+                case NO_EMPTY_CONTAINERS -> "no empty containers in stock";
                 case LOCATION_UNAVAILABLE -> "an output station is not loaded or no longer there";
                 case UNREACHABLE -> "the crane cannot drive to the aisle these items belong on";
                 case BUDGET_EXHAUSTED -> "still searching";
@@ -619,6 +624,46 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_LIST_HERE), "A list always comes here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_FETCH_HERE), "The ingredients always come here");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_DOOR_CONFIRM), "Goes to %1$s");
+        // Asking the warehouse for a fluid (M31, issue #21, ADR-073): the fluid cells, the fluid question and the fill
+        // request's order line.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_AMOUNT), "%1$s mB (%2$s)");
+        lang.accept(WareworksLang.key(WareworksLang.BUCKET_FORMAT_BUCKETS), "%1$s buckets");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_STORED), "Stored: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_AVAILABLE), "Available: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_FILLS), "Fills: %1$s (%2$s mB)");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_ALL_PROMISED), "All of it is already promised");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_NO_EMPTIES), "No empty containers in stock");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_PIPE_HINT),
+                "A pipe at the back of a fluid bay draws it off without containers");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_MAKE_HINT), "Click to have them made first (%1$s)");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_AMOUNT_HINT),
+                "Amount in buckets; Shift 16, Ctrl all");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_TITLE), "Fetch %1$s of %2$s?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_USES), "It will use:");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_PORTION), "%1$s × %2$s (%3$s mB each)");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_TRIPS),
+                "%1$s crane trips (%2$s at a time)");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_ONLY), "Only %1$s can be served.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_NOT_ENOUGH_FLUID),
+                "Not yet promised: %1$s.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_NOT_ENOUGH_CONTAINERS),
+                "Empty containers in stock: %1$s.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_NO_CONTAINER_FITS),
+                "No container holds %1$s; smallest: %2$s mB.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_STATION_ROOM),
+                "The terminal takes %1$s at a time; the crane waits.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_FLUID_RESERVE),
+                "Takes %1$s of the %2$s of %3$s in reserve.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_CONTAINER_RESERVE),
+                "Takes %1$s of the %2$s %3$s in reserve.");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_MAKE),
+                "No empty containers. Make %1$s × %2$s first?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_MAKE_MORE),
+                "Too few empty containers. Make %1$s × %2$s first?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_FETCH), "Fetch");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_MAKE_AND_FETCH), "Make and fetch");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_FLUID_QUESTION_CANCEL), "Cancel");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_ORDER_FILLING), "Filling from %1$s");
         // The clipboard order (M23, issue #19): a whole list ordered at once, worked off in portions and ticked off on
         // the clipboard as it is delivered.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_LIST),
@@ -913,6 +958,18 @@ public final class WareworksLangGen {
                 "Paused: %1$s. Click the mark to resume");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_MISSING_INGREDIENT), "Missing: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RESUMED), "The warehouse orders this item again");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_UNIT_FLUID), "Counts fluid");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_UNIT_ITEMS), "Counts items");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_UNIT_TO_ITEMS), "Click to count the containers as items");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_UNIT_TO_FLUID),
+                "Click to count the fluid in the fluid bays");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_FLUID_PIPES),
+                "Pipes at the back of a fluid bay are not held to it");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_FLUID_MINIMUM_SHOWN),
+                "Only shown: nothing makes fluid");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_FLUID_NUMBER_HINT),
+                "Scroll to change by a bucket, Shift for 16, Right-click to switch it off");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_FLUID_AMOUNT), "%1$s buckets (%2$s mB)");
         for (StockRuleAdjustment adjustment : StockRuleAdjustment.values()) {
             lang.accept(WareworksLang.key(WareworksLang.keeperAdjustmentKey(adjustment)), switch (adjustment) {
                 case NONE -> "Stored";
@@ -1016,6 +1073,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_SUPPLYING), "Supplying");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_HANDING_OVER), "Handing over");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_COLLECTING), "Collecting");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_FILLING), "Filling");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_PAUSED), "Paused");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_JOB), "%1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_TARGET), "To %1$s");
@@ -1045,6 +1103,7 @@ public final class WareworksLangGen {
                 case PRODUCTION_PAUSED -> "the warehouse has stopped making it; check the machine and resume it";
                 case NOT_A_DOOR -> "not a package door of this warehouse";
                 case DOOR_IGNORES_REDSTONE -> "that door ignores redstone";
+                case NO_EMPTY_CONTAINERS -> "no empty containers in stock";
             });
         }
 

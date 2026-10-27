@@ -78,8 +78,16 @@ IDLE ───────────────────▶ TRAVEL_TO_SOUR
                         │
                         ├─ leftovers ─▶ REROUTE ──(new target)──▶ TRAVEL_TO_TARGET
                         │                  └─(none)──▶ HOLDING ──(retry)──▶ REROUTE
-                        └─ output full ─▶ WAITING_FOR_TARGET ──(retry)──▶ EXTEND_TARGET
+                        ├─ output full ─▶ WAITING_FOR_TARGET ──(retry)──▶ EXTEND_TARGET
+                        └─ fill of a FILL job (M31) ─▶ TRAVEL_TO_TARGET (the station that asked) ─▶ … ─▶ COMPLETE
 ```
+
+Since M31 (issue #21, ADR-073) a **fill trip** runs through the same phases twice on its target side: the `DROP` at the
+fluid bay is a fill (§6.3), which retargets the job to the station of its request in the same transition
+(`TransportJob#filledFor`, the request is kept), and one rule in `RETRACT_TARGET` then sends the crane on: a `FILL` job
+whose target is a delivery station the crane does not stand at goes to `TRAVEL_TO_TARGET`. The rule is narrowed to
+`FILL`, and every other job retracts at its own target, so no existing job can take it. No phase was added, and a crane
+saved in `RETRACT_TARGET` right after the fill resumes onto the second leg.
 
 Since M27 (ADR-065) `WAITING_FOR_TARGET` is held in the world only at a **warehouse terminal** (a `RETRIEVE`) or a
 **production station** (a `SUPPLY`), never in front of a warehouse port: see the flows in §4.1.
@@ -269,7 +277,8 @@ public interface HandlingHead {
 ```
 
 MVP implementation: `InventoryGrabber` (IItemHandler source/target). Future: pallet/fork handler, package handler, fluid handler.
-Since M30 the head has a **third** transfer, `exchange`, which is how a fluid reaches a warehouse at all (§6.2).
+Since M30 the head has a **third** transfer, `exchange`, which is how a fluid reaches a warehouse at all (§6.2), and
+since M31 a **fourth**, `fill`, which is how a fluid leaves it in a container (§6.3).
 
 ### 6.1 Implementation (M3) and deviations
 Classes in `content.crane.head`: `HandlingHead`, `HeldItems`, `InventoryGrabber`, `TransferContext`, `TransferContexts`.
@@ -333,6 +342,34 @@ take a carry whole or not at all (`PlannerInput.allOrNothing`, wired to the cont
 skips such a location on a reroute unless it takes **all** of the carry; the store plan is untouched, because it sizes
 a job by what the bay answers. It is only reachable with a carry of two or more containers, i.e. at
 `crane.grabberStacks` above 1 or with a modded container that stacks — a filled vanilla bucket stacks to one.
+
+### 6.3 The fill (M31, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
+
+The exchange the other way round: at a fluid bay the head gives up **empty** containers and receives the same number of
+filled ones, and the bay gives up their fluid. `warehouse-system.md` §3.9.6 carries the whole fill trip and ADR-073 the
+decision; what belongs here is what it means for the head.
+
+```java
+int fill(TransferContext target, ItemKey from, ItemKey to, int amount);   // containers really filled, or 0
+```
+
+* **One body with `exchange`.** `InventoryGrabber` runs both through one private method, parameterised by the
+  direction, which asks the location `exchange` or `fill`. Everything §6.2 says holds unchanged: the real call is the
+  authority, the result is all or nothing, and a location that contradicts its own plan is salvaged.
+* **The location's half is two default methods** on `TransferContext`, `simulateFill` and `fill`, which answer nothing
+  for every location but a fluid bay. The bay drains its ungated tank for the whole amount or refuses, and it refuses
+  a container that fills to one key and drains back to another (`FluidContainers.fillsBack`).
+* **The head asks only if it can hold the result.** `ExchangeDecision#mayAsk` gains a gate: the head must have room for
+  `amount` of the filled key once the empties are gone (`CapacityMath.carryLimit`). The gate decides nothing for a
+  drain, because empties stack at least as high as filled containers. For a fill it decides the trip: 16 empty buckets
+  fit one grabber stack and 16 lava buckets do not, so a fill trip carries one filled bucket at the default grabber.
+* **`CraneExecution` checks the result before it fills.** The job's request names the filled key it wants
+  (`WarehouseControllerBlockEntity#fillDestination`). A bay whose simulated fill gives anything else, for example
+  after pipes emptied it and another fluid came in, is refused, as is a fill with no request left. The empties are
+  then rerouted to a shelf, because a bay's insert estimate is drain-only.
+
+In the job it is the same `CraneEvent.Exchanged`, with an onward stop (`CraneEvent.filled`), and `CraneEffect.
+ReportExchanged` names the bay as the stop. A fill plays the bucket sound of the exchange.
 
 ## 7. Rendering
 

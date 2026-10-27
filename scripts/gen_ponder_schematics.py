@@ -58,6 +58,10 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 # The fluid bay scene (M30) uses the shared square 9 plate: it needs the aisle, because the loop it teaches is the
 #   crane's (dev.wareworks.client.ponder.scenes.FluidBayScenes), with the rack plane RIGHT carrying the input, a rack
 #   bay, the fluid bay, a fluid pipe and a Create Fluid Tank from positions 2 to 6.
+# The fluid request scene (M31) uses the shared square 9 plate too: the terminal on the rack plane RIGHT at position 2,
+#   the rack bay of empty buckets and the fluid bay on the plane LEFT at positions 3 and 5, and the pipe and the Create
+#   Fluid Tank behind the fluid bay at z = 2 and z = 1, on the side the camera draws
+#   (dev.wareworks.client.ponder.scenes.FluidBayScenes#askingForFluid).
 # The door ordering scene (M27) uses the shared square 9 plate too: the terminal and the door's port on the rack plane
 #   LEFT at positions 1 and 4, the door's Packager in front of the port with its sign, Smart Observer and Stock Link
 #   around it, and the racks the iron comes from on the plane RIGHT (dev.wareworks.client.ponder.scenes.PackageScenes).
@@ -91,6 +95,7 @@ TEMPLATES = {
     "warehouse/rack_wall": (7, 7, 7),
     "warehouse/bays_in_an_aisle": (9, 7, 9),
     "warehouse/fluid_bay": (9, 7, 9),
+    "warehouse/fluid_request": (9, 7, 9),
     "warehouse/ordering_to_a_door": (9, 7, 9),
     "warehouse/crafter_feeder": (9, 7, 9),
 }

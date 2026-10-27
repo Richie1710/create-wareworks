@@ -288,6 +288,28 @@ final class SceneItemCensus {
     }
 
     /** A copy of {@code counts} with every entry of {@code added} applied. */
+    /**
+     * {@code counts} after the <b>fill</b> of a fill trip (M31, issue #21): {@code containers} fewer of {@code empty} and
+     * that many more of {@code filled}, verified against the routine the bay itself uses
+     * ({@code FluidContainers#fillsBack}), so a scenario cannot declare a fill the game would not make. The fluid
+     * expectation is not touched: the fluid moved from a tank into the containers, both of which the fluid census counts.
+     */
+    static Map<ItemKey, Long> filled(Map<ItemKey, Long> counts, ItemKey empty, ItemKey filled, long containers) {
+        if (containers <= 0)
+            throw new VisualTestException("a fill moves at least one container, not " + containers);
+        FluidContainers.Drained contents = FluidContainers.drained(filled)
+                .orElseThrow(() -> new VisualTestException("declared the fill " + empty + " -> " + filled
+                        + ", but the game refuses to empty " + filled + " at all"));
+        if (!contents.emptied().equals(empty) || FluidContainers.fillsBack(empty, contents.fluid())
+                .map(FluidContainers.Filled::filled).filter(filled::equals).isEmpty())
+            throw new VisualTestException("declared the fill " + empty + " -> " + filled + ", but filling " + empty
+                    + " with " + contents.fluid() + " does not give " + filled + " and back");
+        Map<ItemKey, Long> result = new HashMap<>(counts);
+        add(result, empty, -containers);
+        add(result, filled, containers);
+        return result;
+    }
+
     static Map<ItemKey, Long> plusAll(Map<ItemKey, Long> counts, List<ItemStack> added) {
         Map<ItemKey, Long> result = new HashMap<>(counts);
         for (ItemStack stack : added)

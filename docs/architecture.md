@@ -109,7 +109,11 @@ dev.wareworks
 │   │                          since M18 (ADR-030) JobType.COLLECT (a collecting warehouse port → storage, never a port
 │   │                          as its target) with TransportJob.collect, bringsItemsIn / waitsAtAFullTarget,
 │   │                          PlannerInput.collectSources / collectBuffers, PlanResult.nextArrivalCursor and
-│   │                          JobPlanner.planCollect / MAX_COLLECT_CANDIDATES
+│   │                          JobPlanner.planCollect / MAX_COLLECT_CANDIDATES;
+│   │                          since M31 (issue #21, ADR-073) RequestKind (STOCK / FILL: what a request promises, one
+│   │                          queue for both), JobType.FILL with TransportJob.fill / filledFor (the fill trip: rack →
+│   │                          bay → the station that asked, one job), Reservation.Kind.FILLING, PlannerInput's
+│   │                          FillSupply and JobPlanner.planFill, NoJobReason.NO_EMPTY_CONTAINERS
 │   ├── crane                  CranePhase, CranePose, CraneState, CraneTimings, CraneEvent, CraneEffect,
 │   │                          CraneInterruption, AbortReason, CraneStateMachine, CraneMotion (M3); CraneSoundCues
 │   │                          (when the crane makes which sound, M4; the TURN cue, M21); CraneResync (when a client
@@ -152,7 +156,12 @@ dev.wareworks
 │   │                          save/restore surface that re-applies every bound) and TerminalUsageCounts (the
 │   │                          read-only half a comparator and a screen need); DoorSelection (M27, issue #18,
 │   │                          ADR-065: the screen's choice of door — here at the start, the next and previous door
-│   │                          that can be chosen, back to here when the chosen door goes)
+│   │                          that can be chosen, back to here when the chosen door goes); asking for fluid (M31,
+│   │                          issue #21, ADR-073): ContainerPlan (which empty containers, largest first, never
+│   │                          over-serving, and the shortfall it names), BucketFormat (a fluid amount in a cell and in
+│   │                          full), FillTrips (crane trips for a plan), FluidQuestion / FluidAcknowledgement (what a
+│   │                          fluid click would mean, and the consent that must equal it) and FluidRowState (the look
+│   │                          of a fluid row: OK, red, red with a make offer, all promised)
 │   ├── crafting               crafting at the terminal (M32, issue #24, ADR-059): CraftGrid (the nine ghost cells of
 │   │                          a player's grid, the per-craft multiset in first-cell order, how many crafts a count
 │   │                          map holds and what a top-up would still need) and SlotPlan (one craft planned over
@@ -220,7 +229,8 @@ dev.wareworks
 │                              (the one place a reserve enters the request path), StockRuleStatus,
 │                              StockRuleEvaluation; and for automatic restocking (part 2) RestockPlanner,
 │                              RestockInput, RestockDecision, RestockPlan, RestockOutcome, RestockLimits,
-│                              StockRulePause (the safety stop)
+│                              StockRulePause (the safety stop); RuleUnit (whether a row counts items or the fluid in
+│                              the bays, in millibuckets, M31, issue #21, ADR-073)
 ├── content
 │   ├── item                   ItemKey (item + components, count-less), ItemHandlerSnapshots, ItemTypeSummaries
 │   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views),
@@ -261,7 +271,8 @@ dev.wareworks
 │   ├── fluid                  FluidKey (fluid + components, amount-less, ItemKey's sibling), FluidTypeSummaries,
 │   │                          FluidContainers (the one place "is this a filled container, and what comes back when
 │   │                          it is drained" is answered) and FluidDedication (this fluid / whichever arrives first /
-│   │                          not a fluid location at all, ADR-056) (M30, issue #21)
+│   │                          not a fluid location at all, ADR-056) (M30, issue #21); since M31 FluidContainers also
+│   │                          answers the fill direction and its round-trip check (fillsBack, ADR-073)
 │   ├── controller             BranchLayout (world mapping of ONE straight aisle — the M2 AisleLayout, renamed in M21
 │   │                          and unchanged in shape) and WarehouseLayout (the whole warehouse: dock, NetworkGeometry
 │   │                          and one BranchLayout per branch; it owns candidates(), the corner-ownership rule, the
@@ -304,7 +315,11 @@ dev.wareworks
 │   │                          server thread only, nothing of it saved by the mod;
 │   │                          DoorDirectory (M27, issue #18, ADR-065 D9: the package doors a terminal screen may
 │   │                          offer, pulled by the terminal menus' pushes and nothing else, one build per 20 ticks
-│   │                          per controller plus one per change a hook reports, never saved)
+│   │                          per controller plus one per change a hook reports, never saved);
+│   │                          FillLedger (what open fill requests have promised: fluid owed, empties owed, fluid
+│   │                          promised at each bay; rebuilt from the tracked jobs and the queue, never saved) and
+│   │                          FillRecipes (the fluid, the amount and the empty container a filled key derives to,
+│   │                          memoised per key) (M31, issue #21, ADR-073)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock (since M21 four derived cosmetic
 │   │   │                      connection booleans and a CLOSED state the topology really reads; the wrench toggles
 │   │   │                      CLOSED instead of turning the now cosmetic AXIS), RailNetworkScan (M2 as RailScan,
@@ -352,7 +367,11 @@ dev.wareworks
 │                              WarehouseStockKeeperBlock / BlockEntity (the aisle member that holds the stock rules;
 │                              no items, no capability, no arm point), StockKeeperRules (its editable rows and their
 │                              NBT), StockKeeperGoggleSummary, StockKeeperScreenState, StockKeeperMenu,
-│                              StockKeeperMenuLayout (M15, ADR-027);
+│                              StockKeeperMenuLayout (M15, ADR-027); KeeperRule (a rule with its unit, the
+│                              controller's saved copy of a row, M31, ADR-073);
+│                              TerminalFluids (the fluid cells and fill lines a terminal's stock push carries) and
+│                              TerminalFluidOutcome (what a fluid click became: accepted, refused or asked about)
+│                              (M31, issue #21, ADR-073);
 │                              TerminalRequestOutcome (the third ending of a terminal click: accepted, refused, or
 │                              asked about — kept out of RequestResult on purpose) (M15 part 2, ADR-027);
 │                              WarehouseHomePointBlock / BlockEntity (the rack position a crane with nothing to do
@@ -458,7 +477,12 @@ dev.wareworks
 │                              and locks); TerminalCraftLayPayload (client → server, ADR-063: a recipe viewer's recipe
 │                              as nine lists of at most 64 candidate items in at most 32 767 bytes, the terminal, a
 │                              recipe hint and the fold-out; the grid the server picked goes back as
-│                              TerminalCraftViewPayload#lay).
+│                              TerminalCraftViewPayload#lay);
+│                              the two fluid payloads (M31, issue #21, ADR-073): TerminalFluidRequestPayload (client →
+│                              server: a fluid cell's click in millibuckets with its acknowledgement, nothing in it
+│                              trusted) and TerminalFluidQuestionPayload (server → client: the containers, the trips
+│                              and the shortfall a fluid click would mean); the fluid cells themselves ride
+│                              TerminalStockPayload (an optional TerminalFluids on its first page).
 │                              Everything else syncs through block entity update packets
 ├── client
 │   ├── gui                    WarehouseTerminalScreen (the terminal's screen; since M27 also its door button, the
@@ -643,6 +667,14 @@ dev.wareworks
 │                              -Pwareworks.cc (its generator returns no tests without CC); CeeMotorGameTests: a Create:
 │                              Electro Energetics Electric Motor wired to a Creative Battery drives the crane at 230 V and
 │                              stops it at 70 V, only with -Pwareworks.cee, without a CEE type in the class (issue #9)
+│                              FluidRequestGameTests (the fill trip: one bucket a trip, the head's room for a filled
+│                              bucket, no empties, the bay emptied by pipes or refilled with another fluid, a
+│                              cancellation before and after the fill, a full port drained back, a fill saved mid
+│                              trip), TerminalFluidRequestGameTests (the fluid click: always asked first, partial
+│                              service, no container fits, the make offer, the click cap, empties never promised twice)
+│                              and FluidRuleGameTests (fluid stock rules: the unit, the maximum on the crane's store
+│                              into a bay, the reserve against a port, an old lava-bucket row staying an item rule)
+│                              (M31, issue #21, ADR-073)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -749,6 +781,11 @@ dev.wareworks
 │                              first and third person empty and loaded, walking and gliding against an empty-truck
 │                              control, the drop key, a barrel slot and a second truck refused, English and German,
 │                              a census around every move, issue #37, ADR-070),
+│                              FluidRequestVisualScenario (asking the terminal for lava with real clicks, English and
+│                              German: the fluid cell, the question with its containers and trips, the crane carrying
+│                              an empty bucket to the bay and the filled one on to the terminal, partial service, the
+│                              red row and the make offer, a census of items and fluid around every move, M31, issue
+│                              #21, ADR-073),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -1026,6 +1063,7 @@ iron sheets already require a press and its brass casing already requires brass.
   * *Extended in M27* (`warehouse/ordering_to_a_door`, “Delivering to a Package Door”), the twenty-second scene, after M30's `warehouse/fluid_bay`: ordering goods to a package door at the terminal (ADR-065 D15). It is registered for the **warehouse terminal and the warehouse output**, because the door is chosen at the one and is the other, and **last** for both, so each block still opens on the scene it always did. It is a storyboard of its own for the reason M20, M22 and M26 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because it needs a terminal beside the door, which the `packages_at_the_door` stage has no room for; its own stage is another empty 9x7x9 plate. Like the terminal's own scenes it represents the screen it cannot open: `InputElementBuilder#showing` draws any Create icon in a control bubble, so the door button appears as itself (`AllIcons.I_SEND_ONLY`) on the terminal's display face.
   * *Extended for issue #34* (`warehouse/crafter_feeder`, “Crafting with a Vanilla Crafter”), the twenty-third scene, in `client.ponder.scenes.CrafterFeederScenes` (ADR-067). It is registered for the **crafter feeder and the production station**, last for the station, so the station still opens on the scene it always did. Its stage is a new 9x7x9 plate in `scripts/gen_ponder_schematics.py`; the build is mirrored onto the left rack plane, whose back row is the one nearest Ponder's camera, so the feeder and the Crafter are in view without turning it. Like the station's own scenes it shows the pattern screen as icons and text, and the batch as item bubbles over the Crafter and each run as a redstone indication on it. The feeder joined the tag `wareworks:warehouse` and Create's `KINETIC_APPLIANCES` with it.
   * *Extended for issue #37* (`hand_truck/carrying`, “Carrying Containers with the Hand Truck”), the twenty-fourth scene, in `client.ponder.scenes.HandTruckScenes`, registered for the **hand truck** only and in no Ponder tag (ADR-070): the truck is an item, not a block of the warehouse. A `PonderLevel` has no player, so an armour stand holds the truck and is moved a little every tick. One quirk worth knowing for the next scene that hands an entity an item: catnip's `SchematicLevel` strips every item component but a few from an armour stand's equipment when the stand is **added**, which would take the carried chest off the truck, so the scene puts the truck into the stand's hand only after the stand is in the level (`HandTruckScenes#holding`).
+  * *Extended in M31* (`warehouse/fluid_request`, “Asking the Warehouse for Fluid”), the twenty-fifth scene, in `client.ponder.scenes.FluidBayScenes` beside M30's `warehouse/fluid_bay` (ADR-073). It is registered for **both fluid bays and the warehouse terminal**, because the fill happens at the one and the fluid row is clicked at the other, and **last** for all three, so each block still opens on the scene it always did. It is a scene of its own rather than beats added to `warehouse/fluid_bay` for M20's reason (a shipped scene's `text_n` keys stay put) and because a player who wants lava out should not sit through the way in first. Its stage is the shared 9x7x9 plate with the bay on the rack plane LEFT, whose back faces the camera, so the closing beat's pipe at the bay's back is in view.
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
@@ -7175,9 +7213,142 @@ port, and the production station has the very same body. (ADR-071 is taken by th
   `#craneDeliversIntoAnOutputAtTheStationStroke` (the arm at the stroke for the whole drop, full stroke at storage,
   items conserved, the stroke-aware trip time).
 
-### ADR-074 — Computers talk to the warehouse through the terminal: an optional CC: Tweaked peripheral of our own, and Create: Electro Energetics needs no code ([issue #9](https://github.com/Richie1710/create-wareworks/issues/9))
+### ADR-073 — Asking for fluid: a fill trip is one `FILL` job that fills at the bay and goes on to the station that asked; fill requests are their own kind in the one queue (M31, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
 
-(ADR-073 belongs to M31, which was developed in parallel.)
+*Context:* M30 brought fluid into a warehouse and left one direction open: a player could not **ask** for a fluid.
+Fluid may only leave inside a container the crane carries (no teleport) or through a pipe at a bay's back. The owner
+decided three things on 2026-10-27, and they are binding:
+1. **One filled bucket per crane trip is fine** (filled buckets stack to 1). The confirmation names the number of trips,
+   and bulk goes through pipes.
+2. **A bay dedicated to a fluid keeps outranking every shelf** for a container of that fluid (ADR-056, unchanged).
+3. **With no empty containers in stock the terminal's fluid row is red**, says so, and points to the pipe at the bay's
+   back. If a production pattern makes such containers, the terminal offers to make them first, reusing the chain offer
+   of M32 slice 3 (`previewProduction`).
+
+Decision 2 decides the shape of the trip. M30's synthesis planned a fill as "empties to the bay, the filled container
+rerouted into stock, then an ordinary retrieve". Under decision 2 that reroute puts the filled bucket straight back
+into a bay of the same fluid (another bay, or the same one on the `HOLDING` retry), which is M30's review ping-pong in
+a new costume. A filled container must therefore **never be put down on the way** to the station that asked for it.
+
+*Decision:*
+* **One job per fill trip, `JobType.FILL`** (`STORAGE` → `STORAGE` → `STORAGE`, may drop at `STORAGE` or `OUTPUT`).
+  The crane picks the empties from a rack, the fluid bay fills them, and in the **same transition**
+  `TransportJob#filledFor` retargets the job to the request's station and **keeps the request**. That is the one
+  difference from `exchangedFor`, which drops the request, because a drained container is not what anybody asked for
+  and a filled one is exactly what the fill request asked for. `TransportJob` gains no record component, `CranePhase`
+  gains no constant, and the job's save format is the existing `Type` string. `CraneEvent.Exchanged` gains an optional
+  onward stop. `CraneStateMachine#targetRetracted` gains one rule, placed after the interruption check: a `FILL` job
+  whose target is a delivery station the crane does not stand at travels there. It is narrowed to `FILL`, and every
+  other job retracts at its own target anyway, so no existing job can take that branch.
+* **The fill is the head's fourth operation**, the mirror of ADR-055. `TransferContext` gains the default methods
+  `simulateFill` and `fill`, and only the fluid bay implements them. The bay drains its **ungated** tank, all or
+  nothing, so `fluidBayPipeExtraction` never changes what the crane may do. A new round-trip check
+  (`FluidContainers.fillsBack`) refuses any container that fills to one key but drains back to another, because that
+  would create or destroy fluid across the warehouse's two directions. The bay's insert estimate stays drain-only, so
+  empties are never planned *into* a bay, and a reroute of empties can never pick one. `HandlingHead#fill` runs
+  through the same body as `exchange`, and `ExchangeDecision#mayAsk` gains a room-for-the-result gate: 16 empty buckets
+  fit one grabber stack, 16 lava buckets do not. That gate is why each trip carries one filled bucket.
+* **A fill request is an ordinary `RetrievalRequest` of the filled container key, marked `RequestKind.FILL`, in the one
+  queue.** The amount counts containers. The fluid and the empty container are derived from the key
+  (`FluidContainers.drained`, memoised per key in `FillRecipes`), never saved. Merging keys on (key, destination,
+  kind). A `FILL` request is served only by fill trips and a `STOCK` request only from item stock: a lava bucket on a
+  shelf is an item, the lava in a bay is the fluid row, and the two never stand in for each other. Because of this,
+  nothing ever takes a filled container out of a shelf to serve fluid (decision 2 again).
+* **Reservations.** Before the pick, the empties are reserved as `STOCK` at the rack (the existing rule). After the
+  pick, the new `Reservation.Kind.FILLING` counts toward its request and toward **no** per-key total. The empties have
+  left the racks, and the filled containers are nobody's item stock, so counting either as `TRANSIT` would make an item
+  click on "Bucket" or "Lava Bucket" more or less available by the trip in flight. `content.controller.FillLedger` is
+  rebuilt from the tracked jobs and the request queue for every question and never saved. It gives the fluid owed, the
+  empties owed and the fluid already promised at each bay, and all three feed the existing availability formula, so
+  the numbers cannot disagree.
+* **Planning.** The request stage calls `JobPlanner#planFill` for a `FILL` request. It ranks (rack, bay) pairs by
+  crane → rack → bay → station and caps each trip by both carry limits, the bay's live `simulateFill` and its free
+  whole containers. Without empties it answers the new `NoJobReason.NO_EMPTY_CONTAINERS`, declared right after
+  `NOT_IN_STOCK`. That reason **arms no back-off**: one request lacking a bucket must not stop storing from every
+  input, least of all the bucket that would cure it. A rerouted `FILL` job behaves exactly like a retrieve: storage
+  first, filters advisory, never a port. So empties go back to a shelf, and a filled container goes to a dedicated bay
+  (decision 2), which drains it.
+* **Which containers.** `core.terminal.ContainerPlan` is greedy, **largest container first**, and never over-serves
+  (integer division). It names five shortfalls: none, not enough fluid, no containers, not enough containers, and no
+  container small enough. With buckets it is exact.
+* **The terminal always asks before it promises.** Fluid cells form their own block above the items. The amount is in
+  buckets, capped by `storage.maxTerminalFluidRequestBuckets` (default 64, one copper bay), and Ctrl takes everything
+  the warehouse can serve, which may be any number of mB. Every fluid click asks first, with no skip: the dialog is the
+  one place the container economy is explained. It names the containers, the number of trips, any partial service,
+  the station's room and any reserve, and consent (`FluidAcknowledgement`) must equal the server's numbers exactly.
+  Over-serving costs containers, so it breaks consent as much as under-serving. With no empties the row is red, with
+  the pipe hint. If a pattern makes the containers, the question offers to make them: the chain is started with
+  **no backing request** (the restock shape, the made containers land in stock), and the fill requests wait with
+  `NO_EMPTY_CONTAINERS` until they arrive. On consent the queue is checked for room for every portion's request first
+  (`RequestQueue#roomFor`), and the chain starts only after the made portion's request is accepted, for no more than
+  it was granted, so a refused click never spends the player's ingredients. A port whose empties are all held back by
+  an item rule's reserve is told `RESERVED`, as an item port is, not "no empty containers in stock".
+* **Stock rules and ports.** `StockRule.MAX_AMOUNT` rises to 1 000 000 000 (one million buckets in mB). A stock keeper
+  row whose ghost is a filled container gets a saved unit (fluid or items). For fluid, the maximum caps what the crane
+  stores into a bay (pipes ignore it), the reserve holds fluid back from redstone ports, and the minimum is only shown.
+  A requesting port whose filter **carries** fluid keeps asking for shelf stock while there is some for it, and asks
+  for a fill from the bays otherwise. An empty bucket in a filter keeps meaning the item.
+
+*Alternatives rejected:*
+* **M30 §5 step 11's stock-then-retrieve**: empties to the bay, the filled container rerouted into stock, then an
+  ordinary retrieve. Decision 2 kills it, because the filled container would land in a bay of its own fluid and be
+  drained again.
+* **A fill flag on every lava-bucket request**, so "any request for a filled container may be filled". A `STOCK`
+  request promises item stock and a fill request promises fluid and empties. Mixing them would refuse an item click on
+  three shelf buckets because a fill had "promised" them, and would let a fill quietly take shelf buckets promised
+  elsewhere.
+* **A `via` component on `TransportJob`** (an explicit middle stop). It is a save-format change for every job, and the
+  middle stop is only ever the bay of a fill. `filledFor` inside the existing transition expresses the same trip with
+  no new field.
+* **Production backed by the fill request.** The made container (a bucket) is not the request's key (a lava bucket),
+  which `ProductionOrder#promisedToRequest` assumes. The chain therefore runs unbacked and the containers land in
+  stock. If the chain later fails, the fill requests wait with `NO_EMPTY_CONTAINERS` until the player cancels them in
+  the terminal's order list.
+* **Exact subset-sum container choice.** "Largest first" is the owner's own wording. It is predictable, and it is exact
+  with buckets, the container every player has. The known counter-example is pinned in `ContainerPlanTest` so nobody
+  "fixes" it by accident: from one 1 000 mB and two 750 mB containers, 1 500 mB serves 1 000, not 1 500. The dialog
+  always says exactly what is served.
+
+*Consequences:*
+* **Network version 18** (`WareworksNetwork.VERSION`): fluid rows ride the terminal's stock push
+  (`TerminalStockPayload` carries an optional `TerminalFluids` on its first page when it changed). Further changes:
+  `TerminalFluidRequestPayload` (C→S), `TerminalFluidQuestionPayload` (S→C), `RequestRejection.NO_EMPTY_CONTAINERS`
+  appended at the end of the enum, and the stock keeper row's unit and capacity.
+* **Saves gain only optional tags**, so worlds from 0.17.1 load unchanged. A request saves `Kind:"FILL"` only for a
+  fill (absent means `STOCK`), and a keeper rule saves `Unit:"fluid"` only for a fluid row (absent means items, so an
+  old lava-bucket row stays an item rule). A `FILL` job uses the existing `Type` string. The `FILLING` reservation,
+  the fill ledger and the recipe memo are rebuilt, never saved. Downgrading a world from M31 to 0.17.1 is not
+  supported: a `FILL` job is then unknown to `JobType.byName` and its head contents follow the existing "job missing"
+  path.
+* **A fill trip that was cut by anything ends with items and fluid accounted for:**
+  * a cancellation in any phase;
+  * a bay emptied by pipes, or refilled with another fluid (the fill's result must equal the request's key);
+  * a container the bay refuses;
+  * a full or broken station;
+  * a save and rejoin, or a chunk unload.
+
+  The joint census learned the fill direction (`ItemCensus.fill`, `SceneItemCensus.filled`, checked against
+  `FluidContainers.fillsBack`). The planner plans no fill trip to a full station, so at a full terminal the crane
+  rests (`OUTPUT_FULL`) and fills the next bucket once a slot frees up. A terminal that fills up while a filled bucket
+  is on its way is waited at, like a retrieve. A full warehouse port cancels the trip instead, and the reroute takes
+  the filled container into a bay of its fluid, which drains it, while the request stays open.
+* **Ponder:** a second scene, `warehouse/fluid_request`, on both fluid bays and the terminal.
+* **Not built** (recorded so a later milestone starts from it): typed millibucket entry at the terminal; fluids on
+  clipboard lists, in the crafting panel or through JEI's "+"; exact subset-sum container choice; a fluid rule's
+  minimum triggering production (no pattern makes fluid); bottles (M30's rule: the capability only);
+  `NoJobReason.NO_MATCHING_FLUID` (M30 debt, unchanged).
+* **Tests:**
+  * JUnit: `ContainerPlanTest`, `BucketFormatTest`, `FluidQuestionTest`, `FluidQuestionTextWidthTest`,
+    `JobPlannerFillTest`, `FillLedgerTest` (one case per phase of a container), `RuleUnitTest`, and additions to
+    `TransportJobTest`, `CraneStateMachineTest`, `ReservationLedgerTest`, `RequestQueueTest`,
+    `ExchangeDecisionTest` and `StockRuleTest`.
+  * GameTests: `FluidRequestGameTests`, `TerminalFluidRequestGameTests` and `FluidRuleGameTests`, each with a joint
+    item-and-fluid census, plus a pre-M31 migration case in `MigrationGameTests`.
+  * Visual scenario `fluidrequest`: real clicks in English and German.
+  * Two `runRobustnessTest` phases: a chunk unload while a fill trip carries an empty container to the bay, and a save
+    and rejoin while a filled container is on its way.
+
+### ADR-074 — Computers talk to the warehouse through the terminal: an optional CC: Tweaked peripheral of our own, and Create: Electro Energetics needs no code ([issue #9](https://github.com/Richie1710/create-wareworks/issues/9))
 
 *Context:* Issue #9 asks for two integrations. The owner decided (2026-10-27): a **CC: Tweaked** peripheral that only
 loads when CC: Tweaked is installed, through which a computer can read stock and place requests that obey every
@@ -7336,6 +7507,15 @@ instead of redstone, and any dependency on CC: Computer Energetics. Create 6.0.1
   port, keeper or dock leaves its goods, clipboard, order, patterns, pulse token and counters, rules and handling head
   alone. A pallet answers
   `onlyOpCanSetNbt()` with true, so Create leaves it out of every schematic it loads with block data processed.
+* **Asking for fluid** (M31, ADR-073) adds two optional tags and nothing else. A request saves `Kind:"FILL"` only
+  for a fill (absent reads as a stock request, so a world from 0.17.1 loads and saves its queue byte for byte), and a
+  stock keeper rule, in the keeper and in the controller's copy, saves `Unit:"fluid"` only for a fluid row (absent is
+  items, so an old lava-bucket row stays an item rule). A fill trip is a crane job of type `FILL` in the existing
+  `Type` string, with no new field: before the fill it carries the empty key to the bay, after it the filled key to the
+  station, and the state machine's one rule in `RETRACT_TARGET` resumes the second leg from either phase. The
+  `FILLING` reservation, the fill ledger and the recipe memo are derived and rebuilt from the job and the queue, never
+  saved. A fluid question is transient like every confirmation. The client gets the fluid cells and fill lines in the
+  terminal's stock push, network version 18.
 * After a restart, jobs resume from the persisted state (`CraneStateMachine.resume` makes a loaded state consistent). There is no `FAULT` phase: if a referenced block is missing, a job aborts with a reason before the pick, and after it the held items are rerouted (`REROUTE`), held and retried (`HOLDING`) or waited with at the requesting output (`WAITING_FOR_TARGET`). Items are dropped only when the dock itself breaks (`stacker-crane.md` §4.1, `warehouse-system.md` §8).
 
 ## Performance rules

@@ -24,6 +24,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.item.ClipboardList;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
@@ -43,6 +44,7 @@ import dev.wareworks.core.stock.StockLevels;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.stock.StockRules;
+import dev.wareworks.core.terminal.FluidAcknowledgement;
 import dev.wareworks.core.terminal.ListCredit;
 import dev.wareworks.core.terminal.ListEntry;
 import dev.wareworks.core.terminal.ListLine;
@@ -792,6 +794,99 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return TerminalDoors.NONE;
         long now = level.getGameTime();
         return controller().map(found -> found.doorDirectory().terminalRows(now)).orElse(TerminalDoors.NONE);
+    }
+
+    // --- fluid requests (M31, issue #21, ADR-073) --------------------------------------------------------------------
+
+    /**
+     * Server: the fluid half of this terminal's screen (M31, {@code docs/warehouse-system.md} §3.9.6): one cell per
+     * fluid the aisle's bays hold ({@code WarehouseControllerBlockEntity#terminalFluidRows}) and one order line per open
+     * fill request of this terminal. {@link TerminalFluids#NONE} without an aisle, and at once for a warehouse without
+     * fluid and without fill requests. Called by the menu's push only.
+     */
+    public TerminalFluids fluidSnapshot() {
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return TerminalFluids.NONE;
+        WarehouseControllerBlockEntity controller = found.get();
+        List<TerminalFluids.FillLine> fills = new ArrayList<>();
+        for (RetrievalRequest<ItemKey, BlockPos> request : controller.requestsFor(worldPosition)) {
+            if (!request.isFill() || fills.size() >= TerminalFluids.MAX_FILLS)
+                continue;
+            controller.fillRecipe(request.key()).ifPresent(recipe -> fills.add(new TerminalFluids.FillLine(
+                    request.id(), request.key(), recipe.fluid(), request.remaining())));
+        }
+        List<TerminalFluids.Row> rows = controller.terminalFluidRows();
+        return rows.isEmpty() && fills.isEmpty() ? TerminalFluids.NONE : new TerminalFluids(rows, fills);
+    }
+
+    /**
+     * Server: a click on a fluid cell — {@code amountMb} of {@code fluid}, filled into the warehouse's empty containers
+     * and delivered here or to the package door the click named (M31, issue #21, ADR-073).
+     * <p>
+     * Checked like an item click ({@link #requestFromTerminal(Player, ItemKey, int, RequestAcknowledgement,
+     * Optional)}), each a refusal of its own: server side and not removed, the player's reach, an amount of at least
+     * 1 mB, a loaded controller, the door. The amount is then clamped to {@code maxTerminalFluidRequestBuckets}, and the
+     * controller measures the request and asks first ({@code WarehouseControllerBlockEntity#requestFill}): a fluid
+     * request always asks, and only an answer that names exactly the question measured now is carried out.
+     * <p>
+     * A refusal of a click to here is remembered like an item click's; a question is not a refusal and changes nothing.
+     *
+     * @param acknowledged the question the player said yes to, {@link FluidAcknowledgement#NONE} for a first click
+     * @param door         the package door to deliver to; empty for here
+     */
+    public TerminalFluidOutcome requestFluidFromTerminal(Player player, FluidKey fluid, long amountMb,
+            FluidAcknowledgement acknowledged, Optional<BlockPos> door) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(fluid, "fluid");
+        Objects.requireNonNull(acknowledged, "acknowledged");
+        Optional<BlockPos> target = door == null ? Optional.empty()
+                : door.filter(pos -> !pos.equals(worldPosition)).map(BlockPos::immutable);
+        return fluidTo(player, fluid, amountMb, acknowledged, target).withDoor(target);
+    }
+
+    private TerminalFluidOutcome fluidTo(Player player, FluidKey fluid, long amountMb,
+            FluidAcknowledgement acknowledged, Optional<BlockPos> door) {
+        if (level == null || level.isClientSide || isRemoved())
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
+        if (!canPlayerUse(player))
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.OUT_OF_REACH));
+        if (amountMb < 1L)
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.INVALID_AMOUNT));
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return TerminalFluidOutcome.of(rememberHere(door, RequestResult.rejected(RequestRejection.NO_CONTROLLER)));
+        WarehouseControllerBlockEntity controller = found.get();
+        if (door.isPresent()) {
+            Optional<RequestRejection> notADoor = PackageDoors.refusal(level, controller, door.get());
+            if (notADoor.isPresent())
+                return TerminalFluidOutcome.of(RequestResult.rejected(notADoor.get()));
+        }
+        TerminalFluidOutcome outcome = controller.requestFill(door.orElse(worldPosition), fluid, amountMb,
+                WareworksConfig.maxTerminalFluidRequestMillibuckets(), StockAccess.PLAYER, acknowledged);
+        outcome.result().filter(result -> door.isEmpty()).ifPresent(this::rememberRejection);
+        return outcome;
+    }
+
+    /**
+     * Server: gives up on an open <b>fill request</b> of this terminal (M31, issue #21): the cancel mark of its order line,
+     * which sends the request's id the way a production line sends an order's. Re-validated like a cancellation: the
+     * player's reach, a loaded aisle, and an open fill request whose destination is this very terminal — a crafted id
+     * reaches nothing else. A crane carrying its container is told; what it holds goes back into stock.
+     *
+     * @return whether a fill request was given up
+     */
+    public boolean cancelFillRequest(Player player, UUID requestId) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved() || requestId == null || !canPlayerUse(player))
+            return false;
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return false;
+        WarehouseControllerBlockEntity controller = found.get();
+        boolean ours = controller.requestsFor(worldPosition).stream()
+                .anyMatch(request -> request.isFill() && request.id().equals(requestId));
+        return ours && controller.cancelRequest(requestId).isPresent();
     }
 
     // --- crafting at the terminal (M32, issue #24, ADR-059) --------------------------------------------------------

@@ -20,7 +20,7 @@ class ComputerRepliesTest {
     void refusalReasonsAreTheDocumentedWords() {
         assertEquals(List.of("no_controller", "no_filter", "not_in_stock", "queue_full", "output_full", "out_of_reach",
                 "invalid_amount", "request_full", "production_busy", "reserved", "production_paused", "not_a_door",
-                "door_ignores_redstone"),
+                "door_ignores_redstone", "no_empty_containers"),
                 Arrays.stream(RequestRejection.values()).map(ComputerReplies::rejection).toList());
     }
 

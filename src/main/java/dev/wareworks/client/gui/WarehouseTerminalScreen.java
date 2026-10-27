@@ -23,6 +23,7 @@ import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.RequestRejection;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ListTableLayout;
 import dev.wareworks.content.station.ProductionScreenState;
@@ -30,6 +31,7 @@ import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalDoorRow;
 import dev.wareworks.content.station.TerminalDoors;
+import dev.wareworks.content.station.TerminalFluids;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalListState;
 import dev.wareworks.content.station.TerminalMenuLayout;
@@ -44,8 +46,13 @@ import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.BucketFormat;
+import dev.wareworks.core.terminal.ContainerPlan;
 import dev.wareworks.core.terminal.CountFormat;
 import dev.wareworks.core.terminal.DoorSelection;
+import dev.wareworks.core.terminal.FluidAcknowledgement;
+import dev.wareworks.core.terminal.FluidQuestion;
+import dev.wareworks.core.terminal.FluidRowState;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.PlanCancelCost;
@@ -69,6 +76,8 @@ import dev.wareworks.network.TerminalCraftOrderPayload;
 import dev.wareworks.network.TerminalCraftOrderStatePayload;
 import dev.wareworks.network.TerminalCraftViewPayload;
 import dev.wareworks.network.TerminalDoorsPayload;
+import dev.wareworks.network.TerminalFluidQuestionPayload;
+import dev.wareworks.network.TerminalFluidRequestPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
@@ -89,6 +98,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.renderer.Rect2i;
 import net.minecraft.core.BlockPos;
@@ -97,14 +108,19 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.FormattedText;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions;
+import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
@@ -432,6 +448,20 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     private Optional<BlockPos> confirmingDoor = Optional.empty();
     /**
+     * The fluid half of the stock (M31, issue #21): one cell per fluid the bays hold, drawn as a block of its own above
+     * the items, and this terminal's open fill requests, drawn as order lines. Replaced whole whenever the server sends
+     * it ({@link TerminalStockPayload#fluids()}).
+     */
+    private TerminalFluids fluids = TerminalFluids.NONE;
+    /** The fluid question the panel is showing (M31), or {@code null}; a fluid click always asks first. */
+    @Nullable
+    private FluidQuestion<ItemKey, FluidKey> fluidConfirming;
+    /** The package door the fluid question was measured for; a Fetch sends exactly this one back. */
+    private Optional<BlockPos> fluidConfirmingDoor = Optional.empty();
+    /** The fluid question the player last said Fetch to: a new one for that fluid means the warehouse moved. */
+    @Nullable
+    private FluidQuestion<ItemKey, FluidKey> fluidConfirmed;
+    /**
      * The package doors a click may deliver to, as the server last pushed them (M27, issue #18, ADR-065 D9). The screen
      * holds them only; where a click goes is its own choice, and the server holds none.
      */
@@ -681,6 +711,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             model.replaceAll(lines);
         else
             model.apply(lines);
+        // The fluid half comes whole whenever it changed (M31); a page without it leaves the cells as they are.
+        payload.fluids().ifPresent(half -> fluids = half);
         stockReceived = true;
         clampScroll();
     }
@@ -744,6 +776,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     public void onResult(TerminalResultPayload payload) {
         // The answer to a confirmed request: whatever it says, the question is settled (M15 part 2).
         confirmed = null;
+        fluidConfirmed = null;
         costChanged = false;
         // A click the racks served only part of carries the reason the rest could not be made (M20, issue #4): the
         // chain behind it was refused, and that sentence is what a player can act on, while "Requested Chest x1" is
@@ -941,9 +974,198 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return Optional.ofNullable(feedback);
     }
 
-    /** The entries the grid currently shows, in the order they are drawn. */
+    /**
+     * The item entries the grid currently shows, in the order they are drawn. Since M31 the fluid cells form a block of
+     * their own above the items ({@link #visibleFluids()}), so the first item is drawn at grid cell
+     * {@link #itemCellOffset()}, not at 0; an index into this list is an <b>item</b> index.
+     */
     public List<StockLine<ItemKey>> visibleEntries() {
-        return model.window(scrollRow, TerminalMenuLayout.GRID_COLUMNS, layout.gridRows());
+        int itemRows = layout.gridRows() - fluidRowsShown();
+        if (itemRows <= 0)
+            return List.of();
+        return model.window(Math.max(0, scrollRow - fluidRowCount()), TerminalMenuLayout.GRID_COLUMNS, itemRows);
+    }
+
+    // --- fluid cells (M31, issue #21, ADR-073) ---------------------------------------------------------------------
+
+    /**
+     * The fluid cells the search keeps, in the server's order: the same search rules as for items
+     * ({@link TerminalSearch}), with the fluid's own name and mod id. The "only what is available" filter keeps every
+     * fluid, since a fluid cell exists only while the bays hold some.
+     */
+    public List<TerminalFluids.Row> matchingFluids() {
+        String query = model.query();
+        if (query == null || query.isBlank())
+            return fluids.rows();
+        List<TerminalFluids.Row> matching = new ArrayList<>(fluids.rows().size());
+        for (TerminalFluids.Row row : fluids.rows()) {
+            if (TerminalSearch.matches(fluidName(row.fluid()).getString(), fluidModId(row.fluid()), query))
+                matching.add(row);
+        }
+        return matching;
+    }
+
+    /** Grid rows the fluid block takes, scrolled or not: whole rows, so the items always start on a fresh row. */
+    private int fluidRowCount() {
+        int count = matchingFluids().size();
+        return (count + TerminalMenuLayout.GRID_COLUMNS - 1) / TerminalMenuLayout.GRID_COLUMNS;
+    }
+
+    /** Grid rows of the window that show fluid cells right now. */
+    private int fluidRowsShown() {
+        return Math.max(0, Math.min(layout.gridRows(), fluidRowCount() - scrollRow));
+    }
+
+    /** The grid cell the first visible item is drawn in: the cells above it belong to the fluid block. */
+    public int itemCellOffset() {
+        return fluidRowsShown() * TerminalMenuLayout.GRID_COLUMNS;
+    }
+
+    /** The fluid cells the window shows, in the order they are drawn from grid cell 0 on. */
+    public List<TerminalFluids.Row> visibleFluids() {
+        int shown = fluidRowsShown();
+        if (shown <= 0)
+            return List.of();
+        List<TerminalFluids.Row> matching = matchingFluids();
+        int from = Math.min(matching.size(), scrollRow * TerminalMenuLayout.GRID_COLUMNS);
+        int to = Math.min(matching.size(), (scrollRow + shown) * TerminalMenuLayout.GRID_COLUMNS);
+        return List.copyOf(matching.subList(from, to));
+    }
+
+    /** The whole fluid half as last pushed (dev harness and tests of the client side). */
+    public TerminalFluids fluids() {
+        return fluids;
+    }
+
+    /** Rows the whole list needs: the fluid block and the items under it. */
+    private int contentRows() {
+        return fluidRowCount() + model.rowCount(TerminalMenuLayout.GRID_COLUMNS);
+    }
+
+    /** The largest first row the grid can scroll to (0 when everything fits). */
+    private int maxScrollRow() {
+        return Math.max(0, contentRows() - Math.max(1, layout.gridRows()));
+    }
+
+    /**
+     * Asks for the fluid of the visible fluid cell {@code index} (dev harness and click handling): the amount in
+     * buckets ({@link TerminalAmounts#fluidMillibucketsFor}), to the door the button shows or here, with nothing
+     * accepted yet — the server answers with the question, which a fluid request always asks first.
+     *
+     * @return whether a request was sent
+     */
+    public boolean requestFluidVisible(int index, TerminalAmounts.Click click) {
+        List<TerminalFluids.Row> visible = visibleFluids();
+        if (index < 0 || index >= visible.size())
+            return false;
+        TerminalFluids.Row row = visible.get(index);
+        long amount = TerminalAmounts.fluidMillibucketsFor(click, selectedAmount, row.servableMb(), row.availableMb(),
+                maxFluidBuckets());
+        sendFluid(row.fluid(), amount, FluidAcknowledgement.NONE, doorSelection.selected());
+        return true;
+    }
+
+    private void sendFluid(FluidKey fluid, long amountMb, FluidAcknowledgement acknowledged, Optional<BlockPos> door) {
+        PacketDistributor.sendToServer(new TerminalFluidRequestPayload(menu.containerId, fluid, amountMb, door,
+                acknowledged));
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
+    }
+
+    /** The bucket ceiling of one fluid click ({@code maxTerminalFluidRequestBuckets}). */
+    private static int maxFluidBuckets() {
+        return Math.max(TerminalAmounts.MIN_AMOUNT, WareworksConfig.maxTerminalFluidRequestBuckets());
+    }
+
+    /** The fluid's name as the player reads it; the search matches on it. */
+    private static Component fluidName(FluidKey fluid) {
+        return fluid.toStack(BucketFormat.BUCKET).getHoverName();
+    }
+
+    private static String fluidModId(FluidKey fluid) {
+        ResourceLocation id = BuiltInRegistries.FLUID.getKey(fluid.getFluid());
+        return id == null ? "" : id.getNamespace();
+    }
+
+    /** {@code "64,000 mB (64 buckets)"}: a fluid amount in full. */
+    public static Component fluidAmountText(long millibuckets) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_AMOUNT,
+                LangNumberFormat.format(millibuckets), bucketsText(millibuckets));
+    }
+
+    /** {@code "64 buckets"}: a fluid amount in buckets, exact. */
+    public static Component bucketsText(long millibuckets) {
+        return WareworksLang.translateDirect(WareworksLang.BUCKET_FORMAT_BUCKETS, BucketFormat.buckets(millibuckets));
+    }
+
+    /**
+     * A fluid cell's tooltip (M31): the fluid, what the bays hold and what a request may still claim, and — the point of
+     * the cell — what a click can do: which container it fills, that open requests have promised all of it, or, framed
+     * red, that no empty container is in stock, with the pipe at the bay's back that needs none and, where a pattern
+     * makes containers, that a click offers to have them made. Public for the visual harness, like
+     * {@link #itemTooltip}.
+     */
+    public List<Component> fluidTooltip(TerminalFluids.Row row) {
+        List<Component> tooltip = new ArrayList<>();
+        tooltip.add(fluidName(row.fluid()));
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_STORED,
+                fluidAmountText(row.storedMb())).copy().withStyle(ChatFormatting.GRAY));
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_AVAILABLE,
+                fluidAmountText(row.availableMb())).copy().withStyle(ChatFormatting.GOLD));
+        if (row.state() == FluidRowState.ALL_PROMISED) {
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_ALL_PROMISED).copy()
+                    .withStyle(ChatFormatting.GRAY));
+        } else if (row.state().lacksContainers()) {
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_NO_EMPTIES).copy()
+                    .withStyle(ChatFormatting.RED));
+            // The hint is a sentence, wrapped to the row like every other line of this window's tooltips.
+            for (FormattedText part : font.getSplitter().splitLines(
+                    WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_PIPE_HINT), ROW_WIDTH, Style.EMPTY))
+                tooltip.add(Component.literal(part.getString()).withStyle(ChatFormatting.GRAY));
+            row.makeable().ifPresent(container -> tooltip.add(WareworksLang.translateDirect(
+                    WareworksLang.TERMINAL_FLUID_MAKE_HINT, container.toStack().getHoverName()).copy()
+                    .withStyle(ChatFormatting.AQUA)));
+        } else {
+            row.container().ifPresent(container -> tooltip.add(WareworksLang.translateDirect(
+                    WareworksLang.TERMINAL_FLUID_FILLS, container.toStack().getHoverName(),
+                    LangNumberFormat.format(row.containerMb())).copy().withStyle(ChatFormatting.AQUA)));
+        }
+        chosenRow().filter(door -> doorCueShown()).ifPresent(door -> tooltip.add(fitArgument(
+                name -> WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_CELL, name), doorName(door),
+                ROW_WIDTH).copy().withStyle(ChatFormatting.GOLD)));
+        // A fluid click always asks, so the item cells' hint with its Alt skip would promise something it does not do.
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_AMOUNT_HINT).copy()
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        return tooltip;
+    }
+
+    /**
+     * One fluid cell: the fluid's still texture in its tint, as Create draws fluids in its own screens, and the amount
+     * in buckets ({@link BucketFormat#compact}); a red frame while no container is in stock, a grey amount while open
+     * requests have promised all of it.
+     */
+    private void renderFluidCell(GuiGraphics graphics, TerminalFluids.Row row, int x, int y) {
+        FluidStack stack = row.fluid().toStack(BucketFormat.BUCKET);
+        IClientFluidTypeExtensions fluid = IClientFluidTypeExtensions.of(stack.getFluid());
+        ResourceLocation still = fluid.getStillTexture(stack);
+        if (still != null && minecraft != null) {
+            TextureAtlasSprite sprite = minecraft.getTextureAtlas(InventoryMenu.BLOCK_ATLAS).apply(still);
+            int tint = fluid.getTintColor(stack);
+            float alpha = (tint >>> 24 & 0xFF) / 255.0F;
+            graphics.blit(x, y, 0, 16, 16, sprite, (tint >> 16 & 0xFF) / 255.0F, (tint >> 8 & 0xFF) / 255.0F,
+                    (tint & 0xFF) / 255.0F, alpha <= 0.0F ? 1.0F : alpha);
+        }
+        if (row.state().lacksContainers()) {
+            int left = x - ITEM_INSET;
+            int top = y - ITEM_INSET;
+            int right = left + TerminalMenuLayout.SLOT;
+            int bottom = top + TerminalMenuLayout.SLOT;
+            graphics.fill(left, top, right, top + 1, COLOR_ERROR);
+            graphics.fill(left, bottom - 1, right, bottom, COLOR_ERROR);
+            graphics.fill(left, top, left + 1, bottom, COLOR_ERROR);
+            graphics.fill(right - 1, top, right, bottom, COLOR_ERROR);
+        }
+        renderCount(graphics, BucketFormat.compact(row.storedMb()), x, y,
+                row.state() == FluidRowState.ALL_PROMISED ? COLOR_DIM : COLOR_TEXT);
     }
 
     /** All entries the search and filter keep, not only the ones on screen. */
@@ -1639,6 +1861,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             listTable = TerminalListTable.of(question, font);
             // Only one dialog at a time: the list's question wins over a chain a player was reading (M20/M23).
             confirming = null;
+            fluidConfirming = null;
             confirmed = null;
             craftConfirming = null;
             openPlan = null;
@@ -1886,6 +2109,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             craftConfirming = payload.question().get();
             // Only one dialog at a time: the player has just pressed Fetch, so this question wins.
             confirming = null;
+            fluidConfirming = null;
             confirmed = null;
             listConfirming = null;
             listConfirmed = null;
@@ -2471,9 +2695,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (cell >= 0 && button == 0) {
             TerminalAmounts.Click click = hasShiftDown() ? TerminalAmounts.Click.STACK
                     : hasControlDown() ? TerminalAmounts.Click.ALL : TerminalAmounts.Click.SELECTED;
-            // Alt is the skip and nothing else, so it composes with either amount modifier (M15 review fix).
-            if (requestVisible(cell, click, hasAltDown()))
+            // A fluid cell (M31): its question is always asked, so there is no skip to hold.
+            int items = itemCellOffset();
+            if (cell < items) {
+                if (requestFluidVisible(cell, click))
+                    return true;
+            } else if (requestVisible(cell - items, click, hasAltDown())) {
+                // Alt is the skip and nothing else, so it composes with either amount modifier (M15 review fix).
                 return true;
+            }
         }
         // A right-click on a stock cell lays the item into the crafting grid (M32): it picks a ghost, or with Shift
         // writes the item into the next free cell. A left click keeps requesting, exactly as before, and a right-click
@@ -2487,7 +2717,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return true;
         }
         int order = orderAt(mouseX, mouseY);
-        if (order >= 0 && button == 0 && clickOrderLine(order, mouseX))
+        if (order >= 0 && button == 0 && clickOrderRow(order, mouseX))
             return true;
         // The door button (M27): a click for the next door, a right-click for here. Taken here like the toggle's, so
         // a right-click, which a widget never gets, works as well.
@@ -2512,7 +2742,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     @Nullable
     private ItemKey stockKey(int cell) {
         List<StockLine<ItemKey>> visible = visibleEntries();
-        return cell >= 0 && cell < visible.size() ? visible.get(cell).key() : null;
+        int index = cell - itemCellOffset();
+        return cell >= 0 && index >= 0 && index < visible.size() ? visible.get(index).key() : null;
     }
 
     /**
@@ -2589,8 +2820,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return true;
         }
         if (isOverGrid(mouseX, mouseY) && scrollY != 0) {
-            scrollRow = model.clampScrollRow(scrollRow - (int) Math.signum(scrollY), TerminalMenuLayout.GRID_COLUMNS,
-                    layout.gridRows());
+            scrollRow = Math.max(0, Math.min(scrollRow - (int) Math.signum(scrollY), maxScrollRow()));
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
@@ -2662,7 +2892,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             AllGuiTextures.STOCK_KEEPER_REQUEST_SLOT.render(graphics, gridX + cellX(cell), gridY + cellY(cell));
 
         List<StockLine<ItemKey>> visible = visibleEntries();
-        if (visible.isEmpty()) {
+        List<TerminalFluids.Row> fluidCells = visibleFluids();
+        if (visible.isEmpty() && fluidCells.isEmpty()) {
             Component message = !stockReceived ? WareworksLang.translateDirect(WareworksLang.TERMINAL_LOADING)
                     : model.size() == 0 ? WareworksLang.translateDirect(WareworksLang.TERMINAL_EMPTY)
                             : WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_MATCH);
@@ -2670,12 +2901,23 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                     gridY + layout.gridHeight() / 2 - font.lineHeight / 2, COLOR_DIM, false);
         }
         int hovered = cellAt(mouseX, mouseY);
-        for (int cell = 0; cell < visible.size(); cell++) {
+        for (int cell = 0; cell < fluidCells.size(); cell++) {
+            int fluidX = gridX + cellX(cell) + ITEM_INSET;
+            int fluidY = gridY + cellY(cell) + ITEM_INSET;
+            if (cell == hovered)
+                graphics.fill(fluidX - ITEM_INSET, fluidY - ITEM_INSET, fluidX - ITEM_INSET + TerminalMenuLayout.SLOT,
+                        fluidY - ITEM_INSET + TerminalMenuLayout.SLOT,
+                        doorCueShown() ? COLOR_CELL_HOVER_DOOR : COLOR_CELL_HOVER);
+            renderFluidCell(graphics, fluidCells.get(cell), fluidX, fluidY);
+        }
+        int offset = itemCellOffset();
+        for (int index = 0; index < visible.size(); index++) {
+            int cell = offset + index;
             int itemX = gridX + cellX(cell) + ITEM_INSET;
             int itemY = gridY + cellY(cell) + ITEM_INSET;
             // An item the aisle can only make gets a tinted cell as well as its "+" (M11, ADR-024): at a normal GUI
             // scale a four-pixel glyph is not what a player notices, the cell's colour is.
-            if (visible.get(cell).isProducibleOnly())
+            if (visible.get(index).isProducibleOnly())
                 graphics.fill(itemX - ITEM_INSET, itemY - ITEM_INSET, itemX - ITEM_INSET + TerminalMenuLayout.SLOT,
                         itemY - ITEM_INSET + TerminalMenuLayout.SLOT, COLOR_PRODUCIBLE_CELL);
             // Gold while a click here delivers to a door (M27): the cue is on the very cell the player is about to click.
@@ -2683,7 +2925,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 graphics.fill(itemX - ITEM_INSET, itemY - ITEM_INSET, itemX - ITEM_INSET + TerminalMenuLayout.SLOT,
                         itemY - ITEM_INSET + TerminalMenuLayout.SLOT,
                         doorCueShown() ? COLOR_CELL_HOVER_DOOR : COLOR_CELL_HOVER);
-            renderEntry(graphics, visible.get(cell), itemX, itemY);
+            renderEntry(graphics, visible.get(index), itemX, itemY);
         }
         renderScrollbar(graphics);
     }
@@ -2750,14 +2992,14 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     private void renderScrollbar(GuiGraphics graphics) {
-        int maxScroll = model.maxScrollRow(TerminalMenuLayout.GRID_COLUMNS, layout.gridRows());
+        int maxScroll = maxScrollRow();
         if (maxScroll <= 0)
             return;
         int trackX = leftPos + TerminalMenuLayout.WIDTH - SCROLLBAR_INSET;
         int trackTop = topPos + layout.gridY();
         int trackHeight = layout.gridHeight();
         graphics.fill(trackX, trackTop, trackX + SCROLLBAR_WIDTH, trackTop + trackHeight, COLOR_SCROLLBAR_TRACK);
-        int rows = model.rowCount(TerminalMenuLayout.GRID_COLUMNS);
+        int rows = contentRows();
         int knobHeight = Math.max(TerminalMenuLayout.SLOT / 2, trackHeight * layout.gridRows() / rows);
         int knobTop = trackTop + (trackHeight - knobHeight) * scrollRow / maxScroll;
         graphics.fill(trackX, knobTop, trackX + SCROLLBAR_WIDTH, knobTop + knobHeight, COLOR_SCROLLBAR_KNOB);
@@ -2829,13 +3071,17 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.TERMINAL_PRODUCTION),
                 x + TerminalMenuLayout.MARGIN, y + layout.productionLabelY(), COLOR_DIM, false);
         List<PlanLine> shown = visibleOrderLines();
-        if (shown.isEmpty()) {
+        List<TerminalFluids.FillLine> fills = visibleFillLines();
+        if (shown.isEmpty() && fills.isEmpty()) {
             graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_NO_ORDERS),
                     x + TerminalMenuLayout.MARGIN, y + layout.orderLineY(0), COLOR_DIM, false);
             return;
         }
+        // The fill requests of this terminal first (M31): they are what a player who just asked for fluid waits for.
+        for (int line = 0; line < fills.size(); line++)
+            renderFillLine(graphics, x, y + layout.orderLineY(line), fills.get(line));
         for (int line = 0; line < shown.size(); line++)
-            renderOrderLine(graphics, x, y + layout.orderLineY(line), shown.get(line));
+            renderOrderLine(graphics, x, y + layout.orderLineY(fills.size() + line), shown.get(line));
     }
 
     /**
@@ -2921,12 +3167,83 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 : WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER, name, amount, state);
     }
 
-    /** The lines the window has room for, newest first: one per chain, one per ordinary order (M20). */
+    /**
+     * The production lines the window has room for, newest first: one per chain, one per ordinary order (M20). Since
+     * M31 they share the section's rows with this terminal's fill lines, which come first ({@link #visibleFillLines}).
+     */
     public List<PlanLine> visibleOrderLines() {
-        List<PlanLine> shown = new ArrayList<>(Math.max(0, layout.orderLines()));
-        for (int line = 0; line < layout.orderLines() && line < planLines.size(); line++)
+        int rows = Math.max(0, layout.orderLines() - visibleFillLines().size());
+        List<PlanLine> shown = new ArrayList<>(rows);
+        for (int line = 0; line < rows && line < planLines.size(); line++)
             shown.add(planLines.get(planLines.size() - 1 - line));
         return List.copyOf(shown);
+    }
+
+    /**
+     * This terminal's open fill requests the section has rows for (M31): {@code "Lava Bucket x3 — Filling from Lava"},
+     * each with the cancel mark that gives it up. They come before the production lines, and take at most all but one
+     * of the section's rows while a production line is there to show.
+     */
+    public List<TerminalFluids.FillLine> visibleFillLines() {
+        int rows = Math.max(0, layout.orderLines());
+        if (!planLines.isEmpty() && rows > 1)
+            rows -= 1;
+        List<TerminalFluids.FillLine> all = fluids.fills();
+        return List.copyOf(all.subList(0, Math.min(rows, all.size())));
+    }
+
+    /** One fill line: the filled container and how many are still to come, "Filling from Lava", and the cancel mark. */
+    private void renderFillLine(GuiGraphics graphics, int x, int top, TerminalFluids.FillLine line) {
+        int reserved = cancelColumnWidth();
+        Component item = WareworksLang.translateDirect(WareworksLang.GOGGLES_ITEM_COUNT,
+                line.filled().toStack().getHoverName(), LangNumberFormat.format(line.remaining()));
+        int floor = Math.min(font.width(item), MIN_ITEM_WIDTH);
+        Component state = fitTo(fillStateText(line), Math.max(0, ROW_WIDTH - reserved - floor - TEXT_GAP));
+        int stateX = Math.max(TerminalMenuLayout.MARGIN,
+                TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - reserved - font.width(state));
+        graphics.drawString(font, state, x + stateX, top, COLOR_PRODUCIBLE, false);
+        int room = stateX - TerminalMenuLayout.MARGIN - TEXT_GAP;
+        graphics.drawString(font, fitTo(item, Math.max(0, room)), x + TerminalMenuLayout.MARGIN, top, COLOR_TEXT,
+                false);
+        graphics.drawString(font, CANCEL_MARK, x + cancelMarkX(), top, COLOR_ERROR, false);
+    }
+
+    /** {@code "Filling from Lava"}: a fill line's state column. */
+    private static Component fillStateText(TerminalFluids.FillLine line) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_ORDER_FILLING, fluidName(line.fluid()));
+    }
+
+    /** A fill line's tooltip: the whole line, and how to give it up. */
+    private List<Component> fillTooltip(TerminalFluids.FillLine line) {
+        List<Component> tooltip = new ArrayList<>();
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.GOGGLES_ITEM_COUNT,
+                line.filled().toStack().getHoverName(), LangNumberFormat.format(line.remaining())));
+        tooltip.add(fillStateText(line).copy().withStyle(ChatFormatting.AQUA));
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_CANCEL_HINT).copy()
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        return tooltip;
+    }
+
+    /**
+     * Gives up on the fill line at {@code index} of {@link #visibleFillLines()} (dev harness and click handling): the
+     * request's id, sent like a production order's ({@link ProductionCancelPayload}); the server checks it is an open
+     * fill request of this terminal.
+     *
+     * @return whether a cancellation was sent
+     */
+    public boolean cancelVisibleFill(int index) {
+        List<TerminalFluids.FillLine> shown = visibleFillLines();
+        if (index < 0 || index >= shown.size())
+            return false;
+        PacketDistributor.sendToServer(new ProductionCancelPayload(menu.containerId, shown.get(index).id()));
+        playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
+        return true;
+    }
+
+    /** A click on the section's row {@code row}: a fill line cancels its request, a production line does its own. */
+    private boolean clickOrderRow(int row, double mouseX) {
+        int fills = visibleFillLines().size();
+        return row < fills ? cancelVisibleFill(row) : clickOrderLine(row - fills, mouseX);
     }
 
     /** Every line the server's orders were folded into, oldest first (dev harness and tests of the client side). */
@@ -3018,7 +3335,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (layout.orderLines() <= 0 || mouseX < leftPos + TerminalMenuLayout.MARGIN
                 || mouseX >= leftPos + TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN)
             return -1;
-        int shown = visibleOrderLines().size();
+        int shown = visibleFillLines().size() + visibleOrderLines().size();
         for (int line = 0; line < shown; line++) {
             int top = topPos + layout.orderLineY(line);
             if (mouseY >= top && mouseY < top + TerminalMenuLayout.LABEL_HEIGHT)
@@ -3296,14 +3613,149 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 return tooltip;
         }
         int cell = cellAt(mouseX, mouseY);
+        List<TerminalFluids.Row> fluidCells = visibleFluids();
+        if (cell >= 0 && cell < fluidCells.size())
+            return fluidTooltip(fluidCells.get(cell));
         List<StockLine<ItemKey>> visible = visibleEntries();
-        if (cell >= 0 && cell < visible.size())
-            return itemTooltip(visible.get(cell));
+        int index = cell - itemCellOffset();
+        if (cell >= 0 && index >= 0 && index < visible.size())
+            return itemTooltip(visible.get(index));
         int order = orderAt(mouseX, mouseY);
+        List<TerminalFluids.FillLine> fillLines = visibleFillLines();
+        if (order >= 0 && order < fillLines.size())
+            return fillTooltip(fillLines.get(order));
         List<PlanLine> shownLines = visibleOrderLines();
-        if (order >= 0 && order < shownLines.size())
-            return orderTooltip(shownLines.get(order));
+        if (order >= 0 && order - fillLines.size() < shownLines.size())
+            return orderTooltip(shownLines.get(order - fillLines.size()));
         return List.of();
+    }
+
+    // --- the fluid question (M31, issue #21, ADR-073) ---------------------------------------------------------------
+
+    /**
+     * The server sent the question a fluid click raised: nothing was requested, and the panel goes up. A question about
+     * the fluid the player has just said Fetch to means the warehouse moved in between — an empty bucket was taken, or
+     * another request promised the fluid — and the panel says so.
+     */
+    public void onFluidQuestion(TerminalFluidQuestionPayload payload) {
+        FluidQuestion<ItemKey, FluidKey> question = payload.question();
+        costChanged = fluidConfirmed != null && fluidConfirmed.fluid().equals(question.fluid());
+        fluidConfirmed = null;
+        fluidConfirming = question;
+        fluidConfirmingDoor = payload.door();
+        panel = null;
+        // Only one dialog at a time: the player has just clicked, so this question wins.
+        confirming = null;
+        confirmed = null;
+        listConfirming = null;
+        listConfirmed = null;
+        craftConfirming = null;
+        openPlan = null;
+        stepPanel = null;
+        playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 0.8F);
+    }
+
+    /** The fluid question the panel shows, or {@code null} (dev harness and tests of the client side). */
+    @Nullable
+    public FluidQuestion<ItemKey, FluidKey> fluidQuestion() {
+        return fluidConfirming;
+    }
+
+    /**
+     * Fetch: the same request again, now naming exactly the numbers of the question ({@link FluidAcknowledgement}),
+     * to the door the question was measured for. The server measures it once more and asks again if anything moved.
+     * A question that serves nothing has no Fetch, and Enter does nothing for it.
+     */
+    private void confirmFluidFetch() {
+        FluidQuestion<ItemKey, FluidKey> question = fluidConfirming;
+        if (question == null || !question.canFetch())
+            return;
+        Optional<BlockPos> door = fluidConfirmingDoor;
+        fluidConfirming = null;
+        fluidConfirmingDoor = Optional.empty();
+        costChanged = false;
+        panel = null;
+        fluidConfirmed = question;
+        sendFluid(question.fluid(), question.askedMb(), question.acknowledgement(), door);
+    }
+
+    /**
+     * The fluid question's lines, in the order a player reads them: what is fetched, the containers it fills, the crane
+     * trips (decision 1 made visible), why less than asked is served, whether the station holds what arrives, what
+     * comes out of a reserve, and the offer to make containers. Public for the visual harness and the width test's
+     * twin in the visual run.
+     */
+    public List<Component> fluidQuestionLines(FluidQuestion<ItemKey, FluidKey> question) {
+        List<Component> lines = new ArrayList<>(8 + question.portions().size());
+        Component fluid = fluidName(question.fluid());
+        long titled = question.canFetch() ? question.servedMb() : question.askedMb();
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_TITLE, bucketsText(titled),
+                fluid).copy().withStyle(ChatFormatting.GOLD));
+        if (costChanged)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
+                    .withStyle(ChatFormatting.GOLD));
+        fluidConfirmingDoor.ifPresent(door -> lines.add(WareworksLang.translateDirect(
+                WareworksLang.TERMINAL_DOOR_CONFIRM, doorNameWithRack(door)).copy().withStyle(ChatFormatting.GOLD)));
+        if (!question.portions().isEmpty() || question.make().isPresent()) {
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_USES).copy()
+                    .withStyle(ChatFormatting.WHITE));
+            for (ContainerPlan.Portion<ItemKey> portion : question.portions())
+                lines.add(portionLine(portion.count(), portion.container(), portion.capacityMb()));
+            question.make().ifPresent(offer -> lines.add(portionLine(offer.count(), offer.container(),
+                    offer.capacityMb())));
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_TRIPS,
+                    LangNumberFormat.format(question.trips()), LangNumberFormat.format(question.perTrip())).copy()
+                    .withStyle(ChatFormatting.WHITE));
+        }
+        if (question.shortfall() != ContainerPlan.Shortfall.NONE) {
+            if (question.canFetch())
+                lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_ONLY,
+                        bucketsText(question.servedMb())).copy().withStyle(ChatFormatting.GOLD));
+            Component why = shortfallLine(question);
+            if (why != null)
+                lines.add(why.copy().withStyle(ChatFormatting.GOLD));
+        }
+        if (question.canFetch() && question.overflowsStation())
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_STATION_ROOM,
+                    LangNumberFormat.format(question.stationSlots())).copy().withStyle(ChatFormatting.WHITE));
+        if (question.fluidFromReserve() > 0L)
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_FLUID_RESERVE,
+                    bucketsText(question.fluidFromReserve()), bucketsText(question.fluidReserved()), fluid).copy()
+                    .withStyle(ChatFormatting.WHITE));
+        for (FluidQuestion.ReservedEmpties<ItemKey> reserve : question.emptiesFromReserve())
+            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_CONTAINER_RESERVE,
+                    LangNumberFormat.format(reserve.fromReserve()), LangNumberFormat.format(reserve.reserved()),
+                    reserve.container().toStack().getHoverName()).copy().withStyle(ChatFormatting.WHITE));
+        question.make().ifPresent(offer -> lines.add(WareworksLang.translateDirect(question.portions().isEmpty()
+                ? WareworksLang.TERMINAL_FLUID_QUESTION_MAKE : WareworksLang.TERMINAL_FLUID_QUESTION_MAKE_MORE,
+                LangNumberFormat.format(offer.count()), offer.container().toStack().getHoverName()).copy()
+                .withStyle(ChatFormatting.AQUA)));
+        return lines;
+    }
+
+    /** {@code "10 × Bucket (1,000 mB each)"}. */
+    private static Component portionLine(int count, ItemKey container, int capacityMb) {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_QUESTION_PORTION,
+                LangNumberFormat.format(count), container.toStack().getHoverName(),
+                LangNumberFormat.format(capacityMb)).copy().withStyle(ChatFormatting.WHITE);
+    }
+
+    /** Why less than asked is served, or {@code null} when the reason needs no sentence of its own. */
+    @Nullable
+    private static Component shortfallLine(FluidQuestion<ItemKey, FluidKey> question) {
+        return switch (question.shortfall()) {
+            case NOT_ENOUGH_FLUID -> WareworksLang.translateDirect(
+                    WareworksLang.TERMINAL_FLUID_QUESTION_NOT_ENOUGH_FLUID, bucketsText(question.fluidAvailableMb()));
+            case NOT_ENOUGH_CONTAINERS -> WareworksLang.translateDirect(
+                    WareworksLang.TERMINAL_FLUID_QUESTION_NOT_ENOUGH_CONTAINERS,
+                    LangNumberFormat.format(question.containersInStock()));
+            case NO_CONTAINER_FITS -> WareworksLang.translateDirect(
+                    WareworksLang.TERMINAL_FLUID_QUESTION_NO_CONTAINER_FITS, fluidAmountText(question.unservedMb()),
+                    LangNumberFormat.format(question.smallestStep()));
+            case NO_CONTAINERS -> question.make().isPresent() ? null
+                    : WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_NO_EMPTIES);
+            case NONE -> null;
+        };
     }
 
     // --- the confirmation panel (M15 part 2, issue #3) -------------------------------------------------------------
@@ -3330,6 +3782,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         panel = null;
         // Only one dialog at a time: a question the server is asking wins over a chain a player was reading (M20) and
         // over the list dialog and the Fetch question, which are the player's own and can be raised again by a button.
+        fluidConfirming = null;
         listConfirming = null;
         listConfirmed = null;
         craftConfirming = null;
@@ -3365,7 +3818,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * every click and key belongs to the panel.
      */
     public boolean isAskingSomething() {
-        return confirming != null || listConfirming != null || craftConfirming != null;
+        return confirming != null || listConfirming != null || craftConfirming != null || fluidConfirming != null;
     }
 
     /**
@@ -3374,6 +3827,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * a command.
      */
     public void confirmRequest() {
+        if (fluidConfirming != null) {
+            confirmFluidFetch(); // the fluid question: the same request, naming exactly the numbers it was asked (M31)
+            return;
+        }
         if (listConfirming != null) {
             confirmListFetch(); // the list dialog: the same consent, measured again over the whole list (M23)
             return;
@@ -3435,8 +3892,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * Resume and the same question can be had again.
      */
     public void cancelConfirmation() {
-        if (confirming == null && listConfirming == null && craftConfirming == null)
+        if (confirming == null && listConfirming == null && craftConfirming == null && fluidConfirming == null)
             return;
+        // A fluid question requested nothing, so a no to it needs no word to the server (M31).
+        fluidConfirming = null;
+        fluidConfirmingDoor = Optional.empty();
+        fluidConfirmed = null;
         // Both list orders stand in ASKING until they are told no; a click's question needs no word to the server.
         RequestScope declining = confirming != null && confirmScope.asksAboutProduction() ? confirmScope : null;
         confirming = null;
@@ -3570,15 +4031,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     @Nullable
     private ConfirmPanel panel() {
-        if (confirming == null && listConfirming == null && craftConfirming == null)
+        if (confirming == null && listConfirming == null && craftConfirming == null && fluidConfirming == null)
             return null;
         if (panel != null)
             return panel;
-        if (confirming == null && listConfirming != null) {
+        if (confirming == null && fluidConfirming == null && listConfirming != null) {
             panel = listPanel(listConfirming);
             return panel;
         }
         List<Component> lines = confirming != null ? confirmationLines(confirming)
+                : fluidConfirming != null ? fluidQuestionLines(fluidConfirming)
                 : craftFetchConfirmationLines(craftConfirming);
         List<FormattedCharSequence> rows = new ArrayList<>();
         int text = 0;
@@ -3588,15 +4050,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         }
         int confirmWidth = confirmButtonWidth(true);
         int cancelWidth = confirmButtonWidth(false);
-        int buttons = confirmWidth + cancelWidth + CONFIRM_BUTTON_GAP;
+        int buttons = confirmWidth + cancelWidth + (confirmWidth > 0 ? CONFIRM_BUTTON_GAP : 0);
         int width = Math.max(text, buttons) + 2 * CONFIRM_PADDING;
         int height = confirmHeight(rows);
         int x = leftPos + (TerminalMenuLayout.WIDTH - width) / 2;
         int y = topPos + Math.max(TerminalMenuLayout.MARGIN, (layout.height() - height) / 2);
         int buttonStart = x + (width - buttons) / 2;
         panel = new ConfirmPanel(List.copyOf(rows), x, y, width, height, buttonStart,
-                buttonStart + confirmWidth + CONFIRM_BUTTON_GAP, y + height - CONFIRM_PADDING - CONFIRM_BUTTON_HEIGHT,
-                confirmWidth, cancelWidth);
+                buttonStart + confirmWidth + (confirmWidth > 0 ? CONFIRM_BUTTON_GAP : 0),
+                y + height - CONFIRM_PADDING - CONFIRM_BUTTON_HEIGHT, confirmWidth, cancelWidth);
         return panel;
     }
 
@@ -3659,11 +4121,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     private void renderConfirmButton(GuiGraphics graphics, ConfirmPanel shown, int mouseX, int mouseY,
             boolean confirm) {
-        Component label = WareworksLang.translateDirect(
-                confirm ? WareworksLang.TERMINAL_CONFIRM_YES : WareworksLang.TERMINAL_CONFIRM_NO);
+        Component label = confirmButtonLabel(confirm);
         int x = shown.buttonX(confirm);
         int y = shown.buttonY();
         int width = shown.buttonWidth(confirm);
+        if (width <= 0)
+            return; // a fluid question that serves nothing has no Fetch (M31)
         boolean hovered = isOverConfirmButton(mouseX, mouseY, confirm);
         graphics.fill(x, y, x + width, y + CONFIRM_BUTTON_HEIGHT,
                 hovered ? COLOR_CONFIRM_BUTTON_HOVER : COLOR_CONFIRM_BUTTON);
@@ -3677,9 +4140,22 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     private int confirmButtonWidth(boolean confirm) {
-        Component label = WareworksLang.translateDirect(
+        if (confirm && fluidConfirming != null && confirming == null && !fluidConfirming.canFetch())
+            return 0;
+        return font.width(confirmButtonLabel(confirm)) + 2 * CONFIRM_BUTTON_PADDING;
+    }
+
+    /**
+     * The label of one of the panel's two buttons: Confirm and Cancel, and for the fluid question (M31) Fetch — or Make
+     * and fetch, when containers would be made first — and Cancel.
+     */
+    private Component confirmButtonLabel(boolean confirm) {
+        if (fluidConfirming != null && confirming == null)
+            return WareworksLang.translateDirect(!confirm ? WareworksLang.TERMINAL_FLUID_QUESTION_CANCEL
+                    : fluidConfirming.make().isPresent() ? WareworksLang.TERMINAL_FLUID_QUESTION_MAKE_AND_FETCH
+                    : WareworksLang.TERMINAL_FLUID_QUESTION_FETCH);
+        return WareworksLang.translateDirect(
                 confirm ? WareworksLang.TERMINAL_CONFIRM_YES : WareworksLang.TERMINAL_CONFIRM_NO);
-        return font.width(label) + 2 * CONFIRM_BUTTON_PADDING;
     }
 
     /**
@@ -3694,6 +4170,22 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return shown == null ? -1 : shown.buttonX(confirm) + shown.buttonWidth(confirm) / 2;
     }
 
+    /**
+     * The outer bounds of the question panel that is up, in GUI pixels, or {@code null} while nothing is being asked:
+     * what the visual harness measures against the 320 × 240 floor.
+     */
+    @Nullable
+    public ScreenRectangle confirmPanelBounds() {
+        ConfirmPanel shown = panel();
+        return shown == null ? null : new ScreenRectangle(shown.x(), shown.y(), shown.width(), shown.height());
+    }
+
+    /** The bottom edge of both buttons; -1 while nothing is being asked ({@link #confirmButtonCenterX}). */
+    public int confirmButtonBottom() {
+        ConfirmPanel shown = panel();
+        return shown == null ? -1 : shown.buttonY() + CONFIRM_BUTTON_HEIGHT;
+    }
+
     /** The vertical centre of both buttons; -1 while nothing is being asked ({@link #confirmButtonCenterX}). */
     public int confirmButtonCenterY() {
         ConfirmPanel shown = panel();
@@ -3703,7 +4195,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** Whether the mouse is over one of the two buttons; false while nothing is being asked. */
     public boolean isOverConfirmButton(double mouseX, double mouseY, boolean confirm) {
         ConfirmPanel shown = panel();
-        if (shown == null)
+        if (shown == null || shown.buttonWidth(confirm) <= 0)
             return false;
         int x = shown.buttonX(confirm);
         int y = shown.buttonY();
@@ -4119,7 +4611,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     // --- helpers ---------------------------------------------------------------------------------------------------
 
     private void clampScroll() {
-        scrollRow = model.clampScrollRow(scrollRow, TerminalMenuLayout.GRID_COLUMNS, layout.gridRows());
+        scrollRow = Math.max(0, Math.min(scrollRow, maxScrollRow()));
     }
 
     private boolean isOverGrid(double mouseX, double mouseY) {

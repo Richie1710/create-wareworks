@@ -49,7 +49,8 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting,
  *       warehouse/port_collecting, warehouse/packages_at_the_door, warehouse/ordering_to_a_door</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting,
- *       warehouse/production_chain, warehouse/fluid_bay, warehouse/ordering_to_a_door</td></tr>
+ *       warehouse/production_chain, warehouse/fluid_bay, warehouse/ordering_to_a_door,
+ *       warehouse/fluid_request</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
  *       warehouse/production_chain, warehouse/crafter_feeder</td></tr>
  *   <tr><td>warehouse_crafter_feeder</td><td>warehouse/crafter_feeder</td></tr>
@@ -57,7 +58,7 @@ import net.minecraft.resources.ResourceLocation;
  *       warehouse/port_accepting</td></tr>
  *   <tr><td>rack_bay_wood, rack_bay_andesite, rack_bay_brass</td><td>warehouse/rack_bay, warehouse/rack_wall,
  *       warehouse/bays_in_an_aisle</td></tr>
- *   <tr><td>fluid_bay_copper, fluid_bay_brass</td><td>warehouse/fluid_bay</td></tr>
+ *   <tr><td>fluid_bay_copper, fluid_bay_brass</td><td>warehouse/fluid_bay, warehouse/fluid_request</td></tr>
  *   <tr><td>hand_truck</td><td>hand_truck/carrying</td></tr>
  * </table>
  */
@@ -183,7 +184,8 @@ public final class WareworksPonderScenes {
         // The fluid bay (M30, issue #21, ADR-051..ADR-055). One scene for both tiers, because the tier is the block and
         // what a player cannot guess is the same for copper and brass: what becomes of the container. Also a scene of
         // the <b>warehouse terminal</b> — a player holding a stocked warehouse looks for lava in the stock list and
-        // finds buckets, and the closing beats are where the fluid really goes in and out until M31 adds the request.
+        // finds buckets, and the closing beats are where the fluid really goes in and out. Asking for the fluid back
+        // (M31) is a scene of its own, warehouse/fluid_request, registered last below.
         scenes.forComponents(WareworksBlocks.FLUID_BAY_COPPER, WareworksBlocks.FLUID_BAY_BRASS,
                         WareworksBlocks.WAREHOUSE_TERMINAL)
                 .addStoryBoard("warehouse/fluid_bay", FluidBayScenes::fluidsTravelInContainers,
@@ -205,6 +207,15 @@ public final class WareworksPonderScenes {
         scenes.forComponents(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, WareworksBlocks.WAREHOUSE_PRODUCTION)
                 .addStoryBoard("warehouse/crafter_feeder", CrafterFeederScenes::feeder,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
+
+        // Asking the warehouse for fluid (M31, issue #21, ADR-073), and last for the same reason as every scene above:
+        // a player meets "fluids travel in containers" and "requesting at a terminal" first, and "and the terminal can
+        // ask for the fluid itself" after both. It belongs to both fluid bays, where the fill happens, and to the
+        // terminal, where the fluid row is clicked; registered last, so no scene of either block moves (ADR-016).
+        scenes.forComponents(WareworksBlocks.FLUID_BAY_COPPER, WareworksBlocks.FLUID_BAY_BRASS,
+                        WareworksBlocks.WAREHOUSE_TERMINAL)
+                .addStoryBoard("warehouse/fluid_request", FluidBayScenes::askingForFluid,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.FLUIDS);
 
         // The hand truck (issue #37, ADR-070): an item rather than a warehouse block, so it carries no Wareworks tag; its
         // one scene is load, walk slowly, set down.

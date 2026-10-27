@@ -5209,10 +5209,27 @@ of this any more") and unset means "no cap at all"; for the minimum and the rese
 only read differently.
 
 **Nothing ever throws on a number.** `StockRule`'s canonical constructor clamps whatever it is given into
-`-1 … 1 000 000` and resolves the two contradictions a player can express: a minimum above the maximum raises the
+`-1 … 1 000 000 000` (1 000 000 before M31; the cap rose so a rule can count the fluid of a large warehouse in
+millibuckets, and it applies to item rows as well) and resolves the two contradictions a player can express: a minimum above the maximum raises the
 maximum, a reserve above the maximum lowers the reserve. `StockRule.checked` reports which correction it had to make
 (`StockRuleAdjustment`), which is the line the screen shows. Crafted save data, a schematic and a hostile payload can
 therefore only ever produce a sane rule.
+
+**Fluid rules (M31, issue #21, ADR-073).** A row whose ghost is a **filled container** has a small unit switch at
+the end of its name: "B" while it counts the **fluid** in the fluid bays, "x" while it counts the containers as items.
+A row a player fills with a filled container starts counting fluid. The unit is saved per row as an optional
+`Unit:"fluid"`, so a lava-bucket row from an older world stays an item rule. A fluid row shows its numbers in buckets,
+steps them by a bucket (Shift: 16), and names the exact millibuckets in its tooltip. Switching the unit converts the
+numbers by the container's capacity, rounding down (10 buckets ↔ 10 000 mB). For fluid the three numbers mean:
+* **maximum:** caps what the **crane** stores into the bays. A bay at the cap takes no more, and the filled container is
+  shelved as an item. Pipes are not held to it, because they are the player's own plumbing.
+* **reserve:** holds fluid back from redstone ports (`StockAccess.AUTOMATION`), and a player's fluid question names it.
+* **minimum:** counts toward the keeper's lamp, comparator and "below minimum" lines, and is **never** acted on: no
+  pattern makes fluid ("Only shown: nothing makes fluid").
+
+The controller keeps a fluid row in its saved copy at the row's own place, as an empty item rule that governs and
+shadows nothing, so every keeper's row positions (screen, lamp, goggles, resume) stay as they were. The fluid
+evaluation is put in that place separately.
 
 #### 3.6.1 Who the reserve protects (the decision the feature rests on)
 
@@ -6828,8 +6845,12 @@ character, which is far more than the twelve bytes an int and a long really send
 bays **and on the warehouse terminal**. One scene rather than the rack bay's three, and the reason is the loop rather
 than the block: what a player cannot guess is not what a tank is but what happens to the **container**, and nothing
 else in the game says that a filled bucket goes in, the fluid stays, and the **empty bucket comes back as stock**. The
-terminal carries it because that is where a player holding a stocked warehouse looks for a fluid row, finds buckets,
-and needs the answer; the closing beats say where fluid really goes in and out until M31 adds the request.
+terminal carries it because that is where a player holding a stocked warehouse looks for the lava, finds buckets,
+and needs the answer; the closing beats say where fluid really goes in and out. **Since M31 a second scene, "Asking
+the Warehouse for Fluid"** (`warehouse/fluid_request`, same class, same three blocks, registered last so no scene of
+theirs moves), shows the other direction: the fluid row and its question, an empty bucket carried from a rack bay to
+the fluid bay, filled there and carried straight on to the terminal, then the red row with no empty container in stock
+and, as the bulk answer, the pipe at the bay's back (§3.9.6).
 
 Its twelve beats are the whole of §3.9 in order: what the block is; a bucket in the hand, both ways, with one bucket
 showing as a film in a 64-bucket tank; the pipe that does the bulk work, reaching every face but the one towards the
@@ -6856,12 +6877,164 @@ two copper casings for the brass one — the casing is copper in both, because i
 vessel is copper in both models. They stand in the creative tab immediately after the three rack bays, weakest first,
 which is declaration order in `WareworksBlocks` and is asserted as an explicit list.
 
-**What is still missing, and it is a milestone of its own.** You cannot **ask** for a fluid at a terminal or a port:
-fluid leaves a warehouse through a pipe at the back of a bay, or through your own bucket. M31 is the other direction —
-the fill stage that takes empty containers out of stock, fills them at the bay and delivers them; the new refusal when
-no empty container is in stock; the container plan the terminal states **before** it starts; and the terminal's own
-fluid rows. The empty-container economy itself needs nothing built: an empty bucket is an ordinary `ItemKey`, so a
-stock keeper's minimum, maximum and reserve already cover it.
+**What was missing after M30 is M31** (§3.9.6). After M30 a player could not **ask** for a fluid at a terminal or a
+port: fluid left a warehouse through a pipe at the back of a bay, or through the player's own bucket. M31 builds the
+other direction: the fill trip that takes empty containers out of stock, fills them at the bay and delivers them; the
+refusal when no empty container is in stock; the container plan the terminal states **before** it starts; the
+terminal's fluid rows; ports with a filled container in their filter; and stock rules counted in millibuckets. The
+empty-container economy itself needed nothing built: an empty bucket is an ordinary `ItemKey`, so a stock keeper's
+minimum, maximum and reserve already cover it. What M31 leaves out is listed at the end of §3.9.6.
+
+#### 3.9.6 Asking for fluid (M31)
+
+> Decision and reasons: **ADR-073**. Owner's decisions (2026-10-27), binding: one filled bucket per crane trip is fine
+> and the confirmation names the trips; a bay dedicated to a fluid keeps outranking every shelf; with no empty
+> containers in stock the fluid row is red, points to the pipe, and offers to make them when a pattern can.
+
+Fluid still leaves a warehouse in exactly two ways: inside a container the crane carries, or through a pipe at a bay's
+back. M31 makes the first one something a player can ask for. The terminal lists each fluid, a click names an amount
+in buckets, and the warehouse takes **empty containers out of stock**, has a fluid bay **fill** them and carries them
+on to the station that asked.
+
+##### The fill trip: one job, never put down on the way
+
+A fill trip is one crane job of the new type `FILL`:
+
+```text
+IDLE → TRAVEL_TO_SOURCE → EXTEND_SOURCE → PICK (empties at a rack) → RETRACT_SOURCE → TRAVEL_TO_TARGET (bay)
+     → EXTEND_TARGET → DROP: fill ── job retargeted to the station, request kept ──▶ RETRACT_TARGET
+     → TRAVEL_TO_TARGET (station) → EXTEND_TARGET → DROP (delivery) → RETRACT_TARGET → COMPLETE
+```
+
+The filled container is **never set down in stock** on its way. A bay dedicated to its fluid outranks every shelf for
+a filled container (§3.9.3, unchanged), so a filled bucket stored on the way would only be drained again. In the same
+transition as the fill, the job is retargeted to the request's station (`TransportJob#filledFor`) and keeps its
+request. One rule in the state machine sends it on from `RETRACT_TARGET`. There is no new crane phase and no new field
+on the saved job.
+
+**The fill is the head's fourth operation** (pick, drop, the drain exchange of §3.9.2, and now the fill), and it mirrors
+the drain:
+* the bay drains its tank **all or nothing**, through the ungated API, so `fluidBayPipeExtraction` never changes what
+  the crane can do;
+* a container that fills to one key but drains back to another is refused (`FluidContainers.fillsBack`), because it
+  would create or destroy fluid between the two directions;
+* the result must be exactly the key the request asked for, so a bay emptied by pipes and refilled with water never
+  hands the terminal water for lava;
+* the head takes the empties only if it has room for the **filled** result. 16 empty buckets fit one grabber stack and
+  16 lava buckets do not, which is why a trip carries **one filled bucket**.
+
+A bay's own insert estimate stays drain-only, so empties are never planned *into* a bay.
+
+##### Requests: one queue, two kinds
+
+A fill request is an ordinary request of the **filled container** (`minecraft:lava_bucket`), counting containers and
+marked `FILL` (`core.job.RequestKind`). It lives in the one request queue beside every other request (§7.2). It is
+served **only** by fill trips, and a stock request only from item stock: a lava bucket on a shelf is an item, the lava
+in a bay is the fluid row, and the two never stand in for each other. Merging keys on key, destination and kind, so a
+fill request never grows a stock request for the same key at the same station, or the other way round.
+
+While a request is open the warehouse has promised three things, and every number a player sees goes through the same
+availability formula:
+* **the fluid** in the bays (`FillLedger`: fluid owed by the open fill requests, and fluid already promised at each
+  bay to a trip on its way there);
+* **the empty containers** in the racks (`STOCK` reservations before the pick; afterwards a `FILLING` reservation that
+  counts toward the request and toward no item total, so an item click on "Bucket" or "Lava Bucket" is never more or
+  less available because of a trip in flight);
+* **the station's room**: a full station gets no trip planned (`OUTPUT_FULL`), and the next bucket is filled once a
+  slot frees up.
+
+With the fluid in a bay and no empty container in stock, the planner answers the new reason **"no empty containers in
+stock"** (`NO_EMPTY_CONTAINERS`). It arms no back-off, because one fill request lacking a bucket must not stop storing
+from the inputs, least of all the bucket that would cure it.
+
+##### At the terminal
+
+* **Fluid cells come first.** Each fluid the bays hold is one cell in a block of its own above the items, never
+  interleaved with them. The cell shows the fluid's still texture, tinted, and the amount in buckets. The search
+  finds a fluid by name. The tooltip names the stored and the available amount in millibuckets and buckets, and the
+  container a click will fill.
+* **The amount is in buckets.** A plain click asks for the amount field in buckets, Shift for 16, and Ctrl for
+  everything the warehouse can serve, which may be any number of millibuckets. A click is capped by
+  `storage.maxTerminalFluidRequestBuckets` (default 64, one copper bay, §9).
+* **Every fluid click asks first, with no skip.** The dialog is where the container economy is explained, in the style
+  of the clipboard order's partial-order question (§3.4.4). It names:
+  * the containers it will use, largest first;
+  * the number of **crane trips** and how many go at a time;
+  * any partial service, always naming the amount that **will** be served;
+  * the station's room when the order is larger than the terminal's buffer (the crane waits while it is full, which
+    would otherwise read as a hang);
+  * any reserve it takes from (§3.6).
+
+  The click's consent must equal the server's numbers exactly. If the warehouse changed in between, the question is
+  asked again.
+* **Largest whole amount, and the dialog says so.** `core.terminal.ContainerPlan` is greedy, largest container first,
+  and never over-serves. With buckets it is exact. With several container sizes it can serve less than the best
+  choice would: from one 1 000 mB and two 750 mB containers it serves 1 000 of 1 500 mB, not 1 500. That gap is
+  pinned in a test on purpose. Each shortfall has its own line: not enough fluid, not enough empty containers, or no
+  container small enough (for example 750 mB with buckets only).
+* **No empty containers: the row is red.** It says "No empty containers in stock" and gives the hint "A pipe at the
+  back of a fluid bay draws it off without containers". If a production pattern of the aisle makes such a container,
+  the row says "Click to have them made first (Bucket)", and the question offers to make them (the chain offer of
+  §3.4.5, measured side-effect free by `previewProduction`). On "Make and fetch" the queue is checked first: if the
+  terminal or the queue cannot take a request for every portion, the click is refused and nothing is started.
+  Otherwise the made portion's fill request is added last, and only once it is accepted is the chain started, with
+  **no backing request** and for no more containers than the request was granted; the made containers land in stock, and the fill requests wait with "no empty containers in stock" until
+  they arrive. If the chain fails, the fill requests wait until the player cancels them.
+* **Open fill requests are listed** in the terminal's order panel ("Filling from Lava"), each with a cancel mark.
+
+##### Redstone ports and the display source
+
+A requesting port whose filter **carries** fluid (a lava bucket; an empty bucket keeps meaning the item) behaves exactly
+as before while the shelves hold that container for it. Otherwise it asks the warehouse to fill containers from the
+bays, held to a fluid rule's reserve like any automation. The amount on its filter counts containers. The port's
+goggles add "(filled from the fluid bays)" to its request line, and a gold line when the last refusal was the missing
+empty container. Empty containers that are on the shelves but all held back by an item rule's reserve are answered
+`RESERVED`, as for an item port, not "no empty containers in stock". "Stock of the Filtered Item" on such a port shows the **fluid** in the bays, in buckets. On a
+warehouse interface it still counts the containers as items.
+
+##### Fluid stock rules
+
+A stock keeper row whose ghost is a filled container can count **fluid** instead of containers (§3.6, "Fluid rules").
+Its maximum caps what the crane stores into the bays, its reserve holds fluid back from redstone ports, and its
+minimum is shown and never acted on, because no pattern makes fluid.
+
+##### Interruptions
+
+Every case ends with items and fluid accounted for (§8):
+
+| When | What happens |
+|---|---|
+| Cancelled before the pick | the job aborts, the empties' reservation is released, nothing moved |
+| Cancelled after the pick, before the fill | the empties are rerouted to a shelf (never to a bay) |
+| Cancelled after the fill | the filled containers are rerouted like a retrieve's leftovers: a dedicated bay drains them, the empties go to a shelf |
+| Bay emptied by pipes, refilled with another fluid, or refusing the container | the fill is refused, nothing moves, the empties go back to a shelf, and the request stays open and is planned again |
+| Station full on arrival | a terminal is waited at, as for a retrieve; a full warehouse port cancels the trip and a bay drains the filled container |
+| Bay or station broken mid trip | the carry is rerouted (§8) |
+| Save and rejoin, chunk unload | the job resumes in its phase; the reservations and the fill ledger are rebuilt from the job |
+
+##### What is not built
+
+Typed millibucket entry at the terminal; fluids on clipboard lists, in the crafting panel and through JEI's "+";
+exact subset-sum container choice; a fluid minimum that triggers production; bottles; and the reason "no matching
+fluid".
+
+##### Classes and tests
+
+* `core.job`: `RequestKind`, `JobType.FILL`, `Reservation.Kind.FILLING`, `JobPlanner#planFill`,
+  `NoJobReason.NO_EMPTY_CONTAINERS`.
+* `core.terminal`: `ContainerPlan`, `BucketFormat`, `FillTrips`, `FluidQuestion`, `FluidAcknowledgement`,
+  `FluidRowState`.
+* `core.stock.RuleUnit`.
+* `content.controller`: `FillLedger`, `FillRecipes`, `KeyMemo` (the empty-container test, remembered per item type and
+  sized to the item index, so a terminal push without new item types probes nothing).
+* `content.station`: `TerminalFluids`, `TerminalFluidOutcome`, `KeeperRule`.
+* `network`: `TerminalFluidRequestPayload` and `TerminalFluidQuestionPayload` (network version 18).
+* JUnit: `ContainerPlanTest`, `BucketFormatTest`, `FluidQuestionTest`, `FluidQuestionTextWidthTest`,
+  `JobPlannerFillTest`, `FillLedgerTest`, `KeyMemoTest`, `RuleUnitTest`, and `RequestQueueTest`'s `roomFor`.
+* GameTests: `FluidRequestGameTests`, `TerminalFluidRequestGameTests`, `FluidRuleGameTests`, and the pre-M31 migration
+  case in `MigrationGameTests`, each with a joint item-and-fluid census.
+* Visual scenario `fluidrequest`: real clicks in English and German.
+* Two `runRobustnessTest` phases (§8.1).
 
 ## 4. Discovery and membership (no permanent world searches)
 
@@ -7032,6 +7205,9 @@ JobType      STORE (input station → storage location) | RETRIEVE (storage loca
              | SUPPLY (storage location → production station, M11: one ingredient of a production order, §3.5)
              | COLLECT (collecting warehouse port → storage location, M18: items fetched out of the inventory
                         behind the port, §3.2.4; never a port as its target)
+             | FILL (storage location holding empty containers → fluid bay, which fills them → the station that
+                     asked, M31: one fill trip, request kept across the fill, §3.9.6; its leftovers go back like a
+                     retrieve's, never to a port)
 ```
 
 ### 7.1 Dispatch (controller, every `dispatchIntervalTicks`, default 5)
@@ -7064,6 +7240,15 @@ Dispatch runs only when a crane exists, is idle, has no held items and has speed
 * Requests are persisted, served by successive RETRIEVE jobs, and removed when `remaining == 0`. Delivered amounts count only after a successful drop into the output buffer.
 * Max open requests per controller: `maxOpenRequests` (default 16).
 * **Since M17 a rising edge is not the only trigger** (§3.2.3): a port whose redstone behaviour is "while powered" or "unless powered" submits whenever its gate is open **and it waits for nothing at all**, so at most one open request per such port ever exists and a machine behind it stays supplied without a clock. The re-submission is a pass of the controller (`tickPorts`, every `dispatchIntervalTicks`), because only it can notice the moment the previous request closed; a refusal backs that port off for `retryTicks`. Switching the signal off never recalls what is already promised. Such a port never merges — it only submits while it waits for nothing — so everything this section says about merging is about pulses, exactly as before.
+
+**Two kinds of request, one queue (M31, §3.9.6, ADR-073).** A request is a `STOCK` request (items out of the
+racks; every request before M31, and a save without `Kind`) or a `FILL` request (filled containers the warehouse makes
+from a bay's fluid and an empty container out of the racks, saved with `Kind:"FILL"`). Both live in this one queue and
+are served oldest first. A `FILL` request is served only by `FILL` jobs (`JobPlanner#planFill`) and a `STOCK` request
+only from item stock. Merging (below) keys on key, destination **and kind**, so the two never grow each other.
+`remainingRequestedByKey` also counts the empty containers that open fill requests still owe, so every caller of the
+availability formula (terminal snapshot, stock rules, the queue's clamp) keeps empties that are promised to a fill out
+of anybody else's reach. A fill request's own filled key is not counted there, because it promises no shelf stock.
 
 **Implementation (M2, stations):**
 * `core.job.RequestQueue<K, D>` (pure Java, JUnit `RequestQueueTest`): FIFO of immutable `RetrievalRequest {UUID id, K key, int requested, int remaining, D destination}`.
@@ -7350,6 +7535,8 @@ the item census's "no block entity, skip" shortcut loses both cauldrons. GameTes
 | Source empty / less than planned at pick time | Pick what is there (real extract). If 0, abort the job after retracting. |
 | Target full / partially full at drop time | Insert what fits. The remainder stays in the grabber, then **reroute**. |
 | Target is a **fluid bay** that cannot take the whole carry (M30) | The exchange is refused, **nothing** moves, and the carry is rerouted with the bay excluded. A reroute never offers such a location part of a carry in the first place (`PlannerInput.allOrNothing`, §3.9.3): it takes a carry whole or not at all, so offering it one of two containers would send the crane to a bay that takes none — and two part-full bays of one fluid, which outrank every shelf, would pass the carry back and forth for ever. |
+| A **fill** at a fluid bay that cannot fill the whole carry with the expected fluid (M31) | Bay emptied by pipes, refilled with another fluid, or a container it refuses: the fill is refused, **nothing** moves, and the empties are rerouted to a shelf (never to a bay, whose insert estimate is drain-only). The fill request stays open and is planned again. A fill that succeeds changes identity once, in one synchronous call: the head gives up *n* empties and takes *n* filled containers, and the bay gives up *n* × their capacity. `ItemCensus#fill` and `SceneItemCensus#filled` declare it and check it against `FluidContainers#fillsBack` (§3.9.6). |
+| A **fill trip** cancelled, or its station gone (M31) | Before the pick it aborts. After the pick the carry is rerouted like a retrieve's leftovers: empties to a shelf, filled containers to a dedicated bay, which drains them. A full warehouse port cancels the trip in the same way, and a full terminal is waited at. |
 | Target interface or inventory removed | Reroute. |
 | Output station full | Wait at the output (`WAITING_FOR_TARGET`, retry every `retryTicks`, default 20). A job that serves no request at that output (its request was lost, or it was rerouted there) reroutes instead (M3 review: otherwise it could wait for ever). **M17:** a `STORE` job never waits, however delivery-like its target is — waiting is right when somebody is waiting for the items, and a store into an accepting port would park the crane in front of a full overflow and block the whole aisle, so it drops, delivers 0 and reroutes (§3.2.3). Every `RETRIEVE` and `SUPPLY` is unchanged. **M27 (ADR-065):** a `RETRIEVE` into a **warehouse port** does not wait: the crane carries what fits, because the trip is planned for no more than the port takes and only when the whole trip, or one full stack of a larger one, fits, and nothing but this crane fills a port (§3.2.3, "How much the crane brings to a port"). A port with too little room reports `OUTPUT_FULL` at every dispatch, without a back-off, while the crane serves other work. A trip that finds the port taking nothing all the same (planned before a restart that lowered `outputBufferSlots`, or a crane saved waiting before M27) takes its leftovers back into storage at its next retry. A **warehouse terminal** and a **production station** still wait as described here. |
 | Reroute for STORE leftovers | Another storage location **whose filter accepts the items**, else any input station buffer, else `HOLDING`. Storing leftovers is still storing, so a dedicated location never receives what it rejects. `HOLDING` is the documented, recoverable outcome when nothing accepts them (the crane's goggles read "Holding items, no target found" and list the items, and every hold retry re-tries every location with no exclusion); M8 adds one more way to reach it, and that is deliberate — ignoring filters as a last resort would break the binding rule that a dedicated location never gets what its filter rejects. **M16:** this is a storing path, so it goes through the same `selectStorage` and honours the storage priority as well. **M17:** after the input buffers comes one more stage, an **accepting warehouse port** — last, whatever its rank, because putting items back into an input is reversible and exporting them is not, and it converges anyway (the next store plan offers them to the port again). It is a stage of its own with a live-simulation budget of its own, and a port's filter is a hard rule there too (§3.2.3). |
@@ -7421,6 +7608,14 @@ The table above is covered by automated tests. What only a running game can reac
   * **Config tests get one batch each.** The tests of a batch run at the same time, so a test that changes a global config value would change it for its neighbours; batches run one after another. `gametest.ConfigOverrides` applies an override with `ModConfigSpec.ConfigValue#set` plus `clearCache()` (needed because `set` does not update the cache of `worldRestart` values) and an `@AfterBatch` method per batch restores every override, also after a failure.
 * **Dev harness scenario** (`dev.wareworks.dev.RobustnessVisualScenario`, `./gradlew runRobustnessTest`, ADR-014): one aisle built 512 blocks from the world spawn (the spawn keeps about 11 chunks permanently loaded, so an aisle at spawn could never unload), with a creative motor, 6 rails, an input, a warehouse terminal (issue #24), a package door (M27: a requesting port with a Create Packager at its back and a sign) and ten storage locations — **eight chests behind interfaces, one rack bay** (M28) and one **fluid bay** (M30), both filled before the warehouse is ready, so every phase carries both kinds of bay through it as well as a foreign inventory. After the first job starts it runs its phases, and after **every** phase it counts every item of the scene (`dev.SceneItemCensus`: inventories, station buffers, handling head, dropped item entities, Create packages and pallets) **and every millibucket of it** (`dev.SceneFluidCensus`: tanks, and the fluid inside container items) and logs one `robustness PASS` or `robustness FAIL` line. The two are asserted **jointly**, because they do not conserve separately: a container exchange moves fluid out of an item and into a tank, so only one assertion carrying both can tell a real transfer from a lost bucket. A census runs only once **every chunk the census box touches** is loaded and refuses to count otherwise (**M5 review fix**: the box is inflated around the aisle and spans four chunks, so skipping unloaded positions could have reported a chunk-loading race as a lost item):
   1. *a container exchange* (**M30**, and it runs first on purpose): a **lava bucket** is dropped into the input and nothing else is said — the store gate sends a container of a bay's fluid to that bay, so the plan is the real one — and the phase waits until the bay has really drained it. The item expectation then changes by exactly **one swap**, declared through `SceneItemCensus.exchanged`, which verifies the swap against the game's own emptying routine so a scenario cannot declare one the game would not make; the **fluid** expectation does not change at all, because 1 000 mB inside a bucket and 1 000 mB in a tank are the same millibuckets. Going first is the point for the reason the broken bay goes second: the lava in the tank and the empty bucket that came back then ride the chunk unload, the world reload, the chunk hold and the broken blocks, and are counted by **every** census after them. It is also what exercises `SceneFluidCensus` at all, which is the class M26's and M28's lesson was written for — each of those shipped a carrier a census could not see, and each time every check reported PASS while items vanished into it.
+     Right after it come *two interrupted fill trips* (**M31**, §3.9.6), which reuse what the exchange left behind (an
+     empty bucket on a shelf, lava in the bay): a terminal asks for one bucket of lava, and the motor is stopped
+     while the crane holds the empty bucket on its way to the bay. Then the aisle's chunks unload and load again, and
+     the reloaded crane must still carry it. The second trip is stopped in `RETRACT_TARGET` right after the fill,
+     with the filled bucket in the head, and the world is saved, quit and rejoined. Each phase asserts that the bay
+     gave exactly 1 000 mB for the one lava bucket delivered, with a census of items and fluid before and after
+     (grep `chunk unload and reload while a fill trip carried an empty container to the bay` and `save, quit and
+     rejoin while a filled container was on its way`).
   2. *a full rack bay broken while the crane carries items* (**M28**): the bay holds two stacks — more than one `ItemStack` could ever carry — and the crane is storing into it when it goes. The step asserts that exactly **one** pallet is left carrying exactly what the bay held, counts the scene right after the break, while the crane is still carrying and its target has just vanished under it, and counts it again once the job has finished without that location. Going early is the point: the pallet is then on the floor for every phase below and is counted by **every** census after it, so "a pallet survives a save, a reload and a chunk unload with its load intact" is proved by a *real* unload and a *real* world reload, which no GameTest can reach. The phase is only meaningful because `SceneItemCensus` was taught about pallets in the same change as the entity; before that it would have reported PASS while 128 diamonds disappeared.
   3. *chunk round trip*: the camera flies from (512, 512) to (1500, 1500), about 1400 blocks — far beyond the client's 8-chunk view distance, but close enough that the trip does not generate and save a large amount of new terrain. It waits until the dock's block entity is really **removed** and the position is no longer loaded (`isLoaded` alone would flip while the same block entity still waits in the unload queue, which would prove nothing), stays away 100 ticks and comes back. The phase then asserts that the dock is a **different** block entity, read from the save; the controller becomes ready again and the interrupted job finishes.
   4. *save, quit and rejoin*: `saveEverything` mid job, then back to the title screen (which stops the integrated server) and `WorldOpenFlows#openWorld` on the same world; the resumed job finishes.
@@ -7478,6 +7673,7 @@ The table above is covered by automated tests. What only a running game can reac
 | `inputBufferSlots` / `outputBufferSlots` | 9 / 9 | station buffers. The input's default equals `PackageItem.SLOTS`: a Create package is opened whole or not at all, so a smaller buffer refuses packages a default one takes, and `1` refuses every multi-type package for ever (§3.2.5) |
 | `terminalBufferSlots` | 9 | buffer of a warehouse terminal (M6). Every eleven slots past the first eleven add a slot row to the screen, which the stock grid gives back (§3.4.2) |
 | `maxTerminalRequestAmount` | 1024 | largest amount one terminal request may wait for, before the controller clamps it to the available stock (M6). Since M7 it bounds the **merged** amount of repeated clicks for one item, not a single click (§7.2) |
+| `maxTerminalFluidRequestBuckets` | 64 | most **buckets** of fluid one click on a terminal's fluid cell may ask for (M31, §3.9.6), checked on the server in millibuckets. The default is one copper bay; range 1–4 096. A fluid leaves in containers the crane fills one trip at a time, so this bounds a click the way `maxTerminalRequestAmount` bounds an item click; bulk goes through a pipe at the back of a bay |
 | `maxTerminalStockEntries` | 512 | item types a terminal reports in one stock snapshot, so a huge warehouse cannot produce an unbounded list for the screen (M6). It bounds the **payload**, not the pass over the index (§3.4.1); the types with the most items are reported and the screen shows how many were left out |
 | `maxTerminalListEntries` | 128 | entries one **clipboard order** takes from the clipboard in a terminal's list slot (M23, §3.4.4). A Schematicannon's checklist is usually far shorter; entries beyond the bound stay on the clipboard untouched and unticked, and a clipboard the bound cuts short is always asked about before anything is fetched. The hard ceiling is 1024 |
 | `maxTerminalUsageEntries` | 64 | item types a terminal remembers **per player** for its "most used" order (M24, §3.4.2, ADR-037) — the size of that player's request counts, which live in their own save data and are the only thing M24 adds to it. It bounds the number of item types; how **large** one of them may be is bounded in code and not by config (`TerminalPreferences.MAX_KEY_SIZE`/`MAX_USED_SIZE`, §3.4.2), because an item key carrying a shulker box's whole contents is a defect to refuse rather than a number to tune. When the bound is reached the **weakest** entry goes (the lowest count, among equal counts the one asked for longest ago), so a new item type is always learned and a passing click never pushes a favourite out. Lowering it is safe and needs no migration: the next load of a player keeps the strongest entries of what was saved for them. There is no 0 — an order a player never presses the button into costs nothing anyway — and the hard ceiling is 256 (`TerminalUsage.MAX_CAPACITY`) |

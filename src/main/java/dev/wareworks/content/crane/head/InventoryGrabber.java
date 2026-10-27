@@ -208,19 +208,43 @@ public final class InventoryGrabber implements HandlingHead {
      */
     @Override
     public int exchange(TransferContext target, ItemKey from, ItemKey to, int amount) {
+        return swap(ExchangeDirection.DRAIN, target, from, to, amount);
+    }
+
+    /**
+     * The <b>fill</b> of a fill trip (M31, issue #21, ADR-073): {@link #exchange}'s walk the other way round. Empty
+     * containers are given up at a fluid bay and that many filled ones are taken back, in one stop and one synchronous
+     * call; the fluid leaves the tank and is inside the containers the moment they are on the head. Every gate, every
+     * refusal and the salvage path are the ones {@link #exchange} documents, plus one: the head must have room for the
+     * filled containers ({@link ExchangeDecision#mayAsk}'s {@code roomForResult}), because a filled container may stack
+     * lower than its empty one.
+     */
+    @Override
+    public int fill(TransferContext target, ItemKey from, ItemKey to, int amount) {
+        return swap(ExchangeDirection.FILL, target, from, to, amount);
+    }
+
+    /** Which way a {@link #swap} moves the fluid: into the location ({@link #exchange}) or out of it ({@link #fill}). */
+    private enum ExchangeDirection {
+        DRAIN,
+        FILL
+    }
+
+    /** The one body of {@link #exchange} and {@link #fill}; only the location's operation differs ({@link #ask}). */
+    private int swap(ExchangeDirection direction, TransferContext target, ItemKey from, ItemKey to, int amount) {
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
-        if (!ExchangeDecision.mayAsk(amount, count(from), !from.equals(to)))
+        if (!ExchangeDecision.mayAsk(amount, count(from), !from.equals(to), carryLimitFor(to) >= amount))
             return 0;
-        TransferContext.ContainerExchange planned = ask(target, from, amount, true);
+        TransferContext.ContainerExchange planned = ask(direction, target, from, amount, true);
         if (planned == null
                 || !ExchangeDecision.planAgrees(amount, planned.containers(), to.equals(planned.result())))
             return 0;
         // An empty answer means the location refused, and by its contract a refusal moved nothing. A location that
         // THREW answers the same way, and then nothing is known: the head is left as it was, which cannot lose an
         // item, and the joint census is what reports a location that really did take the fluid anyway.
-        TransferContext.ContainerExchange done = ask(target, from, amount, false);
+        TransferContext.ContainerExchange done = ask(direction, target, from, amount, false);
         if (done == null)
             return 0;
         ExchangeDecision.Outcome outcome = ExchangeDecision.judge(amount, count(from), done.containers(),
@@ -252,13 +276,15 @@ public final class InventoryGrabber implements HandlingHead {
      * then leaves the head untouched (see {@link #exchange}).
      */
     @Nullable
-    private static TransferContext.ContainerExchange ask(TransferContext target, ItemKey from, int amount,
-            boolean simulate) {
+    private static TransferContext.ContainerExchange ask(ExchangeDirection direction, TransferContext target,
+            ItemKey from, int amount, boolean simulate) {
         try {
-            return target.exchange(from, amount, simulate).orElse(null);
+            return (direction == ExchangeDirection.FILL ? target.fill(from, amount, simulate)
+                    : target.exchange(from, amount, simulate)).orElse(null);
         } catch (RuntimeException e) {
-            LOGGER.warn("Location at {} failed while {} an exchange of {} x {}", target.position(),
-                    simulate ? "simulating" : "performing", amount, from, e);
+            LOGGER.warn("Location at {} failed while {} {} of {} x {}", target.position(),
+                    simulate ? "simulating" : "performing", direction == ExchangeDirection.FILL ? "a fill" : "an exchange",
+                    amount, from, e);
             return null;
         }
     }

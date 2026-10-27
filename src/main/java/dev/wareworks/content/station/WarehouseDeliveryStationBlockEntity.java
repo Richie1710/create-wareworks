@@ -10,6 +10,7 @@ import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
+import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.ChatFormatting;
@@ -115,19 +116,30 @@ public abstract class WarehouseDeliveryStationBlockEntity extends WarehouseStati
         int open = controller.map(c -> c.requestsFor(worldPosition).size()).orElse(0);
         long requested = controller.map(c -> c.requestedFor(worldPosition)).orElse(0L);
         long delivered = controller.map(c -> c.deliveredFor(worldPosition)).orElse(0L);
-        return base.withRequests(open, requested, delivered, lastRejection());
+        // Whether an open request of this station is filled at the fluid bays (M31), for the goggle line that says so.
+        boolean filling = controller.map(c -> c.requestsFor(worldPosition).stream()
+                .anyMatch(request -> request.kind() == RequestKind.FILL)).orElse(false);
+        return base.withRequests(open, requested, delivered, lastRejection()).withFilling(filling);
     }
 
     @Override
     protected void addStationGoggleLines(List<Component> tooltip, StationGoggleSummary shown) {
         if (shown.openRequests() > 0) {
             WareworksLang.pendingRequests(shown.requestedItems(), shown.openRequests()).forGoggles(tooltip, 1);
+            // A request filled at the fluid bays says so: the lava buckets it waits for are not on any shelf (M31).
+            if (shown.filling())
+                WareworksLang.translate(WareworksLang.GOGGLES_PORT_REQUESTS_FILL).style(ChatFormatting.AQUA)
+                        .forGoggles(tooltip, 2);
             WareworksLang.countLine(WareworksLang.GOGGLES_DELIVERED_ITEMS, shown.deliveredItems()).forGoggles(tooltip, 2);
         } else
             WareworksLang.translate(WareworksLang.GOGGLES_NO_PENDING_REQUEST).style(ChatFormatting.DARK_GRAY)
                     .forGoggles(tooltip, 1);
         shown.lastRejection().ifPresent(rejection -> WareworksLang.lastRejection(rejection.langKey())
                 .forGoggles(tooltip, 1));
+        // The one refusal a player can misread as "no lava": the fluid is there, the container is not (M31).
+        if (shown.lastRejection().orElse(null) == RequestRejection.NO_EMPTY_CONTAINERS)
+            WareworksLang.translate(WareworksLang.GOGGLES_PORT_FILL_NO_EMPTIES).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
     }
 
     // --- persistence ---------------------------------------------------------------------------------------------

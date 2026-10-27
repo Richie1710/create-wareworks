@@ -3,7 +3,9 @@ package dev.wareworks.content.controller;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.Set;
@@ -19,12 +21,14 @@ import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.crane.head.TransferContexts;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.inventory.LocationCount;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.JobPlanner;
 import dev.wareworks.core.job.JobType;
@@ -121,6 +125,12 @@ final class CraneDispatch {
             MAX_REMEMBERED_REFUSALS);
     private final RefusalMemory<ItemKey, RackPosition> extractRefusals = new RefusalMemory<>(REFUSAL_MEMORY_TICKS,
             MAX_REMEMBERED_REFUSALS);
+    /**
+     * The jobs whose reservations the ledger holds right now, by id: the crane's current job, as the ledger itself is
+     * rebuilt from it. Kept beside the ledger for the fill ledger (M31, issue #21, D5), which needs the jobs and not
+     * their reservations. Never saved.
+     */
+    private final Map<UUID, TransportJob<ItemKey, RackPosition>> tracked = new LinkedHashMap<>();
     private int arrivalCursor;
     private long nextDispatchTick = NO_BACKOFF;
     private long backoffUntilTick = NO_BACKOFF;
@@ -147,6 +157,11 @@ final class CraneDispatch {
         return ledgerView;
     }
 
+    /** The jobs the ledger holds reservations for (unmodifiable copy): the crane's current job, if any. */
+    List<TransportJob<ItemKey, RackPosition>> trackedJobs() {
+        return List.copyOf(tracked.values());
+    }
+
     Optional<NoJobReason> lastReason() {
         return Optional.ofNullable(lastReason);
     }
@@ -159,6 +174,7 @@ final class CraneDispatch {
     void reset() {
         unreachableSkipped = false;
         ledger.clear();
+        tracked.clear();
         insertRefusals.clear();
         extractRefusals.clear();
         lastReason = null;
@@ -246,6 +262,9 @@ final class CraneDispatch {
             // suspend storing from every input station of the aisle for as long as a machine is empty.
             // NoJobReason.OUTPUT_FULL stays out as well (M27, ADR-065): a warehouse port too full for a whole trip costs
             // one live simulation per open request, and storing has to go on while it waits to be emptied.
+            // NoJobReason.NO_EMPTY_CONTAINERS stays out too (M31, issue #21): a fill request that lacks an empty container
+            // is answered by index lookups before any live call, and backing off would stop storing from every input
+            // of the aisle — including the input a bucket arriving would cure the request through.
             if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
                     || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
                     || result.reasons().contains(NoJobReason.PORT_FULL))
@@ -398,7 +417,76 @@ final class CraneDispatch {
                 .insertRefused((rack, key) -> insertRefusals.isRefused(rack, key, now))
                 .extractRefused((rack, key) -> extractRefusals.isRefused(rack, key, now))
                 .liveExtract((rack, key, max) -> simulate(level, layout, rack, true, key, max, now))
-                .liveInsert((rack, key, amount) -> simulate(level, layout, rack, false, key, amount, now));
+                // A fluid rule's maximum bounds what a bay is told to take (M31, issue #21, ADR-073): after the live
+                // call and outside it, so a capped bay is never remembered as one that refused the container. A bay at
+                // the cap answers 0 and the planner shelves the container as an item, all-or-nothing included.
+                .liveInsert((rack, key, amount) -> {
+                    int live = simulate(level, layout, rack, false, key, amount, now);
+                    return live > 0 && controller.takesFluidContainers(rack)
+                            ? Math.min(live, controller.fluidContainerHeadroom(key)) : live;
+                })
+                // What fill trips can be made of (M31, issue #21, ADR-073): only ever asked for a fill request, so a
+                // warehouse without one never builds the fill ledger here.
+                .fillSupply(fillSupply(level, layout));
+    }
+
+    /**
+     * The fill side of a planner input (M31, issue #21, ADR-073): a filled key's recipe from the controller's memo, the
+     * bays holding its fluid from the parallel fluid index — each with the whole containers it can still give once the
+     * fill trips already on their way to it are taken off ({@link FillLedger#reservedAtBay}) — and a bay's live
+     * {@code simulateFill}. The fill ledger is built once, the first time a fill request asks for bays.
+     */
+    private PlannerInput.FillSupply<ItemKey, RackPosition> fillSupply(Level level, WarehouseLayout layout) {
+        return new PlannerInput.FillSupply<>() {
+            @Nullable
+            private FillLedger<ItemKey, FluidKey, RackPosition> fills;
+
+            @Override
+            public Optional<PlannerInput.FillRecipe<ItemKey>> recipe(ItemKey filledKey) {
+                return controller.fillRecipe(filledKey)
+                        .map(recipe -> new PlannerInput.FillRecipe<>(recipe.emptyKey(), recipe.millibuckets()));
+            }
+
+            @Override
+            public List<PlannerInput.FillBay<RackPosition>> bays(ItemKey filledKey) {
+                Optional<FillLedger.Recipe<ItemKey, FluidKey>> recipe = controller.fillRecipe(filledKey);
+                if (recipe.isEmpty())
+                    return List.of();
+                if (fills == null)
+                    fills = controller.fillLedger();
+                List<PlannerInput.FillBay<RackPosition>> bays = new ArrayList<>();
+                for (LocationCount<RackPosition> entry : controller.fluidStockIndex().locationsOf(recipe.get().fluid())) {
+                    long free = entry.count() - fills.reservedAtBay(entry.location());
+                    long whole = free / recipe.get().millibuckets();
+                    if (whole > 0)
+                        bays.add(new PlannerInput.FillBay<>(entry.location(), (int) Math.min(Integer.MAX_VALUE, whole)));
+                }
+                return bays;
+            }
+
+            @Override
+            public int liveFill(RackPosition bay, ItemKey emptyKey, int amount) {
+                return simulateFill(level, layout, bay, emptyKey, amount);
+            }
+        };
+    }
+
+    /** One live {@code simulateFill} at a fluid bay; 0 for anything that is not an available bay. */
+    private int simulateFill(Level level, WarehouseLayout layout, RackPosition bay, ItemKey emptyKey, int amount) {
+        if (amount < 1 || controller.kindAt(bay).orElse(null) != LocationKind.STORAGE)
+            return 0;
+        TransferContexts.Resolution resolution = TransferContexts.resolve(level, layout.branch(bay.branch()), bay,
+                LocationKind.STORAGE);
+        if (!resolution.isAvailable())
+            return 0;
+        try {
+            return resolution.context().orElseThrow().simulateFill(emptyKey, amount);
+        } catch (RuntimeException e) {
+            if (simulationFailures.tryLog(level.getGameTime()))
+                LOGGER.warn("Warehouse controller at {} could not simulate a fill at {}", controller.getBlockPos(), bay,
+                        e);
+            return 0;
+        }
     }
 
     /**
@@ -461,7 +549,8 @@ final class CraneDispatch {
             if (output.isEmpty() || controller.kindAt(output.get()).orElse(null) != LocationKind.OUTPUT
                     || request.remaining() < 1)
                 continue;
-            result.add(new PlannerInput.OpenRequest<>(request.id(), request.key(), request.remaining(), output.get()));
+            result.add(new PlannerInput.OpenRequest<>(request.id(), request.key(), request.remaining(), output.get(),
+                    request.kind()));
         }
         return result;
     }
@@ -553,20 +642,25 @@ final class CraneDispatch {
         if (craneJob.isEmpty()) {
             if (!ledger.isEmpty())
                 ledger.clear();
+            tracked.clear();
             return;
         }
         ledger.restoreFrom(List.of(craneJob.get()));
+        tracked.clear();
+        tracked.put(craneJob.get().id(), craneJob.get());
         detachUnknownRequest(craneJob.get());
     }
 
     /** Re-tracks a reported job (its reservations follow its stage). */
     void track(TransportJob<ItemKey, RackPosition> job) {
         ledger.track(job);
+        tracked.put(job.id(), job);
         detachUnknownRequest(job);
     }
 
     void release(UUID jobId) {
         ledger.releaseJob(jobId);
+        tracked.remove(jobId);
     }
 
     /**

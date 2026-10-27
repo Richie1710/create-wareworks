@@ -28,11 +28,19 @@ public final class TerminalSearch {
 
     /** Whether {@code line} matches {@code query} by the rules above. */
     public static boolean matches(StockLine<?> line, String query) {
+        return matches(line.name(), line.modId(), query);
+    }
+
+    /**
+     * Whether a cell with this display name and mod id matches {@code query} by the rules above: the same search for an
+     * item and for a fluid cell (M31), whose name is the fluid's own.
+     */
+    public static boolean matches(String displayName, String modIdOf, String query) {
         String[] tokens = tokens(query);
         if (tokens.length == 0)
             return true;
-        String name = lower(line.name());
-        String modId = lower(line.modId());
+        String name = lower(displayName);
+        String modId = lower(modIdOf);
         for (String token : tokens) {
             if (token.charAt(0) == MOD_PREFIX) {
                 String needle = token.substring(1);

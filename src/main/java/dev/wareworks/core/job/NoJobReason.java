@@ -55,6 +55,17 @@ public enum NoJobReason {
     PRODUCTION_FULL,
     /** An open request's item is not in stock (or all of it is reserved, or the live inventories disagree). */
     NOT_IN_STOCK,
+    /**
+     * An open <b>fill</b> request's fluid is in a bay, and no empty container to fill it into is in stock (M31, issue
+     * #21, ADR-073): the more specific half of {@link #NOT_IN_STOCK}, which is why it is declared right after it. The
+     * cure is an empty container — a bucket put into an input, or one a production pattern makes — or the pipe at the
+     * back of the bay, which needs none.
+     * <p>
+     * Like {@link #AT_MAXIMUM} it must <b>not</b> arm the dispatcher's {@code fullBackoffTicks} back-off: it is answered
+     * by index lookups before any live call, and backing off would stop storing from every input station of the aisle
+     * because one request lacks a bucket — which is exactly the request a bucket arriving at an input would cure.
+     */
+    NO_EMPTY_CONTAINERS,
     /** An open request's output station is unavailable (not loaded or gone). */
     LOCATION_UNAVAILABLE,
     /**

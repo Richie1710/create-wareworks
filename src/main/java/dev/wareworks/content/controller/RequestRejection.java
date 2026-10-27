@@ -85,7 +85,15 @@ public enum RequestRejection {
      * the door would never send what the crane hands it (M27, issue #18, ADR-065 D7). Answered, never remembered, like
      * {@link #NOT_A_DOOR}.
      */
-    DOOR_IGNORES_REDSTONE;
+    DOOR_IGNORES_REDSTONE,
+    /**
+     * A fill request (M31, issue #21, ADR-073): the bays hold the fluid, but the racks hold no empty container it could
+     * be filled into, and no production pattern was accepted to make one. It is the more specific half of
+     * {@link #NOT_IN_STOCK} — the fluid is not missing, the container is — and the cure is a different one: put empty
+     * buckets into the warehouse, or draw the fluid off through a pipe at the back of a fluid bay, which needs no
+     * container at all. Appended at the end: the constant travels by ordinal ({@code TerminalResultPayload}).
+     */
+    NO_EMPTY_CONTAINERS;
 
     private static final String LANG_PREFIX = "gui.goggles.request_rejection.";
 

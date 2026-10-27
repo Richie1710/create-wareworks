@@ -18,6 +18,7 @@ import dev.wareworks.content.controller.AisleAssignment;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.controller.WarehouseRegistry;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.StockLevels;
@@ -370,10 +371,14 @@ public class WarehouseStockKeeperBlockEntity extends SmartBlockEntity
             Optional<ItemKey> missing = controller == null
                     || restock != RestockOutcome.WAITING_FOR_INGREDIENTS ? Optional.empty()
                     : controller.restockMissingIngredient(configured.key());
+            // What the row counts (M31): a fluid row's numbers and levels are millibuckets of the fluid in the bays,
+            // and only a filled container may switch between the two.
+            int capacityMb = FluidContainers.contents(configured.key()).map(FluidContainers.Contents::millibuckets)
+                    .orElse(0);
             views.add(new StockKeeperScreenState.RowView(row, Optional.of(configured.key()), configured.minimum(),
                     configured.maximum(), configured.reserve(), status, levels.stocked(), levels.available(),
                     configured.heldBack(levels.available()), configured.shortfall(levels), unrecovered, restock,
-                    missing));
+                    missing, rules.unitAt(row), capacityMb));
         }
         return new StockKeeperScreenState(views, controller != null, adjustment, adjustedRow, resumed);
     }

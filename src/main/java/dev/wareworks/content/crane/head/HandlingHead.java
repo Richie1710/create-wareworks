@@ -55,6 +55,18 @@ public interface HandlingHead {
      */
     int exchange(TransferContext target, ItemKey from, ItemKey to, int amount);
 
+    /**
+     * Gives up {@code amount} held <b>empty</b> containers of {@code from} at {@code target} and takes back that many
+     * <b>filled</b> ones of {@code to} — the fill of a fill trip (real operation, M31, issue #21, ADR-073), the mirror
+     * of {@link #exchange} through {@link TransferContext#fill}. All or nothing in the same way, and a head with no room
+     * for {@code amount} of {@code to} refuses before it asks: 16 empty buckets fit one grabber stack, 16 lava buckets
+     * do not.
+     *
+     * @param to the filled item the head expects back, as a simulated fill at {@code target} in this same tick named it
+     * @return {@code amount} when the fill happened, 0 when it did not
+     */
+    int fill(TransferContext target, ItemKey from, ItemKey to, int amount);
+
     /** What the head holds right now. */
     HeldItems held();
 

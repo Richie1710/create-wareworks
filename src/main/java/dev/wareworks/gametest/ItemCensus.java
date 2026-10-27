@@ -230,6 +230,32 @@ final class ItemCensus {
         change(expected, empty, containers);
     }
 
+    /**
+     * Declares the <b>fill</b> of a fill trip on an item expectation — {@code containers} fewer of {@code empty} and that
+     * many more of {@code filled} — after verifying against the game that this is really what filling {@code empty}
+     * with {@code filled}'s fluid gives, and what draining it gives back (M31, issue #21, ADR-073).
+     * <p>
+     * The mirror of {@link #exchange}: the fluid leaves a bay's tank and enters the containers, both of which
+     * {@link FluidCensus} counts, so the fluid expectation is not touched here. The verification is
+     * {@link FluidContainers#fillsBack}, the <b>same routine the bay uses</b>, so a test cannot declare a fill the game
+     * would not make.
+     */
+    static void fill(GameTestHelper helper, Map<ItemKey, Long> expected, ItemKey empty, ItemKey filled,
+            long containers) {
+        if (containers <= 0)
+            helper.fail("a fill moves at least one container, not " + containers);
+        FluidContainers.Drained contents = FluidContainers.drained(filled).orElse(null);
+        if (contents == null || !contents.emptied().equals(empty))
+            helper.fail("declared the fill " + empty + " -> " + filled + ", but emptying " + filled + " does not give "
+                    + empty + " back" + (contents == null ? "" : " (it gives " + contents.emptied() + ")"));
+        else if (FluidContainers.fillsBack(empty, contents.fluid()).map(FluidContainers.Filled::filled)
+                .filter(filled::equals).isEmpty())
+            helper.fail("declared the fill " + empty + " -> " + filled + ", but filling " + empty + " with "
+                    + contents.fluid() + " does not give " + filled);
+        change(expected, empty, -containers);
+        change(expected, filled, containers);
+    }
+
     private static void add(Map<ItemKey, Long> counts, ItemStack stack) {
         add(counts, stack, stack.getCount());
     }

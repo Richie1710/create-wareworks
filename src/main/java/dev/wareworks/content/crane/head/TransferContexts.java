@@ -12,6 +12,7 @@ import dev.wareworks.content.controller.StorageMember;
 import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.fluid.FluidContainers;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ComponentMeanings;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseDeliveryStationBlockEntity;
@@ -574,6 +575,82 @@ public final class TransferContexts {
                 return Optional.of(new TransferContext.ContainerExchange(drained.emptied(), amount, accepted));
             rollBack(drained, accepted, load);
             return Optional.empty();
+        }
+
+        /**
+         * How many whole containers of {@code empty} this bay could <b>fill</b> right now, at most {@code amount} (M31,
+         * issue #21): the same measurement {@link #fill} makes, without the drain. No change.
+         */
+        @Override
+        public int simulateFill(ItemKey empty, int amount) {
+            if (amount <= 0)
+                return 0;
+            FluidKey fluid = bay.storedFluidOrNull();
+            if (fluid == null)
+                return 0;
+            FluidContainers.Filled filled = FluidContainers.fillsBack(empty, fluid).orElse(null);
+            if (filled == null)
+                return 0;
+            return Math.min(amount, bay.millibuckets() / filled.millibuckets());
+        }
+
+        /**
+         * The <b>fill</b> of a fill trip (M31, issue #21, ADR-073): {@code amount} empty containers of {@code empty}
+         * are filled from this bay's tank and the filled item is reported back, all of them or none
+         * ({@link TransferContext#fill}). The order is the contract, as in {@link #exchange}:
+         * <ol>
+         * <li><b>What the bay holds</b>; an empty bay refuses.</li>
+         * <li><b>What one container becomes</b>, measured by really filling a probe ({@code FluidContainers.filled})
+         * <b>and</b> by draining the result again ({@code FluidContainers.fillsBack}): a container that fills to one key
+         * and drains to another would create or destroy fluid across the warehouse's two directions, so it is refused
+         * here. A non-container, an already filled one, a partial capacity and a converting fluid are all refused by
+         * the same call.</li>
+         * <li><b>Whether the whole load is there</b>, with a simulated drain of all {@code amount} containers' worth at
+         * once through the bay's <b>ungated</b> handler: {@code storage.fluidBayPipeExtraction} is about pipes and never
+         * changes what the crane can do (M30 D4).</li>
+         * <li><b>The drain</b>, for a real call. A drain that gave less than the whole load — which this bay's own
+         * handler cannot do, because its arithmetic is the same pure function for both calls — has exactly that much
+         * filled <b>back</b> and is reported as a refusal, so a refusal moved nothing.</li>
+         * </ol>
+         */
+        @Override
+        public Optional<TransferContext.ContainerExchange> fill(ItemKey empty, int amount, boolean simulate) {
+            Objects.requireNonNull(empty, "empty");
+            if (amount <= 0)
+                return Optional.empty();
+            FluidKey fluid = bay.storedFluidOrNull();
+            if (fluid == null)
+                return Optional.empty();
+            FluidContainers.Filled filled = FluidContainers.fillsBack(empty, fluid).orElse(null);
+            if (filled == null)
+                return Optional.empty();
+            long total = (long) amount * filled.millibuckets();
+            if (total <= 0 || total > Integer.MAX_VALUE)
+                return Optional.empty();
+            int load = (int) total;
+            FluidStack available = bay.drain(load, true);
+            if (!fluid.matches(available) || available.getAmount() != load)
+                return Optional.empty();
+            if (simulate)
+                return Optional.of(new TransferContext.ContainerExchange(filled.filled(), amount, load));
+            FluidStack taken = bay.drain(load, false);
+            if (fluid.matches(taken) && taken.getAmount() == load)
+                return Optional.of(new TransferContext.ContainerExchange(filled.filled(), amount, load));
+            rollBackDrain(fluid, taken, load);
+            return Optional.empty();
+        }
+
+        /**
+         * Undoes a drain that gave less than the whole load, so that the refusal {@link #fill} reports is the truth.
+         * Unreachable with this mod's own handler; logged either way, as {@link #rollBack} is.
+         */
+        private void rollBackDrain(FluidKey fluid, FluidStack taken, int load) {
+            int took = taken.isEmpty() ? 0 : taken.getAmount();
+            int back = took > 0 ? bay.fill(taken.copy(), false) : 0;
+            LOGGER.error("The fluid bay at {} simulated {} mB of {} to fill containers with and then gave {}; {}",
+                    position, load, fluid, taken,
+                    back == took ? "the fill was refused and the fluid filled back in"
+                            : "filling it back in took only " + back + " mB, so that much fluid is unaccounted for");
         }
 
         /**

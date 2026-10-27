@@ -7,6 +7,7 @@ import java.util.Optional;
 
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.stock.RestockOutcome;
+import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.core.stock.StockRuleAdjustment;
 import dev.wareworks.core.stock.StockRuleStatus;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -69,10 +70,23 @@ public record StockKeeperScreenState(List<RowView> rows, boolean linked, StockRu
      *                  no room for a whole run — so the outcome is the only thing that says <i>which</i> one it is
      * @param missingIngredient the item the rule is waiting for a player to supply, for
      *                  {@code RestockOutcome.WAITING_FOR_INGREDIENTS}; empty otherwise
+     * @param unit      what the row's numbers count (M31, issue #21): for {@link RuleUnit#FLUID} the three numbers and the
+     *                  levels are millibuckets of the fluid in the bays, which the screen shows in buckets
+     * @param capacityMb what one of the row's item holds when it is a filled fluid container, 0 otherwise — the screen
+     *                  offers the unit switch only for a row with a capacity
      */
     public record RowView(int row, Optional<ItemKey> key, long minimum, long maximum, long reserve,
                           StockRuleStatus status, long stocked, long available, long heldBack, long shortfall,
-                          long unrecovered, RestockOutcome restock, Optional<ItemKey> missingIngredient) {
+                          long unrecovered, RestockOutcome restock, Optional<ItemKey> missingIngredient,
+                          RuleUnit unit, int capacityMb) {
+        /** A row that counts items, as every row did before M31. */
+        public RowView(int row, Optional<ItemKey> key, long minimum, long maximum, long reserve,
+                StockRuleStatus status, long stocked, long available, long heldBack, long shortfall,
+                long unrecovered, RestockOutcome restock, Optional<ItemKey> missingIngredient) {
+            this(row, key, minimum, maximum, reserve, status, stocked, available, heldBack, shortfall, unrecovered,
+                    restock, missingIngredient, RuleUnit.ITEMS, 0);
+        }
+
         public RowView {
             if (key == null)
                 key = Optional.empty();
@@ -88,6 +102,19 @@ public record StockKeeperScreenState(List<RowView> rows, boolean linked, StockRu
             heldBack = Math.max(0L, heldBack);
             shortfall = Math.max(0L, shortfall);
             unrecovered = Math.max(0L, unrecovered);
+            if (unit == null)
+                unit = RuleUnit.ITEMS;
+            capacityMb = Math.max(0, capacityMb);
+        }
+
+        /** Whether this row counts the fluid of its container in millibuckets (M31). */
+        public boolean countsFluid() {
+            return key.isPresent() && unit == RuleUnit.FLUID;
+        }
+
+        /** Whether the screen offers this row the switch between counting fluid and counting items (M31). */
+        public boolean canSwitchUnit() {
+            return key.isPresent() && capacityMb > 0;
         }
 
         /** An empty row: no item, no numbers, nothing to report. */
@@ -128,6 +155,9 @@ public record StockKeeperScreenState(List<RowView> rows, boolean linked, StockRu
             buffer.writeVarInt(restock.ordinal());
             buffer.writeBoolean(missingIngredient.isPresent());
             missingIngredient.ifPresent(value -> ItemKey.STREAM_CODEC.encode(buffer, value));
+            // M31 (network version 18): what the row counts and what its container holds.
+            buffer.writeBoolean(unit == RuleUnit.FLUID);
+            buffer.writeVarInt(capacityMb);
         }
 
         /** Reads a row written by {@link #write}; an unknown status ordinal falls back to the first status. */
@@ -152,8 +182,10 @@ public record StockKeeperScreenState(List<RowView> rows, boolean linked, StockRu
                     : outcomes[restockOrdinal];
             Optional<ItemKey> missing = buffer.readBoolean() ? Optional.of(ItemKey.STREAM_CODEC.decode(buffer))
                     : Optional.empty();
+            RuleUnit unit = buffer.readBoolean() ? RuleUnit.FLUID : RuleUnit.ITEMS;
+            int capacityMb = buffer.readVarInt();
             return new RowView(row, key, minimum, maximum, reserve, status, stocked, available, heldBack, shortfall,
-                    unrecovered, restock, missing);
+                    unrecovered, restock, missing, unit, capacityMb);
         }
     }
 

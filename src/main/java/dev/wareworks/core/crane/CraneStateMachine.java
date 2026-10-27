@@ -8,6 +8,7 @@ import java.util.function.Function;
 
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.job.CraneSpeeds;
+import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.warehouse.CraneRoute;
 
@@ -23,6 +24,7 @@ import dev.wareworks.core.warehouse.CraneRoute;
  *                └─ leftovers, any other target ────▶ REROUTE ──(target)──▶ TRAVEL_TO_TARGET
  *                                                            └─(none)───▶ HOLDING ──(holdRetryTicks)──▶ REROUTE
  * DROP ── container exchange ──▶ RETRACT_TARGET (the job carries the new key, so RETRACT_TARGET reroutes it)
+ * DROP ── fill of a fill trip ──▶ RETRACT_TARGET ──▶ TRAVEL_TO_TARGET (to the request's station) → … → COMPLETE
  * </pre>
  * <b>Reroute exclusion.</b> The reroute request right after a target failed names that target, so the planner skips
  * it; a {@code HOLDING} retry names none, so a former target that accepts items again (emptied, or placed again at the
@@ -57,6 +59,12 @@ import dev.wareworks.core.warehouse.CraneRoute;
  * the stop's kind is {@code STORAGE} and so no delivery target, {@code RETRACT_TARGET} therefore enters
  * {@code REROUTE}, and entering {@code REROUTE} from anywhere but {@code HOLDING} names the current target as the one
  * to skip — which is the bay the exchange just happened at. No new phase, no new reroute rule and no new save name.
+ * <p>
+ * <b>The fill</b> (M31, issue #21, ADR-073) is the same event with an onward stop: a {@code FILL} job's empty
+ * containers became filled ones at the bay, and the job is retargeted to the station of its request in the same
+ * transition ({@link TransportJob#filledFor}), keeping the request. One narrow rule in {@code RETRACT_TARGET} then
+ * sends it on: a {@code FILL} job whose target is a delivery station the crane does not stand at travels there. Every
+ * other job retracts at its own target, so no existing job can take that branch.
  *
  * @param <K> item key type
  * @param <L> location type
@@ -142,7 +150,7 @@ public final class CraneStateMachine<K, L> {
             case CraneEvent.JobAssigned<K, L> assigned -> assign(state, assigned.job(), effects);
             case CraneEvent.PickResult<K, L> result -> picked(state, result.picked(), effects);
             case CraneEvent.DropResult<K, L> result -> dropped(state, result.delivered(), result.leftover(), effects);
-            case CraneEvent.Exchanged<K, L> result -> exchanged(state, result.newKey(), result.amount(), effects);
+            case CraneEvent.Exchanged<K, L> result -> exchanged(state, result, effects);
             case CraneEvent.RerouteResult<K, L> result -> rerouted(state, result, effects);
             case CraneEvent.OutputFull<K, L> ignored -> outputFull(state, effects);
             case CraneEvent.TargetMissing<K, L> ignored -> interrupt(state, CraneInterruption.TARGET_MISSING, effects);
@@ -276,15 +284,21 @@ public final class CraneStateMachine<K, L> {
      * throws rather than being accepted or ignored — {@code CraneExecution.drain} catches that and answers by re-reading
      * the real head.
      */
-    private CraneState<K, L> exchanged(CraneState<K, L> s, K newKey, int amount, List<CraneEffect<K, L>> effects) {
+    private CraneState<K, L> exchanged(CraneState<K, L> s, CraneEvent.Exchanged<K, L> result,
+            List<CraneEffect<K, L>> effects) {
         if (s.phase() != CranePhase.DROP || !s.awaitingResult() || s.job().isEmpty())
             return s;
         TransportJob<K, L> job = s.job().get();
+        int amount = result.amount();
         if (amount != job.heldAmount())
             throw new IllegalArgumentException("exchange result " + amount + " does not match the held amount "
                     + job.heldAmount());
-        TransportJob<K, L> updated = job.exchangedFor(newKey);
-        effects.add(new CraneEffect.ReportExchanged<>(updated, job.key(), updated.target(), amount));
+        // A fill goes on to the station that asked and keeps its request (M31); the stop reported is the bay, which is
+        // where it happened. A drain drops the request and is rerouted from here.
+        TransportJob<K, L> updated = result.isFill()
+                ? job.filledFor(result.newKey(), result.onward().get(), result.onwardKind().get())
+                : job.exchangedFor(result.newKey());
+        effects.add(new CraneEffect.ReportExchanged<>(updated, job.key(), job.target(), amount));
         return enter(s.withJob(updated), CranePhase.RETRACT_TARGET, effects);
     }
 
@@ -411,6 +425,11 @@ public final class CraneStateMachine<K, L> {
             return enter(cleared, CranePhase.COMPLETE, effects);
         if (interruption.filter(CraneInterruption::reroutesHeldItems).isPresent())
             return enter(cleared, CranePhase.REROUTE, effects);
+        // The second leg of a fill trip (M31): the crane retracted at the bay with the filled containers and the job
+        // already names the station of its request. Narrowed to FILL, so no other job can take this branch — every
+        // other job retracts at its own target.
+        if (job.type() == JobType.FILL && job.targetKind().isDeliveryTarget() && !standsAt(cleared, job.target()))
+            return enter(cleared, CranePhase.TRAVEL_TO_TARGET, effects);
         // Only the station that asked for the items is waited for; leftovers nobody requested there go elsewhere. A
         // production station counts as much as an output does (LocationKind#isDeliveryTarget): its machine empties
         // the buffer by itself, so waiting is what serves the order that asked.
@@ -498,6 +517,14 @@ public final class CraneStateMachine<K, L> {
         RackPosition position = Objects.requireNonNull(positions.apply(location), "no rack position for " + location);
         return new CranePose(position.branch(), position.x(), position.y(), arm, position.side(),
                 network.restingYaw(position.branch(), fallbackYaw));
+    }
+
+    /** Whether the crane stands at {@code location}: the same branch, position, level and side as its pose there. */
+    private boolean standsAt(CraneState<K, L> s, L location) {
+        CranePose pose = s.pose();
+        RackPosition position = Objects.requireNonNull(positions.apply(location), "no rack position for " + location);
+        return pose.branch() == position.branch() && pose.x() == position.x() && pose.y() == position.y()
+                && pose.side() == position.side();
     }
 
     private static <K, L> CraneState<K, L> withMergedInterruption(CraneState<K, L> s, CraneInterruption incoming) {

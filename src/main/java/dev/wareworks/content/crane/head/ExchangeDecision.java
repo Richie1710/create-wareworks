@@ -75,12 +75,19 @@ final class ExchangeDecision {
      * of a key for itself would have the head remove and re-add the same items while the location kept the fluid,
      * i.e. fluid from nothing, which is the one way this primitive could create rather than destroy.
      *
-     * @param requested    how many containers the caller wants exchanged
-     * @param heldOfFrom   how many of the given-up key the head really holds
-     * @param distinctKeys whether the item received differs from the item given up
+     * <p>
+     * And the head must have room for what comes back ({@code roomForResult}, M31): it holds {@code requested} of the
+     * received item once the given-up ones are gone, within its own carry limit for that item. Irrelevant for a drain —
+     * an empty container stacks at least as high as a filled one — and decisive for a fill: 16 empty buckets fit one
+     * grabber stack, 16 lava buckets do not, and a head that took them anyway would carry more than it may.
+     *
+     * @param requested     how many containers the caller wants exchanged
+     * @param heldOfFrom    how many of the given-up key the head really holds
+     * @param distinctKeys  whether the item received differs from the item given up
+     * @param roomForResult whether the head could hold {@code requested} of the received item
      */
-    static boolean mayAsk(int requested, int heldOfFrom, boolean distinctKeys) {
-        return requested > 0 && heldOfFrom >= requested && distinctKeys;
+    static boolean mayAsk(int requested, int heldOfFrom, boolean distinctKeys, boolean roomForResult) {
+        return requested > 0 && heldOfFrom >= requested && distinctKeys && roomForResult;
     }
 
     /**

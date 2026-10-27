@@ -465,4 +465,55 @@ class ReservationLedgerTest {
         assertEquals(ledger.reservations().size(), ledger.size());
         assertEquals(ledger.isEmpty(), ledger.jobIds().isEmpty());
     }
+
+    // --- the fill trip (M31, issue #21, ADR-073) ---------------------------------------------------------------------
+
+    /**
+     * A fill trip reserves its empties as stock at the rack before the pick, and afterwards counts its containers —
+     * empty or filled — towards its request and towards <b>no</b> per-key total, so neither an item's availability nor
+     * a location's room changes by the trip in flight.
+     */
+    @Test
+    void aFillTripCountsTowardsItsRequestAndNoKey() {
+        TransportJob<String, String> planned = TransportJob.fill(JOB1, A, "bay", "bucket", 2, REQ1);
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.STOCK, A, "bucket", 2, REQ1)),
+                ReservationLedger.reservationsFor(planned));
+
+        TransportJob<String, String> picked = planned.withPicked(2);
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.FILLING, "bay", "bucket", 2, REQ1)),
+                ReservationLedger.reservationsFor(picked));
+        ledger.track(picked);
+        assertEquals(2, ledger.committedToRequest(REQ1));
+        assertEquals(0, ledger.inTransit("bucket"));
+        assertEquals(0, ledger.inTransitBackingRequests("bucket"));
+        assertEquals(0, ledger.reservedStock("bucket"));
+        assertEquals(0, ledger.reservedCapacity("bay"));
+        assertEquals(0, ledger.reservedCapacityFor("bucket"));
+        assertEquals(0, ledger.totalInTransit());
+
+        TransportJob<String, String> filled = picked.filledFor("lava_bucket", OUT, LocationKind.OUTPUT);
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.FILLING, OUT, "lava_bucket", 2, REQ1)),
+                ReservationLedger.reservationsFor(filled));
+        ledger.track(filled);
+        assertEquals(2, ledger.committedToRequest(REQ1));
+        assertEquals(0, ledger.inTransit("lava_bucket"), "a filled container on its way is no item transit");
+        assertEquals(0, ledger.inTransitBackingRequests("lava_bucket"));
+
+        ledger.track(filled.plusDelivered(1));
+        assertEquals(1, ledger.committedToRequest(REQ1));
+        ledger.track(filled.plusDelivered(2));
+        assertTrue(ledger.isEmpty());
+    }
+
+    /** Detached from its request (rerouted, cancelled), a fill trip's carry is capacity at its new target. */
+    @Test
+    void aDetachedFillTripReservesCapacity() {
+        TransportJob<String, String> rerouted = TransportJob.fill(JOB1, A, "bay", "bucket", 1, REQ1).withPicked(1)
+                .withTarget(B, LocationKind.STORAGE).withoutRequest();
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.CAPACITY, B, "bucket", 1, null)),
+                ReservationLedger.reservationsFor(rerouted));
+        ledger.track(TransportJob.fill(JOB2, A, "bay", "bucket", 1, REQ2).withPicked(1));
+        assertEquals(1, ledger.detachRequest(REQ2));
+        assertEquals(0, ledger.committedToRequest(REQ2), "a detached FILLING entry counts towards nothing");
+    }
 }

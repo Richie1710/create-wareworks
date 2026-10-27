@@ -14,11 +14,13 @@ import com.simibubi.create.foundation.gui.menu.MenuBase;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crafting.IngredientPicker;
 import dev.wareworks.core.stock.StockAccess;
+import dev.wareworks.core.terminal.FluidAcknowledgement;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
@@ -185,6 +187,8 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      */
     @Nullable
     private TerminalDoors lastDoors;
+    /** The fluid half last pushed (M31); {@code null} before the first push, so the first one always goes out. */
+    private TerminalFluids lastFluids;
     /** The question the craft order is waiting on goes out with the next push: its order button's <b>Answer</b>. */
     private boolean craftQuestionPending;
     /** The craft order's question as last pushed; see {@link #lastListQuestion}. */
@@ -425,6 +429,39 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     }
 
     /**
+     * Server: a {@code TerminalFluidRequestPayload}, resolved against the menu {@code player} really has open (M31, issue
+     * #21, ADR-073): empty (and nothing done) when the player has no terminal menu open, the id does not match, or this
+     * menu has already answered {@value #MAX_REQUESTS_PER_TICK} actions in the current tick — a fluid click shares the
+     * item clicks' budget, so a crafted flood cannot make the server measure containers more often than a clicking
+     * player could. Every other check, and the question, happens in the terminal
+     * ({@link WarehouseTerminalBlockEntity#requestFluidFromTerminal}).
+     */
+    public static Optional<TerminalFluidOutcome> submitFluidRequest(@Nullable Player player, int containerId,
+            FluidKey fluid, long amountMb, FluidAcknowledgement acknowledged, Optional<BlockPos> door) {
+        if (player == null || player.level() == null || player.level().isClientSide || fluid == null
+                || acknowledged == null)
+            return Optional.empty();
+        if (!(player.containerMenu instanceof WarehouseTerminalMenu menu) || menu.containerId != containerId)
+            return Optional.empty();
+        if (!menu.takeRequestBudget())
+            return Optional.empty();
+        return Optional.of(menu.requestFluid(player, fluid, amountMb, acknowledged,
+                door == null ? Optional.empty() : door));
+    }
+
+    /** Server: asks this menu's terminal for fluid; every check, and the question, happens in the terminal. */
+    public TerminalFluidOutcome requestFluid(Player requester, FluidKey fluid, long amountMb,
+            FluidAcknowledgement acknowledged, Optional<BlockPos> door) {
+        if (contentHolder == null || contentHolder.isRemoved())
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER)).withDoor(door);
+        TerminalFluidOutcome outcome = contentHolder.requestFluidFromTerminal(requester, fluid, amountMb, acknowledged,
+                door);
+        if (outcome.result().filter(RequestResult::isAccepted).isPresent())
+            markDirty(); // the availability changed: push it with the next tick instead of waiting for the interval
+        return outcome;
+    }
+
+    /**
      * Server: the cancellation of a {@code ProductionCancelPayload} sent from a <b>terminal</b> screen, resolved
      * against the menu {@code player} really has open ({@code docs/warehouse-system.md} §3.4.2, ADR-024).
      * <p>
@@ -568,7 +605,10 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     public boolean cancel(Player requester, UUID orderId) {
         if (contentHolder == null || contentHolder.isRemoved())
             return false;
-        boolean cancelled = contentHolder.cancelProductionOrder(requester, orderId);
+        // The cancel mark of an order line names a production order, or — since M31 — one of this terminal's fill
+        // requests ("Filling from Lava"); each of the two re-validates the id against its own state.
+        boolean cancelled = contentHolder.cancelProductionOrder(requester, orderId)
+                || contentHolder.cancelFillRequest(requester, orderId);
         if (cancelled)
             markDirty(); // the promised ingredients are free again: push the new availability with the next tick
         return cancelled;
@@ -974,8 +1014,14 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         Set<ItemKey> producible = contentHolder.producibleKeys();
         List<StockCount<ItemKey>> changes = stockDiff.commit(current,
                 key -> contentHolder.holdsInStock(key, producible));
-        if (reset || !changes.isEmpty())
-            sendStock(target, reset, changes);
+        // The fluid half (M31, issue #21): the fluid cells and this terminal's fill lines, compared by value and sent
+        // whole with the first stock page whenever they changed. A warehouse without fluid compares NONE with NONE.
+        TerminalFluids fluids = contentHolder.fluidSnapshot();
+        Optional<TerminalFluids> fluidNews = reset || !fluids.equals(lastFluids) ? Optional.of(fluids)
+                : Optional.empty();
+        lastFluids = fluids;
+        if (reset || !changes.isEmpty() || fluidNews.isPresent())
+            sendStock(target, reset, changes, fluidNews);
 
         TerminalScreenStatus status = TerminalScreenStatus.of(contentHolder.status());
         if (reset || !status.equals(lastStatus)) {
@@ -1114,19 +1160,33 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         PacketDistributor.sendToPlayer(target, usage);
     }
 
-    /** Sends {@code changes} in pages of at most {@link TerminalStockPayload#MAX_ENTRIES}; only the first page resets. */
-    private void sendStock(ServerPlayer target, boolean reset, List<StockCount<ItemKey>> changes) {
+    /**
+     * Sends {@code changes} in pages of at most {@link TerminalStockPayload#MAX_ENTRIES}; only the first page resets,
+     * and only the first carries the fluid half.
+     */
+    private void sendStock(ServerPlayer target, boolean reset, List<StockCount<ItemKey>> changes,
+            Optional<TerminalFluids> fluids) {
         if (changes.isEmpty()) {
-            PacketDistributor.sendToPlayer(target, new TerminalStockPayload(containerId, reset, List.of()));
+            PacketDistributor.sendToPlayer(target, new TerminalStockPayload(containerId, reset, List.of(), fluids));
             return;
         }
         boolean first = true;
         for (int from = 0; from < changes.size(); from += TerminalStockPayload.MAX_ENTRIES) {
             List<StockCount<ItemKey>> page = changes.subList(from,
                     Math.min(changes.size(), from + TerminalStockPayload.MAX_ENTRIES));
-            PacketDistributor.sendToPlayer(target, new TerminalStockPayload(containerId, reset && first, page));
+            PacketDistributor.sendToPlayer(target, new TerminalStockPayload(containerId, reset && first, page,
+                    first ? fluids : Optional.empty()));
             first = false;
         }
+    }
+
+    /**
+     * Server: the fluid half this menu last pushed to its screen (M31), or {@code null} before the first push. For the
+     * GameTests: a fake player's connection sends nothing, so this is where a test reads what the screen was told.
+     */
+    @Nullable
+    public TerminalFluids lastFluidRows() {
+        return lastFluids;
     }
 
     /** The game time of the terminal's level, or {@link #NEVER} while there is none. */

@@ -193,6 +193,19 @@ public final class WareworksConfig {
         return get(SERVER.maxTerminalRequestAmount);
     }
 
+    /**
+     * Most buckets one click on a terminal's fluid cell may ask for (M31, issue #21, {@code storage} section); the
+     * request is sent and checked in millibuckets ({@link #maxTerminalFluidRequestMillibuckets()}).
+     */
+    public static int maxTerminalFluidRequestBuckets() {
+        return get(SERVER.maxTerminalFluidRequestBuckets);
+    }
+
+    /** {@link #maxTerminalFluidRequestBuckets()} in millibuckets. */
+    public static long maxTerminalFluidRequestMillibuckets() {
+        return Math.max(1L, maxTerminalFluidRequestBuckets()) * 1_000L;
+    }
+
     public static int maxTerminalStockEntries() {
         return get(SERVER.maxTerminalStockEntries);
     }
@@ -564,6 +577,7 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue outputBufferSlots;
         public final ModConfigSpec.IntValue terminalBufferSlots;
         public final ModConfigSpec.IntValue maxTerminalRequestAmount;
+        public final ModConfigSpec.IntValue maxTerminalFluidRequestBuckets;
         public final ModConfigSpec.IntValue maxTerminalStockEntries;
         public final ModConfigSpec.IntValue maxTerminalListEntries;
         public final ModConfigSpec.IntValue maxTerminalUsageEntries;
@@ -888,6 +902,14 @@ public final class WareworksConfig {
                                     + "anything out. A bay's goggle tooltip states which of the two it is, either "
                                     + "way, and a player's own bucket click is never affected.")
                     .define("fluidBayPipeExtraction", true);
+            maxTerminalFluidRequestBuckets = builder
+                    .comment("Most BUCKETS of fluid one click on a warehouse terminal's fluid cell may ask for (M31).",
+                            "A fluid leaves the warehouse in containers the crane fills at a fluid bay and carries to "
+                                    + "the terminal, one filled bucket per trip, so a click is bounded the way an "
+                                    + "item click is by maxTerminalRequestAmount. The default is one copper bay. "
+                                    + "Bulk goes through a pipe at the back of a fluid bay, which needs no "
+                                    + "container at all.")
+                    .defineInRange("maxTerminalFluidRequestBuckets", 64, 1, 4096);
             builder.pop();
 
             builder.comment("Warehouse controller").push("controller");

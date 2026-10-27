@@ -433,4 +433,89 @@ class RequestQueueTest {
             assertTrue(seen.put(accepted(queue.add("key-" + i, 1, OUT_A, PLENTY)).id(), Boolean.TRUE) == null);
         assertEquals(64, queue.openCount());
     }
+
+    // --- request kinds (M31, issue #21, ADR-073) ---------------------------------------------------------------------
+
+    /**
+     * A fill request and a stock request of the same key and station are two requests: they promise different things
+     * (fluid and an empty container, or items in the racks), so the one never grows the other.
+     */
+    @Test
+    void theKindSeparatesMerging() {
+        RequestQueue<String, String> queue = queue(4);
+        RetrievalRequest<String, String> stock = accepted(queue.add(DIAMOND, 3, OUT_A, PLENTY));
+        RetrievalRequest<String, String> fill = accepted(queue.add(DIAMOND, 2, OUT_A, PLENTY,
+                RequestQueue.NO_AMOUNT_LIMIT, RequestKind.FILL));
+        assertEquals(RequestKind.STOCK, stock.kind());
+        assertEquals(RequestKind.FILL, fill.kind());
+        assertTrue(fill.isFill());
+        assertEquals(2, queue.openCount(), "no merge across kinds");
+        RequestQueue.AddResult<String, String> more = queue.add(DIAMOND, 4, OUT_A, PLENTY,
+                RequestQueue.NO_AMOUNT_LIMIT, RequestKind.FILL);
+        assertTrue(more.merged(), "a second fill click merges into the open fill request");
+        assertEquals(fill.id(), more.request().orElseThrow().id());
+        assertEquals(RequestKind.FILL, more.request().orElseThrow().kind(), "and stays a fill request");
+        assertEquals(6, more.request().orElseThrow().remaining());
+        assertEquals(Optional.of(stock), queue.openFor(OUT_A, DIAMOND), "the plain lookup is the stock request");
+        assertEquals(RequestKind.FILL, queue.openFor(OUT_A, DIAMOND, RequestKind.FILL).orElseThrow().kind());
+    }
+
+    /**
+     * What the queue owes <b>out of the racks</b> is the stock requests' amount: a fill request's key is a filled
+     * container that does not exist yet, and it is never served from a shelf.
+     */
+    @Test
+    void aFillRequestIsNoItemPromise() {
+        RequestQueue<String, String> queue = queue(4);
+        accepted(queue.add(DIAMOND, 3, OUT_A, PLENTY));
+        RetrievalRequest<String, String> fill = accepted(queue.add(DIAMOND, 5, OUT_B, PLENTY,
+                RequestQueue.NO_AMOUNT_LIMIT, RequestKind.FILL));
+        assertEquals(3, queue.remainingOf(DIAMOND));
+        assertEquals(Map.of(DIAMOND, 3L), queue.remainingByKey());
+        assertEquals(List.of(fill), queue.requestsOf(RequestKind.FILL));
+        assertEquals(1, queue.requestsOf(RequestKind.STOCK).size());
+        assertEquals(8, queue.remainingFor(OUT_A) + queue.remainingFor(OUT_B), "a station still waits for both");
+    }
+
+    /** Progress keeps the kind: a delivery, a reduction and a merge never turn a fill request into a stock one. */
+    @Test
+    void progressKeepsTheKind() {
+        RequestQueue<String, String> queue = queue(4);
+        RetrievalRequest<String, String> fill = accepted(queue.add(IRON, 6, OUT_A, PLENTY,
+                RequestQueue.NO_AMOUNT_LIMIT, RequestKind.FILL));
+        queue.deliver(fill.id(), 1);
+        assertEquals(RequestKind.FILL, queue.get(fill.id()).orElseThrow().kind());
+        queue.reduce(fill.id(), 2);
+        assertEquals(RequestKind.FILL, queue.get(fill.id()).orElseThrow().kind());
+        assertEquals(3, queue.get(fill.id()).orElseThrow().remaining());
+        assertEquals(RequestKind.FILL, fill.withAdded(2).kind());
+        assertEquals(RequestKind.STOCK, new RetrievalRequest<>(id(9), IRON, 1, 1, OUT_A).kind(),
+                "a request saved before M31 is a stock request");
+        assertEquals(Optional.of(RequestKind.FILL), RequestKind.byName("FILL"));
+        assertEquals(Optional.empty(), RequestKind.byName("fill"));
+        assertEquals(Optional.empty(), RequestKind.byName(null));
+    }
+
+    /**
+     * {@code roomFor} answers what {@code add} would for every key at once and adds nothing: merging keys need no room,
+     * each other distinct key one request, under the station's cap and the queue's.
+     */
+    @Test
+    void roomForCountsTheNewRequestsAndAddsNothing() {
+        RequestQueue<String, String> queue = queue(4);
+        queue.setMaxOpenRequestsPerDestination(3);
+        accepted(queue.add(IRON, 1, OUT_A, PLENTY, RequestQueue.NO_AMOUNT_LIMIT, RequestKind.FILL));
+        accepted(queue.add(GOLD, 1, OUT_A, PLENTY));
+        assertEquals(Optional.empty(), queue.roomFor(OUT_A, List.of(DIAMOND), RequestKind.FILL), "one more fits");
+        assertEquals(Optional.empty(), queue.roomFor(OUT_A, List.of(IRON, DIAMOND, DIAMOND), RequestKind.FILL),
+                "iron merges and a repeated key counts once");
+        assertEquals(Optional.of(RequestQueue.Rejection.DESTINATION_FULL),
+                queue.roomFor(OUT_A, List.of(DIAMOND, GOLD), RequestKind.FILL),
+                "gold is a stock request, so a fill request for it needs room of its own");
+        assertEquals(2, queue.openCount(), "nothing was added");
+        accepted(queue.add(DIAMOND, 1, OUT_B, PLENTY));
+        assertEquals(Optional.of(RequestQueue.Rejection.QUEUE_FULL),
+                queue.roomFor(OUT_B, List.of(IRON, GOLD), RequestKind.FILL), "the queue holds one more, not two");
+        assertEquals(Optional.empty(), queue.roomFor(OUT_B, List.of(), RequestKind.FILL), "no keys always fit");
+    }
 }

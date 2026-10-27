@@ -5,6 +5,7 @@ import java.util.Optional;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.StockKeeperMenu;
 import dev.wareworks.content.station.TerminalCraftOutcome;
+import dev.wareworks.content.station.TerminalFluidOutcome;
 import dev.wareworks.content.station.TerminalListOutcome;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
@@ -148,8 +149,21 @@ public final class WareworksNetwork {
      * {@link TerminalListAnswerPayload} carries one row per entry — its split, the planner's refusal by name with the
      * item it names, and the missing materials — instead of totals and five named entries. A reader of the old shape
      * would read the first row as totals, so the versions must not mix. {@link TerminalListActionPayload} is unchanged.
+     * <p>
+     * <b>{@code "18"} is M31</b> (asking the warehouse for a fluid, issue #21, ADR-073): {@link TerminalStockPayload}
+     * gained its fluid half after the item entries — the fluid cells and this terminal's fill lines
+     * ({@code content.station.TerminalFluids}), one zero byte when they did not change — which a reader of the old shape
+     * would stop before and leave in the buffer; the two fluid payloads ({@link TerminalFluidRequestPayload} client →
+     * server, {@link TerminalFluidQuestionPayload} server → client), which an older build would neither send nor
+     * understand; and {@code RequestRejection.NO_EMPTY_CONTAINERS}, appended to an enum {@link TerminalResultPayload}
+     * encodes by ordinal, which an older client would read as no reason at all. The cancel mark of a fill line reuses
+     * {@link ProductionCancelPayload} unchanged: the server now also resolves its id against this terminal's fill
+     * requests, so an older server would ignore the click. Nothing new is saved for any of it. A stock keeper row of
+     * the screen's state ({@code StockKeeperScreenState.RowView}) also gained what it counts and its container's
+     * capacity at its end, which an older reader would leave in the buffer, and {@link StockKeeperRulePayload} gained
+     * the field value {@code StockKeeperRules.FIELD_UNIT}, which an older server would ignore.
      */
-    public static final String VERSION = "17";
+    public static final String VERSION = "18";
 
     private WareworksNetwork() {
     }
@@ -171,6 +185,10 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalDoors);
         registrar.playToServer(TerminalRequestPayload.TYPE, TerminalRequestPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalRequest);
+        registrar.playToServer(TerminalFluidRequestPayload.TYPE, TerminalFluidRequestPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalFluidRequest);
+        registrar.playToClient(TerminalFluidQuestionPayload.TYPE, TerminalFluidQuestionPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalFluidQuestion);
         registrar.playToClient(TerminalListPayload.TYPE, TerminalListPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalList);
         registrar.playToClient(TerminalListAnswerPayload.TYPE, TerminalListAnswerPayload.STREAM_CODEC,
@@ -223,6 +241,23 @@ public final class WareworksNetwork {
         Player player = context.player();
         Optional<TerminalRequestOutcome> outcome = WarehouseTerminalMenu.submitRequest(player, payload.containerId(),
                 payload.key(), payload.amount(), payload.acknowledged(), payload.door());
+        if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
+            return;
+        PacketDistributor.sendToPlayer(serverPlayer, TerminalRequestAnswers.answer(payload, outcome.get()));
+    }
+
+    /**
+     * A player clicked a fluid cell of their open terminal screen, or pressed Fetch in its fluid question (M31, issue
+     * #21, ADR-073). The payload is only a hint: the menu the player really has open decides, and the terminal
+     * validates reach, amount, aisle, door and fluid against the server's own state. A fluid request always asks
+     * first, so the first answer is the question ({@link TerminalFluidQuestionPayload}); a Fetch whose numbers still
+     * name exactly the question the server measures now is carried out and answered like an item click
+     * ({@link TerminalResultPayload}), both naming the door the server used.
+     */
+    private static void onTerminalFluidRequest(TerminalFluidRequestPayload payload, IPayloadContext context) {
+        Player player = context.player();
+        Optional<TerminalFluidOutcome> outcome = WarehouseTerminalMenu.submitFluidRequest(player,
+                payload.containerId(), payload.fluid(), payload.amountMb(), payload.acknowledged(), payload.door());
         if (outcome.isEmpty() || !(player instanceof ServerPlayer serverPlayer))
             return;
         PacketDistributor.sendToPlayer(serverPlayer, TerminalRequestAnswers.answer(payload, outcome.get()));
@@ -388,6 +423,12 @@ public final class WareworksNetwork {
     private static void onTerminalConfirm(TerminalConfirmPayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.TerminalScreenUpdates.onConfirm(payload);
+    }
+
+    /** What a click on a fluid cell of the open screen would mean, asked before anything is promised (M31). */
+    private static void onTerminalFluidQuestion(TerminalFluidQuestionPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onFluidQuestion(payload);
     }
 
     /** The package doors a click at the open screen may deliver to (M27, issue #18). */

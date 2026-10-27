@@ -68,7 +68,11 @@ import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
+import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.job.RequestKind;
+import dev.wareworks.core.job.RequestQueue;
 import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.ListOrderState;
@@ -360,6 +364,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
 
     /** The fluid census every step is asserted against, in millibuckets per fluid ({@link SceneFluidCensus}). */
     private volatile Map<FluidKey, Long> expectedFluid = Map.of();
+    /** What the fluid bay held when a fill trip phase began (M31), to prove it gave exactly one bucket's worth. */
+    private volatile int fillBayBefore;
 
     /**
      * The terminal and the controller before the camera flies away during the craft fetch: like
@@ -409,6 +415,10 @@ public final class RobustnessVisualScenario implements VisualScenario {
         // census after it. It also leaves the crane idle, which costs nothing: every phase below starts with a fill
         // of its own.
         containerExchange(script);
+        // The fill trip goes right after it (M31, issue #21): the drain left an empty bucket on a shelf and lava in the
+        // bay, which is exactly what a fill needs, and both fill phases leave the terminal's buffer empty again.
+        fillAcrossChunkUnload(script);
+        fillAcrossSaveAndRejoin(script);
 
         // The bay goes next on purpose: the pallet it leaves then rides the chunk round trip, the save, quit and
         // rejoin and the chunk hold, and is counted by every census after it. "Persists across save, reload and chunk
@@ -477,6 +487,176 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         JOB_TIMEOUT_TICKS)
                 .server("robustness: census after the empty container was shelved",
                         (server, context) -> census(server, "the empty container was shelved as ordinary stock"));
+    }
+
+    /**
+     * <b>A fill trip survives its aisle's chunks unloading and loading again while it carries an empty container to the
+     * bay</b> (M31, issue #21, ADR-073). The player asks the terminal for one bucket of lava; once the crane has picked
+     * the empty bucket the motor stops, so the machine stands with the empty in its head, the camera flies away until
+     * the dock really unloaded, comes back and the motor runs again. The bucket must arrive filled at the terminal, the
+     * bay must have given exactly one bucket's worth, and both censuses must agree at every step — the fill declared
+     * through {@link SceneItemCensus#filled}.
+     */
+    private void fillAcrossChunkUnload(VisualScript script) {
+        script.server("robustness: census before the fill trip",
+                        (server, context) -> census(server, "before the fill trip"))
+                .server("robustness: ask the terminal for one bucket of lava", this::requestOneBucketOfLava)
+                .serverUntil("robustness: wait until the crane carries the empty bucket to the bay, then stop the motor",
+                        (server, context) -> stopWhenCarryingForFill(server, context, EMPTY_BUCKET), JOB_TIMEOUT_TICKS)
+                .server("robustness: move the camera far away", (server, context) -> {
+                    fillBayBefore = fluidBay(server, context).millibuckets();
+                    dockBeforeUnload = crane(server, context);
+                    moveAway(server, context);
+                })
+                .serverUntil("robustness: wait until the aisle chunks with the fill trip really unload",
+                        this::dockUnloaded, UNLOAD_TIMEOUT_TICKS)
+                .waitTicks(UNLOADED_TICKS)
+                .server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded again", this::sceneLoaded, CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the fill trip was read from the save again", (server, context) -> {
+                    assertDockWasReloaded(server, context);
+                    if (!carriesForFill(server, context, EMPTY_BUCKET))
+                        throw new VisualTestException("the reloaded crane is not carrying the empty bucket of a fill trip"
+                                + " any more: " + crane(server, context).currentJob());
+                })
+                .server("robustness: census after the chunk round trip during the fill trip",
+                        (server, context) -> census(server, "chunk unload and reload while a fill carried an empty"))
+                .server("robustness: start the motor again", this::powerOn)
+                .serverUntil("robustness: wait until the filled bucket reached the terminal", this::fillDelivered,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census after the fill trip", (server, context) -> {
+                    expected = SceneItemCensus.filled(expected, EMPTY_BUCKET, FILLED_BUCKET, 1);
+                    census(server, "one empty bucket became one lava bucket at the terminal");
+                    assertBayGaveOneBucket(server, context, "chunk unload and reload while a fill trip carried an "
+                            + "empty container to the bay");
+                })
+                .server("robustness: take the lava bucket out of the terminal", this::takeLavaBucket);
+    }
+
+    /**
+     * <b>A fill trip survives a real save, quit to title and rejoin while the filled container is on its way</b> to the
+     * station that asked (M31, issue #21, ADR-073). An empty bucket is stored first, the terminal asks for one bucket of
+     * lava, and once the bay has filled it the motor stops, so the machine stands with the lava bucket in its head while
+     * the world is saved, left and opened again. The bucket must then arrive at the terminal.
+     */
+    private void fillAcrossSaveAndRejoin(VisualScript script) {
+        script.server("robustness: store an empty bucket for the second fill",
+                        (server, context) -> refill(server, context, List.of(EMPTY_BUCKET.toStack(1))))
+                .serverUntil("robustness: wait until the empty bucket is stored", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census before the second fill trip",
+                        (server, context) -> census(server, "an empty bucket was stored for the second fill"))
+                .server("robustness: ask the terminal for one more bucket of lava", this::requestOneBucketOfLava)
+                .serverUntil("robustness: wait until the crane carries the filled bucket to the terminal, then stop "
+                        + "the motor", (server, context) -> stopWhenCarryingForFill(server, context, FILLED_BUCKET),
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: save the world while the filled bucket is on its way",
+                        (server, context) -> {
+                            expected = SceneItemCensus.filled(expected, EMPTY_BUCKET, FILLED_BUCKET, 1);
+                            census(server, "the bay filled the bucket before the save");
+                            fillBayBefore = fluidBay(server, context).millibuckets() + FluidType.BUCKET_VOLUME;
+                            server.saveEverything(true, true, true);
+                        });
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the fill trip came back after the rejoin", (server, context) -> {
+                    if (!carriesForFill(server, context, FILLED_BUCKET))
+                        throw new VisualTestException("after the rejoin the crane is not carrying the filled bucket of "
+                                + "a fill trip: " + crane(server, context).currentJob());
+                })
+                .server("robustness: census after save, quit and rejoin during the fill trip",
+                        (server, context) -> census(server, "save, quit and rejoin while a filled container was on "
+                                + "its way"))
+                .server("robustness: start the motor again", this::powerOn)
+                .serverUntil("robustness: wait until the filled bucket reached the terminal after the rejoin",
+                        this::fillDelivered, JOB_TIMEOUT_TICKS)
+                .server("robustness: census after the second fill trip", (server, context) -> {
+                    census(server, "the filled bucket arrived after the rejoin");
+                    assertBayGaveOneBucket(server, context, "save, quit and rejoin while a filled container was on "
+                            + "its way");
+                })
+                .server("robustness: take the lava bucket out of the terminal", this::takeLavaBucket);
+    }
+
+    /** A fill request of one lava bucket at the terminal, made as the player's click makes it (one portion). */
+    private void requestOneBucketOfLava(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        RequestResult result = controller.requestFillContainers(layout(context.origin()).rackPos(TERMINAL),
+                FILLED_BUCKET, 1, RequestQueue.NO_AMOUNT_LIMIT, StockAccess.PLAYER);
+        if (!result.isAccepted() || result.request().orElseThrow().kind() != RequestKind.FILL)
+            throw new VisualTestException("the terminal's fill request for one bucket of lava was refused: " + result);
+        LOGGER.info(PREFIX + "robustness: asked for one bucket of lava; the bay holds {} mB",
+                fluidBay(server, context).millibuckets());
+    }
+
+    /**
+     * Whether the crane carries a fill trip's container of {@code key}: the empty one on its way to the bay, or the
+     * filled one on its way to the terminal. Any phase counts: a shelf straight across the aisle from the bay is no
+     * travel at all, so the machine may go from the pick to the bay without a single tick of {@code TRAVEL_TO_TARGET}.
+     */
+    private boolean carriesForFill(MinecraftServer server, VisualContext context, ItemKey key) {
+        StackerCraneBlockEntity crane = crane(server, context);
+        return crane.currentJob().filter(job -> job.type() == JobType.FILL && job.picked() && job.key().equals(key)
+                && job.requestId().isPresent()).isPresent() && crane.heldItems().count(key) == 1;
+    }
+
+    /**
+     * {@link #carriesForFill}, and when it holds, the motor stops in the same tick: the machine then stands with that
+     * container in its head for as long as the phase needs, instead of finishing the stop before the next step runs.
+     */
+    private boolean stopWhenCarryingForFill(MinecraftServer server, VisualContext context, ItemKey key) {
+        if (!carriesForFill(server, context, key))
+            return false;
+        motor(server.overworld(), context.origin()).generatedSpeed.setValue(0);
+        LOGGER.info(PREFIX + "robustness: the crane carries {} for a fill trip ({}); the motor stops",
+                key, crane(server, context).craneState().phase());
+        return true;
+    }
+
+    /** The filled bucket is in the terminal, the request is served and the crane is idle and empty. */
+    private boolean fillDelivered(MinecraftServer server, VisualContext context) {
+        return terminal(server, context).bufferedItems().count(FILLED_BUCKET) == 1
+                && controller(server, context).openRequests().isEmpty() && craneIdleAndEmpty(server, context);
+    }
+
+    /** The bay gave exactly one bucket's worth of lava since {@link #fillBayBefore}; logs the PASS line. */
+    private void assertBayGaveOneBucket(MinecraftServer server, VisualContext context, String what) {
+        int now = fluidBay(server, context).millibuckets();
+        if (fillBayBefore - now != FluidType.BUCKET_VOLUME)
+            throw new VisualTestException("the bay went from " + fillBayBefore + " mB to " + now + " mB for one bucket");
+        LOGGER.info(PREFIX + "robustness: PASS {}: the bay went from {} mB to {} mB for the one lava bucket delivered, "
+                + "census {}, fluid {} mB", what, fillBayBefore, now, SceneItemCensus.describe(expected),
+                SceneFluidCensus.describe(expectedFluid));
+    }
+
+    /**
+     * The player takes the delivered lava bucket out of the terminal, so the buffer is empty for the phases after this
+     * one; it leaves the census with the lava inside it.
+     */
+    private void takeLavaBucket(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminal(server, context);
+        IItemHandler buffer = terminal.externalHandler();
+        int taken = 0;
+        for (int slot = 0; slot < buffer.getSlots(); slot++) {
+            if (FILLED_BUCKET.matches(buffer.getStackInSlot(slot)))
+                taken += buffer.extractItem(slot, 1, false).getCount();
+        }
+        if (taken != 1 || !terminal.bufferedItems().isEmpty())
+            throw new VisualTestException("the terminal held " + taken + " lava bucket(s) and "
+                    + terminal.bufferedItems().keys() + " besides");
+        expected = SceneItemCensus.plus(expected, FILLED_BUCKET, -1);
+        expectedFluid = SceneFluidCensus.plus(expectedFluid, BAY_FLUID, -FluidType.BUCKET_VOLUME);
+        census(server, "the player took the lava bucket out of the terminal");
+    }
+
+    private static FluidBayBlockEntity fluidBay(MinecraftServer server, VisualContext context) {
+        BlockPos pos = layout(context.origin()).rackPos(FLUID_BAY);
+        FluidBayBlockEntity bay = WareworksBlockEntityTypes.FLUID_BAY.getNullable(server.overworld(), pos);
+        if (bay == null)
+            throw new VisualTestException("the fluid bay at " + pos + " is gone");
+        return bay;
     }
 
     /** A running job survives the chunks of its aisle unloading and loading again. */

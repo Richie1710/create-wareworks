@@ -22,6 +22,8 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       ({@link JobType#allowsTarget}).</li>
  *   <li>{@link #exchangedFor(Object)} records a <b>container exchange</b>: the carry continues under another key
  *       (M30, issue #21).</li>
+ *   <li>{@link #filledFor(Object, Object, LocationKind)} records the <b>fill</b> of a fill trip: the carry continues
+ *       under the filled key, towards the station that asked, still serving its request (M31, issue #21).</li>
  *   <li>{@link #withoutRequest()} detaches a retrieve job from a request that no longer exists.</li>
  * </ul>
  * All components are plain values (UUIDs, enums, ints), so the job persists as is. The canonical constructor validates
@@ -122,6 +124,18 @@ public record TransportJob<K, L>(UUID id, JobType type, L source, L target, Loca
                 Optional.empty(), false, 0, 0);
     }
 
+    /**
+     * A new <b>fill trip</b> (M31, issue #21, ADR-073): pick {@code amount} empty containers of {@code emptyKey} from
+     * {@code rack}, have the fluid bay at {@code bay} fill them, then go on to the station of request {@code requestId}
+     * ({@link #filledFor}). Until the fill the target is the bay, a {@link LocationKind#STORAGE} location, so before the
+     * pick the job reserves the empties as stock at the rack like any retrieve ({@link JobType#reservesSourceStock()}).
+     */
+    public static <K, L> TransportJob<K, L> fill(UUID id, L rack, L bay, K emptyKey, int amount,
+            @Nullable UUID requestId) {
+        return new TransportJob<>(id, JobType.FILL, rack, bay, LocationKind.STORAGE, emptyKey, amount,
+                Optional.ofNullable(requestId), false, 0, 0);
+    }
+
     /** The kind of {@link #source()}. */
     public LocationKind sourceKind() {
         return type.sourceKind();
@@ -214,6 +228,38 @@ public record TransportJob<K, L>(UUID id, JobType type, L source, L target, Loca
         if (newKey.equals(key))
             throw new IllegalArgumentException("job " + id + " already carries " + key + ", so that is no exchange");
         return new TransportJob<>(id, type, source, target, targetKind, newKey, held, Optional.empty(), true, held, 0);
+    }
+
+    /**
+     * This fill trip after the <b>fill</b> at its bay (M31, issue #21, D2): the head gave up every empty container it
+     * held and received that many of {@code filledKey}, and the trip goes on to {@code station}, the station of the
+     * request it serves.
+     * <p>
+     * The one difference from {@link #exchangedFor}: the <b>request is kept</b>. A drained container is not what anybody
+     * asked for, a filled one is exactly what the fill request asked for. Like an exchange it starts the carry again
+     * under the new key ({@code plannedAmount == pickedAmount == heldAmount()}, nothing delivered), so the head and the
+     * job agree on the new key the moment the fill returns. No new record component and no save-format change: a saved
+     * fill trip is a {@code FILL} job whose key is either the empty container (still on its way to the bay) or the
+     * filled one (on its way to the station).
+     *
+     * @throws IllegalStateException    if this is no fill trip, it was not picked or it holds nothing
+     * @throws IllegalArgumentException if {@code filledKey} is the key it already carries, or {@code stationKind} is not
+     *                                  a kind a fill trip may drop at
+     */
+    public TransportJob<K, L> filledFor(K filledKey, L station, LocationKind stationKind) {
+        Objects.requireNonNull(filledKey, "filledKey");
+        Objects.requireNonNull(station, "station");
+        Objects.requireNonNull(stationKind, "stationKind");
+        if (type != JobType.FILL)
+            throw new IllegalStateException("job " + id + " is a " + type + " job, not a fill trip");
+        if (!picked)
+            throw new IllegalStateException("job " + id + " was not picked");
+        int held = heldAmount();
+        if (held < 1)
+            throw new IllegalStateException("job " + id + " holds nothing to fill");
+        if (filledKey.equals(key))
+            throw new IllegalArgumentException("job " + id + " already carries " + key + ", so that is no fill");
+        return new TransportJob<>(id, type, source, station, stationKind, filledKey, held, requestId, true, held, 0);
     }
 
     /**

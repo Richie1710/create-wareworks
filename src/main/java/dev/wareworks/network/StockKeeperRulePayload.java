@@ -26,7 +26,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * @param row         the rule row
  * @param field       {@link StockKeeperRules#FIELD_ITEM}, {@link StockKeeperRules#FIELD_MINIMUM},
  *                    {@link StockKeeperRules#FIELD_MAXIMUM}, {@link StockKeeperRules#FIELD_RESERVE} or
- *                    {@link StockKeeperRules#FIELD_CLEAR_ROW}; anything else does nothing
+ *                    {@link StockKeeperRules#FIELD_CLEAR_ROW}, {@link StockKeeperRules#FIELD_RESUME} or
+ *                    {@link StockKeeperRules#FIELD_UNIT} (M31); anything else does nothing
  * @param key         the item to set, or empty to clear the row (only read for {@link StockKeeperRules#FIELD_ITEM})
  * @param value       the number to set (only read for the three number fields; the server clamps it)
  */
@@ -59,6 +60,15 @@ public record StockKeeperRulePayload(int containerId, int row, int field, Option
      */
     public static StockKeeperRulePayload resume(int containerId, int row) {
         return new StockKeeperRulePayload(containerId, row, StockKeeperRules.FIELD_RESUME, Optional.empty(), 0L);
+    }
+
+    /**
+     * Sets what a row counts (M31, issue #21): the fluid of its filled container in the fluid bays, or the containers
+     * as items. The server converts the numbers and refuses it for an item that carries no fluid.
+     */
+    public static StockKeeperRulePayload setUnit(int containerId, int row, boolean fluid) {
+        return new StockKeeperRulePayload(containerId, row, StockKeeperRules.FIELD_UNIT, Optional.empty(),
+                fluid ? 1L : 0L);
     }
 
     /** Sets one of the three numbers of a row ({@code StockRule.UNSET} switches it off). */

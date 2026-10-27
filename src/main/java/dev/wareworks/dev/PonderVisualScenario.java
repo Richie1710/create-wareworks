@@ -92,7 +92,8 @@ public final class PonderVisualScenario implements VisualScenario {
             // warehouse looks for a fluid row and finds buckets, and that scene is where the answer is.
             // M27 (issue #18, second half) adds ordering to a door: the door is chosen at the terminal and is the
             // output, so both blocks show it.
-            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 5),
+            // M31 (issue #21) adds asking for fluid, which the terminal shows beside both fluid bays.
+            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 6),
             // Issue #34 adds the Crafter Feeder scene, which the station shows as well: the feeder is its machine.
             new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 4),
             new Subject("feeder", WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, 1),
@@ -104,9 +105,10 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("bay-andesite", WareworksBlocks.RACK_BAY_ANDESITE, 3),
             new Subject("bay-brass", WareworksBlocks.RACK_BAY_BRASS, 3),
             // M30 (issue #21): one scene for both fluid bays, and both are toured for the rack bays' own reason — the
-            // tier is the block, so two registrations can be lost independently.
-            new Subject("tank-copper", WareworksBlocks.FLUID_BAY_COPPER, 1),
-            new Subject("tank-brass", WareworksBlocks.FLUID_BAY_BRASS, 1),
+            // tier is the block, so two registrations can be lost independently. M31 adds the second scene, asking
+            // the warehouse for the fluid.
+            new Subject("tank-copper", WareworksBlocks.FLUID_BAY_COPPER, 2),
+            new Subject("tank-brass", WareworksBlocks.FLUID_BAY_BRASS, 2),
             // Issue #37: the hand truck is an item, not a block, and has its one scene of its own.
             new Subject("hand-truck", WareworksItems.HAND_TRUCK, 1));
 

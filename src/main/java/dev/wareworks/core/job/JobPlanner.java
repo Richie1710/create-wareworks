@@ -3,7 +3,9 @@ package dev.wareworks.core.job;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -36,7 +38,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       Amount =
  *       {@code min(need, carryLimit, liveExtractable − reservedStock)}, and for a port also its room. <b>Store filters
  *       never restrict retrieval</b> (§3.1): items already inside a location can always be fetched, even when its
- *       filter no longer accepts them.</li>
+ *       filter no longer accepts them. A <b>fill</b> request ({@link RequestKind#FILL}, M31, issue #21, ADR-073) is
+ *       served by {@link #planFill} instead: one {@code FILL} job that picks empty containers from a rack, has a
+ *       fluid bay fill them and delivers them to the request's station.</li>
  *   <li><b>SUPPLY</b> next, for the ingredients open production orders still owe their production stations
  *       ({@code docs/warehouse-system.md} §3.5, ADR-024). Planned exactly like a retrieve — same candidates, same
  *       ranking, same live validation — with the production station as the target and
@@ -296,7 +300,9 @@ public final class JobPlanner<K, L> {
             if (need <= 0)
                 continue;
             work = true;
-            Optional<PlannedJob<K, L>> job = planRetrieve(input, request, (int) need, budget, reasons);
+            Optional<PlannedJob<K, L>> job = request.kind() == RequestKind.FILL
+                    ? planFill(input, request, (int) need, budget, reasons)
+                    : planRetrieve(input, request, (int) need, budget, reasons);
             if (job.isPresent())
                 return new PlanResult<>(job, reasons, start);
             if (budget.exhausted) {
@@ -419,7 +425,8 @@ public final class JobPlanner<K, L> {
      * @param failedTarget the target to exclude, or {@code null} (a hold retry: every location may be chosen)
      * @return the best target that accepts at least one item in the live simulation, or empty (hold the items); at most
      * three times {@link PlannerInput#liveSimulationBudget()} live calls for a {@code STORE} reroute (storage, then the
-     * input stations, then the accepting ports), twice for a {@code RETRIEVE} one (storage, then the output stations) and
+     * input stations, then the accepting ports), twice for a {@code RETRIEVE} or a {@code FILL} one (storage, then the
+     * output stations) and
      * for a {@code COLLECT} one (storage, then the input stations), and once for a {@code SUPPLY} one (storage alone)
      * @throws IllegalArgumentException if {@code amount < 1}
      */
@@ -453,7 +460,11 @@ public final class JobPlanner<K, L> {
             // whose filter rejects them is ranked last rather than dropped — otherwise a location that was
             // re-dedicated while its stock was inside could not take that stock back, and a fully partitioned aisle
             // could park the crane in HOLDING for ever (§8).
-            case RETRIEVE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null,
+            // A fill trip's leftovers are a retrieve's (M31, ADR-073): storage first with advisory filters, then an output
+            // that did not ask for them, never a port. With empties in the head that is a shelf — a bay never takes an
+            // empty container (its insert answer is drain-only) — and with a filled container a bay dedicated to its
+            // fluid outranks every shelf, so cancelled lava goes back where it came from (the owner's decision 2).
+            case RETRIEVE, FILL -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null,
                     true)
                     .map(Selection::target)
                     .or(() -> selectStation(input, withoutPorts(input, input.outputs()), LocationKind.OUTPUT, key,
@@ -516,29 +527,10 @@ public final class JobPlanner<K, L> {
      */
     private Optional<PlannedJob<K, L>> planOutOfStorage(PlannerInput<K, L> input, K key, L target, UUID ownerId,
             JobType type, int need, NoJobReason fullReason, Budget budget, Set<NoJobReason> reasons) {
-        if (!input.available().test(target)) {
-            reasons.add(NoJobReason.LOCATION_UNAVAILABLE);
-            return Optional.empty();
-        }
-        int limit = limit(need, input.carryLimit().applyAsInt(key));
+        int limit = stationRoom(input, target, key, limit(need, input.carryLimit().applyAsInt(key)),
+                type == JobType.RETRIEVE, fullReason, budget, reasons);
         if (limit < 1)
             return Optional.empty();
-        if (!budget.tryUse())
-            return Optional.empty();
-        // Asked only for a retrieve, and only after the target was found available: the content layer answers it with
-        // one block entity lookup, which must never reach an unloaded position.
-        boolean bounded = type == JobType.RETRIEVE && input.roomBound().test(target);
-        int room = input.liveInsert().simulateInsert(target, key, bounded ? limit : 1);
-        // The smallest trip worth setting off for: the whole one, or one full stack of a larger one. Without it a port
-        // drained item by item would be served item by item, and requests are planned before storing.
-        int minimum = bounded ? Math.min(limit, Math.max(1, input.stackSize().applyAsInt(key))) : 1;
-        if (room < minimum) {
-            reasons.add(fullReason);
-            return Optional.empty();
-        }
-        // Before the candidates are built, because every candidate carries the limit.
-        if (bounded)
-            limit = Math.min(limit, room);
         RackPosition outputPos = position(target);
         List<Candidate<L>> candidates = new ArrayList<>();
         int order = 0;
@@ -578,6 +570,153 @@ public final class JobPlanner<K, L> {
         }
         reasons.add(NoJobReason.NOT_IN_STOCK);
         return Optional.empty();
+    }
+
+    /**
+     * How much of a trip of at most {@code limit} items of {@code key} the delivery station {@code target} lets the
+     * crane set off with, or 0 (with the reason noted) when it may not set off at all — the head
+     * {@link #planOutOfStorage} and {@link #planFill} share, so a retrieve and a fill trip answer the same question the
+     * same way (M31).
+     * <p>
+     * The station must be available and take at least one item right now (one live simulation). A <b>room-bound</b>
+     * target ({@link PlannerInput#roomBound()}, a warehouse port; M27, ADR-065), asked only when {@code mayBeBound}, must
+     * take the whole trip or at least one full stack of a larger one, and bounds the trip by its room.
+     *
+     * @param mayBeBound whether this kind of trip is sized by a port's room ({@code RETRIEVE} and {@code FILL}, never a
+     *                   {@code SUPPLY})
+     */
+    private int stationRoom(PlannerInput<K, L> input, L target, K key, int limit, boolean mayBeBound,
+            NoJobReason fullReason, Budget budget, Set<NoJobReason> reasons) {
+        if (!input.available().test(target)) {
+            reasons.add(NoJobReason.LOCATION_UNAVAILABLE);
+            return 0;
+        }
+        if (limit < 1)
+            return 0;
+        if (!budget.tryUse())
+            return 0;
+        // Asked only for a trip that may be bound, and only after the target was found available: the content layer
+        // answers it with one block entity lookup, which must never reach an unloaded position.
+        boolean bounded = mayBeBound && input.roomBound().test(target);
+        int room = input.liveInsert().simulateInsert(target, key, bounded ? limit : 1);
+        // The smallest trip worth setting off for: the whole one, or one full stack of a larger one. Without it a port
+        // drained item by item would be served item by item, and requests are planned before storing.
+        int minimum = bounded ? Math.min(limit, Math.max(1, input.stackSize().applyAsInt(key))) : 1;
+        if (room < minimum) {
+            reasons.add(fullReason);
+            return 0;
+        }
+        // Before the candidates are built, because every candidate carries the limit.
+        return bounded ? Math.min(limit, room) : limit;
+    }
+
+    // --- fill (M31, issue #21, ADR-073) ------------------------------------------------------------------------------
+
+    /**
+     * One <b>fill request</b>: empty containers out of a rack, filled at a fluid bay, delivered to the request's station
+     * — one {@code FILL} job for the whole trip ({@link TransportJob#fill}).
+     * <ol>
+     * <li>The filled key must still be refillable ({@link PlannerInput.FillSupply#recipe}), else
+     * {@link NoJobReason#NOT_IN_STOCK}.</li>
+     * <li>The station: {@link #stationRoom}, exactly as for a retrieve, for the <b>filled</b> key — what arrives
+     * there.</li>
+     * <li>A bay holding the fluid with whole containers to give ({@link PlannerInput.FillSupply#bays}), else
+     * {@link NoJobReason#NOT_IN_STOCK}.</li>
+     * <li>Empty containers in the index, available and not reserved, else {@link NoJobReason#NO_EMPTY_CONTAINERS}.</li>
+     * <li>The amount of one trip is bounded by <b>both</b> carry limits, the empty and the filled one: 16 empty buckets
+     * fit one grabber stack, 16 lava buckets do not, and the head has to hold what comes out of the bay
+     * ({@code ExchangeDecision}). Buckets therefore travel one per trip, which the owner accepted.</li>
+     * <li>Every (rack, bay) pair is ranked by crane → rack → bay → station ({@link TravelTimeModel#add}), then by index
+     * order, and tried with the live extract at the rack (once per rack) and the live fill at the bay.</li>
+     * </ol>
+     * Nothing planned: {@link NoJobReason#NO_EMPTY_CONTAINERS} when no rack really gave an empty container, otherwise
+     * {@link NoJobReason#NOT_IN_STOCK} (the bays did not have the fluid after all).
+     */
+    private Optional<PlannedJob<K, L>> planFill(PlannerInput<K, L> input, PlannerInput.OpenRequest<K, L> request,
+            int need, Budget budget, Set<NoJobReason> reasons) {
+        PlannerInput.FillSupply<K, L> supply = input.fillSupply();
+        K filledKey = request.key();
+        PlannerInput.FillRecipe<K> recipe = supply.recipe(filledKey).orElse(null);
+        if (recipe == null) {
+            reasons.add(NoJobReason.NOT_IN_STOCK);
+            return Optional.empty();
+        }
+        K emptyKey = recipe.emptyKey();
+        int carry = Math.min(input.carryLimit().applyAsInt(emptyKey), input.carryLimit().applyAsInt(filledKey));
+        int limit = stationRoom(input, request.output(), filledKey, limit(need, carry), true, NoJobReason.OUTPUT_FULL,
+                budget, reasons);
+        if (limit < 1)
+            return Optional.empty();
+        List<PlannerInput.FillBay<L>> bays = new ArrayList<>();
+        for (PlannerInput.FillBay<L> bay : supply.bays(filledKey)) {
+            if (input.available().test(bay.bay()))
+                bays.add(bay);
+        }
+        if (bays.isEmpty()) {
+            reasons.add(NoJobReason.NOT_IN_STOCK);
+            return Optional.empty();
+        }
+        RackPosition stationPos = position(request.output());
+        List<FillCandidate<L>> candidates = new ArrayList<>();
+        int order = 0;
+        for (LocationCount<L> entry : input.stock().locationsOf(emptyKey)) {
+            L rack = entry.location();
+            if (!input.available().test(rack) || input.extractRefused().test(rack, emptyKey))
+                continue;
+            if (entry.count() - input.reservations().reservedStock(rack, emptyKey) <= 0)
+                continue;
+            RackPosition rackPos = position(rack);
+            long toRack = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(),
+                    rackPos.branch(), rackPos.x(), rackPos.y());
+            for (PlannerInput.FillBay<L> bay : bays) {
+                RackPosition bayPos = position(bay.bay());
+                long travel = TravelTimeModel.add(TravelTimeModel.add(toRack,
+                        input.travel().travelTicks(rackPos.branch(), rackPos.x(), rackPos.y(), bayPos.branch(),
+                                bayPos.x(), bayPos.y())),
+                        input.travel().travelTicks(bayPos.branch(), bayPos.x(), bayPos.y(), stationPos.branch(),
+                                stationPos.x(), stationPos.y()));
+                candidates.add(new FillCandidate<>(rack, bay, travel, order++));
+            }
+        }
+        if (candidates.isEmpty()) {
+            reasons.add(NoJobReason.NO_EMPTY_CONTAINERS);
+            return Optional.empty();
+        }
+        candidates.sort(Comparator.comparingLong((FillCandidate<L> candidate) -> candidate.travelTicks())
+                .thenComparingInt(FillCandidate::order));
+        // One live extract per rack, however many bays it is paired with: the empties at a rack do not depend on the bay.
+        Map<L, Long> extractable = new HashMap<>();
+        boolean anyEmpties = false;
+        for (FillCandidate<L> candidate : candidates) {
+            L rack = candidate.rack();
+            Long known = extractable.get(rack);
+            if (known == null) {
+                if (!budget.tryUse())
+                    return Optional.empty();
+                long reserved = input.reservations().reservedStock(rack, emptyKey);
+                int ask = CapacityMath.toIntClamped(limit + reserved);
+                known = Math.max(0L, input.liveExtract().simulateExtract(rack, emptyKey, ask) - reserved);
+                extractable.put(rack, known);
+            }
+            if (known <= 0)
+                continue;
+            anyEmpties = true;
+            int wanted = (int) Math.min(Math.min(limit, known), candidate.bay().wholeContainers());
+            if (!budget.tryUse())
+                return Optional.empty();
+            int amount = Math.min(wanted, supply.liveFill(candidate.bay().bay(), emptyKey, wanted));
+            if (amount > 0) {
+                TransportJob<K, L> job = TransportJob.fill(newId(), rack, candidate.bay().bay(), emptyKey, amount,
+                        request.id());
+                return Optional.of(new PlannedJob<>(job, fillTripTicks(input, job, request.output())));
+            }
+        }
+        reasons.add(anyEmpties ? NoJobReason.NOT_IN_STOCK : NoJobReason.NO_EMPTY_CONTAINERS);
+        return Optional.empty();
+    }
+
+    /** One (rack, bay) pair of a fill trip, ranked by the travel of its three legs, then by index order. */
+    private record FillCandidate<L>(L rack, PlannerInput.FillBay<L> bay, long travelTicks, int order) {
     }
 
     // --- collect (M18, issue #13) --------------------------------------------------------------------------------
@@ -963,6 +1102,19 @@ public final class JobPlanner<K, L> {
                 input.travel().travelTicks(from.branch(), from.x(), from.y(), to.branch(), to.x(), to.y()));
         return TravelTimeModel.add(total,
                 TravelTimeModel.stopTicks(input.speeds(), input.transferTicks(), job.targetKind().armStroke()));
+    }
+
+    /**
+     * A fill trip's estimated ticks (M31): {@link #tripTicks} to the bay, then the leg on to {@code station} and a stop
+     * there with an output's arm stroke (ADR-072).
+     */
+    private long fillTripTicks(PlannerInput<K, L> input, TransportJob<K, L> job, L station) {
+        RackPosition bay = position(job.target());
+        RackPosition to = position(station);
+        long total = TravelTimeModel.add(tripTicks(input, job),
+                input.travel().travelTicks(bay.branch(), bay.x(), bay.y(), to.branch(), to.x(), to.y()));
+        return TravelTimeModel.add(total,
+                TravelTimeModel.stopTicks(input.speeds(), input.transferTicks(), LocationKind.OUTPUT.armStroke()));
     }
 
     private RackPosition position(L location) {

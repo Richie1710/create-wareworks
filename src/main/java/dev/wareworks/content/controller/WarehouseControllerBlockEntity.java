@@ -2,6 +2,7 @@ package dev.wareworks.content.controller;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -32,15 +33,20 @@ import com.simibubi.create.foundation.blockEntity.behaviour.CenteredSideValueBox
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.crane.head.InventoryGrabber;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.HomePointStatus;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.TerminalFluidOutcome;
+import dev.wareworks.content.station.TerminalFluids;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
+import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.core.address.AisleGeometry;
@@ -62,8 +68,10 @@ import dev.wareworks.core.job.FilterMatch;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.PlannerInput;
+import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RequestQueue;
 import dev.wareworks.core.job.RerouteTarget;
+import dev.wareworks.core.job.Reservation;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
@@ -93,6 +101,7 @@ import dev.wareworks.core.stock.RestockLimits;
 import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.RestockPlan;
 import dev.wareworks.core.stock.RestockPlanner;
+import dev.wareworks.content.station.KeeperRule;
 import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.stock.StockAvailability;
 import dev.wareworks.core.stock.StockLevels;
@@ -101,6 +110,11 @@ import dev.wareworks.core.stock.StockRuleEvaluation;
 import dev.wareworks.core.stock.StockRulePause;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.stock.StockRules;
+import dev.wareworks.core.terminal.ContainerPlan;
+import dev.wareworks.core.terminal.FillTrips;
+import dev.wareworks.core.terminal.FluidAcknowledgement;
+import dev.wareworks.core.terminal.FluidQuestion;
+import dev.wareworks.core.terminal.FluidRowState;
 import dev.wareworks.core.terminal.ListLine;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
@@ -266,6 +280,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private final SharedInventories<RackPosition, Object> sharedInventories = new SharedInventories<>();
     /** Open retrieval requests; destinations are world positions of output stations. Saved. */
     private final RequestQueue<ItemKey, BlockPos> requests = new RequestQueue<>(configuredMaxOpenRequests());
+    /**
+     * What a filled container key a fill request asks for is made of (M31, issue #21, ADR-073): measured on probes
+     * once per key and remembered, bounded, never saved.
+     */
+    private final FillRecipes fillRecipes = new FillRecipes();
     /** Store filters of the storage locations, cached for planning; read from the interfaces, not saved. */
     private final AisleFilters filters = new AisleFilters();
     /**
@@ -1667,7 +1686,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * producible amount computed half against one state of the queue and half against another is nobody's answer.
      */
     private ToLongFunction<ItemKey> availabilityLookup() {
-        Map<ItemKey, Long> requested = requests.remainingByKey();
+        Map<ItemKey, Long> requested = itemPromisedByKey();
         Map<ItemKey, Long> ingredients = productionOrders.outstandingIngredientsByKey();
         ReservationView<ItemKey, RackPosition> reservations = dispatch.reservations();
         return key -> reservations.availableStock(key, stock.count(key),
@@ -2932,7 +2951,496 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // Open production orders promise their ingredients exactly as open requests promise their items: both are
         // already spoken for, so neither may be handed out twice (§3.5, ADR-024).
         return dispatch.reservations().availableStock(key, stock.count(key),
-                requests.remainingOf(key) + productionOrders.outstandingIngredient(key));
+                requests.remainingOf(key) + fillLedger().owedEmpties(key) + productionOrders.outstandingIngredient(key));
+    }
+
+    // --- fill requests (M31, issue #21, ADR-073) ----------------------------------------------------------------------
+
+    /**
+     * Where a fill trip goes once its containers are filled: the station of its open fill request, that station's kind
+     * and the filled key the request asked for.
+     *
+     * @param station  the station's rack position
+     * @param kind     its kind, an {@link LocationKind#OUTPUT}
+     * @param expected the filled container the request asked for, which the fill must hand back exactly
+     */
+    public record FillDestination(RackPosition station, LocationKind kind, ItemKey expected) {
+        public FillDestination {
+            Objects.requireNonNull(station, "station");
+            Objects.requireNonNull(kind, "kind");
+            Objects.requireNonNull(expected, "expected");
+        }
+    }
+
+    /**
+     * Server: where {@code job}, a fill trip at its bay, goes once its containers are filled ({@code
+     * CraneExecution#performFill}): the station of its open fill request and the key that request asked for — or empty
+     * when nobody is waiting any more (the request is gone, it is no fill request, its station is no output of this
+     * warehouse, or the containers the job carries are not what that key is filled from). An empty answer means "do not
+     * fill": the empties are rerouted onto a shelf.
+     */
+    public Optional<FillDestination> fillDestination(TransportJob<ItemKey, RackPosition> job) {
+        Objects.requireNonNull(job, "job");
+        if (level == null || level.isClientSide || layout == null || job.type() != JobType.FILL)
+            return Optional.empty();
+        Optional<RetrievalRequest<ItemKey, BlockPos>> request = job.requestId().flatMap(requests::get);
+        if (request.isEmpty() || !request.get().isFill())
+            return Optional.empty();
+        Optional<FillLedger.Recipe<ItemKey, FluidKey>> recipe = fillRecipes.of(request.get().key());
+        if (recipe.isEmpty() || !recipe.get().emptyKey().equals(job.key()))
+            return Optional.empty();
+        return rackOf(request.get().destination())
+                .filter(rack -> kindAt(rack).orElse(null) == LocationKind.OUTPUT)
+                .map(rack -> new FillDestination(rack, LocationKind.OUTPUT, request.get().key()));
+    }
+
+    /**
+     * The recipe of a filled container key (M31): its empty container, fluid and millibuckets, or empty when it cannot
+     * be filled from an empty container of its own.
+     */
+    public Optional<FillLedger.Recipe<ItemKey, FluidKey>> fillRecipe(ItemKey filledKey) {
+        return fillRecipes.of(Objects.requireNonNull(filledKey, "filledKey"));
+    }
+
+    /**
+     * What the open fill requests have promised right now (M31, D5): empty containers out of the racks, fluid out of
+     * the bays and the fluid planned trips will take out of each bay. Rebuilt per question from the request queue and
+     * the job the dispatch tracks, never saved; a warehouse without fill requests answers {@link FillLedger#empty()}
+     * after one pass over the queue.
+     */
+    public FillLedger<ItemKey, FluidKey, RackPosition> fillLedger() {
+        List<RetrievalRequest<ItemKey, BlockPos>> fills = requests.requestsOf(RequestKind.FILL);
+        if (fills.isEmpty())
+            return FillLedger.empty();
+        return FillLedger.of(fills, dispatch.trackedJobs(), fillRecipes::of);
+    }
+
+    /**
+     * Millibuckets of {@code fluid} a new fill request may still claim: what the bays hold minus what the open fill
+     * requests still need (M31, D5). Never negative.
+     */
+    public long availableFluid(FluidKey fluid) {
+        Objects.requireNonNull(fluid, "fluid");
+        return Math.max(0L, fluidStock.count(fluid) - fillLedger().owedFluid(fluid));
+    }
+
+    /**
+     * How many filled containers of {@code filledKey} a new fill request of {@code access} may still be promised: the
+     * empty containers it may take and the whole containers' worth of fluid not promised yet, whichever is smaller (M31,
+     * D5). 0 when the key cannot be filled.
+     */
+    public long fillableContainers(ItemKey filledKey, StockAccess access) {
+        Objects.requireNonNull(filledKey, "filledKey");
+        Objects.requireNonNull(access, "access");
+        Optional<FillLedger.Recipe<ItemKey, FluidKey>> recipe = fillRecipes.of(filledKey);
+        if (recipe.isEmpty())
+            return 0L;
+        long empties = availableTo(access, recipe.get().emptyKey());
+        long fluid = availableFluidTo(access, recipe.get().fluid()) / recipe.get().millibuckets();
+        return Math.max(0L, Math.min(empties, fluid));
+    }
+
+    /**
+     * Server: a <b>fill request</b> for up to {@code containers} filled containers of {@code filledKey}, to be delivered
+     * to the output station at {@code stationPos} (M31, issue #21, ADR-073) — the one-portion form for a redstone port and
+     * for GameTests; it asks nobody.
+     * <p>
+     * It is an ordinary request in the one queue, marked {@link RequestKind#FILL}: the same destination check, the same
+     * caps, the same merging (into an open fill request of the same key and station only) and the same fairness. The
+     * amount is clamped to {@link #fillableContainers}, so the request promises only empty containers and fluid that are
+     * there and not promised yet; it is then served by fill trips ({@code JobPlanner#planFill}), never out of the racks.
+     * A key that cannot be filled, or nothing to fill it with, answers {@link RequestRejection#NOT_IN_STOCK}.
+     *
+     * @param maxRemainingPerRequest largest amount one request of this station may wait for, at least 1
+     * @param access                 who is asking: a stock rule's reserve of the empty container holds it back from
+     *                               {@link StockAccess#AUTOMATION}
+     * @throws IllegalArgumentException if {@code containers < 1} or {@code maxRemainingPerRequest < 1}
+     */
+    public RequestResult requestFillContainers(BlockPos stationPos, ItemKey filledKey, int containers,
+            int maxRemainingPerRequest, StockAccess access) {
+        Objects.requireNonNull(stationPos, "stationPos");
+        Objects.requireNonNull(filledKey, "filledKey");
+        Objects.requireNonNull(access, "access");
+        if (containers < 1)
+            throw new IllegalArgumentException("containers must be at least 1: " + containers);
+        if (level == null || level.isClientSide || isRemoved() || layout == null
+                || !isRequestDestination(layout, stationPos))
+            return RequestResult.rejected(RequestRejection.NO_CONTROLLER);
+        return addFill(stationPos, filledKey, containers, maxRemainingPerRequest, access, 0L);
+    }
+
+    /**
+     * One fill request of up to {@code containers} filled containers of {@code filledKey} for {@code destination}, which
+     * the caller has checked: the shared body of {@link #requestFillContainers} and of every portion of
+     * {@link #requestFill}.
+     *
+     * @param extraEmpties empty containers the request may be promised <b>beyond</b> what the racks hold: the ones a
+     *                     production chain the player accepted in the same click is going to make (owner's decision 3).
+     *                     Until they arrive the request waits with {@code NO_EMPTY_CONTAINERS}; once they do, the
+     *                     request's promise keeps everybody else from taking them
+     */
+    private RequestResult addFill(BlockPos destination, ItemKey filledKey, int containers, int maxRemainingPerRequest,
+            StockAccess access, long extraEmpties) {
+        Optional<FillLedger.Recipe<ItemKey, FluidKey>> recipe = fillRecipes.of(filledKey);
+        if (recipe.isEmpty())
+            return RequestResult.rejected(RequestRejection.NOT_IN_STOCK);
+        applyRequestCaps();
+        long empties = availableTo(access, recipe.get().emptyKey()) + Math.max(0L, extraEmpties);
+        // A fluid rule's reserve holds fluid back from automation exactly as an item rule's holds items (M31).
+        long fluid = availableFluidTo(access, recipe.get().fluid()) / recipe.get().millibuckets();
+        long fillable = Math.max(0L, Math.min(empties, fluid));
+        RequestQueue.AddResult<ItemKey, BlockPos> added = requests.add(filledKey, containers, destination.immutable(),
+                candidate -> candidate.equals(filledKey) ? fillable : 0L, Math.max(1, maxRemainingPerRequest),
+                RequestKind.FILL);
+        if (added.request().isEmpty()) {
+            return switch (added.rejection().orElseThrow()) {
+                case QUEUE_FULL -> RequestResult.rejected(RequestRejection.QUEUE_FULL);
+                case DESTINATION_FULL -> RequestResult.rejected(RequestRejection.OUTPUT_FULL);
+                // The fluid is there and the empty containers are on the shelves, held back from this taker by an
+                // item rule's reserve: the reserve's own answer, as for an item port (M15, M31).
+                case NOTHING_AVAILABLE -> RequestResult.rejected(fluid > 0L && empties <= 0L
+                        && access == StockAccess.AUTOMATION && availableStock(recipe.get().emptyKey()) > 0L
+                        ? RequestRejection.RESERVED
+                        // The fluid is there and the container is not: the more specific half of "not in stock" (M31).
+                        : fluid > 0L && empties <= 0L
+                        ? RequestRejection.NO_EMPTY_CONTAINERS
+                        // The fluid is there and held back from this taker: the reserve's own answer (M15, M31).
+                        : fluid <= 0L && access == StockAccess.AUTOMATION
+                                && availableFluid(recipe.get().fluid()) >= recipe.get().millibuckets()
+                                ? RequestRejection.RESERVED : RequestRejection.NOT_IN_STOCK);
+                case REQUEST_FULL -> RequestResult.rejected(RequestRejection.REQUEST_FULL);
+            };
+        }
+        setChanged();
+        markChunkKeepDirty(); // M19: an open request is work
+        RetrievalRequest<ItemKey, BlockPos> accepted = added.request().get();
+        return RequestResult.accepted(requests.get(accepted.id()).orElse(accepted), added.accepted(), added.merged());
+    }
+
+    // --- fluid requests at a terminal (M31, issue #21, ADR-073) ------------------------------------------------------
+
+    /**
+     * Server: one cell per fluid the bays hold, as a terminal shows it (M31, {@code docs/warehouse-system.md} §3.9.6):
+     * what is stored, what a new request may still claim, what a request for all of it would serve with the empty
+     * containers in stock (the Ctrl-click's amount, which the screen never computes itself), and whether there is a
+     * container to fill at all — or a production pattern that makes one.
+     * <p>
+     * <b>Cost.</b> One pass over the fluid index, one over the item index's keys (the empty-container test and every
+     * fill measurement are remembered per key, {@code FillRecipes}; the first is sized to the item index, so a push
+     * without new item types probes nothing), and one fill ledger for all fluids. A warehouse
+     * without fluid in its bays answers at once. Called by a terminal's push, i.e. at most every few ticks per open
+     * screen, never per tick.
+     */
+    public List<TerminalFluids.Row> terminalFluidRows() {
+        if (level == null || level.isClientSide || layout == null || fluidStock.distinctKeys() == 0)
+            return List.of();
+        List<ItemKey> empties = emptyContainersInStock();
+        FillLedger<ItemKey, FluidKey, RackPosition> ledger = fillLedger();
+        List<FluidKey> fluids = new ArrayList<>();
+        for (Map.Entry<FluidKey, Long> stored : fluidStock.totals().entrySet()) {
+            if (stored.getValue() > 0L)
+                fluids.add(stored.getKey());
+        }
+        fluids.sort(FluidKey.ORDER);
+        Set<ItemKey> producible = null;
+        List<TerminalFluids.Row> rows = new ArrayList<>(fluids.size());
+        for (FluidKey fluid : fluids) {
+            long stored = fluidStock.count(fluid);
+            long available = Math.max(0L, stored - ledger.owedFluid(fluid));
+            List<ContainerPlan.Row<ItemKey>> containers = fillRows(fluid, StockAccess.PLAYER, empties);
+            long servable = ContainerPlan.of(containers, available, available, ItemKey.ORDER).servedMb();
+            Optional<ItemKey> largest = containers.isEmpty() ? Optional.empty()
+                    : Optional.of(containers.getFirst().container());
+            int largestMb = containers.isEmpty() ? 0 : containers.getFirst().capacityMb();
+            Optional<ItemKey> makeable = Optional.empty();
+            FluidRowState state;
+            if (available <= 0L) {
+                state = FluidRowState.ALL_PROMISED;
+            } else if (containers.isEmpty()) {
+                if (producible == null)
+                    producible = producibleKeys();
+                makeable = makeableContainer(fluid, producible, Long.MAX_VALUE).map(ContainerPlan.Row::container);
+                state = makeable.isPresent() ? FluidRowState.NO_EMPTY_CONTAINERS_MAKEABLE
+                        : FluidRowState.NO_EMPTY_CONTAINERS;
+            } else {
+                state = FluidRowState.OK;
+            }
+            rows.add(new TerminalFluids.Row(fluid, stored, available, servable, state, largest, largestMb,
+                    makeable));
+        }
+        return List.copyOf(rows);
+    }
+
+    /** The item keys in stock that are empty fluid containers, in {@link ItemKey#ORDER}. */
+    private List<ItemKey> emptyContainersInStock() {
+        List<ItemKey> empties = new ArrayList<>();
+        fillRecipes.expectItemTypes(stock.distinctKeys());
+        for (Map.Entry<ItemKey, Long> stored : stock.totals().entrySet()) {
+            if (stored.getValue() > 0L && fillRecipes.isEmptyContainer(stored.getKey()))
+                empties.add(stored.getKey());
+        }
+        empties.sort(ItemKey.ORDER);
+        return empties;
+    }
+
+    /**
+     * The empty containers of {@code empties} that {@code fluid} fills whole and that drain back to exactly what they
+     * were, each with what {@code access} may still be promised of it, largest capacity first and at most
+     * {@value ContainerPlan#MAX_PORTIONS} kinds. A container nothing is available of is left out.
+     */
+    private List<ContainerPlan.Row<ItemKey>> fillRows(FluidKey fluid, StockAccess access, List<ItemKey> empties) {
+        List<ContainerPlan.Row<ItemKey>> rows = new ArrayList<>();
+        for (ItemKey empty : empties) {
+            Optional<FluidContainers.Filled> filled = fillRecipes.fillOf(empty, fluid);
+            if (filled.isEmpty())
+                continue;
+            long available = availableTo(access, empty);
+            if (available > 0L)
+                rows.add(new ContainerPlan.Row<>(empty, filled.get().filled(), filled.get().millibuckets(), available));
+        }
+        rows.sort(Comparator.comparingInt((ContainerPlan.Row<ItemKey> row) -> row.capacityMb()).reversed()
+                .thenComparing(ContainerPlan.Row::container, ItemKey.ORDER));
+        return rows.size() <= ContainerPlan.MAX_PORTIONS ? rows
+                : new ArrayList<>(rows.subList(0, ContainerPlan.MAX_PORTIONS));
+    }
+
+    /**
+     * The largest empty container a production pattern of this aisle makes that {@code fluid} fills and that holds at
+     * most {@code atMostMb}, as a row with nothing available (owner's decision 3: offer to make containers).
+     */
+    private Optional<ContainerPlan.Row<ItemKey>> makeableContainer(FluidKey fluid, Set<ItemKey> producible,
+            long atMostMb) {
+        ContainerPlan.Row<ItemKey> best = null;
+        for (ItemKey key : producible) {
+            if (!fillRecipes.isEmptyContainer(key))
+                continue;
+            Optional<FluidContainers.Filled> filled = fillRecipes.fillOf(key, fluid);
+            if (filled.isEmpty() || filled.get().millibuckets() > atMostMb)
+                continue;
+            ContainerPlan.Row<ItemKey> row = new ContainerPlan.Row<>(key, filled.get().filled(),
+                    filled.get().millibuckets(), 0L);
+            if (best == null || row.capacityMb() > best.capacityMb() || (row.capacityMb() == best.capacityMb()
+                    && ItemKey.ORDER.compare(row.container(), best.container()) < 0))
+                best = row;
+        }
+        return Optional.ofNullable(best);
+    }
+
+    /** A fluid request measured: the question it raises, and the chain that would make its containers, if any. */
+    private record FillMeasure(FluidQuestion<ItemKey, FluidKey> question,
+                               @Nullable ProductionPlan<ItemKey, RackPosition> makePlan) {
+    }
+
+    /**
+     * What a request for {@code askedMb} of {@code fluid} to {@code destination} would mean right now: the containers
+     * ({@link ContainerPlan}, greedy and largest first), the trips, the shortfall, the station's room, the reserves,
+     * and — for a player, when the racks hold too few containers and a pattern makes more — the chain that would make
+     * them (the planner behind {@link #previewProduction}, side-effect free). Nothing is promised.
+     */
+    private FillMeasure measureFill(BlockPos destination, FluidKey fluid, long askedMb, StockAccess access) {
+        List<ContainerPlan.Row<ItemKey>> rows = fillRows(fluid, access, emptyContainersInStock());
+        long fluidAvailable = availableFluidTo(access, fluid);
+        ContainerPlan<ItemKey> plan = ContainerPlan.of(rows, askedMb, fluidAvailable, ItemKey.ORDER);
+        long target = Math.min(plan.askedMb(), fluidAvailable);
+        Optional<FluidQuestion.MakeOffer<ItemKey>> make = Optional.empty();
+        ProductionPlan<ItemKey, RackPosition> makePlan = null;
+        boolean shortOfContainers = plan.shortfall() == ContainerPlan.Shortfall.NO_CONTAINERS
+                || plan.shortfall() == ContainerPlan.Shortfall.NOT_ENOUGH_CONTAINERS;
+        if (access == StockAccess.PLAYER && shortOfContainers && target > plan.servedMb()) {
+            long left = target - plan.servedMb();
+            Optional<ContainerPlan.Row<ItemKey>> makeable = makeableContainer(fluid, producibleKeys(), left);
+            if (makeable.isPresent()) {
+                ContainerPlan.Row<ItemKey> row = makeable.get();
+                int wanted = (int) Math.min(Integer.MAX_VALUE, left / row.capacityMb());
+                ProductionPlan<ItemKey, RackPosition> chain = planProduction(productionPlanInput(aislePatterns(),
+                        StockAvailability.of(stockRules(), access, availabilityLookup())), row.container(), wanted)
+                        .flatMap(ProductionPlanResult::plan).orElse(null);
+                int count = chain == null ? 0 : (int) Math.min(wanted, chain.rootPromise());
+                if (count >= 1) {
+                    make = Optional.of(new FluidQuestion.MakeOffer<>(row.container(), row.filled(), row.capacityMb(),
+                            count));
+                    makePlan = chain;
+                }
+            }
+        }
+        long served = plan.servedMb() + make.map(FluidQuestion.MakeOffer::millibuckets).orElse(0L);
+        ContainerPlan.Shortfall shortfall = served >= plan.askedMb() ? ContainerPlan.Shortfall.NONE
+                : served >= target ? ContainerPlan.Shortfall.NOT_ENOUGH_FLUID : plan.shortfall();
+        List<ContainerPlan.Portion<ItemKey>> all = new ArrayList<>(plan.portions());
+        make.ifPresent(offer -> all.add(new ContainerPlan.Portion<>(offer.container(), offer.filled(),
+                offer.capacityMb(), offer.count())));
+        int trips = FillTrips.of(all, WarehouseControllerBlockEntity::perTrip);
+        int perTrip = all.isEmpty() ? 1 : perTrip(all.getFirst());
+        int stationSlots = all.isEmpty() ? 0 : roomAt(destination, all.getFirst().filled());
+        StockRules<ItemKey> rules = stockRules();
+        List<FluidQuestion.ReservedEmpties<ItemKey>> reserves = new ArrayList<>();
+        if (rules.governingCount() > 0) {
+            for (ContainerPlan.Portion<ItemKey> portion : plan.portions()) {
+                long available = availableStock(portion.container());
+                long fromReserve = rules.fromReserve(portion.container(), available, portion.count());
+                if (fromReserve > 0L)
+                    reserves.add(new FluidQuestion.ReservedEmpties<>(portion.container(), fromReserve,
+                            rules.heldBack(portion.container(), available)));
+            }
+        }
+        // A fluid rule's reserve, named for a player exactly as an item rule's is (M15, M31): it does not hold a player
+        // back, it is said.
+        StockRules<FluidKey> fluidRules = fluidStockRules();
+        long fluidFromReserve = fluidRules.fromReserve(fluid, fluidAvailable, served);
+        long fluidReserved = fluidFromReserve > 0L ? fluidRules.heldBack(fluid, fluidAvailable) : 0L;
+        FluidQuestion<ItemKey, FluidKey> question = new FluidQuestion<>(fluid, plan.askedMb(), served,
+                plan.portions(), make, trips, perTrip, shortfall, fluidAvailable, plan.containersInStock(),
+                plan.smallestStep(), stationSlots, fluidFromReserve, fluidReserved, reserves);
+        return new FillMeasure(question, makePlan);
+    }
+
+    /** Containers of one portion a single crane trip carries: as many as the head may hold of the empty and the filled. */
+    private static int perTrip(ContainerPlan.Portion<ItemKey> portion) {
+        return Math.max(1, Math.min(InventoryGrabber.carryLimitFor(portion.container()),
+                InventoryGrabber.carryLimitFor(portion.filled())));
+    }
+
+    /** How many of {@code key} the station at {@code pos} could take right now; 0 when there is none. */
+    private int roomAt(BlockPos pos, ItemKey key) {
+        if (level == null || !level.isLoaded(pos))
+            return 0;
+        return level.getBlockEntity(pos) instanceof WarehouseStationBlockEntity station ? station.roomFor(key) : 0;
+    }
+
+    /**
+     * Server: a player's request for {@code askedMb} of {@code fluid}, filled into empty containers from the racks and
+     * delivered to {@code destination} (M31, issue #21, ADR-073, {@code docs/warehouse-system.md} §3.9.6).
+     * <p>
+     * <b>It always asks first.</b> The request is measured ({@link #measureFill}) and the question is the answer unless
+     * {@code acknowledged} names exactly that question ({@link FluidAcknowledgement#covers}); a warehouse that moved
+     * since the question is asked about again. A request that can serve nothing is refused instead —
+     * {@link RequestRejection#NO_EMPTY_CONTAINERS} when the fluid is there and no container is (and no pattern makes
+     * one), {@link RequestRejection#NOT_IN_STOCK} when the fluid is not — unless what is missing is a container small
+     * enough, which the question explains with no Fetch.
+     * <p>
+     * <b>On consent</b> the queue is checked first ({@link RequestQueue#roomFor}): when the station's cap or the queue's
+     * cannot take a request for every portion, the click is refused with {@link RequestRejection#OUTPUT_FULL} or
+     * {@link RequestRejection#QUEUE_FULL} and nothing is started. Otherwise the plan is decomposed into <b>one fill
+     * request per portion</b> — ordinary requests in the one queue, kind {@link RequestKind#FILL}, each clamped to what
+     * is there at that moment. The made portion comes last and may be promised the containers its chain makes; the
+     * chain is started only once that request is accepted, for no more containers than it was granted, with no backing
+     * request ({@code startProductionPlan(plan, null)}, the restock shape: the made containers land in stock), and the
+     * request is held to what the started chain promises. It waits with {@code NO_EMPTY_CONTAINERS} until they arrive.
+     *
+     * @param maxMb largest amount one click may ask for, in mB; {@code askedMb} is clamped to it
+     * @return the question, or the resolved request: the first fill request made and the containers granted in all
+     */
+    public TerminalFluidOutcome requestFill(BlockPos destination, FluidKey fluid, long askedMb, long maxMb,
+            StockAccess access, FluidAcknowledgement acknowledged) {
+        Objects.requireNonNull(destination, "destination");
+        Objects.requireNonNull(fluid, "fluid");
+        Objects.requireNonNull(access, "access");
+        Objects.requireNonNull(acknowledged, "acknowledged");
+        if (askedMb < 1L)
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.INVALID_AMOUNT));
+        if (level == null || level.isClientSide || isRemoved() || layout == null
+                || !isRequestDestination(layout, destination))
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
+        if (fluidStock.count(fluid) <= 0L)
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.NOT_IN_STOCK));
+        long asked = Math.min(askedMb, Math.max(1L, maxMb));
+        FillMeasure measured = measureFill(destination, fluid, asked, access);
+        FluidQuestion<ItemKey, FluidKey> question = measured.question();
+        if (!question.canFetch()) {
+            if (question.fluidAvailableMb() <= 0L)
+                return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.NOT_IN_STOCK));
+            if (question.shortfall() == ContainerPlan.Shortfall.NO_CONTAINERS)
+                return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.NO_EMPTY_CONTAINERS));
+            return TerminalFluidOutcome.asking(question);
+        }
+        if (!acknowledged.covers(question))
+            return TerminalFluidOutcome.asking(question);
+        Optional<FluidQuestion.MakeOffer<ItemKey>> offer = measured.makePlan() == null ? Optional.empty()
+                : question.make();
+        // Room first: a chain that makes containers is only started once its fill request is in the queue, and nothing
+        // is started when the queue cannot take every portion's request (the station's cap or the queue's).
+        applyRequestCaps();
+        List<ItemKey> filledKeys = new ArrayList<>();
+        for (ContainerPlan.Portion<ItemKey> portion : question.portions())
+            filledKeys.add(portion.filled());
+        offer.ifPresent(made -> filledKeys.add(made.filled()));
+        Optional<RequestQueue.Rejection> noRoom = requests.roomFor(destination.immutable(), filledKeys,
+                RequestKind.FILL);
+        if (noRoom.isPresent())
+            return TerminalFluidOutcome.of(RequestResult.rejected(noRoom.get() == RequestQueue.Rejection.QUEUE_FULL
+                    ? RequestRejection.QUEUE_FULL : RequestRejection.OUTPUT_FULL));
+        RetrievalRequest<ItemKey, BlockPos> first = null;
+        int granted = 0;
+        boolean merged = false;
+        RequestResult refused = null;
+        for (ContainerPlan.Portion<ItemKey> portion : question.portions()) {
+            RequestResult result = addFill(destination, portion.filled(), portion.count(),
+                    maxContainers(maxMb, portion.capacityMb()), access, 0L);
+            if (!result.isAccepted()) {
+                refused = refused == null ? result : refused;
+                continue;
+            }
+            granted += result.granted();
+            merged |= result.merged();
+            if (first == null)
+                first = result.request().orElse(null);
+        }
+        if (offer.isPresent()) {
+            // The made portion is promised the containers its chain is going to make; the chain is started only once
+            // that request is accepted, and for no more containers than it was granted.
+            FluidQuestion.MakeOffer<ItemKey> make = offer.get();
+            RequestResult result = addFill(destination, make.filled(), make.count(),
+                    maxContainers(maxMb, make.capacityMb()), access, make.count());
+            int promised = result.isAccepted() ? Math.min(make.count(), result.granted()) : 0;
+            int made = promised < 1 ? 0 : startMadeContainers(measured.makePlan(), make.container(), promised, access);
+            if (result.isAccepted() && made < result.granted()) {
+                // The chain makes fewer than were promised (or nothing): the request is held to what is being made.
+                RetrievalRequest<ItemKey, BlockPos> request = result.request().orElseThrow();
+                requests.reduce(request.id(), result.granted() - made);
+            }
+            if (!result.isAccepted()) {
+                refused = refused == null ? result : refused;
+            } else if (made > 0) {
+                granted += made;
+                merged |= result.merged();
+                if (first == null)
+                    first = requests.get(result.request().orElseThrow().id()).orElse(null);
+            }
+        }
+        if (first == null || granted < 1)
+            return TerminalFluidOutcome.of(refused != null ? refused
+                    : RequestResult.rejected(RequestRejection.NOT_IN_STOCK));
+        return TerminalFluidOutcome.of(RequestResult.accepted(requests.get(first.id()).orElse(first), granted,
+                merged));
+    }
+
+    /** Largest number of containers of {@code capacityMb} one click bounded by {@code maxMb} may ask for, at least 1. */
+    private static int maxContainers(long maxMb, int capacityMb) {
+        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, Math.max(1L, maxMb) / capacityMb));
+    }
+
+    /**
+     * Starts the accepted chain that makes {@code count} empty containers of {@code container} for a fluid click, with
+     * no backing request (the restock shape: the made containers land in stock). The preview may have planned whole runs
+     * for more than that; the chain is then re-walked for exactly {@code count}, from the same snapshot, as a click's
+     * chain is.
+     *
+     * @return how many containers the started chain promises, at most {@code count}; 0 when nothing was started
+     */
+    private int startMadeContainers(ProductionPlan<ItemKey, RackPosition> preview, ItemKey container, int count,
+            StockAccess access) {
+        ProductionPlan<ItemKey, RackPosition> chain = preview;
+        if (chain.rootPromise() > count)
+            chain = planProduction(productionPlanInput(aislePatterns(), StockAvailability.of(stockRules(), access,
+                    availabilityLookup())), container, count).flatMap(ProductionPlanResult::plan).orElse(null);
+        return chain == null ? 0 : Math.min(count, startProductionPlan(chain, null));
+    }
+
+    /** Applies the configured caps of the request queue before a request is added or its room is checked. */
+    private void applyRequestCaps() {
+        requests.setMaxOpenRequests(configuredMaxOpenRequests());
+        requests.setMaxOpenRequestsPerDestination(Math.max(RequestQueue.MIN_OPEN_REQUESTS,
+                WareworksConfig.maxOpenRequestsPerOutput()));
     }
 
     /**
@@ -2947,6 +3455,81 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public StockRules<ItemKey> stockRules() {
         return stockRules.rules();
+    }
+
+    /**
+     * The aisle's <b>fluid</b> rules (M31, issue #21, ADR-073): the stock keeper rows that count the fluid of their
+     * filled container, keyed by the fluid and counted in millibuckets, from the same saved copy as
+     * {@link #stockRules()}. Their maximum bounds what the crane stores into a fluid bay
+     * ({@link #fluidContainerHeadroom}), their reserve holds fluid back from {@link StockAccess#AUTOMATION}
+     * ({@link #availableFluidTo}), and their minimum is only shown: no pattern makes fluid. Empty for every aisle without
+     * such a row, which then behaves exactly as before.
+     */
+    public StockRules<FluidKey> fluidStockRules() {
+        return stockRules.fluidRules();
+    }
+
+    /**
+     * What this warehouse knows about one fluid, as a fluid rule is judged against it (M31): what the bays hold, what a
+     * transport job is carrying into a bay ({@link #inboundFluid}), nothing expected (no pattern makes fluid), and what
+     * a new fill request may still claim ({@link #availableFluid}). All in millibuckets.
+     */
+    public StockLevels fluidStockLevelsOf(FluidKey fluid) {
+        Objects.requireNonNull(fluid, "fluid");
+        return new StockLevels(fluidStock.count(fluid), inboundFluid(fluid), 0L, availableFluid(fluid));
+    }
+
+    /**
+     * Millibuckets of {@code fluid} that a transport job is carrying into a fluid bay right now, inside filled
+     * containers (M31): the capacity reserved at a bay, times what each reserved container holds. A walk over the
+     * reservation ledger, which holds the jobs of one crane, and asked only for a fluid a rule governs.
+     */
+    long inboundFluid(FluidKey fluid) {
+        long inbound = 0L;
+        for (Reservation<ItemKey, RackPosition> reservation : dispatch.reservations().reservations()) {
+            if (reservation.kind() != Reservation.Kind.CAPACITY || !takesFluidContainers(reservation.location()))
+                continue;
+            Optional<FluidContainers.Contents> contents = FluidContainers.contents(reservation.key());
+            if (contents.isPresent() && contents.get().fluid().equals(fluid))
+                inbound += (long) reservation.amount() * contents.get().millibuckets();
+        }
+        return inbound;
+    }
+
+    /**
+     * Millibuckets of {@code fluid} the given taker may still be promised (M31): {@link #availableFluid} for a
+     * {@link StockAccess#PLAYER}, and what is left above a governing fluid rule's reserve for
+     * {@link StockAccess#AUTOMATION} — {@link #availableTo} for fluid, with M15's meaning unchanged.
+     */
+    public long availableFluidTo(StockAccess access, FluidKey fluid) {
+        Objects.requireNonNull(access, "access");
+        Objects.requireNonNull(fluid, "fluid");
+        return fluidStockRules().availableTo(access, fluid, availableFluid(fluid));
+    }
+
+    /**
+     * How many containers of {@code containerKey} a fluid bay may still take under a governing fluid rule's maximum
+     * (M31, issue #21, ADR-073): the rule's headroom over what the bays hold and what is on its way into one, in whole
+     * containers. {@link Integer#MAX_VALUE} for an item that carries no fluid and for a fluid no rule caps, at the cost
+     * of one map lookup.
+     * <p>
+     * This is what bounds the crane's store into a bay: a bay at the cap answers 0, so a filled container is shelved as
+     * an item instead (M30's "a full bay stores the container as an item"). A pipe at a bay's back is not held to it —
+     * that is the player's own plumbing, the bulk path, and nothing the crane decides.
+     */
+    public int fluidContainerHeadroom(ItemKey containerKey) {
+        Objects.requireNonNull(containerKey, "containerKey");
+        if (fluidStockRules().isEmpty())
+            return Integer.MAX_VALUE;
+        Optional<FluidContainers.Contents> contents = FluidContainers.contents(containerKey);
+        if (contents.isEmpty() || contents.get().millibuckets() <= 0)
+            return Integer.MAX_VALUE;
+        FluidKey fluid = contents.get().fluid();
+        Optional<StockRule<FluidKey>> rule = fluidStockRules().ruleFor(fluid);
+        if (rule.isEmpty() || !rule.get().hasMaximum())
+            return Integer.MAX_VALUE;
+        long room = rule.get().headroom(fluidStock.count(fluid), inboundFluid(fluid), 0L);
+        return (int) Math.min(Integer.MAX_VALUE, room / contents.get().millibuckets());
     }
 
     /**
@@ -3084,7 +3667,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // out of the cache.
         if (ruleEvaluationTick == now && ruleEvaluationOf == rules && ruleEvaluationRestock == restockOutcomes)
             return ruleEvaluations;
-        Map<ItemKey, Long> promised = requests.remainingByKey();
+        Map<ItemKey, Long> promised = itemPromisedByKey();
         List<StockRuleEvaluation<ItemKey>> evaluated =
                 rules.evaluate(key -> stockLevelsOf(key, promised.getOrDefault(key, 0L)));
         if (!restockOutcomes.isEmpty()) {
@@ -3098,11 +3681,37 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                         : RestockOutcome.NOT_GOVERNING));
             evaluated = List.copyOf(overlaid);
         }
+        evaluated = withFluidEvaluations(evaluated);
         ruleEvaluations = evaluated;
         ruleEvaluationTick = now;
         ruleEvaluationOf = rules;
         ruleEvaluationRestock = restockOutcomes;
         return ruleEvaluations;
+    }
+
+    /**
+     * {@code evaluated} with every <b>fluid row</b> judged as the fluid rule it is (M31, issue #21, ADR-073): the item
+     * set holds such a row as an empty placeholder ({@link AisleStockRules}), which reads "no limit set"; here it is
+     * replaced, at the same aisle index, by the fluid rule's status and its levels in millibuckets — with the row's own
+     * ghost item and numbers, so a keeper's screen, lamp, comparator and goggles read a fluid row exactly like an item
+     * row. Restocking never has anything to say about a fluid row: no pattern makes fluid. An aisle without fluid rows
+     * gets {@code evaluated} back untouched.
+     */
+    private List<StockRuleEvaluation<ItemKey>> withFluidEvaluations(List<StockRuleEvaluation<ItemKey>> evaluated) {
+        StockRules<FluidKey> fluids = stockRules.fluidRules();
+        if (fluids.isEmpty())
+            return evaluated;
+        List<StockRuleEvaluation<FluidKey>> judged = fluids.evaluate(this::fluidStockLevelsOf);
+        List<StockRuleEvaluation<ItemKey>> merged = new ArrayList<>(evaluated);
+        for (int index = 0; index < merged.size(); index++) {
+            OptionalInt fluidIndex = stockRules.fluidIndexAt(index);
+            Optional<KeeperRule> row = stockRules.configuredAt(index);
+            if (fluidIndex.isEmpty() || row.isEmpty() || fluidIndex.getAsInt() >= judged.size())
+                continue;
+            StockRuleEvaluation<FluidKey> fluid = judged.get(fluidIndex.getAsInt());
+            merged.set(index, new StockRuleEvaluation<>(index, row.get().rule(), fluid.status(), fluid.levels()));
+        }
+        return List.copyOf(merged);
     }
 
     /**
@@ -3212,7 +3821,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return false;
         if (level.getBlockEntity(pos) instanceof WarehouseStockKeeperBlockEntity keeper && !keeper.isRemoved()
                 && keeper.isAlignedWith(branch.get(), rack.side()))
-            return stockRules.set(rack, keeper.rules().rules());
+            return stockRules.set(rack, keeper.rules().keeperRules());
         return dropStockRulesAt(rack);
     }
 
@@ -3957,7 +4566,23 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * queue every time. A key without an open request is absent (i.e. owes 0).
      */
     public Map<ItemKey, Long> remainingRequestedByKey() {
-        return requests.remainingByKey();
+        return itemPromisedByKey();
+    }
+
+    /**
+     * What the open requests still owe <b>out of the racks</b>, per item key: the remaining amounts of the stock
+     * requests plus the empty containers the fill requests still need (M31, issue #21, ADR-073). A fill request's own
+     * key — the filled container — is deliberately not in it: what that request promised is fluid and an empty
+     * container, never a filled container from a shelf, so an item click on "Lava Bucket" is not clamped by it.
+     */
+    private Map<ItemKey, Long> itemPromisedByKey() {
+        Map<ItemKey, Long> requested = requests.remainingByKey();
+        FillLedger<ItemKey, FluidKey, RackPosition> fills = fillLedger();
+        if (fills.owedEmptiesByKey().isEmpty())
+            return requested;
+        Map<ItemKey, Long> promised = new HashMap<>(requested);
+        fills.owedEmptiesByKey().forEach((key, owed) -> promised.merge(key, owed, Long::sum));
+        return Collections.unmodifiableMap(promised);
     }
 
     /**
@@ -4254,8 +4879,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * carries ({@code onCraneExchanged}, M30, issue #21, D14): a filled container went into a fluid bay's tank and the
      * crane is carrying the empty container away.
      * <p>
-     * <b>Two things, and deliberately nothing else.</b> The reservations follow the job, which now holds another key and
-     * no request at all, and the bay is re-read at once — not for its items, of which it has none, but because this is
+     * <b>Two things, and deliberately nothing else.</b> The reservations follow the job, which now holds another key —
+     * with no request after a drain, and still with its fill request after the fill of a fill trip (M31, issue #21),
+     * whose containers count towards that request only ({@code Reservation.Kind#FILLING}) — and the bay is re-read at
+     * once — not for its items, of which it has none, but because this is
      * the path on which a location's store settings are refreshed, and an unfiltered bay that was empty before this
      * exchange has just learned which fluid it holds.
      * <p>
@@ -4942,7 +5569,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             if (record.kind() == LocationKind.STORAGE)
                 counts.put(record.position(), stock.countsAt(record.position()));
         }
-        Map<RackPosition, List<StockRule<ItemKey>>> rules = stockRules.saved();
+        Map<RackPosition, List<KeeperRule>> rules = stockRules.saved();
         List<ProductionOrder<ItemKey, RackPosition>> orders = productionOrders.all();
         List<RetrievalRequest<ItemKey, BlockPos>> openRequests = requests.requests();
         Map<RackPosition, RackPosition> moved = new HashMap<>();
@@ -4983,9 +5610,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
         for (LocationRecord record : membership.records(LocationKind.OUTPUT))
             ports.markUnread(record.position());
-        Map<RackPosition, List<StockRule<ItemKey>>> remappedRules = new LinkedHashMap<>();
+        Map<RackPosition, List<KeeperRule>> remappedRules = new LinkedHashMap<>();
         List<RackPosition> droppedKeepers = new ArrayList<>();
-        for (Map.Entry<RackPosition, List<StockRule<ItemKey>>> entry : rules.entrySet()) {
+        for (Map.Entry<RackPosition, List<KeeperRule>> entry : rules.entrySet()) {
             RackPosition to = moved.get(entry.getKey());
             if (to != null)
                 remappedRules.put(to, entry.getValue());
@@ -5056,7 +5683,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     /** Every rack position this controller holds anything for, in {@link RackPosition#ORDER} and without duplicates. */
     private static List<RackPosition> knownPositions(List<LocationRecord> records, List<RackPosition> misaligned,
-                                                     Map<RackPosition, List<StockRule<ItemKey>>> rules,
+                                                     Map<RackPosition, List<KeeperRule>> rules,
                                                      List<ProductionOrder<ItemKey, RackPosition>> orders) {
         Set<RackPosition> positions = new TreeSet<>(RackPosition.ORDER);
         for (LocationRecord record : records)
@@ -5095,6 +5722,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         sharedInventories.clear();
         requests.clear();
         productionOrders.clear();
+        fillRecipes.clear();
         dispatch.reset();
     }
 

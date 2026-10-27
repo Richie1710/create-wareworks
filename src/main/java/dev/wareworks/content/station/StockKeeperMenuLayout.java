@@ -125,6 +125,17 @@ public final class StockKeeperMenuLayout {
         return numbersX() - nameX() - NAME_GAP;
     }
 
+    /**
+     * Width of the unit switch at the right end of a filled container's name (M31, issue #21): "B" while the row counts
+     * the fluid (in buckets), "x" while it counts the containers as items.
+     */
+    public static final int UNIT_WIDTH = 14;
+
+    /** Left edge of a row's unit switch, which takes the right end of the name (M31). */
+    public int unitX() {
+        return nameX() + nameWidth() - UNIT_WIDTH;
+    }
+
     /** Left edge of the first of the three number fields. */
     public int numbersX() {
         return WIDTH - MARGIN - STATUS_WIDTH - NUMBER_FIELDS * NUMBER_WIDTH;

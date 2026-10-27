@@ -25,6 +25,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dock like any Create motor, with no setting needed. The README explains what to know with CEE's default config:
   the motor stops below 80 V, its stress capacity is V²/30 SU, and the crane needs about 88 V at 64 RPM, 124 V at
   128 RPM and 175 V at 256 RPM.
+- **Ask the warehouse for fluid at the Warehouse Terminal** ([#21](https://github.com/Richie1710/create-wareworks/issues/21)).
+  Each fluid your fluid bays hold is a row of its own above the items, and a click asks for it in buckets: the amount
+  field, Shift for 16 or Ctrl for everything that can be served. The crane takes empty containers out of stock,
+  largest first, carries them to a fluid bay that fills them, and takes the filled containers straight on to the
+  terminal. A filled bucket fills the grabber, so that is one bucket per trip; for bulk, use a pipe at the back of a
+  bay. Before anything is promised the terminal asks: it names the containers it will use, the number of crane
+  trips and, when it cannot serve the whole amount, the largest whole amount it can. Open fill requests are listed
+  in the terminal's order panel and can be cancelled there. One click asks for at most 64 buckets
+  (`maxTerminalFluidRequestBuckets`)
+- **No empty containers in stock: the fluid row turns red** and says so, with a hint to the pipe at the back of the
+  bay. When one of your production stations has a pattern that makes buckets, the question offers to have them
+  made first, and the fluid is delivered once they arrive. The crane's goggles say "no empty containers in stock"
+- **A warehouse port with a filled bucket in its filter is filled from the fluid bays** once the shelves have no
+  filled buckets for it; while they do, it asks for them as before. "Stock of the Filtered Item" on such a port
+  shows the fluid in the bays
+- **Stock rules for fluid.** A stock keeper row with a filled container can count the fluid in the fluid bays
+  instead of the containers (switch "B" / "x" at the end of the row). Its maximum caps what the crane stores
+  into the bays, its reserve holds fluid back from warehouse ports, and its minimum is shown. Rows from older
+  worlds stay item rules
+- **Ponder scene "Asking the Warehouse for Fluid"** on both fluid bays and the terminal
+
+### Changed
+
+- **A stock rule's numbers now go up to 1 000 000 000** (was 1 000 000), so a rule can count the fluid of a large
+  warehouse in millibuckets. This applies to item rules as well
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because the terminal now carries fluid rows and fluid requests
+  ([#21](https://github.com/Richie1710/create-wareworks/issues/21)). Worlds from older versions load unchanged. Opening
+  a world in an older version of the mod again turns open fluid requests into requests for filled buckets from the
+  shelves, and a crane on a fill trip drops what it carries at its dock, so back up the world before downgrading
 
 ## [0.17.1-beta] - 2026-10-27
 

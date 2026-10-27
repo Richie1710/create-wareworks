@@ -27,7 +27,9 @@ import java.util.function.ToLongFunction;
  * <p>
  * <b>Merging</b> ({@code docs/warehouse-system.md} §7.2, ADR-020). A request for a key a destination already has an open
  * request for does <b>not</b> queue a second request: it grows that one ({@link RetrievalRequest#withAdded}), so clicking
- * the same item ten times is one request the crane serves in one trip. Only the oldest matching request is grown
+ * the same item ten times is one request the crane serves in one trip. Merging keys on the {@link RequestKind} as well
+ * (M31, issue #21): a fill request never grows a stock request of the same key and destination, because the two promise
+ * different things — the one items in the racks, the other fluid in a bay and empty containers. Only the oldest matching request is grown
  * ({@link #openFor}); a merge takes no new queue slot, so neither cap can refuse it, while the amount is clamped like
  * any other: to what is available and to {@code maxRemainingPerRequest}, applied to the <b>merged</b> remaining amount.
  * <p>
@@ -192,6 +194,18 @@ public final class RequestQueue<K, D> {
      */
     public AddResult<K, D> add(K key, int requested, D destination, ToLongFunction<? super K> available,
             int maxRemainingPerRequest) {
+        return add(key, requested, destination, available, maxRemainingPerRequest, RequestKind.STOCK);
+    }
+
+    /**
+     * {@link #add(Object, int, Object, ToLongFunction, int)} for a request of {@code kind} (M31, issue #21): it merges
+     * only into an open request of the same key, destination <b>and</b> kind, and a new request carries the kind.
+     * {@code available} is the caller's measure of what that kind can still promise — item stock for
+     * {@link RequestKind#STOCK}, whole filled containers for {@link RequestKind#FILL}.
+     */
+    public AddResult<K, D> add(K key, int requested, D destination, ToLongFunction<? super K> available,
+            int maxRemainingPerRequest, RequestKind kind) {
+        Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(destination, "destination");
         Objects.requireNonNull(available, "available");
@@ -202,7 +216,7 @@ public final class RequestQueue<K, D> {
         long grantable = Math.min(requested, Math.max(0L, available.applyAsLong(key)));
         if (grantable == 0)
             return AddResult.rejected(Rejection.NOTHING_AVAILABLE);
-        Optional<RetrievalRequest<K, D>> mergeInto = openFor(destination, key);
+        Optional<RetrievalRequest<K, D>> mergeInto = openFor(destination, key, kind);
         long headroom = mergeInto.map(request -> Math.min((long) maxRemainingPerRequest - request.remaining(),
                 (long) Integer.MAX_VALUE - request.requested())).orElse((long) maxRemainingPerRequest);
         if (headroom <= 0)
@@ -225,7 +239,7 @@ public final class RequestQueue<K, D> {
         UUID id = Objects.requireNonNull(idFactory.get(), "id factory returned null");
         if (open.containsKey(id))
             throw new IllegalStateException("duplicate request id " + id);
-        RetrievalRequest<K, D> request = new RetrievalRequest<>(id, key, amount, amount, destination);
+        RetrievalRequest<K, D> request = new RetrievalRequest<>(id, key, amount, amount, destination, kind);
         open.put(id, request);
         return AddResult.accepted(request, amount, false);
     }
@@ -353,14 +367,20 @@ public final class RequestQueue<K, D> {
     }
 
     /**
-     * The open request a further request for {@code key} at {@code destination} would be merged into: the oldest one
-     * with that key and destination, or empty if there is none.
+     * The open {@link RequestKind#STOCK} request a further request for {@code key} at {@code destination} would be
+     * merged into: the oldest one with that key and destination, or empty if there is none.
      */
     public Optional<RetrievalRequest<K, D>> openFor(D destination, K key) {
+        return openFor(destination, key, RequestKind.STOCK);
+    }
+
+    /** {@link #openFor(Object, Object)} for a request of {@code kind} (M31): the oldest open one of that kind too. */
+    public Optional<RetrievalRequest<K, D>> openFor(D destination, K key, RequestKind kind) {
         Objects.requireNonNull(destination, "destination");
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(kind, "kind");
         for (RetrievalRequest<K, D> request : open.values()) {
-            if (request.destination().equals(destination) && request.key().equals(key))
+            if (request.destination().equals(destination) && request.key().equals(key) && request.kind() == kind)
                 return Optional.of(request);
         }
         return Optional.empty();
@@ -382,6 +402,38 @@ public final class RequestQueue<K, D> {
         return openCountFor(destination) >= maxOpenRequestsPerDestination;
     }
 
+    /**
+     * Whether requests of {@code kind} for every key of {@code keys} at {@code destination} would find room in the
+     * queue, without adding anything (M31, issue #21, ADR-073): a key with an open request of that kind and destination
+     * merges into it and needs no room, every other distinct key needs one new request, and all of them together must fit
+     * under both caps. A caller that starts work for several requests at once (the terminal's fluid click, which may
+     * start a production chain for its containers) asks this first, so it never starts the work and then finds its
+     * requests refused.
+     * <p>
+     * It does not foresee {@link Rejection#NOTHING_AVAILABLE} or {@link Rejection#REQUEST_FULL}: they depend on the
+     * caller's availability and amount bound.
+     *
+     * @return the rejection {@link #add} would give the first request that does not fit, or empty when all of them fit
+     */
+    public Optional<Rejection> roomFor(D destination, Collection<? extends K> keys, RequestKind kind) {
+        Objects.requireNonNull(destination, "destination");
+        Objects.requireNonNull(keys, "keys");
+        Objects.requireNonNull(kind, "kind");
+        List<K> fresh = new ArrayList<>();
+        for (K key : keys) {
+            Objects.requireNonNull(key, "key");
+            if (!fresh.contains(key) && openFor(destination, key, kind).isEmpty())
+                fresh.add(key);
+        }
+        if (fresh.isEmpty())
+            return Optional.empty();
+        if (openCountFor(destination) + fresh.size() > maxOpenRequestsPerDestination)
+            return Optional.of(Rejection.DESTINATION_FULL);
+        if (open.size() + fresh.size() > maxOpenRequests)
+            return Optional.of(Rejection.QUEUE_FULL);
+        return Optional.empty();
+    }
+
     /** Sum of the remaining amounts of the requests for {@code destination}. */
     public long remainingFor(D destination) {
         Objects.requireNonNull(destination, "destination");
@@ -394,8 +446,12 @@ public final class RequestQueue<K, D> {
     }
 
     /**
-     * The remaining amounts of every key that has an open request, in <b>one</b> pass over the queue: what each key is
-     * already promised to.
+     * The remaining amounts of every key that has an open {@link RequestKind#STOCK} request, in <b>one</b> pass over
+     * the queue: what each key is already promised to <b>out of the racks</b>.
+     * <p>
+     * A {@link RequestKind#FILL} request is not counted (M31, issue #21): its key is a filled container that does not
+     * exist yet, and what it promises is fluid and empty containers, which its own callers count
+     * ({@link #requestsOf(RequestKind)}).
      * <p>
      * For callers that need the promised amount of many keys at once (a warehouse terminal's stock snapshot,
      * {@code docs/warehouse-system.md} §3.4.1), which would otherwise scan the whole queue once per key.
@@ -404,20 +460,36 @@ public final class RequestQueue<K, D> {
      */
     public Map<K, Long> remainingByKey() {
         Map<K, Long> byKey = new HashMap<>();
-        for (RetrievalRequest<K, D> request : open.values())
-            byKey.merge(request.key(), (long) request.remaining(), Long::sum);
+        for (RetrievalRequest<K, D> request : open.values()) {
+            if (request.kind() == RequestKind.STOCK)
+                byKey.merge(request.key(), (long) request.remaining(), Long::sum);
+        }
         return Collections.unmodifiableMap(byKey);
     }
 
-    /** Sum of the remaining amounts of the requests for {@code key} (the amount of that key already promised). */
+    /**
+     * Sum of the remaining amounts of the {@link RequestKind#STOCK} requests for {@code key} (the amount of that key
+     * already promised out of the racks; a fill request is not counted, see {@link #remainingByKey()}).
+     */
     public long remainingOf(K key) {
         Objects.requireNonNull(key, "key");
         long sum = 0;
         for (RetrievalRequest<K, D> request : open.values()) {
-            if (request.key().equals(key))
+            if (request.kind() == RequestKind.STOCK && request.key().equals(key))
                 sum += request.remaining();
         }
         return sum;
+    }
+
+    /** The open requests of {@code kind}, in queue order (unmodifiable copy). */
+    public List<RetrievalRequest<K, D>> requestsOf(RequestKind kind) {
+        Objects.requireNonNull(kind, "kind");
+        List<RetrievalRequest<K, D>> result = new ArrayList<>();
+        for (RetrievalRequest<K, D> request : open.values()) {
+            if (request.kind() == kind)
+                result.add(request);
+        }
+        return Collections.unmodifiableList(result);
     }
 
     public int openCount() {

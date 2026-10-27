@@ -5,11 +5,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.TreeMap;
 
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.KeeperRule;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRules;
@@ -42,15 +45,29 @@ import dev.wareworks.core.stock.StockRules;
  * Rebuilding is O(total rules) and happens only when a keeper joins, changes or leaves, or when the cap changes —
  * never per tick and never per planning run. A lookup during planning is what {@link StockRules} costs: one hash map
  * read.
+ * <p>
+ * <b>Fluid rules</b> (M31, issue #21, ADR-073). A row may count the fluid of its filled container instead of the item
+ * ({@link KeeperRule#fluid()}). Such a row keeps its place in {@link #rules()} — the aisle-wide index a keeper's screen
+ * and goggles read by — but as an <b>empty</b> item rule, which by {@link StockRules}' own rule neither governs nor
+ * shadows anything, so a lava bucket row that counts lava never caps the lava buckets on the shelves. The same row is
+ * enforced in the parallel {@link #fluidRules()}, keyed by the fluid and counted in millibuckets, with the same "the
+ * first rule governs" meaning among the fluid rows and the same cap: a fluid row at or beyond the aisle's rule cap is
+ * left out of it, exactly as it is inert in {@link #rules()}.
  */
 final class AisleStockRules {
     /** Rules per keeper, in the aisle-wide order the flattened set inherits. */
-    private final Map<RackPosition, List<StockRule<ItemKey>>> perKeeper = new TreeMap<>(RackPosition.ORDER);
+    private final Map<RackPosition, List<KeeperRule>> perKeeper = new TreeMap<>(RackPosition.ORDER);
     /** Where each keeper's rules start in {@link #rules()}, for "what is my row doing" on a keeper's own screen. */
     private final Map<RackPosition, Integer> offsets = new HashMap<>();
 
     private StockRules<ItemKey> flattened = StockRules.empty();
     private int cap = StockRules.NO_CAP;
+    /** Every row in aisle order as it was configured, fluid rows included; parallel to {@link #flattened}. */
+    private List<KeeperRule> configured = List.of();
+    /** The fluid rows below the cap, keyed by fluid and in aisle order (M31). */
+    private StockRules<FluidKey> fluidFlattened = StockRules.empty();
+    /** Where each fluid row of {@link #fluidFlattened} stands in {@link #rules()}: aisle index → fluid index. */
+    private Map<Integer, Integer> fluidIndexOf = Map.of();
 
     /** The aisle's rules, in keeper order and row order. Never {@code null}; empty without keepers. */
     StockRules<ItemKey> rules() {
@@ -60,6 +77,29 @@ final class AisleStockRules {
     /** Whether no keeper of this aisle holds a rule. */
     boolean isEmpty() {
         return flattened.isEmpty();
+    }
+
+    /**
+     * The aisle's fluid rules (M31): one per {@link KeeperRule#fluid() fluid row} below the rule cap, in aisle order,
+     * keyed by the fluid and counted in millibuckets. Never {@code null}; empty without fluid rows, which is what every
+     * aisle before M31 has.
+     */
+    StockRules<FluidKey> fluidRules() {
+        return fluidFlattened;
+    }
+
+    /**
+     * Where the fluid rule of the row at {@code index} of {@link #rules()} stands in {@link #fluidRules()}, or empty for
+     * an item row, a fluid row beyond the cap, or an index out of range.
+     */
+    OptionalInt fluidIndexAt(int index) {
+        Integer fluidIndex = fluidIndexOf.get(index);
+        return fluidIndex == null ? OptionalInt.empty() : OptionalInt.of(fluidIndex);
+    }
+
+    /** The row at {@code index} of {@link #rules()} as it was configured, with its unit; empty out of range. */
+    Optional<KeeperRule> configuredAt(int index) {
+        return index >= 0 && index < configured.size() ? Optional.of(configured.get(index)) : Optional.empty();
     }
 
     /** The rack positions this copy holds rules for, in {@link RackPosition#ORDER}. */
@@ -83,7 +123,7 @@ final class AisleStockRules {
 
     /** How many rules the keeper at {@code rack} contributes to {@link #rules()}; 0 when it holds none. */
     int ruleCountAt(RackPosition rack) {
-        List<StockRule<ItemKey>> rules = perKeeper.get(Objects.requireNonNull(rack, "rack"));
+        List<KeeperRule> rules = perKeeper.get(Objects.requireNonNull(rack, "rack"));
         return rules == null ? 0 : rules.size();
     }
 
@@ -93,11 +133,11 @@ final class AisleStockRules {
      *
      * @return whether the aisle's rule set really changed (a refresh that changed nothing writes nothing)
      */
-    boolean set(RackPosition rack, List<StockRule<ItemKey>> rules) {
+    boolean set(RackPosition rack, List<KeeperRule> rules) {
         Objects.requireNonNull(rack, "rack");
         Objects.requireNonNull(rules, "rules");
-        List<StockRule<ItemKey>> copy = List.copyOf(rules);
-        List<StockRule<ItemKey>> before = perKeeper.put(rack, copy);
+        List<KeeperRule> copy = List.copyOf(rules);
+        List<KeeperRule> before = perKeeper.put(rack, copy);
         if (copy.equals(before))
             return false;
         return rebuild();
@@ -122,13 +162,13 @@ final class AisleStockRules {
         if (clamped == this.cap)
             return false;
         this.cap = clamped;
-        StockRules<ItemKey> before = flattened;
-        flattened = flattened.withCap(clamped);
-        return !flattened.equals(before);
+        // A rebuild rather than withCap: the fluid rules leave out every fluid row at or beyond the cap, so a changed
+        // cap changes which fluid rows exist at all.
+        return rebuild();
     }
 
     /** The saved form: one entry per keeper, in aisle order. */
-    Map<RackPosition, List<StockRule<ItemKey>>> saved() {
+    Map<RackPosition, List<KeeperRule>> saved() {
         return perKeeper;
     }
 
@@ -136,27 +176,51 @@ final class AisleStockRules {
      * Replaces the whole copy with what was saved with the controller. The rules are trusted no further than any other
      * save data: {@link StockRule} clamps every number on construction, and {@link StockRules} bounds the list.
      */
-    void restore(Map<RackPosition, List<StockRule<ItemKey>>> saved) {
+    void restore(Map<RackPosition, List<KeeperRule>> saved) {
         Objects.requireNonNull(saved, "saved");
         perKeeper.clear();
-        for (Map.Entry<RackPosition, List<StockRule<ItemKey>>> entry : saved.entrySet())
+        for (Map.Entry<RackPosition, List<KeeperRule>> entry : saved.entrySet())
             perKeeper.put(entry.getKey(), List.copyOf(entry.getValue()));
         rebuild();
     }
 
     private boolean rebuild() {
         StockRules<ItemKey> before = flattened;
+        StockRules<FluidKey> fluidBefore = fluidFlattened;
+        List<KeeperRule> rows = new ArrayList<>();
         List<StockRule<ItemKey>> all = new ArrayList<>();
+        List<StockRule<FluidKey>> fluids = new ArrayList<>();
+        Map<Integer, Integer> fluidIndices = new HashMap<>();
         offsets.clear();
-        for (Map.Entry<RackPosition, List<StockRule<ItemKey>>> entry : perKeeper.entrySet()) {
-            List<StockRule<ItemKey>> rules = entry.getValue();
+        for (Map.Entry<RackPosition, List<KeeperRule>> entry : perKeeper.entrySet()) {
+            List<KeeperRule> rules = entry.getValue();
             if (rules.isEmpty())
                 continue;
             offsets.put(entry.getKey(), all.size());
-            all.addAll(rules);
+            for (KeeperRule row : rules) {
+                int index = all.size();
+                if (index >= StockRules.MAX_RULES)
+                    break; // what StockRules would drop anyway; kept parallel to it
+                rows.add(row);
+                Optional<FluidKey> fluid = row.fluid();
+                if (fluid.isEmpty()) {
+                    all.add(row.rule());
+                    continue;
+                }
+                // The row keeps its place as an empty item rule, which governs and shadows nothing (StockRules), and is
+                // enforced as a rule on its fluid instead - unless it is beyond the cap, where it is inert either way.
+                all.add(StockRule.of(row.key()));
+                if (index < cap) {
+                    fluidIndices.put(index, fluids.size());
+                    fluids.add(row.rule().withKey(fluid.get()));
+                }
+            }
         }
+        configured = List.copyOf(rows);
         flattened = StockRules.of(all, cap);
-        return !flattened.equals(before);
+        fluidFlattened = fluids.isEmpty() ? StockRules.empty() : StockRules.of(fluids);
+        fluidIndexOf = Map.copyOf(fluidIndices);
+        return !flattened.equals(before) || !fluidFlattened.equals(fluidBefore);
     }
 
     @Override

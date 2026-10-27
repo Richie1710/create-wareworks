@@ -642,6 +642,22 @@ public final class WareworksLang {
     public static final String KEEPER_MISSING_INGREDIENT = "gui.keeper.missing_ingredient";
     /** The status line after an edit lifted a rule's safety stop (M15 part 2). */
     public static final String KEEPER_RESUMED = "gui.keeper.resumed";
+    /** {@code "Counts fluid"}: a stock keeper row that counts the fluid of its filled container (M31, issue #21). */
+    public static final String KEEPER_UNIT_FLUID = "gui.keeper.unit_fluid";
+    /** {@code "Counts items"}: a filled container's row that counts the containers as items (M31). */
+    public static final String KEEPER_UNIT_ITEMS = "gui.keeper.unit_items";
+    /** How a fluid row is switched to counting the containers as items (unit switch tooltip, M31). */
+    public static final String KEEPER_UNIT_TO_ITEMS = "gui.keeper.unit_to_items";
+    /** How a filled container's row is switched to counting its fluid (unit switch tooltip, M31). */
+    public static final String KEEPER_UNIT_TO_FLUID = "gui.keeper.unit_to_fluid";
+    /** That a pipe at a bay's back is not held to a fluid rule (M31). */
+    public static final String KEEPER_FLUID_PIPES = "gui.keeper.fluid_pipes";
+    /** That a fluid rule's minimum is only shown (M31): no pattern makes fluid. */
+    public static final String KEEPER_FLUID_MINIMUM_SHOWN = "gui.keeper.fluid_minimum_shown";
+    /** How a fluid row's number is changed (number tooltip, M31). */
+    public static final String KEEPER_FLUID_NUMBER_HINT = "gui.keeper.fluid_number_hint";
+    /** {@code "%1$s buckets (%2$s mB)"}: a fluid rule's number, exact (M31). */
+    public static final String KEEPER_FLUID_AMOUNT = "gui.keeper.fluid_amount";
     /** Hint under {@link #GOGGLES_MISALIGNED} for stations. */
     public static final String GOGGLES_STATION_MISALIGNED_HINT = "gui.goggles.station_misaligned_hint";
     /** Hint under {@link #GOGGLES_MISALIGNED} for terminals, whose screen must not sit on the aisle side. */
@@ -654,6 +670,10 @@ public final class WareworksLang {
     public static final String GOGGLES_NO_PENDING_REQUEST = "gui.goggles.no_pending_request";
     /** {@code "Last request refused: %1$s"}; the argument is a {@code RequestRejection} text. */
     public static final String GOGGLES_LAST_REJECTION = "gui.goggles.last_rejection";
+    /** {@code "(filled from the fluid bays)"}: under the request line of a station waiting for a fill (M31). */
+    public static final String GOGGLES_PORT_REQUESTS_FILL = "gui.goggles.port_requests_fill";
+    /** Under a port's last refusal {@code NO_EMPTY_CONTAINERS}: the fluid is there, the container is not (M31). */
+    public static final String GOGGLES_PORT_FILL_NO_EMPTIES = "gui.goggles.port_fill_no_empties";
     /** {@code "Requested Item"}: label of the output's filter slot. */
     public static final String OUTPUT_REQUEST_FILTER = "output.request_filter";
     /** {@code "Requested Amount"}: title of the output's hold-to-edit amount board. */
@@ -803,6 +823,11 @@ public final class WareworksLang {
      * collecting warehouse port (M18, issue #13).
      */
     public static final String GOGGLES_CRANE_JOB_COLLECT = "gui.goggles.crane_job.collect";
+    /**
+     * {@code "Filling %1$s x%2$s"}: a fill trip, i.e. empty containers on their way to a fluid bay or filled ones on
+     * their way to the station that asked for them (M31, issue #21). The item is what the head holds right now.
+     */
+    public static final String GOGGLES_CRANE_JOB_FILL = "gui.goggles.crane_job.fill";
     /** {@code "From %1$s to %2$s"}: source and target address of a job. */
     public static final String GOGGLES_CRANE_ROUTE = "gui.goggles.crane_route";
     /** {@code "Holding:"}: header of the handling head listing. */
@@ -1123,6 +1148,60 @@ public final class WareworksLang {
      * after it ({@code "Base North (A-12-03R)"}), which tells two doors with one sign apart.
      */
     public static final String TERMINAL_DOOR_CONFIRM = "gui.terminal.door.confirm";
+    /** {@code "64,000 mB (64 buckets)"}: a fluid amount in full, in a fluid cell's tooltip and the fluid question (M31). */
+    public static final String TERMINAL_FLUID_AMOUNT = "gui.terminal.fluid.amount";
+    /** {@code "64 buckets"}: a fluid amount in buckets ({@code core.terminal.BucketFormat#buckets}, M31). */
+    public static final String BUCKET_FORMAT_BUCKETS = "gui.terminal.fluid.buckets";
+    /** {@code "Stored: %1$s"}: what the fluid bays hold of a fluid cell's fluid (M31). */
+    public static final String TERMINAL_FLUID_STORED = "gui.terminal.fluid.stored";
+    /** {@code "Available: %1$s"}: what a new request may still claim of it, after the open fill requests (M31). */
+    public static final String TERMINAL_FLUID_AVAILABLE = "gui.terminal.fluid.available";
+    /** {@code "Fills: %1$s (%2$s mB)"}: the largest empty container in stock a click fills, and what it holds (M31). */
+    public static final String TERMINAL_FLUID_FILLS = "gui.terminal.fluid.fills";
+    /** {@code "All of it is already promised"}: open fill requests have claimed every millibucket (M31). */
+    public static final String TERMINAL_FLUID_ALL_PROMISED = "gui.terminal.fluid.all_promised";
+    /** {@code "No empty containers in stock"}: the red cell's reason (M31, the owner's decision 3). */
+    public static final String TERMINAL_FLUID_NO_EMPTIES = "gui.terminal.fluid.no_empties";
+    /** The red cell's hint at the bulk path, which needs no container at all (M31). */
+    public static final String TERMINAL_FLUID_PIPE_HINT = "gui.terminal.fluid.pipe_hint";
+    /** {@code "Click to have them made first (%1$s)"}: a red cell whose containers a production pattern makes (M31). */
+    public static final String TERMINAL_FLUID_MAKE_HINT = "gui.terminal.fluid.make_hint";
+    /** How a fluid cell is clicked: the amount is buckets, and there is no skip (M31). */
+    public static final String TERMINAL_FLUID_AMOUNT_HINT = "gui.terminal.fluid.amount_hint";
+    /** {@code "Fetch %1$s of %2$s?"}: the fluid question's title, with the amount it serves and the fluid (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_TITLE = "gui.terminal.fluid.question.title";
+    /** {@code "It will use:"}: the line above the containers the request fills (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_USES = "gui.terminal.fluid.question.uses";
+    /** {@code "%1$s × %2$s (%3$s mB each)"}: one kind of container the request fills (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_PORTION = "gui.terminal.fluid.question.portion";
+    /** {@code "%1$s crane trips (%2$s at a time)"}: the owner's decision 1 made visible (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_TRIPS = "gui.terminal.fluid.question.trips";
+    /** {@code "Only %1$s can be served."}: partial service, naming the served amount (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_ONLY = "gui.terminal.fluid.question.only";
+    /** Why: the bays hold less of the fluid than was asked for, after the open requests (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_NOT_ENOUGH_FLUID = "gui.terminal.fluid.question.not_enough_fluid";
+    /** Why: every usable empty container is used (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_NOT_ENOUGH_CONTAINERS = "gui.terminal.fluid.question.not_enough_containers";
+    /** Why: containers are left, but none is small enough for the rest (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_NO_CONTAINER_FITS = "gui.terminal.fluid.question.no_container_fits";
+    /** More filled containers than the terminal holds: the crane waits, which must not read as a hang (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_STATION_ROOM = "gui.terminal.fluid.question.station_room";
+    /** What the request takes of the fluid out of a stock rule's reserve (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_FLUID_RESERVE = "gui.terminal.fluid.question.fluid_reserve";
+    /** What the request takes of an empty container out of a stock rule's reserve (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_CONTAINER_RESERVE = "gui.terminal.fluid.question.container_reserve";
+    /** The production offer when the racks hold no usable empty container (M31, the owner's decision 3). */
+    public static final String TERMINAL_FLUID_QUESTION_MAKE = "gui.terminal.fluid.question.make";
+    /** The production offer when the racks hold too few usable empty containers (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_MAKE_MORE = "gui.terminal.fluid.question.make_more";
+    /** {@code "Fetch"}: the fluid question's button that carries the request out (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_FETCH = "gui.terminal.fluid.question.fetch";
+    /** {@code "Make and fetch"}: the same button when containers are made first (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_MAKE_AND_FETCH = "gui.terminal.fluid.question.make_and_fetch";
+    /** {@code "Cancel"}: the fluid question's button that drops it (M31). */
+    public static final String TERMINAL_FLUID_QUESTION_CANCEL = "gui.terminal.fluid.question.cancel";
+    /** {@code "Filling from %1$s"}: a fill request's order line, naming the fluid (M31). */
+    public static final String TERMINAL_ORDER_FILLING = "gui.terminal.order.filling";
     /**
      * The <b>full</b> key of Create's own {@code "Scroll to Select"} (not a relative one: Create ships and translates
      * it), reused for the door button the way Create's selection inputs show it ({@code SelectionScrollInput}).
@@ -1544,6 +1623,8 @@ public final class WareworksLang {
      * warehouse is fetching.
      */
     public static final String DISPLAY_CRANE_COLLECTING = "display_source.crane.collecting";
+    /** Crane activity on a display: a {@code FILL} job, a fluid request on its way (M31, issue #21). */
+    public static final String DISPLAY_CRANE_FILLING = "display_source.crane.filling";
     /** Crane activity on a display: paused, whatever the reason. */
     public static final String DISPLAY_CRANE_PAUSED = "display_source.crane.paused";
     /** {@code "%1$s x%2$s"}: the item and amount of the crane's job. */
@@ -1683,8 +1764,8 @@ public final class WareworksLang {
     }
 
     /**
-     * "Storing item x N" / "Retrieving item x N" / "Handing over item x N" / "Collecting item x N", using the item's
-     * generic name.
+     * "Storing item x N" / "Retrieving item x N" / "Handing over item x N" / "Collecting item x N" / "Filling item x N",
+     * using the item's generic name.
      * <p>
      * The third case is a store job into an accepting warehouse port (M17, issue #12): the type alone would call it
      * "Storing" although the items are leaving the warehouse, so the target's kind decides. The fourth is a collect job
@@ -1695,6 +1776,7 @@ public final class WareworksLang {
             case COLLECT -> GOGGLES_CRANE_JOB_COLLECT;
             case STORE -> targetKind == LocationKind.OUTPUT ? GOGGLES_CRANE_JOB_HAND_OVER : GOGGLES_CRANE_JOB_STORE;
             case RETRIEVE, SUPPLY -> GOGGLES_CRANE_JOB_RETRIEVE;
+            case FILL -> GOGGLES_CRANE_JOB_FILL;
         };
         return translate(key, item.getDescription(), number(amount).style(ChatFormatting.GOLD))
                 .style(ChatFormatting.GRAY);

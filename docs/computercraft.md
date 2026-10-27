@@ -155,9 +155,9 @@ of that item (often an ingredient, not the item asked for). A refusal is not an 
 | `not_a_door` | `door` is not a package door of this terminal's warehouse |
 | `door_ignores_redstone` | the door's Packager has a Stock Link, so it would never send the items |
 
-The words are the lowercase names of Wareworks' request refusals. Three more exist there and never reach a computer:
-`no_filter` (a warehouse output only), `out_of_reach` (a player only) and `invalid_amount` (a computer's amount is a
-Lua error first).
+The words are the lowercase names of Wareworks' request refusals. Four more exist there and never reach a computer:
+`no_filter` (a warehouse output only), `out_of_reach` (a player only), `invalid_amount` (a computer's amount is a
+Lua error first) and `no_empty_containers` (a fluid request only; a computer asks for items).
 
 ### `getRequests()`
 

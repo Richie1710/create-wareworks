@@ -15,6 +15,7 @@ import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseRegistry;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
@@ -558,8 +559,29 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
         // the open request, so it must bound the merged remaining amount, not this pulse (§7.2, ADR-020).
         // A redstone pulse is the warehouse's own automation, so a stock rule's reserve holds items back from it: a
         // port must not be able to empty a buffer a player set aside overnight (M15, issue #3).
-        return controller.get().request(worldPosition, ItemKey.of(filter), requestAmount(), maxRequestAmount(),
+        ItemKey key = ItemKey.of(filter);
+        if (fillsFromBays(controller.get(), key))
+            return controller.get().requestFillContainers(worldPosition, key, requestAmount(), maxRequestAmount(),
+                    StockAccess.AUTOMATION);
+        return controller.get().request(worldPosition, key, requestAmount(), maxRequestAmount(),
                 StockAccess.AUTOMATION);
+    }
+
+    /**
+     * Whether a request for {@code key} is served by <b>filling</b> containers at the fluid bays rather than out of the
+     * racks (M31, issue #21, ADR-073, {@code docs/warehouse-system.md} §3.9.6).
+     * <p>
+     * Only for a filter that <b>carries</b> fluid — a lava bucket, never an empty bucket, which keeps meaning the item
+     * — and only while the shelves have none of it for this port: as long as lava buckets lie in the racks and are not
+     * held back from automation, the port asks for them exactly as it always did, so every existing build behaves the
+     * same. Without them the port asks the warehouse to fill empty containers from its bays
+     * ({@code WarehouseControllerBlockEntity#requestFillContainers}), held to a fluid rule's reserve like any other
+     * automation; the amount on the filter means containers.
+     */
+    private static boolean fillsFromBays(WarehouseControllerBlockEntity controller, ItemKey key) {
+        if (!FluidContainers.carriesFluid(key) || controller.availableTo(StockAccess.AUTOMATION, key) > 0L)
+            return false;
+        return controller.fillRecipe(key).isPresent();
     }
 
     // --- station -------------------------------------------------------------------------------------------------

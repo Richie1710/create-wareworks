@@ -27,28 +27,40 @@ class ExchangeDecisionTest {
 
     @Test
     void aHeadMayAskWhileItHoldsWhatItOffers() {
-        assertTrue(ExchangeDecision.mayAsk(ONE, ONE, true));
-        assertTrue(ExchangeDecision.mayAsk(ONE, SIXTEEN, true), "holding more than it offers is fine");
-        assertTrue(ExchangeDecision.mayAsk(SIXTEEN, SIXTEEN, true));
+        assertTrue(ExchangeDecision.mayAsk(ONE, ONE, true, true));
+        assertTrue(ExchangeDecision.mayAsk(ONE, SIXTEEN, true, true), "holding more than it offers is fine");
+        assertTrue(ExchangeDecision.mayAsk(SIXTEEN, SIXTEEN, true, true));
     }
 
     @Test
     void aHeadNeverOffersContainersItDoesNotHold() {
-        assertFalse(ExchangeDecision.mayAsk(THREE, 2, true),
+        assertFalse(ExchangeDecision.mayAsk(THREE, 2, true, true),
                 "offering containers the head does not hold is how a bay would take fluid out of nothing");
-        assertFalse(ExchangeDecision.mayAsk(ONE, 0, true));
+        assertFalse(ExchangeDecision.mayAsk(ONE, 0, true, true));
     }
 
     @Test
     void anExchangeOfAtMostZeroContainersIsNotAnExchange() {
-        assertFalse(ExchangeDecision.mayAsk(0, SIXTEEN, true));
-        assertFalse(ExchangeDecision.mayAsk(-1, SIXTEEN, true));
+        assertFalse(ExchangeDecision.mayAsk(0, SIXTEEN, true, true));
+        assertFalse(ExchangeDecision.mayAsk(-1, SIXTEEN, true, true));
     }
 
     @Test
     void aKeyIsNeverExchangedForItself() {
-        assertFalse(ExchangeDecision.mayAsk(ONE, ONE, false),
+        assertFalse(ExchangeDecision.mayAsk(ONE, ONE, false, true),
                 "the head would remove and re-add the same items while the bay kept the fluid: fluid from nothing");
+    }
+
+    /**
+     * The fill of a fill trip (M31, issue #21): a head that could not hold what comes back refuses before it asks, so a
+     * bay is never even asked to fill sixteen buckets for a head that may carry one lava bucket.
+     */
+    @Test
+    void aHeadWithoutRoomForTheResultRefusesBeforeItAsks() {
+        assertFalse(ExchangeDecision.mayAsk(SIXTEEN, SIXTEEN, true, false),
+                "sixteen empty buckets fit one grabber stack, sixteen lava buckets do not");
+        assertFalse(ExchangeDecision.mayAsk(ONE, ONE, true, false));
+        assertTrue(ExchangeDecision.mayAsk(ONE, ONE, true, true), "with room for one filled bucket it may ask");
     }
 
     // --- gate 2: all or nothing, while nothing has moved -------------------------------------------------------

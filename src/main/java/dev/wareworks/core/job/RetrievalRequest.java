@@ -18,18 +18,32 @@ import java.util.UUID;
  *                    to the available stock, including what merged requests added; at least 1
  * @param remaining   amount not delivered yet, {@code 0..requested}
  * @param destination where the items go (an output station)
+ * @param kind        what the request promises (M31, issue #21): items out of the racks ({@link RequestKind#STOCK}, every
+ *                    request before M31) or filled containers a fluid bay makes ({@link RequestKind#FILL}, whose
+ *                    {@code key} is the filled container). Merging keys on it as well ({@link RequestQueue#add})
  * @param <K>         item key type
  * @param <D>         destination type
  */
-public record RetrievalRequest<K, D>(UUID id, K key, int requested, int remaining, D destination) {
+public record RetrievalRequest<K, D>(UUID id, K key, int requested, int remaining, D destination, RequestKind kind) {
     public RetrievalRequest {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(destination, "destination");
+        Objects.requireNonNull(kind, "kind");
         if (requested < 1)
             throw new IllegalArgumentException("requested must be at least 1: " + requested);
         if (remaining < 0 || remaining > requested)
             throw new IllegalArgumentException("remaining must be within 0.." + requested + ": " + remaining);
+    }
+
+    /** A {@link RequestKind#STOCK} request: what every request was before M31, and what a save without a kind reads as. */
+    public RetrievalRequest(UUID id, K key, int requested, int remaining, D destination) {
+        this(id, key, requested, remaining, destination, RequestKind.STOCK);
+    }
+
+    /** Whether this request is served by fill trips rather than out of the racks (M31). */
+    public boolean isFill() {
+        return kind == RequestKind.FILL;
     }
 
     /** Amount already delivered. */
@@ -44,7 +58,7 @@ public record RetrievalRequest<K, D>(UUID id, K key, int requested, int remainin
 
     /** The same request with another remaining amount. */
     public RetrievalRequest<K, D> withRemaining(int newRemaining) {
-        return new RetrievalRequest<>(id, key, requested, newRemaining, destination);
+        return new RetrievalRequest<>(id, key, requested, newRemaining, destination, kind);
     }
 
     /**
@@ -61,7 +75,7 @@ public record RetrievalRequest<K, D>(UUID id, K key, int requested, int remainin
     public RetrievalRequest<K, D> withRemoved(int fewer) {
         if (fewer < 1 || fewer >= remaining)
             throw new IllegalArgumentException("fewer must be within 1.." + (remaining - 1) + ": " + fewer);
-        return new RetrievalRequest<>(id, key, requested - fewer, remaining - fewer, destination);
+        return new RetrievalRequest<>(id, key, requested - fewer, remaining - fewer, destination, kind);
     }
 
     /**
@@ -78,6 +92,6 @@ public record RetrievalRequest<K, D>(UUID id, K key, int requested, int remainin
         long grown = (long) requested + extra;
         if (grown > Integer.MAX_VALUE)
             throw new IllegalArgumentException("requested would overflow: " + requested + " + " + extra);
-        return new RetrievalRequest<>(id, key, (int) grown, remaining + extra, destination);
+        return new RetrievalRequest<>(id, key, (int) grown, remaining + extra, destination, kind);
     }
 }

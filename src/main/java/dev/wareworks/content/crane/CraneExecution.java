@@ -19,6 +19,7 @@ import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.head.HandlingHead;
 import dev.wareworks.content.crane.head.TransferContext;
 import dev.wareworks.content.crane.head.TransferContexts;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.BranchGeometry;
@@ -69,7 +70,9 @@ import net.minecraft.world.level.Level;
  * {@code TargetMissing}, available → the real transfer through the handling head, whose real result is the answer. A full
  * output station answers {@code OutputFull} without touching the inventory. A target that takes containers by
  * <b>exchange</b> only — a fluid bay — answers {@code Exchanged} instead of a drop result, with the item to expect back
- * taken from a simulated exchange in the same tick ({@link #performExchange}). {@code RequestReroute} asks the linked
+ * taken from a simulated exchange in the same tick ({@link #performExchange}); a fill trip's empty containers are
+ * <b>filled</b> there instead and the answer names the station the trip goes on to ({@link #performFill}, M31).
+ * {@code RequestReroute} asks the linked
  * controller ({@code planReroute}); without controller the answer is "none" (hold). Reports go to the linked controller
  * if there is one; the controller re-derives its reservations from the crane's job anyway.
  * <p>
@@ -514,8 +517,16 @@ final class CraneExecution {
                 // is a different operation and its refusal must not fall through to one: the bay logs an insertion as
                 // the caller error it would otherwise be. Asked before the full-station gate below, which a STORAGE
                 // target can never reach anyway.
+                // Which way is decided by what the head holds (M31, issue #21, ADR-073): a filled container is drained,
+                // as in M30; an empty one is filled, and only for a fill trip — an empty container at a bay on any other
+                // job is a planner defect and is refused like a full bay, never filled.
                 if (target.exchangesOnly()) {
-                    performExchange(level, job, target, drop.amount(), events);
+                    if (FluidContainers.carriesFluid(job.key()))
+                        performExchange(level, job, target, drop.amount(), events);
+                    else if (job.type() == JobType.FILL)
+                        performFill(level, job, target, drop.amount(), events);
+                    else
+                        events.add(CraneEvent.dropResult(0, drop.amount()));
                     return;
                 }
                 // Every station the crane delivers to on someone's behalf is checked, not only an output: a
@@ -536,7 +547,10 @@ final class CraneExecution {
                     // The reroute detaches the job from its request, which stays open with what was delivered
                     // credited, and the planner sends the rest once the port has room for it. A terminal and a
                     // production station keep the wait: somebody stands at the one, and the other's machine empties it.
-                    events.add(job.type() == JobType.RETRIEVE && isWarehousePort(level, target.position())
+                    // A fill trip carrying its filled containers is treated exactly like a retrieve here (M31): the
+                    // reroute takes them into a bay of their fluid, which drains them, and the request stays open.
+                    events.add((job.type() == JobType.RETRIEVE || job.type() == JobType.FILL)
+                            && isWarehousePort(level, target.position())
                             ? CraneEvent.jobCancelled() : CraneEvent.outputFull());
                     return;
                 }
@@ -587,6 +601,51 @@ final class CraneExecution {
             return;
         }
         events.add(CraneEvent.dropResult(0, amount));
+    }
+
+    /**
+     * The <b>fill</b> of a fill trip (M31, issue #21, ADR-073): the empty containers the head carries are filled at the
+     * bay {@code target}, and the trip goes on to the station of its request.
+     * <ol>
+     * <li><b>Who is waiting</b>: the job's open request, its station and the filled key it asked for
+     * ({@code WarehouseControllerBlockEntity#fillDestination}). No request — cancelled on the way, or no controller —
+     * means no fill: nobody asked any more, and filling would turn a cancelled request into a bucket of lava nobody
+     * wants. The empties are then refused like a full bay and rerouted onto a shelf.</li>
+     * <li><b>What the bay would hand back</b>, from a simulated fill in this same tick, which must be <b>exactly</b> the
+     * key the request asked for: a bay emptied by pipes and refilled with another fluid would otherwise hand the terminal
+     * water for lava.</li>
+     * <li><b>The fill</b> through the head ({@code HandlingHead#fill}), all or nothing. A refusal is answered exactly as
+     * {@link #performExchange} answers one.</li>
+     * </ol>
+     */
+    private void performFill(Level level, TransportJob<ItemKey, RackPosition> job, TransferContext target, int amount,
+            Deque<CraneEvent<ItemKey, RackPosition>> events) {
+        WarehouseControllerBlockEntity.FillDestination destination = crane.linkedControllerEntity()
+                .flatMap(controller -> controller.fillDestination(job)).orElse(null);
+        TransferContext.ContainerExchange planned = destination == null ? null
+                : simulateFill(target, job.key(), amount);
+        int filled = planned == null || !planned.result().equals(destination.expected()) ? 0
+                : crane.head().fill(target, job.key(), destination.expected(), amount);
+        if (filled > 0) {
+            sounds.onExchanged(level, crane, filled);
+            events.add(CraneEvent.filled(destination.expected(), filled, destination.station(), destination.kind()));
+            return;
+        }
+        if (crane.head().count(job.key()) != amount) {
+            reconcileHeadWithJob(level);
+            return;
+        }
+        events.add(CraneEvent.dropResult(0, amount));
+    }
+
+    @Nullable
+    private static TransferContext.ContainerExchange simulateFill(TransferContext target, ItemKey key, int amount) {
+        try {
+            return target.fill(key, amount, true).orElse(null);
+        } catch (RuntimeException e) {
+            LOGGER.warn("Location at {} failed while simulating a fill of {} x {}", target.position(), amount, key, e);
+            return null;
+        }
     }
 
     @Nullable

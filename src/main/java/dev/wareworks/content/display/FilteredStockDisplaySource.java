@@ -10,10 +10,13 @@ import com.simibubi.create.content.redstone.displayLink.source.NumericSingleLine
 import com.simibubi.create.content.redstone.displayLink.target.DisplayTargetStats;
 
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
+import dev.wareworks.core.terminal.BucketFormat;
 import dev.wareworks.util.WareworksLang;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -32,6 +35,10 @@ import net.minecraft.world.level.block.entity.BlockEntity;
  * those, they select no single item type to count) and for a block that belongs to no loaded aisle. A display therefore
  * cannot tell "none in stock" from "not configured" — keeping the line numeric is what lets a display board use its
  * number layout.
+ * <p>
+ * <b>A port with a filled container in its filter</b> (M31, issue #21, ADR-073) counts the <b>fluid</b> in the bays
+ * instead, in buckets: such a port is served by filling containers there once the shelves hold none, and a count of
+ * lava buckets in stock would read as an empty warehouse that has a bay full of lava.
  */
 public class FilteredStockDisplaySource extends NumericSingleLineDisplaySource {
     @Override
@@ -43,6 +50,14 @@ public class FilteredStockDisplaySource extends NumericSingleLineDisplaySource {
         Optional<WarehouseControllerBlockEntity> controller = WarehouseDisplays.controller(context);
         if (controller.isEmpty())
             return ZERO.copy();
+        // A port that asks for a filled container is served from the fluid bays when the shelves have none (M31), so
+        // the number it means is the fluid there, in buckets: lava buckets in stock would read as an empty warehouse.
+        if (context.getSourceBlockEntity() instanceof WarehouseOutputBlockEntity) {
+            Optional<FluidContainers.Contents> contents = FluidContainers.contentsOf(filter);
+            if (contents.isPresent())
+                return Component.literal(BucketFormat.buckets(
+                        controller.get().fluidStockIndex().count(contents.get().fluid())));
+        }
         return WareworksLang.number(controller.get().countOf(ItemKey.of(filter))).component();
     }
 

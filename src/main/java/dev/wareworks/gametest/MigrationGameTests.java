@@ -48,6 +48,7 @@ import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.crane.CraneThroughput;
 import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.production.ProductionOrder;
@@ -1776,5 +1777,82 @@ public final class MigrationGameTests {
                 total += entity.getItem().getCount();
         }
         helper.assertValueEqual(total, expected, "conserved iron (chest, input, head, floor)");
+    }
+
+    // --- the M31 gate: a request saved before a request had a kind ---------------------------------------------------
+
+    /**
+     * The migration gate of M31 (issue #21, ADR-073): a controller saved before a request had a <b>kind</b> opens with
+     * every request a stock request and every crane job as it was, and saves back exactly what it read.
+     * <p>
+     * The one key M31 adds to a controller's save is the optional {@code Kind} of a request, written only for a fill
+     * request; a job is unchanged (a fill trip is a {@code FILL} job under the existing {@code Type} tag). So the honest
+     * pre-M31 save is taken live from a world without fill requests, as M21's gate did, and asserted to hold no
+     * {@code Kind} anywhere. Loaded on detached block entities, the request comes back as a stock request and the crane
+     * on its retrieval job, a re-save is the same list of requests, and the live warehouse finishes the delivery with
+     * the census unchanged. A {@code Kind} a later version might write and this one does not know is skipped rather than
+     * read as a stock request, which would hand out items nobody promised.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void prem31queueloads(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, PRE07_RAILS).build(true);
+        aisle.storage(PRE07_STORAGE, IRON.toStack(PRE07_IRON));
+        aisle.terminal(PRE07_TERMINAL);
+        Map<ItemKey, Long> conserved = new HashMap<>();
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 1))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().countOf(IRON), (long) PRE07_IRON,
+                        "the iron is indexed"))
+                .thenExecute(() -> {
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    conserved.putAll(ItemCensus.take(helper));
+                    helper.assertTrue(aisle.controller().request(aisle.absoluteRackPos(PRE07_TERMINAL), IRON,
+                            PRE07_REQUESTED).isAccepted(), "a stock request for iron");
+                })
+                .thenWaitUntil(() -> aisle.assertCarrying(CranePhase.TRAVEL_TO_TARGET, IRON, PRE07_REQUESTED))
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag controller = aisle.controller().saveWithoutMetadata(registries);
+                    CompoundTag dock = aisle.dock().saveWithoutMetadata(registries);
+                    ListTag saved = controller.getList("Requests", Tag.TAG_COMPOUND);
+                    helper.assertValueEqual(saved.size(), 1, "the open request is in the controller's save");
+                    helper.assertFalse(saved.getCompound(0).contains("Kind"),
+                            "a stock request is saved exactly as before M31, with no kind");
+
+                    WarehouseControllerBlockEntity loaded = freshController(helper, aisle.controller());
+                    loaded.loadWithComponents(controller, registries);
+                    helper.assertValueEqual(loaded.openRequests().size(), 1, "the request comes back");
+                    RetrievalRequest<ItemKey, BlockPos> request = loaded.openRequests().get(0);
+                    helper.assertValueEqual(request.kind(), RequestKind.STOCK, "as a stock request");
+                    helper.assertValueEqual(request.remaining(), PRE07_REQUESTED, "with its amount");
+                    helper.assertValueEqual(loaded.saveWithoutMetadata(registries).getList("Requests",
+                            Tag.TAG_COMPOUND), saved, "and saves back exactly what it read");
+
+                    StackerCraneBlockEntity loadedDock = freshDock(helper, aisle.dock());
+                    loadedDock.loadWithComponents(dock, registries);
+                    helper.assertValueEqual(loadedDock.craneState().job().map(TransportJob::type),
+                            Optional.of(JobType.RETRIEVE), "the crane comes back on its retrieval job");
+
+                    // A fill request written by M31 reads back as one; a kind this version does not know is skipped.
+                    CompoundTag fill = controller.copy();
+                    fill.getList("Requests", Tag.TAG_COMPOUND).getCompound(0).putString("Kind", "FILL");
+                    WarehouseControllerBlockEntity withFill = freshController(helper, aisle.controller());
+                    withFill.loadWithComponents(fill, registries);
+                    helper.assertValueEqual(withFill.openRequests().get(0).kind(), RequestKind.FILL,
+                            "a saved fill request is read back as one");
+                    CompoundTag future = controller.copy();
+                    future.getList("Requests", Tag.TAG_COMPOUND).getCompound(0).putString("Kind", "SOMETHING_LATER");
+                    WarehouseControllerBlockEntity withFuture = freshController(helper, aisle.controller());
+                    withFuture.loadWithComponents(future, registries);
+                    helper.assertTrue(withFuture.openRequests().isEmpty(), "an unknown kind is skipped");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(PRE07_TERMINAL, IRON), (long) PRE07_REQUESTED,
+                            "the live warehouse finished the delivery");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenExecute(() -> ItemCensus.assertEquals(helper, conserved, "across the pre-M31 save"))
+                .thenSucceed();
     }
 }

@@ -16,15 +16,19 @@ import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.StockKeeperRules;
 import dev.wareworks.content.station.StockKeeperScreenState;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
+import dev.wareworks.content.storage.FluidBayBlock;
+import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.network.StockKeeperRulePayload;
@@ -41,7 +45,9 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.Fluids;
 import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -100,6 +106,17 @@ public final class StockKeeperVisualScenario implements VisualScenario {
     private static final int COPPER_MINIMUM = 8;
     /** Row 4: a second rule for iron — the one above already governs it. */
     private static final int SHADOWED_ROW = 4;
+    /**
+     * Row 5 (M31, issue #21): a lava bucket counting the lava in the fluid bay, in millibuckets. The bay sits on the
+     * rack in front of the stocked ones, and the row is switched to counting buckets with a real click and back.
+     */
+    private static final int LAVA_ROW = 5;
+    private static final RackPosition LAVA_BAY = RackPosition.of(2, 0, Side.LEFT);
+    private static final ItemKey LAVA_BUCKET = ItemKey.of(Items.LAVA_BUCKET);
+    private static final FluidKey LAVA = FluidKey.of(Fluids.LAVA);
+    private static final int LAVA_MB = 16_000;
+    private static final int LAVA_MAXIMUM = 32_000;
+    private static final int LAVA_RESERVE = 8_000;
     /** What the edited shot raises the gold maximum to, well above the stock, so the rule stops biting. */
     private static final int RAISED_GOLD_MAXIMUM = 256;
 
@@ -136,6 +153,9 @@ public final class StockKeeperVisualScenario implements VisualScenario {
                 .server("keeper: open the rule screen", StockKeeperVisualScenario::openScreen)
                 .until("keeper: wait for the screen with its rules", StockKeeperVisualScenario::screenReady,
                         SCREEN_TIMEOUT_TICKS)
+                // The pointer rests on the title, so no tooltip covers a row in the shot (M31: the sixth row sits where
+                // the window's centre is).
+                .client("keeper: rest the pointer on the title", StockKeeperVisualScenario::hoverTitle)
                 .waitTicks(SETTLE_TICKS)
                 .shot("rules");
         if (pass == VisualPass.FLYWHEEL) {
@@ -155,7 +175,24 @@ public final class StockKeeperVisualScenario implements VisualScenario {
                     .until("keeper: wait until the row is empty on screen",
                             StockKeeperVisualScenario::shadowedRowCleared, EDIT_TIMEOUT_TICKS)
                     .waitTicks(SETTLE_TICKS)
-                    .shot("cleared");
+                    .shot("cleared")
+                    // M31: the lava row counts lava; one real click on its unit switch makes it count buckets, with
+                    // the numbers converted on the server, and a second click brings the millibuckets back.
+                    .client("keeper: click the lava row's unit switch",
+                            context -> ScreenInput.click(context.minecraft(),
+                                    ScreenInput.keeperUnitSwitch(screen(context), LAVA_ROW)))
+                    .until("keeper: wait until the lava row counts buckets",
+                            context -> lavaRowIs(context, RuleUnit.ITEMS, LAVA_MAXIMUM / 1_000), EDIT_TIMEOUT_TICKS)
+                    .waitTicks(SETTLE_TICKS)
+                    .shot("unit-items")
+                    .client("keeper: click the unit switch again",
+                            context -> ScreenInput.click(context.minecraft(),
+                                    ScreenInput.keeperUnitSwitch(screen(context), LAVA_ROW)))
+                    .until("keeper: wait until the lava row counts lava again",
+                            context -> lavaRowIs(context, RuleUnit.FLUID, LAVA_MAXIMUM), EDIT_TIMEOUT_TICKS)
+                    .client("keeper: rest the pointer on the title", StockKeeperVisualScenario::hoverTitle)
+                    .waitTicks(SETTLE_TICKS)
+                    .shot("unit-fluid");
         }
         script.client("keeper: close the screen", StockKeeperVisualScenario::closeScreen)
                 .until("keeper: wait until the screen is closed", context -> context.minecraft().screen == null,
@@ -209,6 +246,13 @@ public final class StockKeeperVisualScenario implements VisualScenario {
         level.setBlockAndUpdate(layout.rackPos(KEEPER), WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                 .setValue(WarehouseStockKeeperBlock.FACING, layout.sideDirection(KEEPER.side()).getOpposite()));
 
+        // The fluid bay of the lava row (M31), filled the way a pipe would.
+        level.setBlockAndUpdate(layout.rackPos(LAVA_BAY), WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                .setValue(FluidBayBlock.FACING, layout.sideDirection(LAVA_BAY.side())));
+        FluidBayBlockEntity bay = WareworksBlockEntityTypes.FLUID_BAY.getNullable(level, layout.rackPos(LAVA_BAY));
+        if (bay == null || bay.fill(new FluidStack(Fluids.LAVA, LAVA_MB), false) != LAVA_MB)
+            throw new VisualTestException("the fluid bay did not take its lava");
+
         List<ItemStack> stock = List.of(IRON.toStack(IRON_IN_STOCK), DIAMOND.toStack(DIAMONDS_IN_STOCK),
                 GOLD.toStack(GOLD_IN_STOCK), COPPER.toStack(COPPER_IN_STOCK));
         for (int i = 0; i < STORAGE.size(); i++) {
@@ -235,6 +279,9 @@ public final class StockKeeperVisualScenario implements VisualScenario {
         set(keeper, 2, GOLD, StockRule.UNSET, GOLD_MAXIMUM, StockRule.UNSET);
         set(keeper, 3, COPPER, COPPER_MINIMUM, StockRule.UNSET, StockRule.UNSET);
         set(keeper, SHADOWED_ROW, IRON, StockRule.UNSET, StockRule.UNSET, 1);
+        set(keeper, LAVA_ROW, LAVA_BUCKET, StockRule.UNSET, LAVA_MAXIMUM, LAVA_RESERVE);
+        if (keeper.rules().unitAt(LAVA_ROW) != RuleUnit.FLUID)
+            throw new VisualTestException("a lava bucket row must start out counting lava");
     }
 
     private static void set(WarehouseStockKeeperBlockEntity keeper, int row, ItemKey key, long minimum, long maximum,
@@ -254,7 +301,9 @@ public final class StockKeeperVisualScenario implements VisualScenario {
         if (controller == null || crane == null)
             return false;
         return controller.status() == ControllerStatus.READY && !controller.isMembershipDirty()
-                && controller.pendingSnapshotCount() == 0 && controller.storageLocations().size() == STORAGE.size()
+                && controller.pendingSnapshotCount() == 0
+                && controller.storageLocations().size() == STORAGE.size() + 1
+                && controller.fluidStockIndex().count(LAVA) == LAVA_MB
                 && crane.isControllerLinked() && controller.countOf(IRON) == IRON_IN_STOCK
                 && controller.countOf(DIAMOND) == DIAMONDS_IN_STOCK && controller.countOf(GOLD) == GOLD_IN_STOCK
                 && controller.countOf(COPPER) == COPPER_IN_STOCK;
@@ -273,7 +322,8 @@ public final class StockKeeperVisualScenario implements VisualScenario {
         if (controller == null)
             return false;
         StockRuleStatus[] expected = {StockRuleStatus.BELOW_MINIMUM, StockRuleStatus.AT_RESERVE,
-                StockRuleStatus.AT_MAXIMUM, StockRuleStatus.SATISFIED, StockRuleStatus.SHADOWED};
+                StockRuleStatus.AT_MAXIMUM, StockRuleStatus.SATISFIED, StockRuleStatus.SHADOWED,
+                StockRuleStatus.SATISFIED};
         for (int rule = 0; rule < expected.length; rule++) {
             if (controller.stockRuleStatus(keeperPos, rule) != expected[rule])
                 return false;
@@ -282,7 +332,11 @@ public final class StockKeeperVisualScenario implements VisualScenario {
         boolean lit = level.getBlockState(keeperPos).getValue(WarehouseStockKeeperBlock.LIT);
         if (!lit || keeper.comparatorSignal() != 1)
             return false;
-        LOGGER.info(PREFIX + "keeper: five rules in five states, lamp lit, comparator {}", keeper.comparatorSignal());
+        // The lava row is judged in millibuckets of the lava in the bay, not in lava buckets on a shelf (M31).
+        if (controller.fluidStockRules().ruleFor(LAVA).map(StockRule::maximum).orElse(0L) != LAVA_MAXIMUM
+                || controller.stockRules().governsKey(LAVA_BUCKET))
+            return false;
+        LOGGER.info(PREFIX + "keeper: six rules in five states, lamp lit, comparator {}", keeper.comparatorSignal());
         return true;
     }
 
@@ -355,6 +409,18 @@ public final class StockKeeperVisualScenario implements VisualScenario {
     private static long maximumOf(VisualContext context, int row) {
         Optional<StockKeeperScreenState.RowView> view = screen(context).state().row(row);
         return view.map(StockKeeperScreenState.RowView::maximum).orElse(StockRule.UNSET);
+    }
+
+    /** Moves the pointer onto the window's title, where nothing draws a tooltip. */
+    private static void hoverTitle(VisualContext context) {
+        WarehouseStockKeeperScreen keeper = screen(context);
+        ScreenInput.hover(context.minecraft(), new ScreenInput.Point(keeper.getGuiLeft() + 12, keeper.getGuiTop() + 4));
+    }
+
+    /** Whether the screen shows the lava row with {@code unit} and {@code maximum}, as the server pushed it (M31). */
+    private static boolean lavaRowIs(VisualContext context, RuleUnit unit, long maximum) {
+        return screen(context).state().row(LAVA_ROW)
+                .filter(row -> row.unit() == unit && row.maximum() == maximum).isPresent();
     }
 
     private static void closeScreen(VisualContext context) {

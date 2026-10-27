@@ -3570,7 +3570,7 @@ you get tired of waiting, and put it back before judging check 160.
 
 ## BL. Computers and Electro Energetics ([issue #9](https://github.com/Richie1710/create-wareworks/issues/9))
 
-> Section BK belongs to M31, which was developed in parallel. With CC: Tweaked installed the warehouse terminal is a
+> With CC: Tweaked installed the warehouse terminal is a
 > peripheral of type `wareworks_terminal` (ADR-074, `docs/computercraft.md`); Create: Electro Energetics' Electric Motor
 > drives the crane like any Create motor. The GameTests `ComputerAccessGameTests` (every run),
 > `ComputerCraftPeripheralGameTests` (`-Pwareworks.cc`) and `CeeMotorGameTests` (`-Pwareworks.cee`) check the logic,
@@ -3622,3 +3622,53 @@ you get tired of waiting, and put it back before judging check 160.
 376. **Voltage sag overstresses.** At 128 RPM lower the battery to 100 V: the motor turns but the network is
      overstressed (about 333 SU for 512 SU of crane), and the crane waits "overstressed". Raise the voltage above
      about 124 V: the crane runs again within about five seconds.
+
+## BK. Asking the warehouse for fluid ([issue #21](https://github.com/Richie1710/create-wareworks/issues/21), second half)
+
+> The terminal's fluid rows, the question before a fluid request, the fill trip (empty containers from stock, filled
+> at a fluid bay, carried straight on to the station that asked), the red row with no empty containers, ports with a
+> filled container in their filter and fluid stock rules (ADR-073, `docs/warehouse-system.md` §3.9.6). The JUnit tests
+> `ContainerPlanTest`, `FillLedgerTest`, `KeyMemoTest`, `JobPlannerFillTest` and `FluidQuestionTextWidthTest`, the
+> GameTests in `FluidRequestGameTests`, `TerminalFluidRequestGameTests` and `FluidRuleGameTests`, the visual scenario
+> `fluidrequest` (English and German) and the two fill phases of `runRobustnessTest` check the trip, the numbers, the
+> texts' width and conservation of items and fluid. What is left is what only a player can judge.
+
+377. **Fluid row look.** A warehouse with a lava bay and a water bay and some items: open the terminal. The two fluid
+     cells stand above the items, show the fluid's own texture and the amount in buckets, and read well in the light
+     and the dark GUI theme (a resource pack with a dark container texture, if you use one). Search for "lava": only
+     the lava cell and lava items stay.
+378. **Tooltip.** Hover a fluid cell: stored and available amounts in millibuckets and buckets, the container it fills
+     ("Fills: Bucket (1000 mB)") and the amount hint. Clear and in the right order?
+379. **The question.** Click the lava cell with 10 in the amount field: the question names 10 × Bucket, 10 crane trips
+     (1 at a time) and, since the terminal holds 9, that the crane waits while it is full. Switch the game to German and
+     at GUI scale 4 on a 1280 × 960 window (320 × 240) ask again: every line fits and reads naturally.
+380. **One bucket per trip.** Ask for 16 buckets and watch the whole order: the crane takes an empty bucket from a
+     shelf, fills it at the bay and carries it straight to the terminal, 16 times. Does the pace feel acceptable for 16
+     buckets, given that the question said so and a pipe is the bulk path?
+381. **A full terminal.** Leave the 16 buckets in the terminal until it is full: the crane rests and does not shuttle
+     back and forth. Does that read as waiting rather than as a hang (goggles on the crane, the order line in the
+     terminal)? Take buckets out: the rest arrives.
+382. **Partial service.** With 3 empty buckets in stock ask for 5: the question offers 3 and says why. With 2 500 mB in
+     the bay and plenty of buckets, Ctrl-click: it asks about 2 buckets (2 000 mB), and the 500 mB stay in the bay.
+     Is it clear from the question why?
+383. **The red row.** Take every empty bucket out of the warehouse: the lava cell turns red, and the tooltip says "No
+     empty containers in stock" with the pipe hint. Is the hint understood?
+384. **The make offer.** Give a production station a pattern for buckets (3 iron ingots → 1 bucket, your own machine
+     behind it) and stock iron: the tooltip says "Click to have them made first (Bucket)", the question offers to make
+     them, "Make and fetch" makes them and the lava arrives afterwards. Cancel one fill line in the order panel before
+     it is served: nothing is lost. With four orders already waiting at the terminal, "Make and fetch" is refused and
+     no iron leaves the racks.
+385. **Port with a lava bucket filter.** A requesting warehouse port with a lava bucket in its filter and a redstone
+     pulse: with lava buckets on a shelf it takes those; with none it is filled from the bay. Its goggles say "(filled
+     from the fluid bays)", and a display board with "Stock of the Filtered Item" on the port shows the lava in buckets.
+386. **Fluid rule toggle.** In a stock keeper, set a row to a lava bucket: it counts fluid ("B"). Click the switch: it
+     counts items ("x") and the numbers convert. Set a fluid maximum below what the bay holds: the crane stores a
+     lava bucket from the input as an item instead. Set a reserve: the port above is refused while the terminal is not.
+     A reserve on empty buckets that covers all of them refuses the port too, and its goggles say the stock is
+     reserved, not that no empty containers are in stock.
+387. **Dedicated server.** Repeat 379, 380 and 385 on a dedicated server with a second player watching: both see the
+     same fluid rows and lines, and nothing in either log mentions a wareworks exception.
+388. **The Ponder scene.** Hold **W** over a copper fluid bay, a brass fluid bay and a Warehouse Terminal and play
+     "Asking the Warehouse for Fluid" in English and in German. Does every caption stay up long enough to read, and
+     does each one point at the right block (the terminal, the rack bay with the empty buckets, the fluid bay, the pipe
+     at the bay's back)?

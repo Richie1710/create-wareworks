@@ -96,6 +96,8 @@ final class ScreenInput {
             double.class, int.class);
     private static final Method KEEPER_OVER_STATUS = method(WarehouseStockKeeperScreen.class, "isOverStatus",
             double.class, double.class, int.class);
+    private static final Method KEEPER_OVER_UNIT = method(WarehouseStockKeeperScreen.class, "isOverUnit",
+            double.class, double.class, int.class);
     private static final Method KEEPER_TOOLTIP_AT = method(WarehouseStockKeeperScreen.class, "tooltipAt", int.class,
             int.class);
     /** What the keeper screen's own hit tests return for "nothing here" ({@code WarehouseStockKeeperScreen.NONE}). */
@@ -212,8 +214,28 @@ final class ScreenInput {
         return (ScrollInput) get(TERMINAL_AMOUNT, screen);
     }
 
-    /** The centre of cell {@code index} of the terminal's visible stock grid, checked with the screen's own hit test. */
+    /**
+     * The centre of the cell of item {@code index} of the terminal's visible stock grid ({@code visibleEntries()}),
+     * checked with the screen's own hit test. Since M31 the fluid cells form a block above the items, so the item's grid
+     * cell is {@code itemCellOffset() + index}.
+     */
     static Point terminalCell(WarehouseTerminalScreen screen, int index) {
+        return terminalGridCell(screen, screen.itemCellOffset() + index);
+    }
+
+    /**
+     * The centre of fluid cell {@code index} of the terminal's visible fluid block ({@code visibleFluids()}, M31),
+     * checked with the screen's own hit test.
+     */
+    static Point terminalFluidCell(WarehouseTerminalScreen screen, int index) {
+        if (index < 0 || index >= screen.visibleFluids().size())
+            throw new VisualTestException("the terminal shows no fluid cell " + index + " (it shows "
+                    + screen.visibleFluids().size() + ")");
+        return terminalGridCell(screen, index);
+    }
+
+    /** The centre of grid cell {@code index} of the terminal, checked with the screen's own hit test. */
+    private static Point terminalGridCell(WarehouseTerminalScreen screen, int index) {
         TerminalMenuLayout layout = (TerminalMenuLayout) get(TERMINAL_LAYOUT, screen);
         int column = index % TerminalMenuLayout.GRID_COLUMNS;
         int row = index / TerminalMenuLayout.GRID_COLUMNS;
@@ -617,6 +639,28 @@ final class ScreenInput {
                         + ProductionMenuLayout.SLOT / 2.0);
         if (!(Boolean) invoke(PRODUCTION_OVER_ARROW, screen, point.x(), point.y()))
             throw new VisualTestException("the production screen's hit test does not put " + point + " on its arrow");
+        return point;
+    }
+
+    /**
+     * The centre of the unit switch of keeper row {@code row} (M31, issue #21), checked with the screen's own hit tests
+     * for the row, the number fields and the switch.
+     */
+    static Point keeperUnitSwitch(WarehouseStockKeeperScreen screen, int row) {
+        int[] centre = screen.unitSwitchCentre(row).orElseThrow(() -> new VisualTestException(
+                "row " + row + " draws no unit switch (scroll " + screen.scroll() + ")"));
+        Point point = new Point(centre[0], centre[1]);
+        int hitRow = (Integer) invoke(KEEPER_ROW_AT, screen, point.x(), point.y());
+        if (hitRow != row)
+            throw new VisualTestException("the keeper screen's hit test puts " + point + " on row " + hitRow + ", not "
+                    + row);
+        int hitField = (Integer) invoke(KEEPER_FIELD_AT, screen, point.x(), row);
+        if (hitField != NO_NUMBER_FIELD)
+            throw new VisualTestException("the keeper screen's hit test puts " + point + " on number field " + hitField
+                    + " rather than on the unit switch");
+        if (!(Boolean) invoke(KEEPER_OVER_UNIT, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the keeper screen's hit test does not put " + point + " on the unit switch "
+                    + "of row " + row);
         return point;
     }
 

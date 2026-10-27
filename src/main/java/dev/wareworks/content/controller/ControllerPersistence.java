@@ -13,6 +13,7 @@ import org.jetbrains.annotations.Nullable;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.KeeperRule;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.BranchGeometry;
 import dev.wareworks.core.address.Heading;
@@ -20,11 +21,13 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.StockView;
+import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
 import dev.wareworks.core.production.SupplyLine;
+import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRulePause;
 import dev.wareworks.core.stock.StockRules;
@@ -51,9 +54,11 @@ import net.minecraft.util.Mth;
  *                 Stock: [ { Item: &lt;ItemKey&gt;, Count: long } ] } ]    (Stock only for STORAGE)
  * Misaligned: int[] (x, y, side ordinal) per position
  * Requests:   [ { Id: UUID, Item: &lt;ItemKey&gt;, Requested: int, Remaining: int,
- *                 Destination: int[3] (offset from the controller) } ]        (queue order)
+ *                 Destination: int[3] (offset from the controller),
+ *                 Kind?: "FILL" } ]                                    (queue order; Kind absent = STOCK, M31)
  * StockRules: [ { X: int, Y: int, Side: "L"|"R",
- *                 Rules: [ { Item: &lt;ItemKey&gt;, Min: long, Max: long, Reserve: long } ] } ]  (keeper order)
+ *                 Rules: [ { Item: &lt;ItemKey&gt;, Min: long, Max: long, Reserve: long,
+ *                            Unit?: "fluid" } ] } ]                 (keeper order; Unit absent = items, M31)
  * ChunkKeep:  { GaveUp: true, Work: long }                              (absent unless the aisle gave up, M19)
  * </pre>
  * The stock rules are the controller's own copy of what the aisle's warehouse stock keepers hold. They are saved
@@ -106,6 +111,8 @@ final class ControllerPersistence {
     private static final String MINIMUM = "Min";
     private static final String MAXIMUM = "Max";
     private static final String RESERVE = "Reserve";
+    /** What a stock rule counts (M31): {@code "fluid"} for a fluid rule, absent for an item rule. */
+    private static final String UNIT = "Unit";
     /** Bound on keepers one save may list, whatever the aisle geometry allows. */
     private static final int MAX_SAVED_KEEPERS = 256;
     private static final String ID = "Id";
@@ -132,6 +139,12 @@ final class ControllerPersistence {
     private static final String REQUESTED = "Requested";
     private static final String REMAINING = "Remaining";
     private static final String DESTINATION = "Destination";
+    /**
+     * The kind of a request (M31, issue #21): written only for a {@link RequestKind#FILL} request, so a world without
+     * fill requests saves exactly what it saved before, and a request without the tag — every request an older world
+     * saved — reads as {@link RequestKind#STOCK}.
+     */
+    private static final String REQUEST_KIND = "Kind";
     /** Ints of a destination offset: dx, dy, dz. */
     private static final int OFFSET_INTS = 3;
     private static final String FACING = "Facing";
@@ -491,6 +504,8 @@ final class ControllerPersistence {
                 entry.putInt(REMAINING, request.remaining());
                 BlockPos offset = request.destination().subtract(controller);
                 entry.putIntArray(DESTINATION, new int[] {offset.getX(), offset.getY(), offset.getZ()});
+                if (request.kind() != RequestKind.STOCK)
+                    entry.putString(REQUEST_KIND, request.kind().name());
                 list.add(entry);
             } catch (RuntimeException e) {
                 Wareworks.LOGGER.warn("Could not save retrieval request {}", request, e);
@@ -515,8 +530,14 @@ final class ControllerPersistence {
                 Optional<ItemKey> key = ItemKey.load(registries, entry.get(ITEM));
                 if (key.isEmpty())
                     continue;
+                // An unknown kind (a newer save) is skipped rather than read as a stock request: serving it out of the
+                // racks would hand out filled containers nobody promised.
+                Optional<RequestKind> kind = entry.contains(REQUEST_KIND, Tag.TAG_STRING)
+                        ? RequestKind.byName(entry.getString(REQUEST_KIND)) : Optional.of(RequestKind.STOCK);
+                if (kind.isEmpty())
+                    continue;
                 requests.add(new RetrievalRequest<>(entry.getUUID(ID), key.get(), requested, remaining,
-                        controller.offset(offset[0], offset[1], offset[2])));
+                        controller.offset(offset[0], offset[1], offset[2]), kind.get()));
             } catch (RuntimeException e) {
                 Wareworks.LOGGER.warn("Skipping unreadable retrieval request {}", entry, e);
             }
@@ -655,15 +676,16 @@ final class ControllerPersistence {
      * Writes the controller's copy of the stock rules of its aisle's keepers, keeper by keeper in aisle order. A
      * keeper with no rule at all is left out, so an aisle without rules saves one empty list. Never throws.
      */
-    static void writeStockRules(CompoundTag tag, Map<RackPosition, List<StockRule<ItemKey>>> perKeeper,
+    static void writeStockRules(CompoundTag tag, Map<RackPosition, List<KeeperRule>> perKeeper,
                                 HolderLookup.Provider registries) {
         ListTag keepers = new ListTag();
-        for (Map.Entry<RackPosition, List<StockRule<ItemKey>>> entry : perKeeper.entrySet()) {
+        for (Map.Entry<RackPosition, List<KeeperRule>> entry : perKeeper.entrySet()) {
             if (entry.getValue().isEmpty())
                 continue;
             try {
                 ListTag rules = new ListTag();
-                for (StockRule<ItemKey> rule : entry.getValue()) {
+                for (KeeperRule row : entry.getValue()) {
+                    StockRule<ItemKey> rule = row.rule();
                     Tag keyTag = rule.key().save(registries);
                     if (keyTag instanceof CompoundTag compound && compound.isEmpty())
                         continue; // unencodable key, already logged by ItemKey
@@ -672,6 +694,9 @@ final class ControllerPersistence {
                     ruleTag.putLong(MINIMUM, rule.minimum());
                     ruleTag.putLong(MAXIMUM, rule.maximum());
                     ruleTag.putLong(RESERVE, rule.reserve());
+                    // Only a fluid rule says so (M31): an item rule saves exactly what it saved before.
+                    if (row.unit() == RuleUnit.FLUID)
+                        ruleTag.putString(UNIT, RuleUnit.FLUID_NAME);
                     rules.add(ruleTag);
                 }
                 if (rules.isEmpty())
@@ -690,11 +715,11 @@ final class ControllerPersistence {
      * Reads the stock rules written by {@link #writeStockRules}. Never throws; an entry whose rack position or whose
      * item cannot be read is skipped, and every number is clamped by {@link StockRule} itself. Bounded by
      * {@value #MAX_SAVED_KEEPERS} keepers and {@code StockRules.MAX_RULES} rules per keeper, so crafted save data
-     * cannot make the copy unbounded.
+     * cannot make the copy unbounded. A rule without a {@code Unit} is an item rule, which is what every rule written
+     * before M31 is — a lava bucket rule included.
      */
-    static Map<RackPosition, List<StockRule<ItemKey>>> readStockRules(CompoundTag tag,
-                                                                     HolderLookup.Provider registries) {
-        Map<RackPosition, List<StockRule<ItemKey>>> perKeeper = new LinkedHashMap<>();
+    static Map<RackPosition, List<KeeperRule>> readStockRules(CompoundTag tag, HolderLookup.Provider registries) {
+        Map<RackPosition, List<KeeperRule>> perKeeper = new LinkedHashMap<>();
         ListTag keepers = tag.getList(STOCK_RULES_TAG, Tag.TAG_COMPOUND);
         for (int i = 0; i < keepers.size() && i < MAX_SAVED_KEEPERS; i++) {
             CompoundTag keeperTag = keepers.getCompound(i);
@@ -703,11 +728,12 @@ final class ControllerPersistence {
                 if (rack.isEmpty())
                     continue;
                 ListTag rules = keeperTag.getList(RULES, Tag.TAG_COMPOUND);
-                List<StockRule<ItemKey>> read = new ArrayList<>(Math.min(rules.size(), StockRules.MAX_RULES));
+                List<KeeperRule> read = new ArrayList<>(Math.min(rules.size(), StockRules.MAX_RULES));
                 for (int r = 0; r < rules.size() && r < StockRules.MAX_RULES; r++) {
                     CompoundTag ruleTag = rules.getCompound(r);
-                    ItemKey.load(registries, ruleTag.get(ITEM)).ifPresent(key -> read.add(new StockRule<>(key,
-                            ruleTag.getLong(MINIMUM), ruleTag.getLong(MAXIMUM), ruleTag.getLong(RESERVE))));
+                    ItemKey.load(registries, ruleTag.get(ITEM)).ifPresent(key -> read.add(new KeeperRule(
+                            new StockRule<>(key, ruleTag.getLong(MINIMUM), ruleTag.getLong(MAXIMUM),
+                                    ruleTag.getLong(RESERVE)), RuleUnit.byName(ruleTag.getString(UNIT)))));
                 }
                 if (!read.isEmpty())
                     perKeeper.put(rack.get(), List.copyOf(read));

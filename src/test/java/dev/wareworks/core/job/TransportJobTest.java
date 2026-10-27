@@ -262,4 +262,70 @@ class TransportJobTest {
         assertEquals(Optional.empty(), JobType.byName("retrieve"));
         assertEquals(Optional.empty(), JobType.byName(null));
     }
+
+    // --- the fill trip (M31, issue #21, ADR-073) ---------------------------------------------------------------------
+
+    @Test
+    void aFillTripPicksEmptiesAndTargetsTheBay() {
+        TransportJob<String, String> fill = TransportJob.fill(JOB, "rack", "bay", "bucket", 1, REQUEST);
+        assertEquals(JobType.FILL, fill.type());
+        assertEquals(LocationKind.STORAGE, fill.sourceKind());
+        assertEquals(LocationKind.STORAGE, fill.targetKind(), "the bay is the planned target");
+        assertEquals("bucket", fill.key());
+        assertEquals(REQUEST, fill.requestIdOrNull());
+        assertFalse(fill.picked());
+        assertTrue(JobType.FILL.reservesSourceStock(), "the empties are reserved as stock at the rack");
+        assertTrue(JobType.FILL.mayCarryRequestId());
+        assertTrue(JobType.FILL.waitsAtAFullTarget(), "a filled container is waited with, like a retrieve");
+        assertFalse(JobType.FILL.bringsItemsIn());
+        assertTrue(JobType.FILL.allowsTarget(LocationKind.OUTPUT));
+        assertTrue(JobType.FILL.allowsTarget(LocationKind.STORAGE));
+        assertFalse(JobType.FILL.allowsTarget(LocationKind.INPUT));
+        assertFalse(JobType.FILL.allowsTarget(LocationKind.PRODUCTION));
+        assertEquals(Optional.of(JobType.FILL), JobType.byName("FILL"), "the stable save name");
+    }
+
+    /**
+     * The fill keeps the request and goes on to the station, which is the whole difference from a drain: a filled
+     * container is exactly what the fill request asked for.
+     */
+    @Test
+    void theFillKeepsTheRequestAndRetargetsToTheStation() {
+        TransportJob<String, String> picked = TransportJob.fill(JOB, "rack", "bay", "bucket", 2, REQUEST).withPicked(2);
+        TransportJob<String, String> filled = picked.filledFor("lava_bucket", "terminal", LocationKind.OUTPUT);
+        assertEquals(JOB, filled.id(), "the same trip");
+        assertEquals(JobType.FILL, filled.type());
+        assertEquals("rack", filled.source());
+        assertEquals("terminal", filled.target());
+        assertEquals(LocationKind.OUTPUT, filled.targetKind());
+        assertEquals("lava_bucket", filled.key());
+        assertEquals(Optional.of(REQUEST), filled.requestId(), "the request is kept");
+        assertEquals(2, filled.plannedAmount());
+        assertEquals(2, filled.heldAmount());
+        assertEquals(0, filled.deliveredAmount());
+        assertTrue(filled.picked());
+
+        TransportJob<String, String> drained = picked.exchangedFor("lava_bucket");
+        assertEquals(Optional.empty(), drained.requestId(), "a drain drops it, as before");
+        assertEquals("bay", drained.target());
+    }
+
+    @Test
+    void aFillRefusesWhatWouldLoseTrack() {
+        TransportJob<String, String> fill = TransportJob.fill(JOB, "rack", "bay", "bucket", 1, REQUEST);
+        assertThrows(IllegalStateException.class, () -> fill.filledFor("lava_bucket", "terminal", LocationKind.OUTPUT),
+                "nothing is in the head before the pick");
+        assertThrows(IllegalStateException.class, () -> fill.withPicked(0)
+                .filledFor("lava_bucket", "terminal", LocationKind.OUTPUT), "a pick of nothing fills nothing");
+        TransportJob<String, String> picked = fill.withPicked(1);
+        assertThrows(IllegalArgumentException.class, () -> picked.filledFor("bucket", "terminal", LocationKind.OUTPUT),
+                "a key filled into itself is no fill");
+        assertThrows(IllegalArgumentException.class,
+                () -> picked.filledFor("lava_bucket", "machine", LocationKind.PRODUCTION),
+                "a fill trip never drops at a production station");
+        TransportJob<String, String> retrieve = TransportJob.retrieve(JOB, "chest", "out", ORE, 1, REQUEST)
+                .withPicked(1);
+        assertThrows(IllegalStateException.class,
+                () -> retrieve.filledFor("lava_bucket", "terminal", LocationKind.OUTPUT), "only a fill trip fills");
+    }
 }

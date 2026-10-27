@@ -58,14 +58,36 @@ public sealed interface CraneEvent<K, L> {
      * out of it carries {@code newKey} and the same count, so the head and the job stay in step and the existing
      * reroute ladder puts the empty containers away like any other carry nobody asked for.
      *
-     * @param newKey the key the head now holds, never the one it held before
-     * @param amount how many of them, which must be exactly what the job held
+     * <p>
+     * <b>The fill</b> of a fill trip (M31, issue #21, ADR-073) is the same event the other way round — empty containers
+     * given up at a bay, filled ones in the head — with the trip's <b>onward</b> stop: the station of the fill request,
+     * where the filled containers are delivered next ({@link #filled}). A drain has no onward stop and is rerouted.
+     *
+     * @param newKey     the key the head now holds, never the one it held before
+     * @param amount     how many of them, which must be exactly what the job held
+     * @param onward     where the trip goes next after a fill: the station of its request; empty for a drain
+     * @param onwardKind the kind of {@code onward}; present exactly when it is
      */
-    record Exchanged<K, L>(K newKey, int amount) implements CraneEvent<K, L> {
+    record Exchanged<K, L>(K newKey, int amount, Optional<L> onward, Optional<LocationKind> onwardKind)
+            implements CraneEvent<K, L> {
         public Exchanged {
             Objects.requireNonNull(newKey, "newKey");
+            Objects.requireNonNull(onward, "onward");
+            Objects.requireNonNull(onwardKind, "onwardKind");
             if (amount < 1)
                 throw new IllegalArgumentException("an exchange moves at least one container: " + amount);
+            if (onward.isPresent() != onwardKind.isPresent())
+                throw new IllegalArgumentException("onward and onwardKind must both be present or both be empty");
+        }
+
+        /** A drain (M30): no onward stop, the carry is rerouted. */
+        public Exchanged(K newKey, int amount) {
+            this(newKey, amount, Optional.empty(), Optional.empty());
+        }
+
+        /** Whether this is the fill of a fill trip, which goes on to the station of its request. */
+        public boolean isFill() {
+            return onward.isPresent();
         }
     }
 
@@ -121,6 +143,14 @@ public sealed interface CraneEvent<K, L> {
 
     static <K, L> CraneEvent<K, L> exchanged(K newKey, int amount) {
         return new Exchanged<>(newKey, amount);
+    }
+
+    /**
+     * The fill of a fill trip (M31): {@code amount} empty containers became {@code amount} of {@code filledKey}, and the
+     * trip goes on to {@code station}.
+     */
+    static <K, L> CraneEvent<K, L> filled(K filledKey, int amount, L station, LocationKind stationKind) {
+        return new Exchanged<>(filledKey, amount, Optional.of(station), Optional.of(stationKind));
     }
 
     static <K, L> CraneEvent<K, L> rerouteTo(L target, LocationKind kind) {

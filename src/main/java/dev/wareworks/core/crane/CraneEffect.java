@@ -77,9 +77,10 @@ public sealed interface CraneEffect<K, L> {
      * went into a tank and the containers it came out of are still in the head.
      *
      * @param job       the job after the exchange: same id, source, target and type, with {@code key} the item the head
-     *                  now holds and nothing delivered yet
+     *                  now holds and nothing delivered yet. After the <b>fill</b> of a fill trip (M31, issue #21) its
+     *                  target is already the station of its request, which it still serves
      * @param formerKey the item that was given up — the one piece of what happened that {@code job} no longer carries
-     * @param target    where it happened (the job's target as well, until the reroute moves it)
+     * @param target    where it happened: the bay (for a drain also the job's target, until the reroute moves it)
      * @param amount    how many containers were exchanged, at least 1
      */
     record ReportExchanged<K, L>(TransportJob<K, L> job, K formerKey, L target, int amount)

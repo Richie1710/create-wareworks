@@ -352,6 +352,36 @@ class StockRuleTest {
         }
     }
 
+    // --- the cap in millibuckets (M31) ------------------------------------------------------------------------------
+
+    /**
+     * A fluid rule counts millibuckets (M31, issue #21): ten brass fluid bays are 2 560 000 mB, which the old cap of a
+     * million clamped away, so a rule could not govern the fluid a large warehouse actually holds.
+     */
+    @Test
+    void aLargeWarehousesFluidSurvivesNormalisation() {
+        StockRule<String> brassBays = rule(StockRule.UNSET, 2_560_000L, 1_000_000L);
+        assertEquals(2_560_000L, brassBays.maximum(), "ten brass bays of millibuckets are stored as given");
+        assertEquals(1_000_000L, brassBays.reserve());
+        assertEquals(StockRuleAdjustment.NONE, StockRule.checked(IRON, 64_000L, 2_560_000L, 1_000L).adjustment(),
+                "and need no correction");
+        assertEquals(560_000L, brassBays.headroom(2_000_000L, 0L, 0L));
+    }
+
+    /** One billion millibuckets, one million buckets, is the cap; a number past it is clamped and said so. */
+    @Test
+    void theCapIsOneBillion() {
+        assertEquals(1_000_000_000L, StockRule.MAX_AMOUNT);
+        assertEquals(StockRule.MAX_AMOUNT, rule(StockRule.UNSET, 1_000_000_000L, StockRule.UNSET).maximum());
+        assertEquals(StockRule.MAX_AMOUNT, rule(StockRule.UNSET, 1_000_000_001L, StockRule.UNSET).maximum());
+        assertEquals(StockRuleAdjustment.VALUE_CLAMPED,
+                StockRule.checked(IRON, StockRule.UNSET, 1_000_000_001L, StockRule.UNSET).adjustment());
+        assertEquals(RestockLimits.MAX_AMOUNT, StockRule.MAX_AMOUNT, "restocking follows the constant");
+        // Sums of capped numbers still cannot overflow: three of them are far below Long.MAX_VALUE.
+        StockRule<String> capped = rule(StockRule.MAX_AMOUNT, StockRule.MAX_AMOUNT, StockRule.MAX_AMOUNT);
+        assertEquals(StockRule.MAX_AMOUNT * 2, capped.headroom(0L, 0L, StockRule.MAX_AMOUNT));
+    }
+
     // --- editing ---------------------------------------------------------------------------------------------------
 
     @Test

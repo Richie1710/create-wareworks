@@ -79,4 +79,25 @@ public final class TerminalAmounts {
             return wanted; // let the server answer with the real reason
         return clamp((int) Math.min(wanted, orderable), max);
     }
+
+    /** Buckets a Shift-click on a fluid cell asks for (M31): a stack's worth of crane trips, like an item's Shift. */
+    public static final int FLUID_STACK_BUCKETS = 16;
+
+    /**
+     * Millibuckets a click on a fluid cell asks for (M31, issue #21, {@code docs/warehouse-system.md} §3.9.6): the
+     * selected amount read as <b>buckets</b>, {@value #FLUID_STACK_BUCKETS} buckets with Shift, and with Ctrl what the
+     * server says a request for everything would serve ({@code servableMb}), which may be any number of millibuckets —
+     * or, while no container is in stock, everything available, so the server can answer with the real reason or offer
+     * to make containers. Every amount is bounded by {@code maxBuckets} and is at least 1 mB.
+     */
+    public static long fluidMillibucketsFor(Click click, int selectedBuckets, long servableMb, long availableMb,
+            int maxBuckets) {
+        long max = (long) Math.max(MIN_AMOUNT, maxBuckets) * BucketFormat.BUCKET;
+        long wanted = switch (click) {
+            case SELECTED -> (long) Math.max(MIN_AMOUNT, selectedBuckets) * BucketFormat.BUCKET;
+            case STACK -> (long) FLUID_STACK_BUCKETS * BucketFormat.BUCKET;
+            case ALL -> servableMb > 0L ? servableMb : availableMb;
+        };
+        return Math.max(1L, Math.min(wanted, max));
+    }
 }

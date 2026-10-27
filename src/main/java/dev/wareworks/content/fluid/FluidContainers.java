@@ -326,6 +326,28 @@ public final class FluidContainers {
     }
 
     /**
+     * What filling one empty {@code container} with {@code fluid} yields, <b>and</b> that the filled container gives
+     * exactly that back when it is emptied again: the same fluid, the same millibuckets and the same empty container
+     * (M31, issue #21, ADR-073).
+     * <p>
+     * The warehouse moves fluid in both directions through containers — a filled one is drained at a bay, an empty one
+     * is filled there — so a container that fills to one key and drains to another would create or destroy fluid across
+     * the two directions, or turn one empty container into another. It is refused here, once, rather than discovered by
+     * a census. Both halves are the real operations on probes of their own ({@link #filled}, {@link #drained}), so
+     * nothing in the world moves.
+     */
+    public static Optional<Filled> fillsBack(ItemKey container, FluidKey fluid) {
+        Optional<Filled> filled = filled(container, fluid);
+        if (filled.isEmpty())
+            return Optional.empty();
+        Optional<Drained> back = drained(filled.get().filled());
+        if (back.isEmpty() || !back.get().fluid().equals(fluid)
+                || back.get().millibuckets() != filled.get().millibuckets() || !back.get().emptied().equals(container))
+            return Optional.empty();
+        return filled;
+    }
+
+    /**
      * The fluid in a probe that is already a single item, through {@code FluidUtil.getFluidContained} — which copies to
      * one item itself and simulate-drains, so it never mutates and needs no level.
      *

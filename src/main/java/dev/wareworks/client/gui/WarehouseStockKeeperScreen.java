@@ -17,6 +17,7 @@ import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleAdjustment;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.BucketFormat;
 import dev.wareworks.core.terminal.CountFormat;
 import dev.wareworks.network.StockKeeperRulePayload;
 import dev.wareworks.util.WareworksLang;
@@ -49,6 +50,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * <i>out to automation</i>. A number that is switched off reads as "{@value #OFF}" — scrolling one step below 0 and a
  * <b>right-click</b> switch it off, a left-click switches an off number on at 0 and leaves a set one alone, and for the
  * maximum 0 is a real setting ("accept none of this any more").
+ * <p>
+ * <b>Fluid rows</b> (M31, issue #21, ADR-073): a row whose item is a filled fluid container has a small switch at the
+ * end of its name — "B" while it counts the fluid in the fluid bays, "x" while it counts the containers as items. A
+ * fluid row shows its numbers in buckets ({@link BucketFormat}), steps them by a bucket (Shift: 16), and names the
+ * exact millibuckets in its tooltip.
  */
 public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<StockKeeperMenu> {
     /** How an unset number reads. */
@@ -61,6 +67,16 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
     /** Amount one scroll step changes a number by; Shift takes a whole stack at a time. */
     private static final int FINE_STEP = 1;
     private static final int COARSE_STEP = 64;
+    /** The same two steps for a row that counts fluid (M31): a bucket, and 16 buckets with Shift. */
+    private static final int FLUID_FINE_STEP = BucketFormat.BUCKET;
+    private static final int FLUID_COARSE_STEP = 16 * BucketFormat.BUCKET;
+    private static final int COLOR_UNIT_FLUID = 0xFF5FD3E0;
+    /**
+     * The unit switch's two faces: units, not words, the same in every language like Create's own "B" for buckets — the
+     * unit the row's numbers are drawn in.
+     */
+    private static final String UNIT_FLUID_MARK = "B";
+    private static final String UNIT_ITEMS_MARK = "x";
     private static final int NUMBER_PADDING = 3;
 
     private static final int COLOR_HEADER = 0xFFFBDC7D;
@@ -134,6 +150,12 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
             // The status mark is the row's own affordance, and a paused row is the only one where clicking it
             // means anything: it is the way back from the safety stop (M15 part 2). A click anywhere else on the row
             // keeps doing exactly what it did.
+            // The unit switch of a filled container's row (M31): the server converts the numbers and pushes them back.
+            Optional<StockKeeperScreenState.RowView> clicked = state.row(row);
+            if (clicked.isPresent() && clicked.get().canSwitchUnit() && isOverUnit(mouseX, mouseY, row)) {
+                send(StockKeeperRulePayload.setUnit(menu.containerId, row, !clicked.get().countsFluid()));
+                return true;
+            }
             if (isOverStatus(mouseX, mouseY, row)
                     && state.row(row).map(StockKeeperScreenState.RowView::paused).orElse(false)) {
                 send(StockKeeperRulePayload.resume(menu.containerId, row));
@@ -171,7 +193,7 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
             int field = numberFieldAt(mouseX, row);
             Optional<StockKeeperScreenState.RowView> view = state.row(row);
             if (field != NONE && view.isPresent() && view.get().key().isPresent()) {
-                long next = stepped(number(view.get(), field), direction);
+                long next = stepped(number(view.get(), field), direction, view.get().countsFluid());
                 send(StockKeeperRulePayload.setNumber(menu.containerId, row, payloadField(field), next));
                 return true;
             }
@@ -187,11 +209,13 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
     }
 
     /**
-     * One scroll step on a number: one item, or a whole stack with Shift held. One step below 0 switches the number
-     * off, and one step up from "off" lands on 0 — so every value including 0 is reachable and nothing is a dead end.
+     * One scroll step on a number: one item, or a whole stack with Shift held; for a row that counts fluid a bucket, or
+     * 16 with Shift (M31). One step below 0 switches the number off, and one step up from "off" lands on 0 — so every
+     * value including 0 is reachable and nothing is a dead end.
      */
-    private long stepped(long current, int direction) {
-        long step = hasShiftDown() ? COARSE_STEP : FINE_STEP;
+    private long stepped(long current, int direction, boolean fluid) {
+        long step = fluid ? (hasShiftDown() ? FLUID_COARSE_STEP : FLUID_FINE_STEP)
+                : hasShiftDown() ? COARSE_STEP : FINE_STEP;
         if (current == StockRule.UNSET)
             return direction > 0 ? 0L : StockRule.UNSET;
         long next = current + direction * step;
@@ -271,6 +295,7 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
             view.flatMap(StockKeeperScreenState.RowView::key)
                     .ifPresent(key -> renderItem(graphics, key, cellX + ITEM_INSET, rowY + ITEM_INSET));
             renderName(graphics, view, rowY);
+            renderUnit(graphics, view, rowY, hoveredRow == row && isOverUnit(mouseX, mouseY, row));
             for (int field = 0; field < StockKeeperMenuLayout.NUMBER_FIELDS; field++)
                 renderNumber(graphics, view, field, rowY, hoveredRow == row && hoveredField == field);
             renderStatusPip(graphics, view, rowY);
@@ -292,7 +317,27 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
                 .map(key -> (Component) key.toStack().getHoverName())
                 .orElseGet(() -> WareworksLang.translateDirect(WareworksLang.KEEPER_EMPTY_ROW));
         boolean empty = view.flatMap(StockKeeperScreenState.RowView::key).isEmpty();
-        graphics.drawString(font, fitTo(name, layout.nameWidth()), x, y, empty ? COLOR_OFF : COLOR_TEXT, false);
+        boolean switchable = view.map(StockKeeperScreenState.RowView::canSwitchUnit).orElse(false);
+        int room = layout.nameWidth() - (switchable ? StockKeeperMenuLayout.UNIT_WIDTH + 2 : 0);
+        graphics.drawString(font, fitTo(name, room), x, y, empty ? COLOR_OFF : COLOR_TEXT, false);
+    }
+
+    /** The unit switch of a filled container's row (M31): "B" while it counts fluid, "x" while it counts items. */
+    private void renderUnit(GuiGraphics graphics, Optional<StockKeeperScreenState.RowView> view, int rowY,
+            boolean hovered) {
+        if (view.isEmpty() || !view.get().canSwitchUnit())
+            return;
+        int x = leftPos + layout.unitX();
+        int top = rowY + 2;
+        int bottom = rowY + StockKeeperMenuLayout.SLOT - 2;
+        graphics.fill(x, top, x + StockKeeperMenuLayout.UNIT_WIDTH, bottom, COLOR_FIELD);
+        if (hovered)
+            graphics.fill(x, top, x + StockKeeperMenuLayout.UNIT_WIDTH, bottom, COLOR_FIELD_HOVER);
+        boolean fluid = view.get().countsFluid();
+        String mark = fluid ? UNIT_FLUID_MARK : UNIT_ITEMS_MARK;
+        graphics.drawString(font, mark, x + (StockKeeperMenuLayout.UNIT_WIDTH - font.width(mark)) / 2,
+                rowY + (StockKeeperMenuLayout.SLOT - font.lineHeight) / 2, fluid ? COLOR_UNIT_FLUID : COLOR_DIM,
+                false);
     }
 
     private void renderNumber(GuiGraphics graphics, Optional<StockKeeperScreenState.RowView> view, int field, int rowY,
@@ -305,7 +350,9 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
             graphics.fill(x + 1, top, x + StockKeeperMenuLayout.NUMBER_WIDTH - 1, bottom, COLOR_FIELD_HOVER);
         boolean editable = view.flatMap(StockKeeperScreenState.RowView::key).isPresent();
         long value = view.map(row -> number(row, field)).orElse(StockRule.UNSET);
-        String text = !editable || value == StockRule.UNSET ? OFF : amountText(value);
+        boolean fluid = view.map(StockKeeperScreenState.RowView::countsFluid).orElse(false);
+        String text = !editable || value == StockRule.UNSET ? OFF
+                : fluid ? BucketFormat.compact(value) : amountText(value);
         int textX = x + StockKeeperMenuLayout.NUMBER_WIDTH - NUMBER_PADDING - font.width(text);
         int textY = rowY + (StockKeeperMenuLayout.SLOT - font.lineHeight) / 2;
         graphics.drawString(font, text, textX, textY,
@@ -426,9 +473,33 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
         if (field != NONE) {
             tooltip.add(WareworksLang.translateDirect(fieldTitleKey(field)));
             tooltip.add(WareworksLang.translateDirect(fieldHintKey(field)).copy().withStyle(ChatFormatting.GRAY));
-            if (view.isPresent() && view.get().key().isPresent())
+            if (view.isPresent() && view.get().countsFluid()) {
+                long value = number(view.get(), field);
+                if (value != StockRule.UNSET)
+                    tooltip.add(fluidAmount(value).copy().withStyle(ChatFormatting.GRAY));
+                if (field == StockKeeperMenuLayout.FIELD_MINIMUM)
+                    tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_FLUID_MINIMUM_SHOWN).copy()
+                            .withStyle(ChatFormatting.GOLD));
+                else if (field == StockKeeperMenuLayout.FIELD_MAXIMUM)
+                    tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_FLUID_PIPES).copy()
+                            .withStyle(ChatFormatting.GRAY));
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_FLUID_NUMBER_HINT).copy()
+                        .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            } else if (view.isPresent() && view.get().key().isPresent())
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_NUMBER_HINT).copy()
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            return tooltip;
+        }
+        if (view.isPresent() && view.get().canSwitchUnit() && isOverUnit(mouseX, mouseY, row)) {
+            boolean fluid = view.get().countsFluid();
+            tooltip.add(WareworksLang.translateDirect(fluid ? WareworksLang.KEEPER_UNIT_FLUID
+                    : WareworksLang.KEEPER_UNIT_ITEMS));
+            if (fluid)
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_FLUID_PIPES).copy()
+                        .withStyle(ChatFormatting.GRAY));
+            tooltip.add(WareworksLang.translateDirect(fluid ? WareworksLang.KEEPER_UNIT_TO_ITEMS
+                    : WareworksLang.KEEPER_UNIT_TO_FLUID).copy()
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             return tooltip;
         }
         if (isOverStatus(mouseX, mouseY, row) && view.isPresent() && view.get().key().isPresent()) {
@@ -444,22 +515,23 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
         if (view.isPresent() && view.get().key().isPresent()) {
             StockKeeperScreenState.RowView shown = view.get();
             tooltip.addAll(getTooltipFromItem(minecraft, shown.key().orElseThrow().toStack()));
+            boolean fluid = shown.countsFluid();
+            if (fluid)
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_UNIT_FLUID).copy()
+                        .withStyle(ChatFormatting.AQUA));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_LIMITS,
-                    amount(shown.minimum()), amount(shown.maximum()), amount(shown.reserve())).copy()
-                    .withStyle(ChatFormatting.GRAY));
+                    amount(shown.minimum(), fluid), amount(shown.maximum(), fluid),
+                    amount(shown.reserve(), fluid)).copy().withStyle(ChatFormatting.GRAY));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_IN_STOCK,
-                    Component.literal(LangNumberFormat.format(shown.stocked()))).copy().withStyle(ChatFormatting.GRAY));
+                    quantity(shown.stocked(), fluid)).copy().withStyle(ChatFormatting.GRAY));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_AVAILABLE,
-                    Component.literal(LangNumberFormat.format(shown.available()))).copy()
-                    .withStyle(ChatFormatting.GRAY));
+                    quantity(shown.available(), fluid)).copy().withStyle(ChatFormatting.GRAY));
             if (shown.heldBack() > 0)
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_HELD_BACK,
-                        Component.literal(LangNumberFormat.format(shown.heldBack()))).copy()
-                        .withStyle(ChatFormatting.GRAY));
+                        quantity(shown.heldBack(), fluid)).copy().withStyle(ChatFormatting.GRAY));
             if (shown.shortfall() > 0)
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_SHORTFALL,
-                        Component.literal(LangNumberFormat.format(shown.shortfall()))).copy()
-                        .withStyle(ChatFormatting.GRAY));
+                        quantity(shown.shortfall(), fluid)).copy().withStyle(ChatFormatting.GRAY));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.keeperStatusKey(shown.status())).copy()
                     .withStyle(statusFormat(shown.status())));
             addRestockLines(tooltip, shown);
@@ -513,9 +585,22 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
     }
 
-    /** One of the three numbers in a tooltip: the exact amount, or the "off" dash. */
-    private static Component amount(long value) {
-        return Component.literal(value == StockRule.UNSET ? OFF : LangNumberFormat.format(value));
+    /** One of the three numbers in a tooltip: the exact amount, or the "off" dash; buckets and mB for fluid (M31). */
+    private static Component amount(long value, boolean fluid) {
+        if (value == StockRule.UNSET)
+            return Component.literal(OFF);
+        return quantity(value, fluid);
+    }
+
+    /** An exact amount: a plain number of items, or for fluid the buckets with the exact millibuckets (M31). */
+    private static Component quantity(long value, boolean fluid) {
+        return fluid ? fluidAmount(value) : Component.literal(LangNumberFormat.format(value));
+    }
+
+    /** {@code "2.5 buckets (2,500 mB)"}: a fluid rule's number, exact. */
+    private static Component fluidAmount(long millibuckets) {
+        return WareworksLang.translateDirect(WareworksLang.KEEPER_FLUID_AMOUNT, BucketFormat.buckets(millibuckets),
+                LangNumberFormat.format(millibuckets));
     }
 
     private static ChatFormatting statusFormat(StockRuleStatus status) {
@@ -563,6 +648,30 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
         int y = topPos + layout.rowY(line);
         return mouseX >= x && mouseX < x + StockKeeperMenuLayout.SLOT && mouseY >= y
                 && mouseY < y + StockKeeperMenuLayout.SLOT;
+    }
+
+    /** Whether the mouse is over the unit switch of {@code row} (M31); only a filled container's row draws one. */
+    private boolean isOverUnit(double mouseX, double mouseY, int row) {
+        int line = row - scroll;
+        if (line < 0 || line >= layout.visibleRows())
+            return false;
+        int x = leftPos + layout.unitX();
+        int y = topPos + layout.rowY(line);
+        return mouseX >= x && mouseX < x + StockKeeperMenuLayout.UNIT_WIDTH && mouseY >= y
+                && mouseY < y + StockKeeperMenuLayout.SLOT;
+    }
+
+    /**
+     * Where the unit switch of {@code row} is drawn on the screen, for real clicks of the dev harness: the switch's
+     * centre, or empty for a row that is not visible or has no switch (M31).
+     */
+    public Optional<int[]> unitSwitchCentre(int row) {
+        int line = row - scroll;
+        if (line < 0 || line >= layout.visibleRows()
+                || !state.row(row).map(StockKeeperScreenState.RowView::canSwitchUnit).orElse(false))
+            return Optional.empty();
+        return Optional.of(new int[] { leftPos + layout.unitX() + StockKeeperMenuLayout.UNIT_WIDTH / 2,
+                topPos + layout.rowY(line) + StockKeeperMenuLayout.SLOT / 2 });
     }
 
     /** Whether the mouse is over the status mark of {@code row} — the resume affordance of a paused rule. */

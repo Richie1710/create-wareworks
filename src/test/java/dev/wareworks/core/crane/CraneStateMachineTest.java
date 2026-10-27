@@ -65,6 +65,11 @@ class CraneStateMachineTest {
          * ordinary drops, which is exactly what a fluid bay in a warehouse of racks looks like.
          */
         String exchangeFor;
+        /**
+         * When set, the <b>next</b> {@code PerformDrop} is answered with the <b>fill</b> of a fill trip for this key, going
+         * on to {@link #OUTPUT} (M31, issue #21), and the field is cleared again.
+         */
+        String fillFor;
         boolean answer = true;
         int ticks;
 
@@ -96,7 +101,11 @@ class CraneStateMachineTest {
                 case CraneEffect.PerformPick<String, RackPosition> pick ->
                         send(CraneEvent.pickResult(picker.applyAsInt(pick.amount())));
                 case CraneEffect.PerformDrop<String, RackPosition> drop -> {
-                    if (exchangeFor != null) {
+                    if (fillFor != null) {
+                        String received = fillFor;
+                        fillFor = null;
+                        send(CraneEvent.filled(received, drop.amount(), OUTPUT, LocationKind.OUTPUT));
+                    } else if (exchangeFor != null) {
                         String received = exchangeFor;
                         exchangeFor = null;
                         send(CraneEvent.exchanged(received, drop.amount()));
@@ -1004,5 +1013,151 @@ class CraneStateMachineTest {
         assertEquals(16, h.effects(CraneEffect.ReportDelivered.class).get(0).delivered());
         assertTrue(h.history.stream().filter(s -> s.phase() == CranePhase.DROP)
                 .allMatch(s -> s.pose().arm() == LocationKind.STATION_STROKE));
+    }
+
+    // --- the fill trip (M31, issue #21, ADR-073) ---------------------------------------------------------------------
+
+    private static TransportJob<String, RackPosition> fillJob() {
+        return TransportJob.fill(JOB, STORAGE_A, STORAGE_B, EMPTIED, 1, REQUEST);
+    }
+
+    /**
+     * The whole fill trip as the crane runs it: the empties are picked, the bay fills them, and the crane — without a
+     * reroute and without putting anything down — travels on to the station of the request and delivers there. The
+     * request is never dropped, and the phase list is an ordinary retrieve with one more travel leg: no new phase.
+     */
+    @Test
+    void aFillTripFillsAtTheBayAndDeliversToTheStation() {
+        Harness h = new Harness();
+        h.fillFor = ORE;
+        h.send(CraneEvent.jobAssigned(fillJob()));
+        h.tickUntilPhase(CranePhase.COMPLETE);
+
+        assertEquals(1, h.count(CraneEffect.ReportExchanged.class));
+        CraneEffect.ReportExchanged<?, ?> filled = h.effects(CraneEffect.ReportExchanged.class).get(0);
+        assertEquals(EMPTIED, filled.formerKey(), "what the head gave up at the bay");
+        assertEquals(STORAGE_B, filled.target(), "the stop named is the bay, where it happened");
+        assertEquals(ORE, filled.job().key());
+        assertEquals(OUTPUT, filled.job().target(), "the job already names the station");
+        assertEquals(Optional.of(REQUEST), filled.job().requestId(), "and keeps its request");
+
+        assertEquals(0, h.count(CraneEffect.RequestReroute.class), "a fill is never rerouted");
+        assertEquals(1, h.count(CraneEffect.ReportDelivered.class));
+        CraneEffect.ReportDelivered<?, ?> delivered = h.effects(CraneEffect.ReportDelivered.class).get(0);
+        assertEquals(OUTPUT, delivered.target());
+        assertEquals(ORE, delivered.job().key());
+        assertEquals(Optional.of(REQUEST), delivered.job().requestId(), "credited to the request that asked");
+        assertEquals(List.of(CranePhase.TRAVEL_TO_SOURCE, CranePhase.EXTEND_SOURCE, CranePhase.PICK,
+                CranePhase.RETRACT_SOURCE, CranePhase.TRAVEL_TO_TARGET, CranePhase.EXTEND_TARGET, CranePhase.DROP,
+                CranePhase.RETRACT_TARGET, CranePhase.TRAVEL_TO_TARGET, CranePhase.EXTEND_TARGET, CranePhase.DROP,
+                CranePhase.RETRACT_TARGET, CranePhase.COMPLETE), h.phases(), "one more leg, no new phase");
+        assertEquals(0, h.state.heldAmount());
+    }
+
+    /** A drain still reroutes: the narrow rule is the fill trip's alone, even for a retrieve at a delivery target. */
+    @Test
+    void aDrainStillReroutesAfterTheFillRuleExists() {
+        Harness h = new Harness();
+        h.exchangeFor = EMPTIED;
+        h.rerouter = request -> CraneEvent.rerouteTo(STORAGE_B, LocationKind.STORAGE);
+        h.send(CraneEvent.jobAssigned(storeJob()));
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(1, h.count(CraneEffect.RequestReroute.class));
+    }
+
+    /**
+     * Saved right after the fill, in {@code RETRACT_TARGET} at the bay, the trip resumes and goes on to the station:
+     * the narrow rule needs nothing saved but the job, which already names the station.
+     */
+    @Test
+    void aFillTripResumesAfterTheFill() {
+        Harness h = new Harness();
+        h.fillFor = ORE;
+        h.send(CraneEvent.jobAssigned(fillJob()));
+        h.tickUntil(() -> h.count(CraneEffect.ReportExchanged.class) > 0);
+        assertEquals(CranePhase.RETRACT_TARGET, h.state.phase());
+        CraneState<String, RackPosition> saved = h.state;
+        CraneStateMachine.Transition<String, RackPosition> resumed = MACHINE.resume(saved);
+        assertEquals(CranePhase.RETRACT_TARGET, resumed.state().phase(), "nothing to repair");
+        Harness after = new Harness();
+        after.state = resumed.state();
+        after.tickUntilPhase(CranePhase.COMPLETE);
+        assertTrue(after.phases().contains(CranePhase.TRAVEL_TO_TARGET), "it travels on to the station");
+        assertEquals(1, after.count(CraneEffect.ReportDelivered.class));
+        assertEquals(OUTPUT, after.effects(CraneEffect.ReportDelivered.class).get(0).target());
+        assertEquals(0, after.count(CraneEffect.RequestReroute.class));
+    }
+
+    /** Cancelled after the fill, the filled container is rerouted (into a bay of its fluid, the planner decides). */
+    @Test
+    void aFillTripCancelledAfterTheFillIsRerouted() {
+        Harness h = new Harness();
+        h.fillFor = ORE;
+        List<Optional<RackPosition>> excluded = new ArrayList<>();
+        h.rerouter = request -> {
+            excluded.add(request.failedTarget());
+            return CraneEvent.rerouteTo(STORAGE_B, LocationKind.STORAGE);
+        };
+        h.send(CraneEvent.jobAssigned(fillJob()));
+        h.tickUntil(() -> h.count(CraneEffect.ReportExchanged.class) > 0);
+        h.tickUntilPhase(CranePhase.TRAVEL_TO_TARGET);
+        h.send(CraneEvent.jobCancelled());
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(List.of(Optional.of(OUTPUT)), excluded, "the station is the target that failed");
+        assertEquals(STORAGE_B, h.effects(CraneEffect.ReportDelivered.class).get(0).target());
+        assertEquals(ORE, h.effects(CraneEffect.ReportDelivered.class).get(0).job().key());
+    }
+
+    /** Cancelled before the fill, the empties are rerouted and nothing is filled; cancelled before the pick, aborted. */
+    @Test
+    void aFillTripCancelledBeforeTheFill() {
+        Harness h = new Harness();
+        h.rerouter = request -> CraneEvent.rerouteTo(STORAGE_A, LocationKind.STORAGE);
+        h.send(CraneEvent.jobAssigned(fillJob()));
+        h.tickUntilPhase(CranePhase.TRAVEL_TO_TARGET);
+        h.send(CraneEvent.jobCancelled());
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(0, h.count(CraneEffect.ReportExchanged.class));
+        assertEquals(EMPTIED, h.effects(CraneEffect.ReportDelivered.class).get(0).job().key());
+        assertEquals(STORAGE_A, h.effects(CraneEffect.ReportDelivered.class).get(0).target());
+
+        Harness early = new Harness();
+        early.send(CraneEvent.jobAssigned(fillJob()));
+        early.send(CraneEvent.jobCancelled());
+        early.tickUntilPhase(CranePhase.IDLE);
+        assertEquals(1, early.count(CraneEffect.ReportAbort.class));
+    }
+
+    /** A full station after the fill: the crane waits holding the filled container, as for a retrieve. */
+    @Test
+    void aFillTripWaitsAtAFullStation() {
+        Harness h = new Harness();
+        h.fillFor = ORE;
+        h.send(CraneEvent.jobAssigned(fillJob()));
+        h.tickUntil(() -> h.state.phase() == CranePhase.EXTEND_TARGET && h.state.job().orElseThrow().key().equals(ORE));
+        h.send(CraneEvent.outputFull());
+        h.tickUntilPhase(CranePhase.WAITING_FOR_TARGET);
+        assertEquals(ORE, h.state.job().orElseThrow().key());
+        assertEquals(1, h.state.heldAmount());
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(OUTPUT, h.effects(CraneEffect.ReportDelivered.class).get(0).target());
+    }
+
+    @Test
+    void aFillWithTheWrongAmountThrows() {
+        Harness h = new Harness();
+        h.answer = false;
+        h.send(CraneEvent.jobAssigned(TransportJob.fill(JOB, STORAGE_A, STORAGE_B, EMPTIED, 2, REQUEST)));
+        h.tickUntil(() -> h.count(CraneEffect.PerformPick.class) > 0);
+        h.send(CraneEvent.pickResult(2));
+        h.tickUntil(() -> h.count(CraneEffect.PerformDrop.class) > 0);
+        CraneState<String, RackPosition> atTheBay = h.state;
+        assertThrows(IllegalArgumentException.class,
+                () -> MACHINE.apply(atTheBay, CraneEvent.filled(ORE, 1, OUTPUT, LocationKind.OUTPUT)));
+        assertThrows(IllegalArgumentException.class,
+                () -> MACHINE.apply(atTheBay, CraneEvent.filled(EMPTIED, 2, OUTPUT, LocationKind.OUTPUT)),
+                "a key filled into itself");
+        assertThrows(IllegalArgumentException.class,
+                () -> new CraneEvent.Exchanged<String, RackPosition>(ORE, 1, Optional.of(OUTPUT), Optional.empty()));
     }
 }

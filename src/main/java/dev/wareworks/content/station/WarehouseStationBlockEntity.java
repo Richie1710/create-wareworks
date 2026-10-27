@@ -23,6 +23,7 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Clearable;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
@@ -106,6 +107,24 @@ public abstract class WarehouseStationBlockEntity extends SmartBlockEntity
      */
     public boolean hasEmptySlot() {
         return buffer.hasEmptySlot();
+    }
+
+    /**
+     * How many items of {@code key} the buffer could take right now: a free slot holds a whole stack, a slot with the
+     * same key what is missing to one, any other slot nothing (M31, issue #21: the fluid question's "the terminal holds
+     * 9 at a time" for filled buckets, which stack to one). Reads the slots in memory and nothing else.
+     */
+    public int roomFor(ItemKey key) {
+        int max = Math.max(1, key.getMaxStackSize());
+        long room = 0L;
+        for (int slot = 0; slot < buffer.getSlots(); slot++) {
+            ItemStack stack = buffer.getStackInSlot(slot);
+            if (stack.isEmpty())
+                room += max;
+            else if (key.matches(stack))
+                room += Math.max(0, max - stack.getCount());
+        }
+        return (int) Math.min(Integer.MAX_VALUE, room);
     }
 
     /** Current number of buffer slots (the configured count, or more if a save used more). */

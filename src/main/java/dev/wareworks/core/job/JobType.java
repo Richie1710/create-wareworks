@@ -52,7 +52,21 @@ public enum JobType {
      * one must not be droppable where the leftovers of the other may go.
      */
     COLLECT(LocationKind.OUTPUT, LocationKind.STORAGE, LocationKind.INPUT,
-            Set.of(LocationKind.STORAGE, LocationKind.INPUT));
+            Set.of(LocationKind.STORAGE, LocationKind.INPUT)),
+    /**
+     * Storage location (empty containers) → fluid bay (fill) → the station that asked (M31, issue #21, ADR-073): one
+     * <b>fill trip</b>. The crane picks empty containers from a rack, the bay fills them, and the job is retargeted to
+     * the request's station inside the same transition ({@code TransportJob#filledFor}) and keeps its request.
+     * <p>
+     * Added as a type rather than folded into {@link #RETRIEVE}, for ADR-024's own reason: its middle stop is a fluid
+     * bay, which no other job may be planned into with an empty container, and its exchange runs the other way round.
+     * Its planned target is a {@link LocationKind#STORAGE} (the bay); after the fill it may drop at an
+     * {@link LocationKind#OUTPUT} (the station that asked), and its leftovers go back into storage like a retrieve's —
+     * never to a port. A dedicated bay outranks every shelf for a filled container, so the filled container is never put
+     * down on the way: that is why the trip does not stock the filled container and fetch it again.
+     */
+    FILL(LocationKind.STORAGE, LocationKind.STORAGE, LocationKind.STORAGE,
+            Set.of(LocationKind.STORAGE, LocationKind.OUTPUT));
 
     private final LocationKind sourceKind;
     private final LocationKind plannedTargetKind;
@@ -85,7 +99,7 @@ public enum JobType {
     /**
      * Whether a job of this type takes items <b>out of storage</b>, so that before the pick it reserves stock at its
      * source instead of capacity at its target ({@code ReservationLedger#reservationsFor}). True for
-     * {@link #RETRIEVE} and {@link #SUPPLY}.
+     * {@link #RETRIEVE}, {@link #SUPPLY} and {@link #FILL}, whose source is the rack holding the empty containers.
      */
     public boolean reservesSourceStock() {
         return sourceKind == LocationKind.STORAGE;
@@ -94,14 +108,14 @@ public enum JobType {
     /**
      * Whether a job of this type may name who is waiting for its items ({@code TransportJob#requestId()}): a
      * {@link #RETRIEVE} names the retrieval request it serves, a {@link #SUPPLY} the ingredient line of the production
-     * order it serves. A {@link #STORE} and a {@link #COLLECT} job never have one — nothing asked for those items, they
+     * order it serves, a {@link #FILL} the fill request it serves (M31). A {@link #STORE} and a {@link #COLLECT} job never have one — nothing asked for those items, they
      * simply arrived or were fetched.
      * <p>
      * Written as the two types that <b>do</b> carry one rather than as "not a store" (M18): the list of types that serve
      * somebody is the shorter and the more stable one, and adding a type must not silently make it a request carrier.
      */
     public boolean mayCarryRequestId() {
-        return this == RETRIEVE || this == SUPPLY;
+        return this == RETRIEVE || this == SUPPLY || this == FILL;
     }
 
     /**
@@ -120,12 +134,12 @@ public enum JobType {
      * Whether a crane with this job <b>waits</b> in front of a delivery target that accepts nothing right now, instead of
      * dropping what it can and rerouting the rest ({@code CraneExecution}, {@code ReservationLedger}).
      * <p>
-     * True exactly for the two types that deliver on somebody's behalf, {@link #RETRIEVE} and {@link #SUPPLY}: waiting is
-     * right when somebody is waiting for the items. A {@link #STORE} into an accepting port must not park the crane in
+     * True exactly for the types that deliver on somebody's behalf, {@link #RETRIEVE}, {@link #SUPPLY} and {@link #FILL}
+     * (a filled container is waited with like a retrieve, M31): waiting is right when somebody is waiting for the items. A {@link #STORE} into an accepting port must not park the crane in
      * front of a full overflow (M17), and a {@link #COLLECT} never has a delivery target at all.
      */
     public boolean waitsAtAFullTarget() {
-        return this == RETRIEVE || this == SUPPLY;
+        return this == RETRIEVE || this == SUPPLY || this == FILL;
     }
 
     /**

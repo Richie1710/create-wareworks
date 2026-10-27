@@ -10,7 +10,8 @@ import java.util.UUID;
  * @param jobId     the job holding the reservation
  * @param kind      what is promised
  * @param location  for {@link Kind#CAPACITY} the target, for {@link Kind#STOCK} the source, for {@link Kind#TRANSIT} the
- *                  output station the held items travel to
+ *                  output station the held items travel to, for {@link Kind#FILLING} the current target of the fill
+ *                  trip (the bay before the fill, the station after it)
  * @param key       item key
  * @param amount    promised amount, at least 1 (the ledger never stores empty reservations)
  * @param requestId who the promised items are for: a retrieval request, or the ingredient line of a production order
@@ -29,7 +30,17 @@ public record Reservation<K, L>(UUID jobId, Kind kind, L location, K key, int am
          * Items already in a handling head on their way to a delivery station (an output or a production station);
          * they are no longer indexed stock.
          */
-        TRANSIT
+        TRANSIT,
+        /**
+         * Containers of a <b>fill trip</b> already in a handling head, empty on their way to the fluid bay or filled on
+         * their way to the station (M31, issue #21, ADR-073), with the fill request they are for.
+         * <p>
+         * It counts towards that request ({@code committedToRequest}, so the planner does not plan the same containers a
+         * second time) and towards <b>no</b> per-key total: the empties have left the racks, and the filled containers
+         * are not stock anybody's item request is owed from. Counting them as {@link #TRANSIT} of their key would make
+         * an item click on "Bucket" or "Lava Bucket" more or less available by the trip in flight.
+         */
+        FILLING
     }
 
     public Reservation {

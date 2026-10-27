@@ -986,6 +986,41 @@ public final class DisplayLinkGameTests {
     }
 
     /**
+     * A port with a filled container in its filter counts the <b>fluid</b> in the bays, in buckets (M31, issue #21,
+     * ADR-073): such a port is served by filling containers there, and "0 lava buckets in stock" would read as an empty
+     * warehouse beside a bay of lava. An empty bucket in the same filter keeps meaning the item.
+     * <p>
+     * <b>Teeth:</b> drop the fluid branch of {@code FilteredStockDisplaySource#provideLine}: the tube reads "0".
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void filteredstockfluidonport(GameTestHelper helper) {
+        AisleFixture aisle = fluidWarehouse(helper);
+        aisle.output(OUTPUT);
+        BlockPos tube = nixieRow(helper);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 0, 1))
+                .thenExecute(() -> fillBay(helper, aisle, LAVA_BAY, LAVA, 2_500))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().fluidStockIndex().count(LAVA), 2_500L,
+                        "the lava is indexed"))
+                .thenExecute(() -> {
+                    helper.assertTrue(aisle.filterOf(OUTPUT).setFilter(new ItemStack(Items.LAVA_BUCKET)),
+                            "the port takes a lava bucket as its filter");
+                    DisplayLinkBlockEntity link = link(helper, aisle.rackPos(OUTPUT), Direction.UP, tube,
+                            WareworksDisplaySources.FILTERED_STOCK);
+                    helper.assertValueEqual(nixieText(helper, tube).getString(), "2.5",
+                            "the lava in the bays, in buckets, and not the lava buckets on the shelves");
+
+                    helper.assertTrue(aisle.filterOf(OUTPUT).setFilter(new ItemStack(Items.BUCKET)),
+                            "an empty bucket as the filter");
+                    link.updateGatheredData();
+                    assertNumber(helper, tube, STORED_BUCKETS, "an empty bucket is the item");
+                })
+                .thenExecute(() -> retireBays(helper, aisle))
+                .thenSucceed();
+    }
+
+    /**
      * The interface's store filter names the item, and the number is the whole aisle's stock of it, not just this
      * location's. A Create list filter selects no single item type, so it reads 0.
      */

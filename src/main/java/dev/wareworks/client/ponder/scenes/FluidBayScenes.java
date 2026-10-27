@@ -4,6 +4,7 @@ import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.fluids.tank.FluidTankBlockEntity;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
+import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.StorageFilterValueBox;
@@ -12,6 +13,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.storage.FluidBayTier;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlocks;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
@@ -42,8 +44,13 @@ import net.neoforged.neoforge.fluids.capability.IFluidHandler.FluidAction;
  * the easy half.
  * <p>
  * It is registered on both fluid bays <b>and on the warehouse terminal</b> ({@code WareworksPonderScenes}), which is
- * where a player holding a stocked warehouse meets the one thing M30 does not do: there is no fluid row to click, and
- * the closing beats say where the fluid really goes in and out.
+ * where a player holding a stocked warehouse looks for the lava and finds buckets; the closing beats say where the
+ * fluid really goes in and out.
+ * <p>
+ * <b>The second scene, {@link #askingForFluid}, is the other direction</b> (M31, issue #21, ADR-073): a fluid row at
+ * the terminal, empty containers taken from stock, filled at the bay and carried on to the station that asked. It is a
+ * scene of its own rather than more beats on this one, because this one already teaches a whole loop and a player who
+ * wants lava <i>out</i> should not have to sit through the way in first.
  * <p>
  * As in {@link CraneScenes}, storyboards must stay level-free: they also run with {@code level == null} during lang
  * datagen, so everything that touches a real level goes inside an instruction. The order of the {@code .text(...)}
@@ -102,6 +109,9 @@ public final class FluidBayScenes {
     private static final int PIPED_MB = 24 * ONE_BUCKET_MB;
     /** What the source tank behind the pipe holds, so it reads as a tank with lava in it rather than as glass. */
     private static final int SOURCE_TANK_MB = 6 * ONE_BUCKET_MB;
+
+    /** Empty buckets the request scene's rack bay starts with, so the one the crane takes leaves some behind. */
+    private static final int STOCKED_EMPTIES = 4;
 
     private static final ItemStack FILLED_BUCKET = new ItemStack(Items.LAVA_BUCKET);
     private static final ItemStack EMPTY_BUCKET = new ItemStack(Items.BUCKET);
@@ -385,6 +395,197 @@ public final class FluidBayScenes {
                 .attachKeyFrame()
                 .placeNearTarget()
                 .pointAt(bayFront);
+        scene.idle(TEXT_IDLE);
+
+        scene.markAsFinished();
+    }
+
+    /**
+     * Asking the warehouse for a fluid (M31, issue #21, ADR-073): the fluid row at a terminal, the question that names
+     * the containers and the trips, and the one trip the whole milestone is: an <b>empty bucket from a rack bay</b>,
+     * <b>filled at the fluid bay</b> and carried <b>straight on to the terminal</b>, never put down on the way (a bay
+     * dedicated to the fluid outranks every shelf for a filled bucket, so a filled bucket set down in stock would only
+     * be drained again).
+     * <p>
+     * The two closing beats are the two answers a player needs when the trip cannot happen: the row turns red when no
+     * empty container is in stock (with the offer to have them made when a pattern exists), and the pipe at the back of
+     * the bay is the bulk path that needs no container at all. The bay therefore stands on the {@link Side#LEFT} rack
+     * plane here, whose <b>back</b> faces north, the side the camera draws (see {@code TerminalScenes}' class comment
+     * on the camera), so that pipe is in view rather than behind the bay.
+     * <p>
+     * The terminal's screen cannot be opened in a Ponder level ({@code TerminalScenes}' class comment), so the row,
+     * the click and the question are represented the way every other terminal beat is: a control icon on the display
+     * face, carrying the lava bucket that the fluid row shows, plus the caption. The plumbing is a diagram again, for
+     * this class's own reason: only the dock's column turns, so no pump runs and the bay's level is changed by the
+     * scene, one bucket at the fill.
+     */
+    public static void askingForFluid(SceneBuilder builder, SceneBuildingUtil util) {
+        CreateSceneBuilder scene = new CreateSceneBuilder(builder);
+        scene.title("fluid_request", "Asking the Warehouse for Fluid");
+
+        PonderAisle aisle = PonderAisle.WIDE;
+        scene.configureBasePlate(0, 0, aisle.plateSize());
+        scene.scaleSceneView(0.9f);
+
+        // The terminal where TerminalScenes#requesting puts it (its screen is the west face the camera reads), the rack
+        // of empties and the bay on the other plane, two positions apart so neither shares an upright with the other.
+        int terminalPosition = 2;
+        int rackPosition = 3;
+        int bayPosition = 5;
+        Direction depth = PonderAisle.outward(Side.LEFT);
+
+        BlockPos terminal = aisle.rack(util, terminalPosition, 0, Side.RIGHT);
+        BlockPos rack = aisle.rack(util, rackPosition, 0, Side.LEFT);
+        BlockPos bay = aisle.rack(util, bayPosition, 0, Side.LEFT);
+        BlockPos pipe = aisle.inventory(util, bayPosition, 0, Side.LEFT);
+        BlockPos tank = pipe.relative(depth);
+
+        Vec3 screen = util.vector().blockSurface(terminal, Direction.WEST);
+        Vec3 rackTop = util.vector().topOf(rack);
+        Vec3 bayTop = util.vector().topOf(bay);
+
+        Selection plumbing = util.select().fromTo(pipe.getX(), pipe.getY(), pipe.getZ(),
+                tank.getX(), tank.getY(), tank.getZ());
+        Selection aisleLine = util.select().fromTo(aisle.dockX() - 1, FLOOR_Y, aisle.aisleZ(),
+                aisle.lastRailX(), FLOOR_Y, aisle.aisleZ());
+        Selection rackAndBay = util.select().position(rack).add(util.select().position(bay));
+        Selection terminalSelection = util.select().position(terminal);
+
+        // --- the stage, all of it while the positions are still hidden ----------------------------------------------
+        aisle.placeAisle(scene, util);
+        aisle.placeTerminal(scene, util, terminalPosition, 0, Side.RIGHT, TerminalDisplaySide.LEFT);
+        scene.world().setBlock(rack, WareworksBlocks.RACK_BAY_ANDESITE.getDefaultState()
+                .setValue(HorizontalDirectionalBlock.FACING, depth)
+                .setValue(TieredBay.FILL, 1), false);
+        scene.world().modifyBlockEntity(rack, RackBayBlockEntity.class,
+                bayEntity -> bayEntity.insert(EMPTY_BUCKET.copyWithCount(STOCKED_EMPTIES), false));
+        scene.world().setBlock(bay, WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                .setValue(HorizontalDirectionalBlock.FACING, depth), false);
+        pour(scene, bay, PIPED_MB);
+        // The pipe at the bay's back, between the bay and a tank of lava, with both ends written (no neighbour updates
+        // in a PonderLevel, as in the first scene).
+        scene.world().setBlock(pipe, AllBlocks.FLUID_PIPE.getDefaultState()
+                .setValue(PipeBlock.NORTH, true)
+                .setValue(PipeBlock.SOUTH, true), false);
+        scene.world().setBlock(tank, AllBlocks.FLUID_TANK.getDefaultState(), false);
+        scene.world().modifyBlockEntity(tank, FluidTankBlockEntity.class, be -> be.getTankInventory()
+                .fill(new FluidStack(Fluids.LAVA, SOURCE_TANK_MB), FluidAction.EXECUTE));
+        scene.world().setKineticSpeed(util.select().fromTo(aisle.dockX(), FLOOR_Y - 1, aisle.aisleZ(),
+                aisle.dockX(), FLOOR_Y, aisle.aisleZ()), CraneScript.PONDER_RPM);
+
+        scene.showBasePlate();
+        scene.idle(10);
+        scene.world().showSection(aisleLine, Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.world().showSection(rackAndBay, Direction.DOWN);
+        scene.world().showSection(terminalSelection, Direction.DOWN);
+        scene.idle(FADE_IDLE + 5);
+
+        // --- 1. the fluid row ---------------------------------------------------------------------------------------
+        scene.overlay().showControls(screen, Pointing.LEFT, CONTROL_TICKS).withItem(FILLED_BUCKET);
+        scene.idle(CONTROL_LEAD);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("With a Fluid Bay in the aisle, the terminal lists each fluid as a row of its own above the "
+                        + "items")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(screen);
+        scene.idle(TEXT_IDLE);
+
+        // --- 2. the click and the question --------------------------------------------------------------------------
+        scene.overlay().showControls(screen, Pointing.LEFT, CONTROL_TICKS)
+                .leftClick()
+                .withItem(FILLED_BUCKET);
+        scene.idle(CONTROL_LEAD);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Click it for buckets of that fluid: the terminal first says which containers it uses and how "
+                        + "many trips that takes")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(screen);
+        scene.idle(TEXT_IDLE);
+
+        // --- 3. an empty container from stock -----------------------------------------------------------------------
+        CraneScript crane = CraneScript.parkedAt(scene, aisle.dock(util));
+        scene.overlay().showOutline(PonderPalette.INPUT, "empties", util.select().position(rack), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("The crane takes an empty container from stock, the largest first: here an empty bucket")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(rackTop);
+        int shown = crane.moveTo(CranePose.at(rackPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_SOURCE);
+        shown += crane.moveTo(new CranePose(rackPosition, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_SOURCE);
+        scene.world().modifyBlockEntity(rack, RackBayBlockEntity.class, bayEntity -> bayEntity.extract(1, false));
+        crane.hold(Items.BUCKET, 1);
+        shown += crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
+        shown += crane.moveTo(CranePose.at(rackPosition, 0, Side.LEFT), CranePhase.RETRACT_SOURCE);
+        scene.idle(Math.max(0, TEXT_IDLE - shown));
+
+        // --- 4. the fill at the bay ---------------------------------------------------------------------------------
+        crane.moveTo(CranePose.at(bayPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_TARGET);
+        crane.moveTo(new CranePose(bayPosition, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_TARGET);
+        // The caption is covered by the two dwells and the retraction below, which together are longer than it is shown
+        // (the class comment's rule). The swap is two icons at one anchor, the first scene's own picture turned round:
+        // an empty bucket over the bay, then a filled one.
+        scene.overlay().showText(TEXT_TICKS)
+                .text("The bay fills it, and the crane carries the filled bucket straight on to the terminal")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(bayTop);
+        scene.overlay().showControls(bayTop, Pointing.DOWN, TRANSFER_TICKS).withItem(EMPTY_BUCKET);
+        crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        scene.world().modifyBlockEntity(bay, FluidBayBlockEntity.class,
+                bayEntity -> bayEntity.drain(ONE_BUCKET_MB, false));
+        crane.hold(Items.LAVA_BUCKET, 1);
+        scene.effects().indicateSuccess(bay);
+        scene.overlay().showControls(bayTop, Pointing.DOWN, TRANSFER_TICKS).withItem(FILLED_BUCKET);
+        crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        crane.moveTo(CranePose.at(bayPosition, 0, Side.LEFT), CranePhase.RETRACT_TARGET);
+
+        // --- 5. the delivery, one bucket per trip -------------------------------------------------------------------
+        scene.overlay().showText(TEXT_TICKS)
+                .text("and drops it into the terminal: one filled bucket per trip, which is why the question counts "
+                        + "the trips")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(screen);
+        shown = crane.moveTo(CranePose.at(terminalPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
+        shown += crane.moveTo(new CranePose(terminalPosition, 0, LocationKind.OUTPUT.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
+        shown += crane.dwell(CranePhase.DROP, 10);
+        crane.release();
+        scene.effects().indicateSuccess(terminal);
+        shown += crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        shown += crane.moveTo(CranePose.at(terminalPosition, 0, Side.RIGHT), CranePhase.RETRACT_TARGET);
+        shown += crane.moveTo(CranePose.at(0, 0, Side.LEFT), CranePhase.IDLE);
+        scene.idle(Math.max(10, TEXT_IDLE - shown));
+
+        // --- 6. no empty containers: the red row --------------------------------------------------------------------
+        scene.world().modifyBlockEntity(rack, RackBayBlockEntity.class,
+                bayEntity -> bayEntity.extract(STOCKED_EMPTIES, false));
+        scene.world().modifyBlock(rack, state -> state.setValue(TieredBay.FILL, 0), false);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showOutline(PonderPalette.RED, "no empties", util.select().position(rack), TEXT_TICKS);
+        scene.overlay().showControls(screen, Pointing.LEFT, CONTROL_TICKS).withItem(EMPTY_BUCKET);
+        scene.idle(CONTROL_LEAD);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("With no empty container in stock the row turns red, and if a pattern makes buckets, the terminal "
+                        + "offers to have them made first")
+                .attachKeyFrame()
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(rackTop);
+        scene.idle(TEXT_IDLE);
+
+        // --- 7. and the bulk path needs none ------------------------------------------------------------------------
+        scene.world().showSection(plumbing, Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showOutline(PonderPalette.GREEN, "pipe", plumbing, TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("For bulk, a pipe at the back of the bay draws the fluid off without any container")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(pipe));
         scene.idle(TEXT_IDLE);
 
         scene.markAsFinished();

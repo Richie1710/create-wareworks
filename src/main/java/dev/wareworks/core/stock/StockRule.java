@@ -41,8 +41,14 @@ public record StockRule<K>(K key, long minimum, long maximum, long reserve) {
     /** A number that is switched off. A screen shows it as "–"; every query reads it as "no limit". */
     public static final long UNSET = -1L;
 
-    /** The largest amount a number may be set to. Far beyond any warehouse, and small enough that sums cannot hurt. */
-    public static final long MAX_AMOUNT = 1_000_000L;
+    /**
+     * The largest amount a number may be set to. Far beyond any warehouse, and small enough that sums cannot hurt.
+     * <p>
+     * One billion since M31 (issue #21, ADR-073): a fluid rule counts millibuckets, and a large warehouse holds far more
+     * than a million of them (ten brass fluid bays are 2 560 000 mB), so a cap of a million could not govern a fluid it
+     * actually holds. One billion millibuckets is one million buckets; an item rule simply never needs that much.
+     */
+    public static final long MAX_AMOUNT = 1_000_000_000L;
 
     public StockRule {
         Objects.requireNonNull(key, "key");

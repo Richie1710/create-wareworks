@@ -7,6 +7,7 @@ import java.util.Optional;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.TerminalFluids;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.StockCount;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -22,13 +23,19 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * costs no packet at all.
  * <p>
  * Reading is bounded: at most {@value #MAX_ENTRIES} entries are ever decoded, whatever the length prefix claims.
+ * <p>
+ * <b>The fluid half travels whole</b> (M31, issue #21): the fluid cells and this terminal's fill lines
+ * ({@link TerminalFluids}) whenever they changed, and nothing — one zero byte — when they did not. A warehouse has few
+ * fluids, so a diff would cost more than it saves; the menu compares the half by value and the screen replaces its
+ * own copy with every one it is sent. Only the first page of a split push carries it.
  *
  * @param containerId the menu the payload belongs to; the screen ignores a payload for another menu
  * @param reset       whether the client must drop its list before applying these entries
  * @param entries     new, changed or removed ({@code total == 0}) item types
+ * @param fluids      the whole fluid half when it changed, empty when it did not
  */
-public record TerminalStockPayload(int containerId, boolean reset, List<StockCount<ItemKey>> entries)
-        implements CustomPacketPayload {
+public record TerminalStockPayload(int containerId, boolean reset, List<StockCount<ItemKey>> entries,
+                                   Optional<TerminalFluids> fluids) implements CustomPacketPayload {
     /** Most entries in one payload; the server splits a longer list into several. */
     public static final int MAX_ENTRIES = 64;
 
@@ -41,10 +48,17 @@ public record TerminalStockPayload(int containerId, boolean reset, List<StockCou
     public TerminalStockPayload {
         Objects.requireNonNull(entries, "entries");
         entries = List.copyOf(entries.size() <= MAX_ENTRIES ? entries : entries.subList(0, MAX_ENTRIES));
+        fluids = fluids == null ? Optional.empty() : fluids;
+    }
+
+    /** A page of item entries with no news about fluid: every shape this payload had before M31. */
+    public TerminalStockPayload(int containerId, boolean reset, List<StockCount<ItemKey>> entries) {
+        this(containerId, reset, entries, Optional.empty());
     }
 
     private TerminalStockPayload(RegistryFriendlyByteBuf buffer) {
-        this(buffer.readVarInt(), buffer.readBoolean(), readEntries(buffer));
+        this(buffer.readVarInt(), buffer.readBoolean(), readEntries(buffer),
+                buffer.readBoolean() ? Optional.of(TerminalFluids.read(buffer)) : Optional.empty());
     }
 
     private void write(RegistryFriendlyByteBuf buffer) {
@@ -71,6 +85,9 @@ public record TerminalStockPayload(int containerId, boolean reset, List<StockCou
             // than the ten a negative varlong takes.
             buffer.writeVarLong(entry.ruleMaximum() + 1L);
         }
+        // Last, so every field before it reads as it did before M31: a push without fluid news is one zero byte.
+        buffer.writeBoolean(fluids.isPresent());
+        fluids.ifPresent(half -> half.write(buffer));
     }
 
     private static List<StockCount<ItemKey>> readEntries(RegistryFriendlyByteBuf buffer) {

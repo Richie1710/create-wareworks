@@ -44,7 +44,7 @@ import net.minecraft.world.item.Item;
 public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<Item> buffer, int openRequests,
                                    long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection,
                                    long exportedItems, boolean portArmed, PortCollectSummary collect,
-                                   PackageUnpackSummary packages) {
+                                   PackageUnpackSummary packages, boolean filling) {
     public static final StationGoggleSummary NONE = new StationGoggleSummary(AisleAssignment.NONE,
             InventorySummary.empty(), 0, 0L, 0L, Optional.empty(), 0L, false, PortCollectSummary.NONE,
             PackageUnpackSummary.NONE);
@@ -59,6 +59,7 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
     private static final String PORT_ARMED = "PortArmed";
     private static final String COLLECT = "Collect";
     private static final String PACKAGES = "Packages";
+    private static final String FILLING = "Filling";
 
     public StationGoggleSummary {
         if (assignment == null)
@@ -77,29 +78,43 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
         exportedItems = Math.max(0L, exportedItems);
     }
 
+    /** A summary with no open fill request (M31), which is every summary that was built before fill requests existed. */
+    public StationGoggleSummary(AisleAssignment assignment, InventorySummary<Item> buffer, int openRequests,
+            long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection, long exportedItems,
+            boolean portArmed, PortCollectSummary collect, PackageUnpackSummary packages) {
+        this(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection, exportedItems, portArmed,
+                collect, packages, false);
+    }
+
+    /** This summary saying whether an open request of the station is filled at the fluid bays (M31, issue #21). */
+    public StationGoggleSummary withFilling(boolean filling) {
+        return filling == this.filling ? this : new StationGoggleSummary(assignment, buffer, openRequests,
+                requestedItems, deliveredItems, lastRejection, exportedItems, portArmed, collect, packages, filling);
+    }
+
     /** This summary with other request data. */
     public StationGoggleSummary withRequests(int open, long requested, long delivered,
             Optional<RequestRejection> rejection) {
         return new StationGoggleSummary(assignment, buffer, open, requested, delivered, rejection, exportedItems,
-                portArmed, collect, packages);
+                portArmed, collect, packages, filling);
     }
 
     /** This summary with a warehouse port's export counter and its unspent rising edge (M17). */
     public StationGoggleSummary withPort(long exported, boolean armed) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exported, armed, collect, packages);
+                exported, armed, collect, packages, filling);
     }
 
     /** This summary with what a collecting warehouse port fetches from and has fetched (M18, issue #13). */
     public StationGoggleSummary withCollect(PortCollectSummary collect) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exportedItems, portArmed, collect, packages);
+                exportedItems, portArmed, collect, packages, filling);
     }
 
     /** This summary with what a warehouse input has made of the packages handed to it (M26, issue #18). */
     public StationGoggleSummary withPackages(PackageUnpackSummary packages) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exportedItems, portArmed, collect, packages);
+                exportedItems, portArmed, collect, packages, filling);
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -132,6 +147,9 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
             packages.write(packagesTag);
             tag.put(PACKAGES, packagesTag);
         }
+        // And only a station that waits for a fill (M31).
+        if (filling)
+            tag.putBoolean(FILLING, true);
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -142,6 +160,6 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
                         ? RequestRejection.byName(tag.getString(LAST_REJECTION)) : Optional.empty(),
                 tag.getLong(EXPORTED_ITEMS), tag.getBoolean(PORT_ARMED),
                 PortCollectSummary.read(tag.getCompound(COLLECT)),
-                PackageUnpackSummary.read(tag.getCompound(PACKAGES)));
+                PackageUnpackSummary.read(tag.getCompound(PACKAGES)), tag.getBoolean(FILLING));
     }
 }

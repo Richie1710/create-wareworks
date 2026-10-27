@@ -92,6 +92,28 @@ public interface TransferContext {
     }
 
     /**
+     * How many whole containers of {@code empty} this location could <b>fill</b> right now, at most {@code amount}
+     * (M31, issue #21, ADR-073). No change. A location that cannot fill answers 0, which is why this is a default.
+     */
+    default int simulateFill(ItemKey empty, int amount) {
+        return 0;
+    }
+
+    /**
+     * Gives up {@code amount} <b>empty</b> containers of {@code empty} and takes back that many filled with what this
+     * location holds — the mirror of {@link #exchange}, for the fill trip of a fluid request (M31, issue #21, ADR-073).
+     * The same four-point contract holds word for word: all or nothing, a real call performs exactly what it answers or
+     * changes nothing, within one tick it answers what the simulation answered, and nothing of the containers is passed
+     * in or handed out — the head does the moving. {@link ContainerExchange#millibuckets()} is then the fluid that
+     * moved <b>out of</b> this location into the containers.
+     *
+     * @return what the fill yields, or empty for a location that refuses it (and then nothing changed)
+     */
+    default Optional<ContainerExchange> fill(ItemKey empty, int amount, boolean simulate) {
+        return Optional.empty();
+    }
+
+    /**
      * Whether this location takes items <b>only</b> through {@link #exchange} and never through {@link #insert} — a
      * fluid bay, and nothing else (M30, issue #21, D3).
      * <p>
@@ -116,9 +138,10 @@ public interface TransferContext {
      *
      * @param result       the item the head receives, one per container; never the item it gave up
      * @param containers   how many containers were exchanged, at least 1
-     * @param millibuckets how much fluid moved into the location <b>in total</b>, for all {@code containers} together;
-     *                     at least 1, and it is the number the fluid census sees appear in the location's tank while
-     *                     the same amount disappears from the containers
+     * @param millibuckets how much fluid moved between the containers and the location <b>in total</b>, for all
+     *                     {@code containers} together, in the direction of the operation: into the location for
+     *                     {@link #exchange}, out of it for {@link #fill} (M31). At least 1; it is the number the fluid
+     *                     census sees move from one half to the other
      */
     record ContainerExchange(ItemKey result, int containers, int millibuckets) {
         public ContainerExchange {

@@ -94,7 +94,10 @@ teleported: every item you put in or take out is carried by the crane, where you
   you meet them: a **funnel, a chute, a belt or a hopper cannot fill a fluid bay** (it would keep your empty bucket, so
   use a pipe, your hand or the crane), and **breaking a full one loses the fluid**, exactly as breaking a Create Fluid
   Tank does — the item description, the goggles and the first hit on the block all warn you, and the empty bay comes
-  back. Asking a terminal for a fluid is not built yet; fluid leaves through a pipe at the back or your own bucket.
+  back. And a fluid can be **asked for at a terminal**: the crane takes empty buckets out of stock, a bay fills
+  them, and they are carried straight on to the terminal, one bucket per trip. The terminal says first which
+  containers and how many trips that takes, turns the row red when no empty container is in stock and, when one of
+  your production stations makes buckets, offers to have them made; bulk goes through a pipe at the back.
 * **Warehouse Input**: the andesite hand-over point for belts, funnels, chutes, hoppers and Mechanical Arms feeding the
   warehouse. Put a **Create Packager** against it and it becomes an **in door** for addressed **Create packages**:
   arriving boxes are opened and their contents stored like anything else.
@@ -185,10 +188,8 @@ What beta promises:
 * **No item is lost or duplicated by the warehouse.** A report of one is treated as the most serious kind of bug.
 * Features may still grow and their screens change before 1.0.
 
-Still to come before 1.0: requesting fluids at the terminal
-([#21](https://github.com/Richie1710/create-wareworks/issues/21)). Please report problems on the
-[issue tracker](https://github.com/Richie1710/create-wareworks/issues), and keep a backup of your world, as with any
-mod in beta.
+Please report problems on the [issue tracker](https://github.com/Richie1710/create-wareworks/issues), and keep a
+backup of your world, as with any mod in beta.
 
 ## Requirements
 
@@ -275,7 +276,10 @@ twenty-third, **Crafting with a Vanilla Crafter**, belongs to the Crafter Feeder
 on the station's back, the Crafter in front of it and the input in front of the Crafter, an order of torches laid and
 crafted run by run, and the red pattern that is never fetched. The twenty-fourth, **Carrying Containers with the Hand
 Truck**, belongs to the **Hand Truck**, the one item that is no block: a chest loaded with everything in it, the slow
-walk, and the chest set down again.
+walk, and the chest set down again. The twenty-fifth, **Asking the Warehouse for Fluid**, belongs to both **fluid
+bays** and the terminal: the fluid row and its question, an empty bucket carried from a rack bay to the fluid bay,
+filled there and taken straight on to the terminal, the red row when no empty container is in stock, and the pipe
+at the bay's back for bulk.
 
 ## Balancing the crane
 
