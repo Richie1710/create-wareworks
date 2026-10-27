@@ -7,18 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0-beta] - 2026-10-27
+
 ### Added
 
 - **Hand Truck** ([#37](https://github.com/Richie1710/create-wareworks/issues/37)). Right-click a chest, trapped chest
   or barrel with the empty truck and it goes onto the truck with everything inside, including its name, its lock and
   an unopened loot table; right-click a surface to set it down again, facing you. Carrying one half of a double chest
   leaves the other half standing as a single chest. While a loaded truck is in your inventory you walk at half speed
-  and cannot sprint or glide; an empty truck costs nothing. A loaded truck goes into no other container, the drop key
-  is refused, and one that is thrown out of a screen comes back into your inventory. You carry one at a time, only
-  where you may break blocks. On death it tips over into its contents, the container and the empty truck. Warehouse
+  and cannot sprint or glide (creative and spectator players excepted); an empty truck costs nothing. A loaded truck
+  goes into no other container and cannot be used on entities such as item frames or villagers, the drop key is
+  refused, and one that is thrown out of a screen comes back into your inventory. You carry one at a time, only where
+  you may break blocks. On death it tips over into its contents, the container and the empty truck. Warehouse
   blocks, ender chests and shulker boxes cannot be carried; the tags `wareworks:hand_truck_carriable` and
   `wareworks:hand_truck_denied` change what can. Server config section `handTruck` (speed, sprint, elytra,
   size limit). Recipe: a shaft over andesite alloy over two cogwheels and an iron sheet; one Ponder scene.
+
+### Changed
+
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because of the new Hand Truck item
+  ([#37](https://github.com/Richie1710/create-wareworks/issues/37))
 
 ## [0.16.0-beta] - 2026-10-27
 
@@ -1335,7 +1344,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.16.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.17.0-beta...HEAD
+[0.17.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.16.0-beta...v0.17.0-beta
 [0.16.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.15.0-beta...v0.16.0-beta
 [0.15.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.14.0-beta...v0.15.0-beta
 [0.14.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.13.1-beta...v0.14.0-beta
