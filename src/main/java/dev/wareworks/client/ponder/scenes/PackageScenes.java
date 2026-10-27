@@ -20,6 +20,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.port.PortRedstone;
+import dev.wareworks.core.warehouse.LocationKind;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
@@ -607,7 +608,8 @@ public final class PackageScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(sourcePosition, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(portPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(portPosition, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(portPosition, 0, LocationKind.OUTPUT.armStroke(), Side.LEFT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);

@@ -9,6 +9,7 @@ import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlocks;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
@@ -294,7 +295,8 @@ public final class TerminalScenes {
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(terminal, SCREEN));
         crane.moveTo(CranePose.at(terminalPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(terminalPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(terminalPosition, 0, LocationKind.OUTPUT.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);

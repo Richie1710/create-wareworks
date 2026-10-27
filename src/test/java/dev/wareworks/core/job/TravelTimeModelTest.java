@@ -10,6 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import dev.wareworks.core.crane.CraneMotion;
+import dev.wareworks.core.warehouse.LocationKind;
 
 class TravelTimeModelTest {
     /** The config defaults of {@code docs/warehouse-system.md} §9. */
@@ -129,6 +130,27 @@ class TravelTimeModelTest {
         assertEquals(TravelTimeModel.UNAVAILABLE, TravelTimeModel.tripTicks(CraneSpeeds.STOPPED, 10, 0, 0, 0, 0, 0, 0),
                 "the arm cannot move without rotation");
         assertThrows(IllegalArgumentException.class, () -> TravelTimeModel.stopTicks(speeds, -1));
+    }
+
+    /** A stop's stroke (issue #39, ADR-072): a station takes half a block, which costs fewer arm ticks. */
+    @Test
+    void strokeAwareStopAndTripTicks() {
+        CraneSpeeds speeds = CraneKinematics.speeds(DEFAULTS, 64);
+        double half = LocationKind.STATION_STROKE;
+        assertEquals(2, TravelTimeModel.armTicks(speeds, half), "ceil(0.5 / (1/3))");
+        assertEquals(TravelTimeModel.armTicks(speeds), TravelTimeModel.armTicks(speeds, TravelTimeModel.FULL_EXTENSION));
+        assertEquals(TravelTimeModel.stopTicks(speeds, 10),
+                TravelTimeModel.stopTicks(speeds, 10, TravelTimeModel.FULL_EXTENSION));
+        assertEquals(14, TravelTimeModel.stopTicks(speeds, 10, half), "extend 2 + transfer 10 + retract 2");
+        assertEquals(TravelTimeModel.tripTicks(speeds, 10, 0, 0, 2, 1, 5, 0), TravelTimeModel.tripTicks(speeds, 10, 0,
+                0, 2, 1, TravelTimeModel.FULL_EXTENSION, 5, 0, TravelTimeModel.FULL_EXTENSION));
+        // storage (2,1) at a full stroke, a station (5,0) at half: 12 + 16 + 18 + 14
+        assertEquals(12 + 16 + 18 + 14, TravelTimeModel.tripTicks(speeds, 10, 0, 0, 2, 1,
+                LocationKind.STORAGE.armStroke(), 5, 0, LocationKind.OUTPUT.armStroke()));
+        for (double invalid : new double[] { 0.0, -0.5, 1.5, Double.NaN })
+            assertThrows(IllegalArgumentException.class, () -> TravelTimeModel.armTicks(speeds, invalid),
+                    () -> "stroke " + invalid);
+        assertEquals(TravelTimeModel.UNAVAILABLE, TravelTimeModel.armTicks(CraneSpeeds.STOPPED, half));
     }
 
     @Test

@@ -10,6 +10,7 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.warehouse.LocationKind;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
@@ -361,7 +362,8 @@ public final class PortScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(inputPosition, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(portPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(portPosition, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(portPosition, 0, LocationKind.OUTPUT.armStroke(), Side.LEFT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
@@ -525,7 +527,8 @@ public final class PortScenes {
                 .pointAt(util.vector().blockSurface(port, BACK_LEFT));
         CraneScript crane = CraneScript.parkedAt(scene, dock);
         crane.moveTo(CranePose.at(portPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_SOURCE);
-        crane.moveTo(new CranePose(portPosition, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_SOURCE);
+        crane.moveTo(new CranePose(portPosition, 0, LocationKind.OUTPUT.armStroke(), Side.LEFT),
+                CranePhase.EXTEND_SOURCE);
         crane.hold(Items.OAK_PLANKS, COLLECTED_AMOUNT);
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(portPosition, 0, Side.LEFT), CranePhase.RETRACT_SOURCE);
@@ -599,7 +602,8 @@ public final class PortScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(sourcePosition, 0, sourceSide), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(portPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(portPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(portPosition, 0, LocationKind.OUTPUT.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);

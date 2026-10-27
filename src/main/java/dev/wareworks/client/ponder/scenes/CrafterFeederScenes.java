@@ -8,6 +8,7 @@ import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlocks;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
@@ -257,7 +258,7 @@ public final class CrafterFeederScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(from, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(to, 0, Side.LEFT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(to, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(to, 0, LocationKind.PRODUCTION.armStroke(), Side.LEFT), CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);

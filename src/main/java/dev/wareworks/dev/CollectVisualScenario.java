@@ -34,6 +34,7 @@ import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
@@ -119,7 +120,8 @@ public final class CollectVisualScenario implements VisualScenario {
     private static final int COLLECTED_TIMEOUT_TICKS = 2400;
     private static final int SYNC_TIMEOUT_TICKS = 200;
     private static final int SETTLE_TICKS = 10;
-    private static final double ARM_EXTENDED = 0.9;
+    /** How far the arm has to be out in a collecting port: most of a port's stroke (half a block, ADR-072). */
+    private static final double ARM_EXTENDED = 0.9 * LocationKind.OUTPUT.armStroke();
     /** A travel moment needs this much left on one axis, so the crane is still travelling when the freeze arrives. */
     private static final double MIN_REMAINING_TRAVEL = 1.0;
 

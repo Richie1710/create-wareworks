@@ -14,6 +14,7 @@ import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksArmInteractionPoints;
 import dev.wareworks.registry.WareworksBlocks;
 import net.createmod.catnip.math.Pointing;
@@ -307,7 +308,8 @@ public final class StockRuleScenes {
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(source, PonderAisle.outward(Side.LEFT)));
         crane.moveTo(CranePose.at(outputPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(outputPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(outputPosition, 0, LocationKind.OUTPUT.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
@@ -459,7 +461,8 @@ public final class StockRuleScenes {
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(station, FRONT));
         crane.moveTo(CranePose.at(stationPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(stationPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(stationPosition, 0, LocationKind.PRODUCTION.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);

@@ -32,7 +32,8 @@ import dev.wareworks.core.warehouse.CraneRoute;
  * <b>Ticks.</b> Every {@link CraneEvent.Tick} stores the previous pose. While paused (flag or all speeds 0) nothing
  * else changes: no motion, no timers, no effects. Motion phases step {@link CraneMotion} and end in the tick the target
  * pose is reached; the next phase starts moving in the following tick, but a phase whose target is already reached on
- * entry ends at once, so a whole job takes exactly {@code TravelTimeModel.tripTicks} ticks. {@code PICK} and
+ * entry ends at once, so a whole job takes exactly {@code TravelTimeModel.tripTicks} ticks with the arm strokes of its
+ * source and target kind ({@link dev.wareworks.core.warehouse.LocationKind#armStroke}, ADR-072). {@code PICK} and
  * {@code DROP} last {@code transferTicks}; in the last tick they emit their perform effect, and the real transfer
  * result arrives as an event in the same tick. A perform effect is repeated each unpaused tick until its result
  * arrives, and never after (a picked job is never picked again).
@@ -423,7 +424,11 @@ public final class CraneStateMachine<K, L> {
         return enter(s, CranePhase.IDLE, effects);
     }
 
-    /** The pose a phase moves towards (or holds). */
+    /**
+     * The pose a phase moves towards (or holds). At a stop the arm extends to the stroke of that stop's kind
+     * ({@link dev.wareworks.core.warehouse.LocationKind#armStroke}, issue #39, ADR-072): a full block into storage and
+     * inputs, half a block into the terminal, outputs and production stations.
+     */
     private CranePose targetFor(CraneState<K, L> s) {
         CranePose retractedHere = s.pose().withArm(CranePose.RETRACTED);
         if (s.phase() == CranePhase.IDLE)
@@ -432,9 +437,9 @@ public final class CraneStateMachine<K, L> {
         double here = s.pose().yaw();
         return switch (s.phase()) {
             case TRAVEL_TO_SOURCE -> poseAt(job.source(), CranePose.RETRACTED, here);
-            case EXTEND_SOURCE, PICK -> poseAt(job.source(), CranePose.EXTENDED, here);
+            case EXTEND_SOURCE, PICK -> poseAt(job.source(), job.sourceKind().armStroke(), here);
             case TRAVEL_TO_TARGET -> poseAt(job.target(), CranePose.RETRACTED, here);
-            case EXTEND_TARGET, DROP -> poseAt(job.target(), CranePose.EXTENDED, here);
+            case EXTEND_TARGET, DROP -> poseAt(job.target(), job.targetKind().armStroke(), here);
             case IDLE, RETRACT_SOURCE, RETRACT_TARGET, COMPLETE, REROUTE, HOLDING, WAITING_FOR_TARGET -> retractedHere;
         };
     }

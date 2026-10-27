@@ -35,7 +35,10 @@ import dev.wareworks.core.job.TravelTimeModel;
 public record CranePose(int branch, double x, double y, double arm, Side side, double yaw) {
     /** Arm extension of a retracted arm. */
     public static final double RETRACTED = 0.0;
-    /** Arm extension of a fully extended arm. */
+    /**
+     * Arm extension of a fully extended arm: the longest stroke. Stations stop shorter
+     * ({@link dev.wareworks.core.warehouse.LocationKind#armStroke}, ADR-072).
+     */
     public static final double EXTENDED = TravelTimeModel.FULL_EXTENSION;
     /** Side used when a saved or synced side is missing. */
     public static final Side DEFAULT_SIDE = Side.LEFT;

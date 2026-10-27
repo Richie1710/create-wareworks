@@ -212,7 +212,8 @@ class JobPlannerTest {
                 .build());
         PlannedJob<String, RackPosition> planned = result.job().orElseThrow();
         assertEquals(TransportJob.retrieve(planned.job().id(), near, OUT_A, DIAMOND, 5, older), planned.job());
-        assertEquals(TravelTimeModel.tripTicks(SPEEDS, TRANSFER_TICKS, 0, 0, 2, 0, 0, 0), planned.estimatedTicks());
+        assertEquals(TravelTimeModel.tripTicks(SPEEDS, TRANSFER_TICKS, 0, 0, 2, 0, LocationKind.STORAGE.armStroke(), 0, 0,
+                LocationKind.OUTPUT.armStroke()), planned.estimatedTicks(), "the output is a stop at the station stroke");
         assertEquals(Set.of(), result.reasons());
         assertEquals(List.of(OUT_A), live.insertCalls, "the output is checked for at least one item");
         assertEquals(List.of(near), live.extractCalls, "the far source is never asked");

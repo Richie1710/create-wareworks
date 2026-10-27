@@ -5,6 +5,7 @@ import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.warehouse.LocationKind;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
@@ -514,7 +515,8 @@ public final class NetworkScenes {
         crane.moveTo(crane.at(branch, x, 0, side), CranePhase.RETRACT_SOURCE);
 
         crane.moveTo(crane.at(PonderNetwork.FIRST, COLLECT_X, 0, RUN_SIDE), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(crane.extendedAt(PonderNetwork.FIRST, COLLECT_X, 0, RUN_SIDE), CranePhase.EXTEND_TARGET);
+        crane.moveTo(crane.extendedAt(PonderNetwork.FIRST, COLLECT_X, 0, RUN_SIDE, LocationKind.OUTPUT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, COLLECT_TRANSFER_TICKS);

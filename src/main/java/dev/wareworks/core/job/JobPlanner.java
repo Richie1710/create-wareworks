@@ -391,7 +391,7 @@ public final class JobPlanner<K, L> {
                     TransportJob<K, L> job = selection.get().kind() == LocationKind.STORAGE
                             ? TransportJob.store(newId(), station, target, key, selection.get().amount())
                             : TransportJob.storeToPort(newId(), station, target, key, selection.get().amount());
-                    return new PlanResult<>(Optional.of(new PlannedJob<>(job, tripTicks(input, station, target))),
+                    return new PlanResult<>(Optional.of(new PlannedJob<>(job, tripTicks(input, job))),
                             reasons, next);
                 }
                 if (budget.exhausted) {
@@ -573,7 +573,7 @@ public final class JobPlanner<K, L> {
                 TransportJob<K, L> job = type == JobType.SUPPLY
                         ? TransportJob.supply(newId(), candidate.location(), target, key, (int) amount, ownerId)
                         : TransportJob.retrieve(newId(), candidate.location(), target, key, (int) amount, ownerId);
-                return Optional.of(new PlannedJob<>(job, tripTicks(input, candidate.location(), target)));
+                return Optional.of(new PlannedJob<>(job, tripTicks(input, job)));
             }
         }
         reasons.add(NoJobReason.NOT_IN_STOCK);
@@ -654,7 +654,7 @@ public final class JobPlanner<K, L> {
                 L target = selection.get().location();
                 TransportJob<K, L> job = TransportJob.collect(newId(), source, target, key,
                         selection.get().amount());
-                return Optional.of(new PlannedJob<>(job, tripTicks(input, source, target)));
+                return Optional.of(new PlannedJob<>(job, tripTicks(input, job)));
             }
             if (budget.exhausted)
                 return Optional.empty();
@@ -948,16 +948,21 @@ public final class JobPlanner<K, L> {
         return true;
     }
 
-    private long tripTicks(PlannerInput<K, L> input, L source, L target) {
-        RackPosition from = position(source);
-        RackPosition to = position(target);
-        long stop = TravelTimeModel.stopTicks(input.speeds(), input.transferTicks());
+    /**
+     * The job's estimated ticks from the crane's position: travel to the source, a stop there with the source kind's
+     * arm stroke, travel to the target and a stop there with the target kind's stroke (ADR-072).
+     */
+    private long tripTicks(PlannerInput<K, L> input, TransportJob<K, L> job) {
+        RackPosition from = position(job.source());
+        RackPosition to = position(job.target());
         long total = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(), from.branch(),
                 from.x(), from.y());
-        total = TravelTimeModel.add(total, stop);
+        total = TravelTimeModel.add(total,
+                TravelTimeModel.stopTicks(input.speeds(), input.transferTicks(), job.sourceKind().armStroke()));
         total = TravelTimeModel.add(total,
                 input.travel().travelTicks(from.branch(), from.x(), from.y(), to.branch(), to.x(), to.y()));
-        return TravelTimeModel.add(total, stop);
+        return TravelTimeModel.add(total,
+                TravelTimeModel.stopTicks(input.speeds(), input.transferTicks(), job.targetKind().armStroke()));
     }
 
     private RackPosition position(L location) {

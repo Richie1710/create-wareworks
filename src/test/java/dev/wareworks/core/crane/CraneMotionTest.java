@@ -16,6 +16,7 @@ import dev.wareworks.core.address.Side;
 import dev.wareworks.core.job.CraneKinematics;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.TravelTimeModel;
+import dev.wareworks.core.warehouse.LocationKind;
 
 class CraneMotionTest {
     private static final CraneSpeeds SPEEDS = new CraneSpeeds(1.0, 0.5, 0.25);
@@ -136,7 +137,25 @@ class CraneMotionTest {
             CranePose extended = target.withArm(CranePose.EXTENDED);
             assertEquals(TravelTimeModel.armTicks(speeds), run(target, extended, speeds).size());
             assertEquals(TravelTimeModel.armTicks(speeds), run(extended, target, speeds).size());
+            double stroke = LocationKind.STATION_STROKE;
+            CranePose atStation = target.withArm(stroke);
+            assertEquals(TravelTimeModel.armTicks(speeds, stroke), run(target, atStation, speeds).size(),
+                    () -> "extend to the station stroke at " + speeds);
+            assertEquals(TravelTimeModel.armTicks(speeds, stroke), run(atStation, target, speeds).size(),
+                    () -> "retract from the station stroke at " + speeds);
         }
+    }
+
+    /** A crane whose arm is further out than its target (a save from before ADR-072) pulls it in to the target. */
+    @Test
+    void anArmBeyondItsTargetMovesInToIt() {
+        CranePose out = new CranePose(3, 1, CranePose.EXTENDED, Side.RIGHT);
+        CranePose station = out.withArm(LocationKind.STATION_STROKE);
+        List<CranePose> poses = run(out, station, SPEEDS);
+        assertEquals(TravelTimeModel.ticksToCover(CranePose.EXTENDED - LocationKind.STATION_STROKE, SPEEDS.va()),
+                poses.size());
+        assertTrue(poses.stream().allMatch(p -> p.sameXY(out) && p.side() == Side.RIGHT
+                && p.arm() >= LocationKind.STATION_STROKE), "only the arm moves, and only inwards to the stroke");
     }
 
     @Test

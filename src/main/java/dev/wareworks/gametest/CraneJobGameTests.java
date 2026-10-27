@@ -32,14 +32,18 @@ import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.crane.CraneTimings;
 import dev.wareworks.core.inventory.KeyCount;
+import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.ReservationLedger;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.job.TravelTimeModel;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -97,6 +101,8 @@ public final class CraneJobGameTests {
     /** Ticks the census keeps running after the dock was broken, so the ticks after the drop are covered too. */
     private static final int POST_BREAK_IDLE_TICKS = 10;
     private static final int KINETIC_START_TICKS = 2;
+    /** A timed job may finish this many ticks after the travel time model's figure (dispatch latency). */
+    private static final int TIMING_SLACK_TICKS = 2;
     /**
      * Bound of the dock's update tag in NBT size accounting ({@code Tag#sizeInBytes}): Create's kinetic data, two poses,
      * the phase and the goggle data with one job summary and at most four item ids are a few kilobytes, independent of
@@ -711,6 +717,103 @@ public final class CraneJobGameTests {
                     helper.assertValueEqual(controllerAt(helper).openRequestCount(), 0, "request completed");
                     helper.assertValueEqual(chestCount(helper, FAR, DIAMOND), (long) (STOCKED_DIAMONDS - REQUESTED_DIAMONDS),
                             "diamonds left in storage");
+                })
+                .thenSucceed();
+    }
+
+    // --- (h2) the arm stroke at stations (issue #39, ADR-072) -------------------------------------------------------
+
+    /**
+     * A retrieve into a <b>warehouse terminal</b> reaches only half a block into it ({@code LocationKind#armStroke}):
+     * the fork stays inside the terminal's core instead of poking through its screen. Storage still gets the full
+     * stroke, the drop happens at the station stroke, the items arrive, and the whole job takes the stroke-aware trip
+     * time of the travel time model.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void craneDeliversIntoATerminalAtTheStationStroke(GameTestHelper helper) {
+        deliverAtTheStationStroke(helper, true);
+    }
+
+    /** The same into a warehouse output (a port): its far port shows no fork either. */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void craneDeliversIntoAnOutputAtTheStationStroke(GameTestHelper helper) {
+        deliverAtTheStationStroke(helper, false);
+    }
+
+    private static void deliverAtTheStationStroke(GameTestHelper helper, boolean terminal) {
+        buildAisle(helper, true);
+        storage(helper, FAR, DIAMOND.toStack(STOCKED_DIAMONDS));
+        if (terminal)
+            aisle(helper).terminal(OUTPUT);
+        else
+            placeOutput(helper);
+        double stationStroke = LocationKind.OUTPUT.armStroke();
+        double[] maxArm = {0.0, 0.0}; // at the storage source, at the station
+        int[] dropTicks = {0};
+        long[] assignedTick = {-1L};
+        long[] finishedTick = {-1L};
+        long[] modelTicks = {-1L};
+        helper.onEachTick(() -> {
+            assertConserved(helper, DIAMOND, STOCKED_DIAMONDS, FAR);
+            StackerCraneBlockEntity dock = dockAt(helper);
+            CraneState<ItemKey, RackPosition> state = dock.craneState();
+            CranePose pose = state.pose();
+            if (pose.sameXY(CranePose.at(FAR.x(), FAR.y(), FAR.side())))
+                maxArm[0] = Math.max(maxArm[0], pose.arm());
+            if (pose.sameXY(CranePose.at(OUTPUT.x(), OUTPUT.y(), OUTPUT.side())))
+                maxArm[1] = Math.max(maxArm[1], pose.arm());
+            if (state.phase() == CranePhase.DROP) {
+                dropTicks[0]++;
+                helper.assertValueEqual(pose.arm(), stationStroke, "the arm drops at the station stroke");
+            }
+            if (dock.currentJob().isPresent()) {
+                if (assignedTick[0] < 0)
+                    assignedTick[0] = helper.getTick();
+            } else if (assignedTick[0] >= 0 && finishedTick[0] < 0) {
+                finishedTick[0] = helper.getTick();
+            }
+        });
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    assertAisleReady(helper, 1, 0, 1);
+                    helper.assertValueEqual(controllerAt(helper).countOf(DIAMOND), (long) STOCKED_DIAMONDS, "indexed");
+                })
+                .thenExecute(() -> motorAt(helper).generatedSpeed.setValue(TEST_RPM))
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual((int) Math.abs(dockAt(helper).getSpeed()), TEST_RPM, "dock speed");
+                    helper.assertTrue(dockAt(helper).canAcceptJob(), "crane ready");
+                })
+                .thenExecute(() -> {
+                    StackerCraneBlockEntity dock = dockAt(helper);
+                    CranePose parked = dock.craneState().pose();
+                    CraneSpeeds speeds = dock.currentSpeeds();
+                    int transfer = WareworksConfig.transferTicks();
+                    modelTicks[0] = TravelTimeModel.tripTicks(speeds, transfer, parked.x(), parked.y(), FAR.x(), FAR.y(),
+                            LocationKind.STORAGE.armStroke(), OUTPUT.x(), OUTPUT.y(), stationStroke);
+                    helper.assertTrue(modelTicks[0] < TravelTimeModel.tripTicks(speeds, transfer, parked.x(), parked.y(),
+                            FAR.x(), FAR.y(), OUTPUT.x(), OUTPUT.y()), "the shorter stroke saves arm ticks at "
+                            + TEST_RPM + " RPM");
+                    requestDiamonds(helper);
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(stationCount(helper, OUTPUT, DIAMOND), (long) REQUESTED_DIAMONDS,
+                            "diamonds delivered");
+                    assertCraneIdleAndEmpty(helper);
+                    helper.assertTrue(finishedTick[0] >= 0, "job finished");
+                })
+                .thenExecute(() -> {
+                    String station = terminal ? "terminal" : "output";
+                    helper.assertValueEqual(maxArm[0], LocationKind.STORAGE.armStroke(), "full stroke into storage");
+                    helper.assertValueEqual(maxArm[1], stationStroke, "half stroke into the " + station);
+                    helper.assertTrue(dropTicks[0] > 0, "the drop was seen");
+                    long measured = finishedTick[0] - assignedTick[0];
+                    helper.assertTrue(measured >= modelTicks[0] && measured <= modelTicks[0] + TIMING_SLACK_TICKS,
+                            "measured " + measured + " ticks for a retrieve into the " + station
+                                    + " the travel time model puts at " + modelTicks[0] + " ticks");
+                    helper.assertValueEqual(chestCount(helper, FAR, DIAMOND), (long) (STOCKED_DIAMONDS - REQUESTED_DIAMONDS),
+                            "diamonds left in storage");
+                    helper.assertValueEqual(controllerAt(helper).openRequestCount(), 0, "request completed");
                 })
                 .thenSucceed();
     }

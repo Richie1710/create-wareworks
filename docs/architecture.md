@@ -71,6 +71,7 @@ dev.wareworks
 │   │                          everything with an equals of its own counted by its place alone, plus a hook)
 │   ├── warehouse              aisle membership: LocationKind, LocationRecord, RackProbe, AisleMembership,
 │   │                          MembershipChanges (M2);
+│   │                          LocationKind#armStroke, how far the crane's arm reaches into a stop (issue #39, ADR-072);
 │   │                          the names a player gives a warehouse's aisles (M25, issue #15, ADR-038): AisleName (the
 │   │                          one spelling rule — a total, idempotent sanitiser capped at 16 characters, never a
 │   │                          validator, so a save, a packet and every surface necessarily agree) and AisleNames (the
@@ -7090,6 +7091,64 @@ owner's server is not known, and does not need to be: the fix targets the part t
   beside loaded wheels) and `restart-late` (wheels loaded after the rejoin), both of which fail without the recheck and
   assert that a really overstressed dock stays overstressed for 250 ticks (`dev.RestartPowerVisualScenario`; a GameTest
   cannot unload a chunk or rejoin).
+
+### ADR-072 — The arm's stroke is a property of the location kind: stations stop at half a block, storage reaches a full block ([issue #39](https://github.com/Richie1710/create-wareworks/issues/39))
+
+*Context:* The crane's arm always extended one full block (`CranePose.EXTENDED`, `CraneModelLayout.ARM_REACH_BLOCKS`
+= 1), so the front of the grabber ended 15.5 px into the member block. That is right for storage: the inventory behind
+an interface covers its far port, a rack or fluid bay is built for the full reach, and the input's body runs to 16 px.
+It was wrong for the warehouse terminal, whose screen (or plain panel) on the back face, a shell turned half a turn, has
+its surface at 15 px: the fork tip poked 0.5 px through it. The same fault class showed in the warehouse output (every
+mode) and the production station: the grabber plate and fingers stood inside the open port recess on the far side
+(13..16 px), visible from there whenever nothing stood in front of the port. The terminal is an `OUTPUT` like every
+port, and the production station has the very same body. (ADR-071 is taken by the parallel fix of issue #38.)
+
+*Decision:*
+* **`core.warehouse.LocationKind#armStroke`**, in the unit of `CranePose#arm` (a fraction of the one block reach):
+  `FULL_STROKE` = 1 for `STORAGE` and `INPUT`, `STATION_STROKE` = 0.5 for `OUTPUT` and `PRODUCTION` (the owner's "about
+  half a block"). `KEEPER` and `HOME` are never a stop and carry the full stroke. The constants are literals because
+  `core.warehouse` must not depend on `core.job` or `core.crane`; JUnit pins `FULL_STROKE` to
+  `TravelTimeModel.FULL_EXTENSION` and `CranePose.EXTENDED`. It lives on the kind rather than in `core.crane` because
+  the planner's time model (`core.job`) needs it too.
+* **`CraneStateMachine#targetFor`** extends to `job.sourceKind().armStroke()` at the source and to
+  `job.targetKind().armStroke()` at the target. A reroute (`TransportJob#withTarget`, which a container exchange also
+  ends in) sets the new target kind, so a carry rerouted from a terminal back into storage reaches a full block there.
+* **No motion, sync or save change.** `CraneMotion` already moves the arm towards the target extension in both
+  directions and snaps exactly, and `PICK`/`DROP` start in the tick the arm reaches it, so the hand-over happens at the
+  stroke. The target pose with its arm is already saved and synced (`CranePersistence`), so the client renders the
+  shorter stroke through the existing packet; `WareworksNetwork.VERSION` stays 17. A crane saved mid-drop at a station
+  with the full stroke has its target recomputed on resume and moves the arm in to the station stroke before it drops.
+* **`TravelTimeModel`** gets stroke-aware `armTicks(speeds, stroke)` = `ceil(stroke / va)`, `stopTicks` and `tripTicks`;
+  the old overloads mean the full stroke. `JobPlanner` estimates a job with the strokes of its kinds, and the state
+  machine's "a job takes exactly `tripTicks`" holds with them.
+
+*Alternatives rejected:*
+* **A stroke per block, looked up in the world** (the member block entity answering how far the arm may go). Every
+  member that needs the shorter stroke shares one kind and one value, and a kind is saved with the job, so the kind's
+  stroke is the same on the server, on resume and on the client, with no unloaded-chunk case. If a later member ever
+  needs its own stroke inside one kind, the extension point is a `ToDoubleFunction<L>` for the machine, supplied by
+  content from the member block entity.
+* **A shorter `ARM_REACH_BLOCKS`.** It would shorten the reach into storage, where the interface's grabber stop and the
+  rack and fluid bay models are built for the full block.
+* **A thicker terminal back shell.** The screen is a recess on that face; the fork would still reach it.
+
+*Consequences:*
+* At half a block the grabber front stops at 7.5 px, in the middle of the solid body of the terminal, the outputs and
+  the production station, and the first carried item sits in the aisle-side opening. Stops there are shorter by
+  `armTicks(1) - armTicks(0.5)` twice (2 ticks a stop at 64 RPM on the defaults).
+* A block item in the first slot rests 1.22 px into the top edge of the opening for the whole drop, where before it only
+  passed it while the arm moved. From 32 items on, the second copy (y 14.3..17.02 px) sits inside the frame top for the
+  whole drop and shows about 1 px above the block's top face. If that is not acceptable, 11/16 puts it inside the core; 13/16 is the largest stroke
+  that keeps the grabber 0.5 px inside the body, and `CraneModelLayoutTest` pins it.
+* Ponder scenes extend to the stroke of the block at each stop (`CraneScript#extendedAt` with a kind), and the dev
+  scenarios `collect` and `collectloop` wait for most of the station stroke in a collecting port instead of 0.9.
+* Tests: JUnit `LocationKindStrokeTest`, `TravelTimeModelTest#strokeAwareStopAndTripTicks`,
+  `CraneMotionTest` (steps to and from the station stroke, an arm beyond its target moving in),
+  `CraneStateMachineTest` (retrieve, supply, collect, reroute into storage, resume of a full-stroke drop at an output,
+  exact trip times), `JobPlannerTest` and `CraneModelLayoutTest#theArmStopsInsideEverySolidStationAtItsStroke`;
+  GameTests `CraneJobGameTests#craneDeliversIntoATerminalAtTheStationStroke` and
+  `#craneDeliversIntoAnOutputAtTheStationStroke` (the arm at the stroke for the whole drop, full stroke at storage,
+  items conserved, the stroke-aware trip time).
 
 ## Persistence & sync
 

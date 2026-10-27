@@ -30,6 +30,8 @@ import javax.imageio.ImageIO;
 
 import org.junit.jupiter.api.Test;
 
+import dev.wareworks.core.warehouse.LocationKind;
+
 /**
  * The stacker crane partial models fit together with the renderer's layout ({@link CraneModelLayout}): valid vanilla block
  * models with Create textures, retracted parts inside the aisle block, wheels on the rail and inside the chassis at every
@@ -68,6 +70,17 @@ class CraneModelLayoutTest {
     private static final float MAX_GRABBER_GAP_PX = 1.0F;
     private static final double[] EXTENSIONS = {0.0, 0.25, 0.5, 0.75, 1.0};
     private static final Path BLOCK_MODELS = Path.of("src/main/resources/assets/wareworks/models/block");
+    /** How far before the back of a station's solid body the arm stops at the station stroke (ADR-072). */
+    private static final float STATION_BODY_CLEARANCE_PX = 0.5F;
+    /** The longest station stroke that keeps the grabber front that far inside a 13 px deep body: 13/16. */
+    private static final double STATION_STROKE_LIMIT = 13.0 / 16.0;
+    /**
+     * How far a block item in the first slot may rest in the top edge of a station's aisle-side opening at the station
+     * stroke (issue #39, ADR-072: 11.5 + 2.72 px tall against the opening's top at 13 px, accepted for the drop).
+     */
+    private static final float ACCEPTED_BLOCK_ITEM_INTRUSION_PX = 1.22F;
+    /** The documented alternative stroke that puts the first block item fully inside the terminal's core. */
+    private static final double CORE_STROKE = 11.0 / 16.0;
     /** Depth of the aisle-side port recess of interfaces and stations, in pixels. */
     private static final float PORT_DEPTH_PX = 3.0F;
     /** The warehouse terminal's model folder: a core column plus the shells a multipart blockstate picks (ADR-022). */
@@ -643,21 +656,7 @@ class CraneModelLayoutTest {
      */
     @Test
     void armPassesThroughTheMemberPorts() throws IOException {
-        float outerReach = (float) CraneModelLayout.outerStageOffset(1.0) * BLOCK;
-        float innerReach = (float) CraneModelLayout.innerStageOffset(1.0) * BLOCK;
-        List<Box> swept = new ArrayList<>();
-        boxes("arm_outer").forEach(box -> swept.add(sweptAlongArm(box, outerReach)));
-        boxes("arm_inner").forEach(box -> swept.add(sweptAlongArm(box, innerReach)));
-        boxes("grabber").forEach(box -> swept.add(sweptAlongArm(box, innerReach)));
-        float flatWidth = BLOCK * CraneModelLayout.ITEM_SCALE;
-        float flatHeight = CraneModelLayout.FLAT_ITEM_THICKNESS_PX * CraneModelLayout.ITEM_SCALE;
-        for (float x : CraneModelLayout.ITEM_SLOT_X_PX) {
-            for (int copy = 0; copy < FLAT_ITEM_COPIES; copy++) {
-                Box item = itemBox("flat item " + x + "/" + copy, x, flatWidth, flatHeight)
-                        .moved(0.0F, copy * CraneModelLayout.FLAT_ITEM_STACK_PX, 0.0F);
-                swept.add(sweptAlongArm(item, innerReach));
-            }
-        }
+        List<Box> swept = armSweep(1.0);
         // The interface's aisle side faces south in its model (port north); the stations' aisle opening faces north.
         assertPortClear(memberBoxes("warehouse_interface"), true, swept);
         assertPortClear(memberBoxes("warehouse_input"), false, swept);
@@ -1649,6 +1648,136 @@ class CraneModelLayoutTest {
         for (Box box : boxes)
             total += (box.max(X) - box.min(X)) * (box.max(Y) - box.min(Y)) * (box.max(Z) - box.min(Z));
         return total;
+    }
+
+    /**
+     * Every volume the arm, the grabber and the flat items it carries pass through while the arm extends from retracted
+     * to {@code extension} (crane frame, +X into the rack block).
+     */
+    private static List<Box> armSweep(double extension) throws IOException {
+        float outerReach = (float) CraneModelLayout.outerStageOffset(extension) * BLOCK;
+        float innerReach = (float) CraneModelLayout.innerStageOffset(extension) * BLOCK;
+        List<Box> swept = new ArrayList<>();
+        boxes("arm_outer").forEach(box -> swept.add(sweptAlongArm(box, outerReach)));
+        boxes("arm_inner").forEach(box -> swept.add(sweptAlongArm(box, innerReach)));
+        boxes("grabber").forEach(box -> swept.add(sweptAlongArm(box, innerReach)));
+        float flatWidth = BLOCK * CraneModelLayout.ITEM_SCALE;
+        float flatHeight = CraneModelLayout.FLAT_ITEM_THICKNESS_PX * CraneModelLayout.ITEM_SCALE;
+        for (float x : CraneModelLayout.ITEM_SLOT_X_PX) {
+            for (int copy = 0; copy < FLAT_ITEM_COPIES; copy++) {
+                Box item = itemBox("flat item " + x + "/" + copy, x, flatWidth, flatHeight)
+                        .moved(0.0F, copy * CraneModelLayout.FLAT_ITEM_STACK_PX, 0.0F);
+                swept.add(sweptAlongArm(item, innerReach));
+            }
+        }
+        return swept;
+    }
+
+    /**
+     * {@code arm} (crane frame) in the frame of a member whose aisle side is its model's north face: the depth into the
+     * member becomes z, the lateral crane z becomes x (mirrored for the other side of the aisle), y stays.
+     */
+    private static Box inMemberFacingNorth(Box arm, boolean mirrored) {
+        float lateralFrom = mirrored ? BLOCK - arm.max(Z) : arm.min(Z);
+        float lateralTo = mirrored ? BLOCK - arm.min(Z) : arm.max(Z);
+        return new Box(arm.model(), arm.name(), new float[] {lateralFrom, arm.min(Y), arm.min(X) - BLOCK},
+                new float[] {lateralTo, arm.max(Y), arm.max(X) - BLOCK}, false, arm.faces());
+    }
+
+    /**
+     * <b>At a station the arm stops inside the solid body</b> (issue #39, ADR-072). At the full stroke the grabber's
+     * front ends 15.5 px into the member: in the warehouse terminal that is half a pixel through the screen (or the
+     * plain panel) on its back or side face, and in a warehouse output or production station it is inside the open port
+     * on the far side. So the terminal, every output model (requesting, accepting, collecting) and the production
+     * station take {@code LocationKind#armStroke} of their kind, and everything the arm carries or is made of stays
+     * {@value #STATION_BODY_CLEARANCE_PX} px or more before the back of the body at that stroke, touching no shell on
+     * another face. A control assertion proves the check bites: at the full stroke the grabber would cross the screen.
+     */
+    @Test
+    void theArmStopsInsideEverySolidStationAtItsStroke() throws IOException {
+        double stroke = LocationKind.OUTPUT.armStroke();
+        assertEquals(stroke, LocationKind.PRODUCTION.armStroke(), "one stroke for every solid station");
+        assertTrue(stroke > 0.0 && stroke <= STATION_STROKE_LIMIT, "the station stroke stays within (0, 13/16]: " + stroke);
+        List<Box> atStroke = armSweep(stroke);
+
+        // The terminal: its core column is the solid body; the shells on the three other faces must stay untouched.
+        Box core = terminalBoxes("block").getFirst();
+        List<Box> otherFaces = new ArrayList<>();
+        for (String shell : List.of("shell_display", "shell_plain")) {
+            for (int quarter = 1; quarter <= 3; quarter++) {
+                for (Box box : terminalBoxes(shell))
+                    otherFaces.add(turnedAroundTheBlock(box, quarter));
+            }
+        }
+        assertStopsInsideTheBody(atStroke, core.max(Z), otherFaces);
+
+        // Outputs (every mode) and the production station: one body, the far port recess behind it.
+        for (String model : List.of("warehouse_output/block", "warehouse_output/block_accept",
+                "warehouse_output/block_collect", "warehouse_production/block")) {
+            List<Box> member = boxes(BLOCK_MODELS.resolve(model + JSON_SUFFIX), model);
+            Box body = member.stream().filter(box -> box.name().equals("body")).findFirst().orElseThrow();
+            List<Box> farSide = member.stream().filter(box -> box.min(Z) >= body.max(Z) - EPSILON).toList();
+            assertFalse(farSide.isEmpty(), model + " has a far port behind its body");
+            assertStopsInsideTheBody(atStroke, body.max(Z), farSide);
+        }
+
+        // Block items at rest at the stroke (copy 0 in every slot): inside the body, and at most the accepted 1.22 px
+        // into the frame top above the aisle-side opening for the whole drop.
+        Box frameTop = new Box("station", "aisle-side frame top", new float[] {0.0F, PORT_WINDOW_MAX_Y_PX, 0.0F},
+                new float[] {BLOCK, BLOCK, PORT_DEPTH_PX}, false, Set.of());
+        float deepest = Float.NEGATIVE_INFINITY;
+        for (Box item : blockItemsAt(stroke)) {
+            for (boolean mirrored : new boolean[] {false, true}) {
+                Box inMember = inMemberFacingNorth(item, mirrored);
+                deepest = Math.max(deepest, inMember.max(Z));
+                assertTrue(inMember.max(Z) <= TERMINAL_CORE_MAX_PX - STATION_BODY_CLEARANCE_PX + EPSILON,
+                        item + " reaches " + inMember.max(Z) + " px deep, past the body's back");
+                if (inMember.overlaps(frameTop)) {
+                    float intrusion = inMember.max(Y) - frameTop.min(Y);
+                    assertTrue(intrusion <= ACCEPTED_BLOCK_ITEM_INTRUSION_PX + EPSILON,
+                            item + " rests " + intrusion + " px in the frame top, more than the accepted "
+                                    + ACCEPTED_BLOCK_ITEM_INTRUSION_PX);
+                }
+            }
+        }
+        assertTrue(deepest > 0.0F, "the first block item is inside the station at its stroke");
+        // The documented alternative: at 11/16 the first block item lies wholly inside the terminal's core.
+        Box firstAtCore = inMemberFacingNorth(blockItemsAt(CORE_STROKE).getFirst(), false);
+        assertTrue(firstAtCore.min(Z) >= TERMINAL_CORE_MIN_PX - EPSILON,
+                "at 11/16 the first block item starts at " + firstAtCore.min(Z) + " px, before the core");
+
+        // Control: at the full stroke the grabber front crosses the screen of a display turned onto the back face.
+        List<Box> backScreen = terminalBoxes("shell_display").stream().filter(box -> box.name().equals("screen"))
+                .map(box -> turnedAroundTheBlock(box, HALF_TURN_QUARTERS)).toList();
+        assertFalse(backScreen.isEmpty(), "the display shell has a screen");
+        boolean crosses = false;
+        for (Box arm : armSweep(1.0)) {
+            for (Box screen : backScreen)
+                crosses |= inMemberFacingNorth(arm, false).overlaps(screen);
+        }
+        assertTrue(crosses, "the full stroke reaches through the terminal's screen, which is the bug the stroke fixes");
+    }
+
+    /** The first copy of a block item in every slot, at rest on the stage with the arm at {@code extension}. */
+    private static List<Box> blockItemsAt(double extension) {
+        float innerReach = (float) CraneModelLayout.innerStageOffset(extension) * BLOCK;
+        float blockSize = CraneModelLayout.BLOCK_ITEM_SIZE_PX * CraneModelLayout.ITEM_SCALE;
+        List<Box> items = new ArrayList<>();
+        for (float x : CraneModelLayout.ITEM_SLOT_X_PX)
+            items.add(itemBox("block item " + x + "/0", x, blockSize, blockSize).moved(innerReach, 0.0F, 0.0F));
+        return items;
+    }
+
+    private static void assertStopsInsideTheBody(List<Box> swept, float bodyBack, List<Box> beyond) {
+        for (Box arm : swept) {
+            for (boolean mirrored : new boolean[] {false, true}) {
+                Box inMember = inMemberFacingNorth(arm, mirrored);
+                assertTrue(inMember.max(Z) <= bodyBack - STATION_BODY_CLEARANCE_PX + EPSILON,
+                        arm + " reaches " + inMember.max(Z) + " px deep, past the body's back at " + bodyBack);
+                for (Box element : beyond)
+                    assertFalse(inMember.overlaps(element), arm + " touches " + element);
+            }
+        }
     }
 
     /** {@code box} moved from its retracted position to {@code reach} pixels along the arm (+X), as one volume. */

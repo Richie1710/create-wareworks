@@ -63,6 +63,7 @@ import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
@@ -261,8 +262,11 @@ public final class CollectLoopVisualScenario implements VisualScenario {
     private static final int QUIET_TICKS = 80;
     /** Polls between two log lines of the machine cluster's state while a moment of the machine loop is waited for. */
     private static final int MACHINE_LOG_INTERVAL = 20;
-    /** How far the crane's arm has to be out for a shot to show it reaching <b>into</b> a port. */
-    private static final double ARM_EXTENDED_MIN = 0.9;
+    /**
+     * How far the crane's arm has to be out for a shot to show it reaching <b>into</b> a port: most of a port's stroke
+     * (half a block, ADR-072).
+     */
+    private static final double ARM_EXTENDED_MIN = 0.9 * LocationKind.OUTPUT.armStroke();
     /** Tolerance when a synced crane target is matched against a rack position. */
     private static final double TARGET_TOLERANCE = 0.05;
     /**

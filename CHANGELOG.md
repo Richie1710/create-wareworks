@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the warehouse. A network that really lacks capacity stays overstressed, and a crane that is not overstressed does
   nothing extra. The Warehouse Crafter Feeder does the same. Breaking and replacing a cogwheel is no longer needed.
 
+- **The crane's fork no longer pokes through the Warehouse Terminal's screen**
+  ([#39](https://github.com/Richie1710/create-wareworks/issues/39)). At terminals, warehouse ports and production
+  stations the arm now reaches only half a block, into the station's opening, and stops there to hand over the items,
+  so it no longer shows in the port on the far side of a Warehouse Output or Production Station either; into storage it
+  still reaches the full block. Deliveries to these stations are a little faster.
+
 ## [0.17.0-beta] - 2026-10-27
 
 ### Added

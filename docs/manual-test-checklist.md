@@ -3540,3 +3540,30 @@ you get tired of waiting, and put it back before judging check 160.
 355. **A real overstress stays.** Add more consumers than the wheels can carry (or set the speed controller higher): the
      network is overstressed, the cranes stay "Paused: overstressed" and the Stressometer agrees. Remove the load: the
      cranes run again within about five seconds.
+
+## BJ. The arm stops at half a block at stations ([issue #39](https://github.com/Richie1710/create-wareworks/issues/39))
+
+> The crane's arm reaches half a block into the warehouse terminal, every warehouse output and the production station,
+> and a full block into storage (ADR-072, `docs/stacker-crane.md` §7.1). The JUnit tests `LocationKindStrokeTest`,
+> `CraneStateMachineTest` and `CraneModelLayoutTest#theArmStopsInsideEverySolidStationAtItsStroke` and the GameTests
+> `CraneJobGameTests#craneDeliversIntoATerminalAtTheStationStroke` and `#craneDeliversIntoAnOutputAtTheStationStroke`
+> check the stroke, the hand-over and the timing. What is left is what only a player can judge.
+
+356. **Terminal screen.** Build a terminal with its screen on the face opposite the aisle, request items and watch
+     the drop from behind the terminal and from the side: no fork tip on the screen. Turn the screen onto a side face
+     and repeat: nothing on the screen or on the plain panels. From the aisle the load sits in the intake slot while it
+     is handed over.
+357. **Output port.** A warehouse output with nothing in front of its port face: request items and watch the port
+     mouth from outside. No grabber shows in it. Repeat with an accepting and a collecting port.
+358. **Production station.** Order a production run and watch the station's far side the same way: no grabber in it.
+359. **Collecting port.** A collecting port with a chest behind it: the arm goes half a block in, and the items are
+     still collected into storage.
+360. **Storage still full.** Watch a store into an interface with a chest, into a rack bay and into a fluid bay: the arm
+     still reaches the whole block, as before.
+361. **Block items in the slot.** Request a stack of planks (or another block item) at a terminal and look at the
+     intake slot during the drop: for the whole hand-over (about half a second) the item sits 1.2 px into the top
+     edge of the slot; with 32 or more items the second copy sits inside the frame top and shows about 1 px above the
+     block. **Is that acceptable?** If not, the stroke can be set to 11/16, which puts the first copy fully inside the
+     core.
+362. **Save while the arm is out.** Save and quit while the arm is out at a terminal (a large request), then rejoin:
+     the arm settles at half a block and the delivery completes with nothing lost or duplicated.

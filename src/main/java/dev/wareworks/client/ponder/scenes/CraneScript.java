@@ -19,6 +19,7 @@ import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.warehouse.CraneRoute;
+import dev.wareworks.core.warehouse.LocationKind;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.Item;
 
@@ -150,6 +151,14 @@ public final class CraneScript {
     /** {@link #at(int, double, double, Side)} with the arm fully extended into the rack. */
     public CranePose extendedAt(int branch, double x, double y, Side side) {
         return at(branch, x, y, side).withArm(CranePose.EXTENDED);
+    }
+
+    /**
+     * {@link #at(int, double, double, Side)} with the arm extended to the stroke of a member of {@code kind}: half a
+     * block into a terminal, an output or a production station, a full block into storage (ADR-072).
+     */
+    public CranePose extendedAt(int branch, double x, double y, Side side, LocationKind kind) {
+        return at(branch, x, y, side).withArm(kind.armStroke());
     }
 
     private Heading headingOf(int branch) {

@@ -190,6 +190,23 @@ class CraneStateMachineTest {
                 target.y());
     }
 
+    /** {@link #trip} with each stop at the arm stroke of its location kind (ADR-072). */
+    private static long trip(double craneX, double craneY, RackPosition source, LocationKind sourceKind,
+            RackPosition target, LocationKind targetKind) {
+        return TravelTimeModel.tripTicks(SPEEDS, TRANSFER, craneX, craneY, source.x(), source.y(),
+                sourceKind.armStroke(), target.x(), target.y(), targetKind.armStroke());
+    }
+
+    /**
+     * Ticks until the arm is out at the job's target and nothing has been dropped yet. A station's stroke can be
+     * reached in the tick its extension starts (half a block at this harness's arm speed), so the moment is either
+     * {@code EXTEND_TARGET} with the arm moving or the first tick of {@code DROP}; both answer a full output alike.
+     */
+    private static void tickUntilArmOutAtTarget(Harness h) {
+        h.tickUntil(() -> (h.state.phase() == CranePhase.EXTEND_TARGET || h.state.phase() == CranePhase.DROP)
+                && h.state.pose().arm() > 0);
+    }
+
     // --- happy paths ---------------------------------------------------------------------------------------------
 
     @Test
@@ -224,7 +241,8 @@ class CraneStateMachineTest {
         Harness h = new Harness(CranePose.at(2, 0, Side.LEFT));
         h.send(CraneEvent.jobAssigned(retrieveJob()));
         assertEquals(CranePhase.TRAVEL_TO_SOURCE, h.state.phase());
-        assertEquals(trip(2, 0, STORAGE_A, OUTPUT), h.tickUntilPhase(CranePhase.COMPLETE));
+        assertEquals(trip(2, 0, STORAGE_A, LocationKind.STORAGE, OUTPUT, LocationKind.OUTPUT),
+                h.tickUntilPhase(CranePhase.COMPLETE), "exactly tripTicks with a half stroke at the output");
         CraneEffect.ReportDelivered<?, ?> delivered = h.effects(CraneEffect.ReportDelivered.class).get(0);
         assertEquals(OUTPUT, delivered.target());
         assertEquals(Optional.of(REQUEST), delivered.job().requestId());
@@ -372,7 +390,7 @@ class CraneStateMachineTest {
         Harness full = new Harness();
         full.rerouter = request -> CraneEvent.rerouteTo(STORAGE_B, LocationKind.STORAGE);
         full.send(CraneEvent.jobAssigned(unrequested));
-        full.tickUntil(() -> full.state.phase() == CranePhase.EXTEND_TARGET && full.state.pose().arm() > 0);
+        tickUntilArmOutAtTarget(full);
         full.send(CraneEvent.outputFull());
         full.tickUntilPhase(CranePhase.COMPLETE);
         assertFalse(full.phases().contains(CranePhase.WAITING_FOR_TARGET));
@@ -411,7 +429,7 @@ class CraneStateMachineTest {
     void outputFullEventsRetractAndRestartTheWait() {
         Harness h = new Harness();
         h.send(CraneEvent.jobAssigned(retrieveJob()));
-        h.tickUntil(() -> h.state.phase() == CranePhase.EXTEND_TARGET && h.state.pose().arm() > 0);
+        tickUntilArmOutAtTarget(h);
         assertTrue(h.send(CraneEvent.outputFull()).changed());
         assertEquals(CranePhase.RETRACT_TARGET, h.state.phase());
         assertEquals(Optional.of(CraneInterruption.OUTPUT_FULL), h.state.interruption());
@@ -452,7 +470,7 @@ class CraneStateMachineTest {
         // And the event a full station raises retracts the arm and restarts the wait, as it does at an output.
         Harness full = new Harness();
         full.send(CraneEvent.jobAssigned(supplyJob()));
-        full.tickUntil(() -> full.state.phase() == CranePhase.EXTEND_TARGET && full.state.pose().arm() > 0);
+        tickUntilArmOutAtTarget(full);
         assertTrue(full.send(CraneEvent.outputFull()).changed(), "a full production station is answered");
         assertEquals(CranePhase.RETRACT_TARGET, full.state.phase());
         assertEquals(Optional.of(CraneInterruption.OUTPUT_FULL), full.state.interruption());
@@ -796,7 +814,7 @@ class CraneStateMachineTest {
 
     @Test
     void clientMotionReplayMatchesTheServer() {
-        Harness server = new Harness(CranePose.at(4, 2, Side.LEFT));
+        Harness server = new Harness(CranePose.at(7, 2, Side.LEFT));
         server.send(CraneEvent.jobAssigned(retrieveJob()));
         int compared = 0;
         while (server.state.phase() != CranePhase.COMPLETE) {
@@ -900,5 +918,91 @@ class CraneStateMachineTest {
         for (CraneStateMachine.Transition<String, RackPosition> transition : List.of(idleHolding, unpickedDrop, finished,
                 repaired))
             assertTrue(transition.state().isConsistent(), transition::toString);
+    }
+
+    // --- the arm stroke per stop (issue #39, ADR-072) ---------------------------------------------------------------
+
+    /** The largest arm extension of the recorded states in {@code phases} while the job's stop there is {@code at}. */
+    private static double maxArm(Harness h, RackPosition at, CranePhase... phases) {
+        List<CranePhase> wanted = List.of(phases);
+        return h.history.stream().filter(s -> wanted.contains(s.phase()) && atXY(s.pose(), at))
+                .mapToDouble(s -> s.pose().arm()).max().orElseThrow(() -> new AssertionError("never at " + at));
+    }
+
+    @Test
+    void aRetrieveReachesFullyIntoStorageAndHalfIntoTheOutput() {
+        Harness h = new Harness(CranePose.at(2, 0, Side.LEFT));
+        h.send(CraneEvent.jobAssigned(retrieveJob()));
+        h.tickUntilPhase(CranePhase.EXTEND_SOURCE);
+        assertEquals(LocationKind.FULL_STROKE, h.state.target().arm(), "storage: the full block");
+        h.tickUntilPhase(CranePhase.EXTEND_TARGET);
+        assertEquals(LocationKind.STATION_STROKE, h.state.target().arm(), "the output: half a block");
+        h.tickUntilPhase(CranePhase.COMPLETE);
+
+        assertEquals(LocationKind.FULL_STROKE, maxArm(h, STORAGE_A, CranePhase.EXTEND_SOURCE, CranePhase.PICK));
+        assertEquals(LocationKind.STATION_STROKE, maxArm(h, OUTPUT, CranePhase.EXTEND_TARGET, CranePhase.DROP,
+                CranePhase.RETRACT_TARGET), "the arm never goes further into the output than its stroke");
+        assertTrue(h.history.stream().filter(s -> s.phase() == CranePhase.DROP)
+                .allMatch(s -> s.pose().arm() == LocationKind.STATION_STROKE), "the drop happens at the stroke");
+        assertEquals(trip(2, 0, STORAGE_A, LocationKind.STORAGE, OUTPUT, LocationKind.OUTPUT), h.ticks);
+        assertEquals(1, h.count(CraneEffect.PerformDrop.class));
+        assertEquals(16, h.effects(CraneEffect.ReportDelivered.class).get(0).delivered());
+    }
+
+    @Test
+    void aSupplyDropsAtHalfAndACollectPicksAtHalf() {
+        Harness supply = new Harness();
+        supply.send(CraneEvent.jobAssigned(supplyJob()));
+        supply.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(LocationKind.STATION_STROKE, maxArm(supply, PRODUCTION, CranePhase.DROP));
+
+        TransportJob<String, RackPosition> collect = TransportJob.collect(JOB, OUTPUT, STORAGE_A, ORE, 16);
+        Harness h = new Harness();
+        h.send(CraneEvent.jobAssigned(collect));
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(LocationKind.STATION_STROKE, maxArm(h, OUTPUT, CranePhase.EXTEND_SOURCE, CranePhase.PICK,
+                CranePhase.RETRACT_SOURCE), "a collecting port is picked from at half a block");
+        assertEquals(LocationKind.FULL_STROKE, maxArm(h, STORAGE_A, CranePhase.DROP));
+        assertEquals(trip(0, 0, OUTPUT, LocationKind.OUTPUT, STORAGE_A, LocationKind.STORAGE), h.ticks);
+    }
+
+    @Test
+    void aRerouteFromAnOutputIntoStorageReachesTheFullBlock() {
+        TransportJob<String, RackPosition> unrequested = TransportJob.retrieve(JOB, STORAGE_A, OUTPUT, ORE, 16, null);
+        Harness h = new Harness();
+        int[] drops = {0};
+        h.dropper = amount -> drops[0]++ == 0 ? 4 : amount;
+        h.rerouter = request -> CraneEvent.rerouteTo(STORAGE_B, LocationKind.STORAGE);
+        h.send(CraneEvent.jobAssigned(unrequested));
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(LocationKind.STATION_STROKE, maxArm(h, OUTPUT, CranePhase.DROP));
+        assertEquals(LocationKind.FULL_STROKE, maxArm(h, STORAGE_B, CranePhase.DROP), "the new target is storage");
+        assertEquals(List.of(4, 12), h.effects(CraneEffect.ReportDelivered.class).stream()
+                .map(CraneEffect.ReportDelivered::delivered).toList());
+    }
+
+    /**
+     * A crane saved in {@code DROP} at an output before ADR-072 has its arm (and its saved target) a full block out.
+     * On resume the target becomes the station stroke, the crane moves the arm <b>in</b> to it and then drops the whole
+     * held amount once.
+     */
+    @Test
+    void aCraneSavedMidDropAtAnOutputWithTheFullStrokeSettlesAtHalfAndDropsOnce() {
+        TransportJob<String, RackPosition> held = retrieveJob().withPicked(16);
+        CranePose fullyOut = new CranePose(OUTPUT.x(), OUTPUT.y(), CranePose.EXTENDED, OUTPUT.side());
+        CraneStateMachine.Transition<String, RackPosition> resumed = MACHINE.resume(
+                state(fullyOut, CranePhase.DROP, held));
+        assertEquals(CranePhase.EXTEND_TARGET, resumed.state().phase(), "not at the stroke yet: extend (inwards) first");
+        assertEquals(LocationKind.STATION_STROKE, resumed.state().target().arm());
+        assertEquals(16, resumed.state().heldAmount());
+        assertTrue(resumed.effects().stream().noneMatch(CraneEffect.PerformDrop.class::isInstance));
+
+        Harness h = new Harness();
+        h.state = resumed.state();
+        h.tickUntilPhase(CranePhase.COMPLETE);
+        assertEquals(1, h.count(CraneEffect.PerformDrop.class));
+        assertEquals(16, h.effects(CraneEffect.ReportDelivered.class).get(0).delivered());
+        assertTrue(h.history.stream().filter(s -> s.phase() == CranePhase.DROP)
+                .allMatch(s -> s.pose().arm() == LocationKind.STATION_STROKE));
     }
 }

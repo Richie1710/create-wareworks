@@ -14,6 +14,7 @@ import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
+import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksArmInteractionPoints;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.catnip.nbt.NBTHelper;
@@ -245,7 +246,8 @@ public final class ProductionScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(ingredientPosition, 0, Side.LEFT), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(stationPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(stationPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(stationPosition, 0, LocationKind.PRODUCTION.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
@@ -454,7 +456,8 @@ public final class ProductionScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(logPosition, 0, Side.LEFT), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(firstStationPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(firstStationPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(firstStationPosition, 0, LocationKind.PRODUCTION.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
@@ -511,7 +514,8 @@ public final class ProductionScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(plankPosition, 0, Side.LEFT), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(secondStationPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(secondStationPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(secondStationPosition, 0, LocationKind.PRODUCTION.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
@@ -538,7 +542,8 @@ public final class ProductionScenes {
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(inputPosition, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
         crane.moveTo(CranePose.at(terminalPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(terminalPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(new CranePose(terminalPosition, 0, LocationKind.OUTPUT.armStroke(), Side.RIGHT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);

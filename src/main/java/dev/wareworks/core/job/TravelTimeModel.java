@@ -8,8 +8,8 @@ import java.util.Objects;
  * The formulas match {@code core.crane.CraneMotion} exactly (verified by JUnit): an axis at distance {@code d} with
  * speed {@code v} arrives in {@link #ticksToCover} = {@code max(1, ceil((d − ε) / v))} ticks, because a step snaps to
  * the target once the remaining distance is at most {@code v + ε} ({@value #SNAP_EPSILON}). X and Y move simultaneously,
- * so {@link #travelTicks} is the larger of the two. A stop at a location costs {@link #stopTicks}: extend, transfer,
- * retract.
+ * so {@link #travelTicks} is the larger of the two. A stop at a location costs {@link #stopTicks}: extend to the stop's
+ * stroke, transfer, retract.
  * <p>
  * Durations are {@code long}; {@link #UNAVAILABLE} means the motion never completes (a needed axis has speed 0, e.g. no
  * rotation). Sums saturate at {@link #UNAVAILABLE}, so rankings stay well-defined.
@@ -92,29 +92,62 @@ public final class TravelTimeModel {
 
     /** Ticks to extend (or retract) the arm fully: {@code ceil(1 / va)}. */
     public static long armTicks(CraneSpeeds speeds) {
-        Objects.requireNonNull(speeds, "speeds");
-        return ticksToCover(FULL_EXTENSION, speeds.va());
+        return armTicks(speeds, FULL_EXTENSION);
     }
 
-    /** Ticks spent at one location: extend, transfer ({@code transferTicks}), retract. */
+    /**
+     * Ticks to extend the arm to {@code stroke}, or to retract it from there: {@code ceil(stroke / va)}. A stop's stroke
+     * is its location kind's {@code LocationKind#armStroke} (issue #39, ADR-072).
+     *
+     * @throws IllegalArgumentException if {@code stroke} is not within {@code (0, FULL_EXTENSION]}
+     */
+    public static long armTicks(CraneSpeeds speeds, double stroke) {
+        Objects.requireNonNull(speeds, "speeds");
+        return ticksToCover(requireStroke(stroke), speeds.va());
+    }
+
+    /** Ticks spent at one location with a full stroke: extend, transfer ({@code transferTicks}), retract. */
     public static long stopTicks(CraneSpeeds speeds, int transferTicks) {
+        return stopTicks(speeds, transferTicks, FULL_EXTENSION);
+    }
+
+    /**
+     * Ticks spent at one location whose arm stroke is {@code stroke}: extend, transfer ({@code transferTicks}),
+     * retract.
+     */
+    public static long stopTicks(CraneSpeeds speeds, int transferTicks, double stroke) {
         if (transferTicks < 0)
             throw new IllegalArgumentException("transferTicks must not be negative: " + transferTicks);
-        long arm = armTicks(speeds);
+        long arm = armTicks(speeds, stroke);
         return add(add(arm, transferTicks), arm);
     }
 
     /**
-     * Ticks for a whole job from an idle crane with a retracted arm: travel to the source, a stop there, travel to the
-     * target and a stop there.
+     * Ticks for a whole job from an idle crane with a retracted arm, with a full stroke at both stops: travel to the
+     * source, a stop there, travel to the target and a stop there.
      */
     public static long tripTicks(CraneSpeeds speeds, int transferTicks, double craneX, double craneY, double sourceX,
             double sourceY, double targetX, double targetY) {
-        long stop = stopTicks(speeds, transferTicks);
+        return tripTicks(speeds, transferTicks, craneX, craneY, sourceX, sourceY, FULL_EXTENSION, targetX, targetY,
+                FULL_EXTENSION);
+    }
+
+    /**
+     * Ticks for a whole job from an idle crane with a retracted arm: travel to the source, a stop there with the
+     * source's stroke, travel to the target and a stop there with the target's stroke.
+     */
+    public static long tripTicks(CraneSpeeds speeds, int transferTicks, double craneX, double craneY, double sourceX,
+            double sourceY, double sourceStroke, double targetX, double targetY, double targetStroke) {
         long total = travelTicks(speeds, craneX, craneY, sourceX, sourceY);
-        total = add(total, stop);
+        total = add(total, stopTicks(speeds, transferTicks, sourceStroke));
         total = add(total, travelTicks(speeds, sourceX, sourceY, targetX, targetY));
-        return add(total, stop);
+        return add(total, stopTicks(speeds, transferTicks, targetStroke));
+    }
+
+    private static double requireStroke(double stroke) {
+        if (!(stroke > 0.0 && stroke <= FULL_EXTENSION))
+            throw new IllegalArgumentException("stroke must be within (0, " + FULL_EXTENSION + "]: " + stroke);
+        return stroke;
     }
 
     /** Whether a duration completes. */
