@@ -131,6 +131,11 @@ teleported: every item you put in or take out is carried by the crane, where you
   while — and drops that trip the instant there is real work, even mid-corner. Without one the dock stays the crane's
   home; on a single straight aisle the machine stands where its last job left it, as it always did. One per warehouse:
   a second one lights up red and says so.
+* **Hand Truck**: moves a **chest, trapped chest or barrel with everything in it**. Right-click the container with the
+  empty truck and it goes onto the truck, name, lock and an unopened loot table included; right-click the ground and it
+  is set down again, facing you. While the truck is loaded you walk at **half speed** and cannot sprint or glide (a
+  server can change all three), and a loaded truck goes into no other container and cannot be dropped. An empty truck
+  in your inventory costs nothing. Warehouse blocks, ender chests and shulker boxes stay where they are.
 
 **Mechanical Arms** can use the stations directly: the warehouse input only as a target to put items into, and the
 output, terminal and production station only as a source to take items from. Clicking a station again with the arm
@@ -267,7 +272,9 @@ the terminal's door button that sends a click there, the crane filling the door 
 what always comes to the terminal instead, and the Stock Link that takes a door out of the choice. The
 twenty-third, **Crafting with a Vanilla Crafter**, belongs to the Crafter Feeder and the production station: the feeder
 on the station's back, the Crafter in front of it and the input in front of the Crafter, an order of torches laid and
-crafted run by run, and the red pattern that is never fetched.
+crafted run by run, and the red pattern that is never fetched. The twenty-fourth, **Carrying Containers with the Hand
+Truck**, belongs to the **Hand Truck**, the one item that is no block: a chest loaded with everything in it, the slow
+walk, and the chest set down again.
 
 ## Balancing the crane
 
@@ -830,6 +837,7 @@ start `./gradlew runClient` and pick **"Wareworks Showcase"**.
 * [Warehouse system](docs/warehouse-system.md): interface, controller, addressing, stock index, jobs, reservations, stock
   rules, config
 * [Stacker crane](docs/stacker-crane.md): block, state machine, kinetics, rendering, sounds
+* [Hand truck](docs/hand-truck.md): what it carries, the penalty, why a loaded truck stays with you, config
 * [Dependencies](docs/dependencies.md): versions, Create APIs in use, known harmless log warnings
 * [Roadmap](docs/roadmap.md): milestones and planned features
 * [Manual test checklist](docs/manual-test-checklist.md): play-test checks

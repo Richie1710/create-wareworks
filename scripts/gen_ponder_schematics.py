@@ -65,6 +65,9 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 #   plane LEFT at positions 2 and 3, the Crafter and the feeder behind them at z = 2 (the feeder's creative motor set
 #   into the plate under it), and the racks the coal and sticks come from on the plane RIGHT
 #   (dev.wareworks.client.ponder.scenes.CrafterFeederScenes).
+# The hand truck scene (issue #37) is an aisle-free square 5 plate: a chest at x = 1, z = 3, set down again at x = 3,
+#   with the armour stand that pushes the truck on the row z = 1 in front of them
+#   (dev.wareworks.client.ponder.scenes.HandTruckScenes).
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
@@ -84,6 +87,7 @@ TEMPLATES = {
     "warehouse/port_collecting": (9, 7, 9),
     "warehouse/packages_at_the_door": (9, 7, 9),
     "warehouse/rack_bay": (3, 6, 3),
+    "hand_truck/carrying": (5, 4, 5),
     "warehouse/rack_wall": (7, 7, 7),
     "warehouse/bays_in_an_aisle": (9, 7, 9),
     "warehouse/fluid_bay": (9, 7, 9),

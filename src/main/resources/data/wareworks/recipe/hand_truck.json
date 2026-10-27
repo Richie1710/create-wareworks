@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "A": { "item": "create:andesite_alloy" },
+    "C": { "item": "create:cogwheel" },
+    "P": { "tag": "c:plates/iron" },
+    "S": { "item": "create:shaft" }
+  },
+  "pattern": [
+    " S ",
+    " A ",
+    "CPC"
+  ],
+  "result": { "count": 1, "id": "wareworks:hand_truck" }
+}

@@ -1,12 +1,15 @@
 package dev.wareworks;
 
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
+import dev.wareworks.client.handtruck.HandTruckClientEvents;
 import dev.wareworks.client.input.StorageFilterPressGuard;
 import dev.wareworks.client.ponder.WareworksPonderLang;
 import dev.wareworks.client.ponder.WareworksPonderPlugin;
+import dev.wareworks.client.render.HandTruckClientExtensions;
 import dev.wareworks.client.render.WareworksPartialModels;
 import dev.wareworks.dev.VisualTestHarness;
 import dev.wareworks.dev.WindowPlacement;
+import dev.wareworks.registry.WareworksItems;
 import net.createmod.ponder.foundation.PonderIndex;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.EventPriority;
@@ -15,6 +18,7 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
+import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent;
 import net.neoforged.neoforge.common.NeoForge;
 
 /**
@@ -39,6 +43,12 @@ public final class WareworksClient {
         // the button that set one stays down, its repeats do nothing on a storage filter slot, so a Create filter item
         // that left the hand is not cleared again by the empty hand.
         StorageFilterPressGuard.register(NeoForge.EVENT_BUS);
+        // Issue #37: a player carrying a loaded hand truck walks slowly and cannot sprint, applied to the movement input
+        // like sneaking.
+        HandTruckClientEvents.register(NeoForge.EVENT_BUS);
+        // Issue #37: the truck's own renderer draws the carried container on it, and a loaded truck is pushed with both
+        // arms. Fired before the first model bake, so Create's model swap still sees the item.
+        modEventBus.addListener(WareworksClient::onRegisterClientExtensions);
         // Dev tooling (ADR-014), like the harness below: open the window on another monitor when build.gradle passes
         // one (Gradle property wareworks.windowMonitor or the environment variable WAREWORKS_WINDOW_MONITOR).
         String windowMonitor = System.getProperty(WindowPlacement.PROPERTY);
@@ -65,6 +75,11 @@ public final class WareworksClient {
     /** Separate method for the same reason as {@link #startVisualTest}. */
     private static void placeWindow(IEventBus modEventBus, String monitor) {
         WindowPlacement.install(modEventBus, monitor);
+    }
+
+    private static void onRegisterClientExtensions(RegisterClientExtensionsEvent event) {
+        event.registerItem(HandTruckClientExtensions.create(WareworksItems.HAND_TRUCK.get()),
+                WareworksItems.HAND_TRUCK.get());
     }
 
     private static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {

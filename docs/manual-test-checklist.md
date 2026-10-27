@@ -10,26 +10,27 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly **sixteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   lists exactly **seventeen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
    interface, **wooden rack bay, andesite rack bay, brass rack bay**, **copper fluid bay, brass fluid bay**, warehouse
    input, warehouse output, warehouse terminal, warehouse production station, **warehouse crafter feeder**, warehouse
-   stock keeper, warehouse home point — the three rack bays stand directly after the interface, weakest first, the two
+   stock keeper, warehouse home point, and the **hand truck**, the one item that is no block, last — the three rack bays stand directly after the interface, weakest first, the two
    fluid bays directly after them, weakest first again, and the crafter feeder directly after the station it serves.
    (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **sixteen** items shows a short Create-style description (issue #22): one sentence what
+3. Holding Shift on each of the **seventeen** items shows a short Create-style description (issue #22): one sentence what
    the block is, at most one note the Ponder scenes do not show; the stacker crane and the crafter feeder additionally
    show their stress impact. At **2560x1440 or 5120x1440 with the automatic GUI scale**, in English and in German, hover
    each bay, the terminal, the output, the crane and the crafter feeder (the tallest tooltip of all) in the **bottom row
    of your inventory**: the item name at the top of the Shift tooltip is on screen. **Does each one tell you what the
    block is for without reading like a telegram?**
-4. JEI/EMI shows **sixteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
+4. JEI/EMI shows **seventeen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
    terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass nuggets**
    the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an andesite casing between
    two andesite alloy, with no electron tube and no precision mechanism), and the crafter feeder is one column: a
-   precision mechanism over a brass casing over a vanilla Crafter. In the **vanilla recipe book** the other **fifteen**
+   precision mechanism over a brass casing over a vanilla Crafter, and the hand truck is a shaft over andesite alloy over
+   a cogwheel, an iron sheet and a cogwheel. In the **vanilla recipe book** the other **sixteen**
    appear once you hold one of their ingredients — the terminal shows up with a precision mechanism and the output with
    a brass nugget — while the stacker crane never does, because mechanical crafting has no recipe-book category
    (Create's own mechanical crafting recipes behave the same).
@@ -3481,3 +3482,42 @@ you get tired of waiting, and put it back before judging check 160.
 345. **Versions.** A dedicated server with this version refuses a 0.15.0 client and the other way round. With matching
      versions on a dedicated server (`./gradlew runServer` and `./gradlew runClient`), 339 and 341 behave the same and
      neither log has an error mentioning `wareworks`.
+
+## BH. The hand truck ([issue #37](https://github.com/Richie1710/create-wareworks/issues/37))
+
+> A held item that carries a chest, trapped chest or barrel with everything in it (ADR-070, `docs/hand-truck.md`).
+> The JUnit tests `HandTruckPenaltyTest` and `HandTruckLimitsTest`, the GameTests in `HandTruckGameTests` (round trips,
+> refusals, menus, container items, a hopper, tossing, death) and the visual scenario `handtruck` (real clicks, first
+> and third person, the walk and the glide measured against an empty-truck control, the drop key, a barrel slot and a
+> second truck refused, English and German, Flywheel on and off, 18 shots) check the behaviour. What is left is what
+> only a player can judge.
+
+346. **Round trips.** In survival, put a few stacks into a chest, a trapped chest and a barrel. Right-click each with an
+     empty Hand Truck: the block disappears without dropping anything and without opening, the truck reads "Hand Truck
+     with Chest" (or the container's own name) and its tooltip "N stacks inside". Right-click the floor somewhere else:
+     the container stands there facing you and holds exactly what it held. Name a chest in an anvil and lock nothing;
+     the name comes back too.
+347. **Double chest and loot.** Carry one half of a double chest: the other half stays as a single chest with its own
+     items, the carried half comes back with its 27 slots. Find an unopened loot chest (a village or a dungeon), carry
+     it ("Unopened loot") and set it down: the loot is rolled only when you open it.
+348. **How it looks.** Hold the empty and the loaded truck in first person and in both third person views (F5), with
+     Flywheel on and with `/flywheel backend off`: the truck stands upright in front of you with its wheels on the
+     ground, the chest (or the barrel, standing upright) sits on its nose plate, and the hotbar icon shows the container
+     too. **Does it read as a hand truck with a box on it, and does anything clip through the player in a way that
+     bothers you?**
+349. **The feel of the penalty.** On a dedicated server (`./gradlew runServer` and `./gradlew runClient`) walk with a
+     loaded truck: about half speed, Ctrl and double-tapping W do not sprint, an elytra does not open. Drop the truck
+     into a chest (it comes back) and walk again at full speed with the empty truck in the inventory. **Is half speed
+     the right amount of punishment?** (`handTruck.speedMultiplier` in `wareworks-server.toml`.)
+350. **Nothing escapes.** With a loaded truck try: Q (refused, "Set it down with Right-Click"), dragging it into a chest
+     slot, the crafting grid and a shulker box slot, a bundle, an item frame and a donkey's chest. Every time the truck
+     stays loaded in your inventory and nothing is duplicated. Throw it out of the inventory screen by dragging it
+     outside the window: it comes back. Die with it (`/gamerule keepInventory false`): the contents, the chest and the
+     empty truck lie on the floor, with keepInventory true the loaded truck is still in your inventory.
+351. **Refusals.** A second empty truck on a chest while one is loaded: "You are already carrying a loaded hand truck".
+     Warehouse blocks, an ender chest, a shulker box, a Create item vault and a toolbox: nothing happens beyond their
+     own click. In adventure mode or inside spawn protection on a server: "You may not take this here". With a claims
+     mod (FTB Chunks, Open Parties and Claims) if you have one: a claimed chest of another player is refused.
+352. **JEI and German.** JEI shows the recipe (a shaft over andesite alloy over cogwheel, iron sheet, cogwheel). With a
+     German client the item is "Sackkarre", the loaded one "Sackkarre mit Truhe", the messages are German, the Shift
+     tooltip fits the screen, and the Ponder scene (hold W over the truck) reads in German.

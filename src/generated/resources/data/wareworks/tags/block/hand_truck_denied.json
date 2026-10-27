@@ -1,0 +1,8 @@
+{
+  "values": [
+    "#c:chests/ender",
+    "#minecraft:shulker_boxes",
+    "#c:relocation_not_supported",
+    "#create:non_movable"
+  ]
+}

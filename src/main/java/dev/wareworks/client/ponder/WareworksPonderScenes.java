@@ -7,6 +7,7 @@ import com.tterrag.registrate.util.entry.RegistryEntry;
 import dev.wareworks.client.ponder.scenes.CraneScenes;
 import dev.wareworks.client.ponder.scenes.CrafterFeederScenes;
 import dev.wareworks.client.ponder.scenes.FluidBayScenes;
+import dev.wareworks.client.ponder.scenes.HandTruckScenes;
 import dev.wareworks.client.ponder.scenes.NetworkScenes;
 import dev.wareworks.client.ponder.scenes.PackageScenes;
 import dev.wareworks.client.ponder.scenes.PortScenes;
@@ -16,6 +17,7 @@ import dev.wareworks.client.ponder.scenes.StockRuleScenes;
 import dev.wareworks.client.ponder.scenes.TerminalScenes;
 import dev.wareworks.client.ponder.scenes.WarehouseScenes;
 import dev.wareworks.registry.WareworksBlocks;
+import dev.wareworks.registry.WareworksItems;
 import net.createmod.ponder.api.registration.PonderSceneRegistrationHelper;
 import net.minecraft.resources.ResourceLocation;
 
@@ -56,6 +58,7 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>rack_bay_wood, rack_bay_andesite, rack_bay_brass</td><td>warehouse/rack_bay, warehouse/rack_wall,
  *       warehouse/bays_in_an_aisle</td></tr>
  *   <tr><td>fluid_bay_copper, fluid_bay_brass</td><td>warehouse/fluid_bay</td></tr>
+ *   <tr><td>hand_truck</td><td>hand_truck/carrying</td></tr>
  * </table>
  */
 public final class WareworksPonderScenes {
@@ -202,5 +205,10 @@ public final class WareworksPonderScenes {
         scenes.forComponents(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, WareworksBlocks.WAREHOUSE_PRODUCTION)
                 .addStoryBoard("warehouse/crafter_feeder", CrafterFeederScenes::feeder,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
+
+        // The hand truck (issue #37, ADR-070): an item rather than a warehouse block, so it carries no Wareworks tag; its
+        // one scene is load, walk slowly, set down.
+        scenes.forComponents(WareworksItems.HAND_TRUCK)
+                .addStoryBoard("hand_truck/carrying", HandTruckScenes::carrying);
     }
 }

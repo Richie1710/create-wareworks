@@ -33,6 +33,7 @@ import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCreativeTabs;
+import dev.wareworks.registry.WareworksItems;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -809,7 +810,9 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 // The Crafter Feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
-                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem());
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
+                // Items that are not blocks follow every block: the hand truck (issue #37).
+                WareworksItems.HAND_TRUCK.asItem());
         if (!shown.equals(expected) || icon != WareworksBlocks.STACKER_CRANE.asItem())
             throw new VisualTestException("unexpected creative tab: icon " + icon + ", items " + shown);
         tabItems = shown;

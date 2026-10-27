@@ -6,6 +6,8 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.ModConfig;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.core.crane.HomeReturn;
+import dev.wareworks.core.handtruck.HandTruckLimits;
+import dev.wareworks.core.handtruck.HandTruckPenalty;
 import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.stock.RestockLimits;
@@ -18,7 +20,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * world by {@code <world>/serverconfig/wareworks-server.toml} (NeoForge {@code ServerLifecycleHooks.handleServerAboutToStart}).
  * <p>
  * Keys and defaults follow {@code docs/warehouse-system.md} §9; the TOML file groups them into the sections
- * {@code aisle}, {@code crane}, {@code stations}, {@code storage}, {@code controller} and {@code chunkLoading}.
+ * {@code aisle}, {@code crane}, {@code stations}, {@code storage}, {@code controller}, {@code chunkLoading} and {@code handTruck}.
  * <p>
  * SERVER config values exist only while a server runs (and on connected clients). Always read them through the typed
  * getters below: they fall back to the default when the config is not loaded (registry events, datagen, main menu,
@@ -503,6 +505,31 @@ public final class WareworksConfig {
         return get(SERVER.maxCollectHoldAislesPerLevel);
     }
 
+    // --- hand truck ----------------------------------------------------------------------------------------------
+
+    /**
+     * How fast a player walks while a loaded hand truck is in their inventory, as a fraction of their normal walk
+     * (issue #37, ADR-070). Applied to the movement input on the client, like sneaking; clamped into 0.1..1.0.
+     */
+    public static double handTruckSpeedMultiplier() {
+        return HandTruckPenalty.clampMultiplier(get(SERVER.handTruckSpeedMultiplier));
+    }
+
+    /** Whether a player carrying a loaded hand truck can neither start nor keep a sprint (issue #37). */
+    public static boolean handTruckPreventsSprinting() {
+        return get(SERVER.handTruckPreventSprinting);
+    }
+
+    /** Whether a player carrying a loaded hand truck cannot glide with an elytra (issue #37). */
+    public static boolean handTruckPreventsElytra() {
+        return get(SERVER.handTruckPreventElytra);
+    }
+
+    /** The largest save data one carried container may have, in KiB (issue #37, {@link HandTruckLimits}). */
+    public static int handTruckMaxLoadKiB() {
+        return HandTruckLimits.clampKiB(get(SERVER.handTruckMaxLoadKiB));
+    }
+
     /** The config values. Read them through the static getters of {@link WareworksConfig}. */
     public static final class Server {
         public final ModConfigSpec.IntValue maxAisleLength;
@@ -572,6 +599,11 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue releaseDelayTicks;
         public final ModConfigSpec.IntValue maxHoldTicks;
         public final ModConfigSpec.IntValue maxCollectHoldAislesPerLevel;
+
+        public final ModConfigSpec.DoubleValue handTruckSpeedMultiplier;
+        public final ModConfigSpec.BooleanValue handTruckPreventSprinting;
+        public final ModConfigSpec.BooleanValue handTruckPreventElytra;
+        public final ModConfigSpec.IntValue handTruckMaxLoadKiB;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -1054,6 +1086,31 @@ public final class WareworksConfig {
                                     + "wins. An aisle that is only waiting for a slot under THIS cap says so through "
                                     + "goggles, so it can be told apart from an idle one.")
                     .defineInRange("maxCollectHoldAislesPerLevel", 0, 0, 64);
+            builder.pop();
+
+            builder.comment("The hand truck: carries a chest or barrel with everything in it").push("handTruck");
+            handTruckSpeedMultiplier = builder
+                    .comment("How fast a player walks while a LOADED hand truck is anywhere in their inventory, as a "
+                            + "fraction of their normal walk. An empty truck costs nothing. Creative and spectator "
+                            + "players are never slowed.",
+                            "Applied to the player's movement input, the way sneaking slows a player, so it does not "
+                                    + "narrow the field of view. 1.0 switches the slow-down off.")
+                    .defineInRange("speedMultiplier", 0.5, HandTruckPenalty.MIN_MULTIPLIER,
+                            HandTruckPenalty.MAX_MULTIPLIER);
+            handTruckPreventSprinting = builder
+                    .comment("Whether a player carrying a loaded hand truck can neither start nor keep a sprint.")
+                    .define("preventSprinting", true);
+            handTruckPreventElytra = builder
+                    .comment("Whether a player carrying a loaded hand truck cannot glide with an elytra.")
+                    .define("preventElytra", true);
+            handTruckMaxLoadKiB = builder
+                    .comment("[in KiB] The largest save data one carried container may have. A container with more "
+                            + "in it is refused with a message. A chest of 27 full shulker boxes of plain items is "
+                            + "about 50 KiB; only chests full of written books come near the default.",
+                            "The carried data travels with every inventory packet and every save of the player, so "
+                                    + "the maximum stays well below what one packet may carry.")
+                    .defineInRange("maxLoadKiB", HandTruckLimits.DEFAULT_KIB, HandTruckLimits.MIN_KIB,
+                            HandTruckLimits.MAX_KIB);
             builder.pop();
         }
     }

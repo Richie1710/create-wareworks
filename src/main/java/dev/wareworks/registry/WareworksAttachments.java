@@ -2,6 +2,7 @@ package dev.wareworks.registry;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.station.TerminalPreferences;
+import dev.wareworks.core.handtruck.HandTruckPenalty;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.neoforged.bus.api.IEventBus;
@@ -17,8 +18,8 @@ import org.jetbrains.annotations.Nullable;
  * The mod's data attachment types: per-player state that belongs to the <b>player</b> rather than to any block
  * (M24, issue #17, ADR-037).
  * <p>
- * Today there is exactly one, the warehouse terminal's preferences. A data attachment was chosen over the two
- * alternatives because of where the data belongs: a {@code SavedData} of the level would have to key everything by
+ * Two today: the warehouse terminal's preferences, and the hand truck's transient carry stamp (issue #37). For the
+ * preferences a data attachment was chosen over the two alternatives because of where the data belongs: a {@code SavedData} of the level would have to key everything by
  * player UUID and clean up after players who never return, and a block entity field would make a player's own order
  * a property of whichever terminal they happened to stand at. NeoForge saves an entity's serializable attachments
  * inside that entity's NBT ({@code AttachmentHolder.ATTACHMENTS_NBT_KEY} in {@code Entity#saveWithoutId}, which is
@@ -66,6 +67,16 @@ public final class WareworksAttachments {
                     .copyHandler((preferences, holder, provider) -> preferences.copy())
                     .copyOnDeath()
                     .build());
+
+    /**
+     * When a loaded hand truck was last ticked in this player's inventory, as the player's own {@code tickCount}
+     * (never the game time, which the client resets from the server and {@code /tick freeze} stops; issue #37, ADR-070,
+     * {@code content.handtruck.HandTruckCarry}). The truck writes it from its own inventory tick, so who is carrying is
+     * known without scanning anything. Transient: no serializer, so it is neither saved nor copied on death, and a
+     * player who logs in carrying a truck is stamped again on their first tick.
+     */
+    public static final DeferredHolder<AttachmentType<?>, AttachmentType<Long>> HAND_TRUCK_CARRY =
+            REGISTER.register("hand_truck_carry", () -> AttachmentType.builder(() -> HandTruckPenalty.NEVER).build());
 
     private WareworksAttachments() {
     }

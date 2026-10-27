@@ -1129,6 +1129,27 @@ public final class WareworksLangGen {
                 "Lays out the _aisles_ the crane drives on.",
                 "When using a Wrench",
                 "_Closes_ the rail, keeping two warehouses that touch apart.");
+
+        // Issue #37: the hand truck. Its name comes from the item builder; these are its description and messages.
+        tooltip(lang, "item.wareworks.hand_truck",
+                "Carries a _chest_ or _barrel_ with _everything in it_.",
+                "When used on a container",
+                "Lifts it onto the truck.",
+                "When loaded",
+                "_Right-Click_ a surface to set it down. You walk _slowly_ and cannot _sprint_ or _glide_. It goes "
+                        + "into _no other container_.");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_LOADED), "Hand Truck with %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_CARRYING), "%1$s stacks inside");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_CARRYING_LOOT), "Unopened loot");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_SLOWED), "Heavy: you walk slowly while carrying it");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_ALREADY_LOADED),
+                "You are already carrying a loaded hand truck");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_NOT_ALLOWED), "You may not take this here");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_TOO_HEAVY), "Too much inside to carry (%1$s of %2$s KiB)");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_NO_ROOM), "No room to set it down here");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_PLACE_NOT_ALLOWED), "You may not set it down here");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_DROP_REFUSED), "Set it down with Right-Click");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_STAYS_WITH_YOU), "A loaded hand truck stays with you");
     }
 
     /**

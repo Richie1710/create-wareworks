@@ -1593,6 +1593,31 @@ public final class WareworksLang {
     /** {@code "Reserved for pickup: %1$s x%2$s"}: items reserved inside a storage location for a crane job. */
     public static final String GOGGLES_RESERVED_OUTGOING = "gui.goggles.reserved_outgoing";
 
+    // --- hand truck (issue #37, ADR-070) -----------------------------------------------------------------------------
+
+    /** {@code "Hand Truck with %1$s"}: the name of a loaded hand truck, with the carried container's name. */
+    public static final String HAND_TRUCK_LOADED = "hand_truck.loaded";
+    /** {@code "%1$s stacks inside"}: tooltip line of a loaded truck. */
+    public static final String HAND_TRUCK_CARRYING = "hand_truck.carrying";
+    /** {@code "Unopened loot"}: tooltip line of a truck carrying a loot chest nobody opened. */
+    public static final String HAND_TRUCK_CARRYING_LOOT = "hand_truck.carrying_loot";
+    /** {@code "Heavy: you walk slowly while carrying it"}: tooltip line of a loaded truck. */
+    public static final String HAND_TRUCK_SLOWED = "hand_truck.slowed";
+    /** Action bar: a player already carrying a loaded truck tried to load another. */
+    public static final String HAND_TRUCK_ALREADY_LOADED = "hand_truck.already_loaded";
+    /** Action bar: the player may not break the container there (protection, adventure mode). */
+    public static final String HAND_TRUCK_NOT_ALLOWED = "hand_truck.not_allowed";
+    /** Action bar: {@code "Too much inside to carry (%1$s of %2$s KiB)"}. */
+    public static final String HAND_TRUCK_TOO_HEAVY = "hand_truck.too_heavy";
+    /** Action bar: the container cannot stand where the player clicked. */
+    public static final String HAND_TRUCK_NO_ROOM = "hand_truck.no_room";
+    /** Action bar: the player may not build where they clicked. */
+    public static final String HAND_TRUCK_PLACE_NOT_ALLOWED = "hand_truck.place_not_allowed";
+    /** Action bar: the drop key is refused for a loaded truck. */
+    public static final String HAND_TRUCK_DROP_REFUSED = "hand_truck.drop_refused";
+    /** Action bar: a loaded truck put into a foreign slot or thrown out went back into the inventory. */
+    public static final String HAND_TRUCK_STAYS_WITH_YOU = "hand_truck.stays_with_you";
+
     private WareworksLang() {
     }
 

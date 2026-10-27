@@ -42,6 +42,7 @@ final class VisualScenarios {
             Map.entry(JeiVisualScenario.NAME, JeiVisualScenario::new),
             Map.entry(FeederVisualScenario.NAME, FeederVisualScenario::new),
             Map.entry(PatternStripVisualScenario.NAME, PatternStripVisualScenario::new),
+            Map.entry(HandTruckVisualScenario.NAME, HandTruckVisualScenario::new),
             Map.entry(ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new));
 
     private VisualScenarios() {

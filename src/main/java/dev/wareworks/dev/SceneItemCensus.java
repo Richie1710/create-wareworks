@@ -15,10 +15,14 @@ import com.simibubi.create.content.logistics.box.PackageItem;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.fluid.FluidContainers;
+import dev.wareworks.content.handtruck.HandTruckItem;
+import dev.wareworks.content.handtruck.HandTruckLoad;
+import dev.wareworks.content.handtruck.HandTruckSpill;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.registry.WareworksDataComponents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.SectionPos;
@@ -37,6 +41,7 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 /**
  * Counts every item of a scene by exact identity ({@link ItemKey}: item and data components), for the item conservation
@@ -64,6 +69,10 @@ import net.neoforged.neoforge.items.IItemHandler;
  * the world as one {@link PalletEntity}, which is neither an {@code ItemEntity} nor a block with an item capability, so
  * without this branch the whole robustness run would report PASS while a broken brass bay deleted 65 536 items. A
  * pallet is a new <b>carrier</b>, exactly as a package is, and not a fifth place an item can be (§8).
+ * <p>
+ * <b>A loaded hand truck counts as the empty truck plus what the carried container holds</b> (issue #37), and the
+ * carried container itself as nothing: it is a block before it goes onto the truck and after it comes off, so under
+ * this rule loading and unloading conserve items exactly. {@code gametest.ItemCensus} has the same rule.
  * <p>
  * <b>What a container item holds is not counted here</b> (M30): the fluid inside a bucket is {@link SceneFluidCensus}'s
  * business, and the two censuses only state something true together ({@link SceneFluidCensus#assertConserved}). The one
@@ -307,6 +316,11 @@ final class SceneItemCensus {
     private static void add(Map<ItemKey, Long> counts, ItemStack stack, long copies) {
         if (stack.isEmpty() || copies == 0)
             return;
+        HandTruckLoad load = HandTruckItem.load(stack);
+        if (load != null) {
+            addLoadedTruck(counts, stack, load, copies);
+            return;
+        }
         if (!PackageItem.isPackage(stack)) {
             put(counts, ItemKey.of(stack), copies);
             return;
@@ -316,9 +330,18 @@ final class SceneItemCensus {
                 .forEach(held -> add(counts, held, copies * held.getCount()));
     }
 
-    /** Counts {@code amount} items of {@code key}, a package again as its contents. */
+    /** A loaded hand truck: the empty truck plus the carried container's contents (class comment). */
+    private static void addLoadedTruck(Map<ItemKey, Long> counts, ItemStack truck, HandTruckLoad load, long copies) {
+        ItemStack empty = truck.copy();
+        empty.remove(WareworksDataComponents.HAND_TRUCK_LOAD.get());
+        put(counts, ItemKey.of(empty), copies);
+        for (ItemStack held : HandTruckSpill.contents(load, ServerLifecycleHooks.getCurrentServer().registryAccess()))
+            add(counts, held, copies * held.getCount());
+    }
+
+    /** Counts {@code amount} items of {@code key}, a package or a loaded hand truck again as its contents. */
     private static void add(Map<ItemKey, Long> counts, ItemKey key, long amount) {
-        if (key.getItem() instanceof PackageItem) {
+        if (key.getItem() instanceof PackageItem || key.getItem() instanceof HandTruckItem) {
             add(counts, key.toStack(), amount);
             return;
         }

@@ -15,12 +15,13 @@ import com.simibubi.create.AllRecipeTypes;
 import com.simibubi.create.content.kinetics.crafter.MechanicalCraftingInput;
 import com.simibubi.create.content.kinetics.crafter.MechanicalCraftingRecipe;
 import com.simibubi.create.content.kinetics.crafter.RecipeGridHandler;
-import com.tterrag.registrate.util.entry.BlockEntry;
+import com.tterrag.registrate.util.entry.ItemProviderEntry;
 import com.tterrag.registrate.util.entry.RegistryEntry;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCreativeTabs;
+import dev.wareworks.registry.WareworksItems;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -85,6 +86,7 @@ public final class WareworksItemGameTests {
     private static final String BRASS_HAND = "brass_hand";
     private static final String BRASS_NUGGET = "brass_nugget";
     private static final String BRASS_SHEET = "brass_sheet";
+    private static final String COGWHEEL = "cogwheel";
     private static final String COMPARATOR = "comparator";
     private static final String COPPER_CASING = "copper_casing";
     private static final String COPPER_SHEET = "copper_sheet";
@@ -101,7 +103,7 @@ public final class WareworksItemGameTests {
     private static final String OAK_PLANKS = "oak_planks";
 
     /** A recipe the mod must ship: recipe id = item id, recipe type, result count and the exact ingredients. */
-    private record ExpectedRecipe(BlockEntry<?> block, RecipeType<?> type, int count, List<IngredientSpec> ingredients) {
+    private record ExpectedRecipe(ItemProviderEntry<?, ?> block, RecipeType<?> type, int count, List<IngredientSpec> ingredients) {
     }
 
     /**
@@ -267,6 +269,11 @@ public final class WareworksItemGameTests {
         assertCrafts(helper, recipes, level, feeder, WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(), ONE);
         assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
         assertCrafts(helper, recipes, level, homePoint, WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(), ONE);
+        // The hand truck (issue #37): a handle (shaft) on an andesite frame, an iron nose plate between two cogwheels
+        // as wheels. Any iron sheet would do; Create's is the one a player has.
+        ItemStack cog = stack(COGWHEEL);
+        CraftingInput handTruck = grid(3, 3, none, stack(SHAFT), none, none, alloy, none, cog, stack(IRON_SHEET), cog);
+        assertCrafts(helper, recipes, level, handTruck, WareworksItems.HAND_TRUCK.asItem(), ONE);
 
         // The crane is mechanical crafting. MechanicalCraftingRecipe#matches rejects every input that is not a
         // MechanicalCraftingInput, so the grid has to be built the way a crafter tower builds it.
@@ -337,7 +344,9 @@ public final class WareworksItemGameTests {
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 // The crafter feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
-                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem()),
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
+                // The hand truck is no block, so it stands after every block (issue #37).
+                WareworksItems.HAND_TRUCK.asItem()),
                 "creative tab order");
         helper.assertTrue(tab.getIconItem().is(WareworksBlocks.STACKER_CRANE.asItem()), "creative tab icon: " + tab.getIconItem());
         helper.succeed();
@@ -426,7 +435,12 @@ public final class WareworksItemGameTests {
                                 IngredientSpec.of(ANDESITE_ALLOY))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_HOME_POINT, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(ROSE_QUARTZ_LAMP), IngredientSpec.of(ANDESITE_ALLOY),
-                                IngredientSpec.of(ANDESITE_CASING), IngredientSpec.of(ANDESITE_ALLOY))));
+                                IngredientSpec.of(ANDESITE_CASING), IngredientSpec.of(ANDESITE_ALLOY))),
+                // The hand truck (issue #37): andesite tier, cheaper than any warehouse block, because carrying a
+                // chest across a base is early-game work.
+                new ExpectedRecipe(WareworksItems.HAND_TRUCK, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(SHAFT), IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.of(COGWHEEL),
+                                IngredientSpec.ofTag(IRON_PLATES), IngredientSpec.of(COGWHEEL))));
     }
 
     /** Asserts that the recipe's filled slots are exactly the expected ingredients, in any order and with duplicates. */

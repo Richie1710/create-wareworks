@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hand Truck** ([#37](https://github.com/Richie1710/create-wareworks/issues/37)). Right-click a chest, trapped chest
+  or barrel with the empty truck and it goes onto the truck with everything inside, including its name, its lock and
+  an unopened loot table; right-click a surface to set it down again, facing you. Carrying one half of a double chest
+  leaves the other half standing as a single chest. While a loaded truck is in your inventory you walk at half speed
+  and cannot sprint or glide; an empty truck costs nothing. A loaded truck goes into no other container, the drop key
+  is refused, and one that is thrown out of a screen comes back into your inventory. You carry one at a time, only
+  where you may break blocks. On death it tips over into its contents, the container and the empty truck. Warehouse
+  blocks, ender chests and shulker boxes cannot be carried; the tags `wareworks:hand_truck_carriable` and
+  `wareworks:hand_truck_denied` change what can. Server config section `handTruck` (speed, sprint, elytra,
+  size limit). Recipe: a shaft over andesite alloy over two cogwheels and an iron sheet; one Ponder scene.
+
 ## [0.16.0-beta] - 2026-10-27
 
 ### Changed

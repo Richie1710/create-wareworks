@@ -12,6 +12,7 @@ import dev.wareworks.command.WareworksCommands;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.crane.CraneServerHooks;
+import dev.wareworks.content.handtruck.HandTruckHooks;
 import dev.wareworks.content.station.ProductionStationHooks;
 import dev.wareworks.content.storage.RackBayGestures;
 import dev.wareworks.content.storage.StorageFilterClicks;
@@ -24,8 +25,10 @@ import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCapabilities;
 import dev.wareworks.registry.WareworksCreativeTabs;
+import dev.wareworks.registry.WareworksDataComponents;
 import dev.wareworks.registry.WareworksDisplaySources;
 import dev.wareworks.registry.WareworksEntityTypes;
+import dev.wareworks.registry.WareworksItems;
 import dev.wareworks.registry.WareworksMenuTypes;
 import dev.wareworks.registry.WareworksUnpackingHandlers;
 import dev.wareworks.util.GoggleObservers;
@@ -76,7 +79,11 @@ public final class Wareworks {
         //    arm interaction point types reference blocks).
         WareworksCreativeTabs.register(modEventBus);
         WareworksDisplaySources.register();
+        // Issue #37: the item data component the hand truck carries its container in, before the item that uses it.
+        WareworksDataComponents.register(modEventBus);
         WareworksBlocks.register();
+        // Items that are not block items stand after every block in the creative tab: the hand truck (issue #37).
+        WareworksItems.register();
         WareworksBlockEntityTypes.register();
         // M28: the pallet, the mod's one entity. It references no block, so its place in this order does not matter.
         WareworksEntityTypes.register();
@@ -109,6 +116,9 @@ public final class Wareworks {
         // here, applied by Create's own handler instead of its hold-to-edit warmup, which only applied it on the
         // release (StorageFilterClicks).
         StorageFilterClicks.register(NeoForge.EVENT_BUS);
+        // Issue #37: what keeps a loaded hand truck in its player's inventory (menus, entities, tossing, deaths) and the
+        // part of its penalty that is not the walk itself (HandTruckHooks).
+        HandTruckHooks.register(NeoForge.EVENT_BUS);
         // 5. Optional chunk loading for aisles that have work (M19, issue #10, ADR-031). The ticket controller must be
         //    registered on the MOD bus and unconditionally: an unregistered controller has its saved tickets stripped
         //    from the level. Its lifecycle hooks and the operator command live on the game bus.

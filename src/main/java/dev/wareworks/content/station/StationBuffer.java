@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.item.ComponentMeanings;
 import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
@@ -89,12 +90,21 @@ public class StationBuffer extends ItemStackHandler {
      */
     @Override
     public ItemStack insertItem(int slot, ItemStack stack, boolean simulate) {
+        // A loaded hand truck never leaves its player (issue #37); this is the backstop should anything try.
+        if (HandTruckItem.isLoaded(stack))
+            return stack;
         if (!stack.isEmpty()) {
             ItemStack existing = getStackInSlot(slot); // checks the index, as ItemStackHandler does
             if (!existing.isEmpty() && !ComponentMeanings.sameItemSameComponents(existing, stack))
                 return stack;
         }
         return super.insertItem(slot, simulate ? stack : stack.copy(), simulate);
+    }
+
+    /** Every item but a loaded hand truck (issue #37). */
+    @Override
+    public boolean isItemValid(int slot, ItemStack stack) {
+        return !HandTruckItem.isLoaded(stack) && super.isItemValid(slot, stack);
     }
 
     /** Stores a copy of {@code stack}. */

@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.item.ItemTypeSummaries;
 import dev.wareworks.core.inventory.CapacityMath;
@@ -185,7 +186,7 @@ public class RackBayHandler implements IItemHandler {
 
     @Override
     public ItemStack insertItem(int slot, ItemStack stack, boolean simulate) {
-        if (slot != SLOT || stack.isEmpty() || !rules.passesFilter(stack))
+        if (slot != SLOT || stack.isEmpty() || HandTruckItem.isLoaded(stack) || !rules.passesFilter(stack))
             return stack;
         ItemKey key = ItemKey.of(stack); // a count-less copy: the caller's instance is never stored
         int accepted = contents.insert(key, stack.getCount(), rules.capacity(key), simulate);
@@ -219,7 +220,7 @@ public class RackBayHandler implements IItemHandler {
 
     @Override
     public boolean isItemValid(int slot, ItemStack stack) {
-        if (slot != SLOT || stack.isEmpty() || !rules.passesFilter(stack))
+        if (slot != SLOT || stack.isEmpty() || HandTruckItem.isLoaded(stack) || !rules.passesFilter(stack))
             return false;
         ItemKey key = contents.stored();
         return key == null || key.matches(stack);

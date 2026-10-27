@@ -45,7 +45,10 @@ dev.wareworks
 │                              Create's registry is keyed by the Block object, M26, issue #18, ADR-040);
 │                              WareworksEntityTypes (the mod's only entity: PALLET, the load of a broken rack bay -
 │                              no spawn egg, no item form, M28, issue #20, ADR-046)
-│                              (WareworksItems only if plain items are ever added)
+│                              WareworksItems (plain items that are not block items, after every block in the
+│                              creative tab: today only HAND_TRUCK, issue #37, ADR-070); WareworksDataComponents
+│                              (the mod's item data components: HAND_TRUCK_LOAD, the container a hand truck carries,
+│                              ADR-070)
 ├── command                    WareworksCommands (`/wareworks chunks`, permission 2: what the mod holds force-loaded per
 │                              dimension, and the release valve — a hard requirement of M19, because nothing outside
 │                              NeoForge's own validation callback can enumerate a mod's chunk tickets, ADR-031)
@@ -195,6 +198,9 @@ dev.wareworks
 │   │                          said, a door seen earlier remembered while its chunk is not loaded) and BoxWait (when a
 │   │                          box resting in a Packager's tray has waited long enough to say so, ten seconds, counted
 │   │                          from looks, never from a tick)
+│   ├── handtruck              the hand truck's pure numbers (issue #37, ADR-070): HandTruckPenalty (the movement input
+│   │                          scaled by the speed multiplier, the forward impulse capped below a sprint's 0.8, the
+│   │                          one-tick carry window) and HandTruckLimits (the size budget of one carried container)
 │   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
 │                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
 │                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
@@ -378,6 +384,13 @@ dev.wareworks
 │                              CrafterRecipeCheck (the second class that may look up recipes: it evaluates and runs
 │                              none), CrafterOutputFit (whether a craft's result and remainders fit in front of the
 │                              Crafter), CrafterFeederGoggleSummary
+│   ├── handtruck              the hand truck (issue #37, ADR-070): HandTruckItem (both clicks in onItemUseFirst, the
+│   │                          loaded name and tooltip), HandTruckLoad (the component value: block state, block
+│   │                          entity type, the block entity's own save data), HandTruckRules (tags, permission,
+│   │                          action bar), HandTruckPickup / HandTruckPlacement (load and set down without a drop or a
+│   │                          second copy), HandTruckSpill (a loaded truck as plain stacks), HandTruckCarry (the carry
+│   │                          stamp and the server half of the penalty), HandTruckSlotGuard (a menu listener that
+│   │                          hands a loaded truck back) and HandTruckHooks (every game-bus listener)
 │   └── display                the seven Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -442,6 +455,8 @@ dev.wareworks
 │   │                          JEI-free client half of a recipe viewer's "+": whether it may be used, the candidate
 │   │                          lists, the lay payload) and WarehouseTerminalScreen#forMenu (the terminal screen a
 │   │                          payload belongs to, also while a recipe viewer's screen covers it, ADR-063)
+│   ├── handtruck              HandTruckClientEvents (issue #37, ADR-070: the slow walk and the sprint cap, applied to
+│   │                          the movement input like sneaking)
 │   ├── input                  StorageFilterPressGuard (issue #30, ADR-028: only the first use of a press sets a
 │   │                          store filter, so a held button that slides onto a slot sets none, and while the
 │   │                          button that set one stays down, its repeats do nothing on any storage filter slot)
@@ -461,7 +476,9 @@ dev.wareworks
 │   │                          rank magnitude, M18);
 │   │                          PalletRenderer (the mod's only EntityRenderer: a broken bay's load - a low deck, the
 │   │                          item on it and the count above it, because Create's goggles are block-entity-only and
-│   │                          an entity carries no tooltip at all, M28, ADR-046)
+│   │                          an entity carries no tooltip at all, M28, ADR-046);
+│   │                          HandTruckItemRenderer / HandTruckClientExtensions (the hand truck's model with the
+│   │                          carried container on its nose plate, drawn as a single block, issue #37, ADR-070)
 │   └── ponder                 WareworksPonderPlugin (the one PonderPlugin), WareworksPonderScenes (which scene belongs
 │       │                      to which item), WareworksPonderTags (own tag wareworks:warehouse + Create tags),
 │       │                      WareworksPonderLang (ponder lang inside the Registrate LANG generator) (M5)
@@ -589,7 +606,14 @@ dev.wareworks
 │                              filter items, an empty hand (also with an item in the off hand) and a wrench left to
 │                              Create's warmup, the clipboard, the arm item, sneaking, fake, adventure and spectating
 │                              players and a click beside the slot passed on, and a claim listener at HIGH that
-│                              registered after this mod still refusing the press (issue #30, ADR-028)
+│                              registered after this mod still refusing the press (issue #30, ADR-028);
+│                              HandTruckGameTests: the hand truck's round trips (a named, locked chest, an unopened
+│                              loot chest, one half of a double chest, a barrel), the refusals (denied blocks, a
+│                              cancelled break or place event, adventure mode, a second loaded truck, a fake player,
+│                              a container over the size budget), the click winning over a depot and a warehouse
+│                              input, a menu, a container item, a hopper, a tossed truck and a death that each end
+│                              with no loaded truck outside the player's inventory, and the penalty flags (issue #37,
+│                              ADR-070)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -692,6 +716,10 @@ dev.wareworks
 │                              patterns: 3, 4 and 6 columns, the wheel scrolling by rows, a click on tab 36, a hidden
 │                              tab failing its hit test, a selection scrolling it back, the red tick of a hidden
 │                              refused row, the 320 x 240 floor and the German tooltip, issue #35, ADR-068),
+│                              HandTruckVisualScenario (the hand truck in a survival player's hands with real clicks:
+│                              first and third person empty and loaded, walking and gliding against an empty-truck
+│                              control, the drop key, a barrel slot and a second truck refused, English and German,
+│                              a census around every move, issue #37, ADR-070),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -968,6 +996,7 @@ iron sheets already require a press and its brass casing already requires brass.
   * *Extended in M28 to twenty scenes* (`warehouse/rack_bay`, `warehouse/rack_wall`, `warehouse/bays_in_an_aisle`), the rack bay's three, in `client.ponder.scenes.RackBayScenes` and registered for **all three tiers** (ADR-048). They are the one block of this mod whose scenes are deliberately **not** in warehouse-first order: a wooden bay needs no machine to craft, so its first audience owns no crane, and the standalone block comes first, the wall second and the aisle last. Three things they had to learn, each of which the next aisle-free scene will need as well. A `PonderLevel` is **client-side**, so it derives neither of a bay's flags (`FILL`, `OVERLOADED`) and cannot spawn a pallet at all — the scenes write both flags into the block state and build the pallet through `createEntity` plus the new display hook `PalletEntity#showClientLoad`, the counterpart of `showClientPose`. A third thing, added in **M29 step 14** once a bay drew the item it stores (ADR-049): the goods have to be put in by hand as well, or a scene teaches "a bay keeps the first item type that lands in it" over anonymous cartons. `RackBayScenes#store` does it with `modifyBlockEntity` and the bay's own `insert`, which needs no hook at all — the change callback behind it returns at once on anything that is not a `ServerLevel`, so nothing is sent, no controller is told and the scene's own `FILL` stands. Ponder renders at **`30 * scaleFactor` units per block whatever the base plate is** (`PonderScene.SceneTransform#refreshMatrix`), so the plate only centres a scene and a single-block scene is made legible by `scaleSceneView` — `RackBayScenes.SINGLE_SCALE` is 2.0 on a square **3** plate, the largest scale and smallest plate in the mod. And the M22 caption rule is now written down rather than remembered (`RackBayScenes`' class comment): applying it found `warehouse/packages_at_the_door` still shipping the defect in one of its two trip beats, a caption shown 150 ticks longer than the scene then idled, drawn on top of the next one.
   * *Extended in M27* (`warehouse/ordering_to_a_door`, “Delivering to a Package Door”), the twenty-second scene, after M30's `warehouse/fluid_bay`: ordering goods to a package door at the terminal (ADR-065 D15). It is registered for the **warehouse terminal and the warehouse output**, because the door is chosen at the one and is the other, and **last** for both, so each block still opens on the scene it always did. It is a storyboard of its own for the reason M20, M22 and M26 gave — inserting a text into a shipped scene renumbers every later `text_n` key of it in both lang files — and because it needs a terminal beside the door, which the `packages_at_the_door` stage has no room for; its own stage is another empty 9x7x9 plate. Like the terminal's own scenes it represents the screen it cannot open: `InputElementBuilder#showing` draws any Create icon in a control bubble, so the door button appears as itself (`AllIcons.I_SEND_ONLY`) on the terminal's display face.
   * *Extended for issue #34* (`warehouse/crafter_feeder`, “Crafting with a Vanilla Crafter”), the twenty-third scene, in `client.ponder.scenes.CrafterFeederScenes` (ADR-067). It is registered for the **crafter feeder and the production station**, last for the station, so the station still opens on the scene it always did. Its stage is a new 9x7x9 plate in `scripts/gen_ponder_schematics.py`; the build is mirrored onto the left rack plane, whose back row is the one nearest Ponder's camera, so the feeder and the Crafter are in view without turning it. Like the station's own scenes it shows the pattern screen as icons and text, and the batch as item bubbles over the Crafter and each run as a redstone indication on it. The feeder joined the tag `wareworks:warehouse` and Create's `KINETIC_APPLIANCES` with it.
+  * *Extended for issue #37* (`hand_truck/carrying`, “Carrying Containers with the Hand Truck”), the twenty-fourth scene, in `client.ponder.scenes.HandTruckScenes`, registered for the **hand truck** only and in no Ponder tag (ADR-070): the truck is an item, not a block of the warehouse. A `PonderLevel` has no player, so an armour stand holds the truck and is moved a little every tick. One quirk worth knowing for the next scene that hands an entity an item: catnip's `SchematicLevel` strips every item component but a few from an armour stand's equipment when the stand is **added**, which would take the carried chest off the truck, so the scene puts the truck into the stand's hand only after the stand is in the level (`HandTruckScenes#holding`).
 * **Own tag `wareworks:warehouse`** (title, description, stacker-crane icon, listed in the index) holds all six blocks; the dock is additionally added to Create's `KINETIC_APPLIANCES` and interface/input/output to `LOGISTICS`. Adding to Create's tags emits no lang of our own.
   * *M13:* the warehouse terminal and the warehouse production station joined both tags, so the tag holds all **eight** blocks and every Wareworks item has "Hold [W] to Ponder". Before that the two newest blocks were in no Ponder tag at all, because a tag member without a scene shows an empty entry.
   * *M15:* the warehouse stock keeper joined both tags together with its scenes, so the tag holds all **nine** blocks. It moves nothing itself, but its three numbers gate what everything else in `LOGISTICS` may move.
@@ -6901,6 +6930,102 @@ player.
   English and German column words, status words, detail lines and the lines above the table, measured with the font's
   real advances). The visual scenario `listtable` (11 shots) clicks Fetch, Cancel and Confirm, turns the real wheel,
   hovers a shortened name and a material, and shrinks the window to 320 x 240, in English and German.
+
+### ADR-070 — The hand truck carries a container as its block entity's own save data in a component of ours; a loaded truck never leaves its player's inventory; the slow walk is applied to the movement input like sneaking ([issue #37](https://github.com/Richie1710/create-wareworks/issues/37))
+
+*Context:* The owner asked for a hand truck (German "Sackkarre"): a held item that picks up a chest, trapped chest or
+barrel "etc." with everything in it and sets it down again elsewhere, with a penalty **only while it is loaded** (half
+walking speed, no sprint, no elytra; an empty truck in the inventory costs nothing). The hard rule of the mod is that
+an item is never duplicated or lost, and a full chest that travels as one stack is the easiest way to break it: put
+into another chest, a shulker box, a hopper, a funnel, a deployer, a backpack, or thrown on the floor, it becomes a
+portable chest inside a chest, or a second copy when a cancelled placement restores the block it already filled.
+
+*Decision:*
+* **The load is a data component of ours**, `wareworks:hand_truck_load` (`HandTruckLoad`): the carried block state,
+  the block entity type and `BlockEntity#saveWithoutMetadata` — exactly what chunk saving writes for that block
+  entity, minus its position, so its items, custom name, lock, an unopened loot table and NeoForge attachments travel,
+  and `loadWithComponents` on placement is the chunk loader's own read. The value is immutable and compares by identity
+  first (menus compare every slot every tick). It is synced in full, because a creative client sends whole stacks back.
+  Vanilla's `BLOCK_ENTITY_DATA` and `CONTAINER` are deliberately not used: vanilla code reads them, so a stack carrying
+  them would be a placeable full chest.
+* **What can be carried** is the block tag `wareworks:hand_truck_carriable` (`#c:chests`, `#c:barrels`) minus
+  `wareworks:hand_truck_denied` (`#c:chests/ender`, `#minecraft:shulker_boxes`, `#c:relocation_not_supported`,
+  `#create:non_movable`, which holds every Wareworks state block). The server also requires a vanilla `Container`
+  block entity and a breakable block, so a pack that tags a Create vault or toolbox is still refused.
+* **Both clicks are answered in `Item#onItemUseFirst`**, which runs before the clicked block's own use: a carriable
+  chest never opens under an empty truck, and no block (a depot, a deployer, a station) ever receives a loaded one.
+  Loading refuses fake players (a deployer), a second loaded truck, a position the player may not break
+  (`Level#mayInteract`, adventure mode, NeoForge's `BlockEvent.BreakEvent` for protection mods) and a container over
+  `handTruck.maxLoadKiB`; then the block entity is emptied and removed before the block, so neither `onRemove` nor a
+  loot table drops anything, open menus on it are closed, and only then is the component set. Unloading places an
+  empty block by the normal placement rules (facing the player), fires the place event, restores the old block if it
+  is cancelled (the new block entity is still empty), and loads the contents only after that.
+* **A loaded truck never leaves its player's inventory**, which is the invariant that keeps both item conservation
+  and "no chest in a chest": it fits into no container item (`canFitInsideContainerItems`); the drop key is refused;
+  a listener on every menu a player opens and on the player's own inventory menu hands it straight back into the
+  inventory within the click's own broadcast, before any hopper or funnel ticks; entity interactions holding it are
+  cancelled; a thrown one is put back; one that becomes an item entity anyway tips over on its first tick into plain
+  stacks (contents, the block item with its name or unrolled loot table, the empty truck) — entities tick before block
+  entities, so no hopper or funnel ever sees it; on death the same spill replaces it at the highest priority, so
+  gravestone mods get plain items. A truck left on the cursor of a player who died or disconnected reaches the toss
+  event from `AbstractContainerMenu#removed`, after the death drops or after the player was saved: it tips over where
+  the player stands instead of going back into an inventory that is never read again. The warehouse input buffer and
+  the rack bay refuse it as a backstop.
+* **Unloading checks the load again.** The component is client-writable in creative mode, so a forged truck could
+  name a command block or a spawner with any data. On unload the carried state must still be carriable by tag, the new
+  block entity a vanilla `Container`, and a block entity with `onlyOpCanSetNbt` is refused to a player who cannot use
+  game master blocks (the test `BlockItem#updateCustomBlockEntityTag` makes). The size budget is not checked again, so
+  a truck loaded under a larger budget can still be set down.
+* **The penalty is applied to the movement input**, where vanilla applies sneaking and item use: on
+  `MovementInputUpdateEvent` both impulses are scaled by `handTruck.speedMultiplier` and the forward impulse is capped
+  just below the 0.8 a sprint needs (`HandTruckPenalty`), so a sprint can neither start nor continue. Gliding is stopped
+  every tick on both sides. Who is carrying is a stamp the truck's own `inventoryTick` writes into a transient
+  player attachment, so nothing scans an inventory. The stamp is the player's own `tickCount`, not the game time: the
+  client's clock is reset from the server every 20 ticks (on a lagging server it jumps back or forward, and the penalty
+  would drop for a tick, letting a held sprint key start a sprint) and stands still under `/tick freeze` while players
+  keep ticking. Creative and spectator players are exempt.
+* **Rendering** is a Create custom item renderer (`HandTruckItemRenderer`) that draws the hand-made Blockbench model
+  and, when loaded, the carried block on the nose plate with `BlockRenderDispatcher#renderSingleBlock` (a chest through
+  its own item renderer). Item rendering is not Flywheel's, so the truck looks the same with Flywheel on and off. The
+  arm pose stays vanilla's one-handed item pose: a two-handed pose (the crossbow hold) raises both arms to the
+  shoulders and lifts the truck off the ground, while with the arm hanging the third person transform stands the truck
+  upright in front of the player, wheels on the ground and the handle in the hand.
+* `WareworksNetwork.VERSION` stays 17: no payload was added or changed. The component is synced by vanilla, and a
+  client without the item cannot join at all (registry sync).
+
+*Alternatives rejected:*
+* **An attribute modifier on movement speed.** It narrows the field of view like Slowness, cannot stop a sprint
+  (sprinting is decided by the client) and the sprint's own bonus would still apply on top.
+* **A mixin into `LocalPlayer`'s sprint check.** It would be the mod's first mixin (ADR-066 rejected one for the same
+  reason) for something the input event already decides.
+* **Vanilla's `BLOCK_ENTITY_DATA` or `CONTAINER` on the truck.** Read by vanilla code, so the stack would be a
+  placeable full chest and every container item would accept it.
+* **Placing through `useOn` and NeoForge's `onPlaceItemIntoWorld`.** Its cancel path restores the old block with
+  `setBlock` and would run `ChestBlock#onRemove` on a chest that was already filled, dropping the contents while the
+  truck keeps them: a duplication.
+* **Cancelling the item entity's join.** It would lose the stack; tipping over keeps every item.
+* **A player state instead of an item, as Carry On does.** The owner asked for an item to craft and hold, and an item
+  is what the inventory rules above can guard.
+
+*Consequences:*
+* Protection mods work through the break event, and mods that count broken blocks see a "break" at pickup.
+* Under water, vanilla's swim sprint needs only some forward input, so a swim sprint can still start; the input scaling
+  still halves it. A horse ridden by a carrying player is slowed (it reads the player's input); a boat is not.
+* A storage-mod terminal that inserts the cursor stack through its own packets bypasses the menu listener; nothing is
+  lost, the truck is then simply stored as an item.
+* A loaded truck thrown out of a full inventory tips over on the floor; the drop key is refused with a message.
+* If the carried block's mod is removed, the load is lost, as that mod's chunks would be.
+* `Block#setPlacedBy` is not called on unload (it would read the truck's components).
+* Tests: JUnit `HandTruckPenaltyTest`, `HandTruckLimitsTest`; GameTests `HandTruckGameTests` (round trips of a named,
+  locked chest, an unopened loot chest, a double chest half and a barrel; denied blocks, a cancelled break and place
+  event, adventure mode, one loaded truck, a fake player, the size budget; Create's item vault and toolbox and the
+  rule's own container requirement; a forged command block load; the click winning over a depot and a warehouse
+  input; menus, container items, a hopper, a tossed truck, a death and a dead player's cursor; the penalty flags); the census in
+  `ItemCensus` and `SceneItemCensus` counts a loaded truck as the empty truck plus the carried contents. The visual
+  scenario `handtruck` (18 shots) loads and unloads with real clicks in first and third person, measures the walk
+  against an empty-truck control (half the walking speed, no sprint) and the glide against one, refuses the drop key,
+  a barrel slot and a second truck, in English and German, with Flywheel on and off; the `ponder` scenario compiles the
+  scene `hand_truck/carrying`.
 
 ## Persistence & sync
 

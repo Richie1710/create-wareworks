@@ -10,6 +10,7 @@ import java.util.Optional;
 import com.tterrag.registrate.util.entry.ItemProviderEntry;
 
 import dev.wareworks.registry.WareworksBlocks;
+import dev.wareworks.registry.WareworksItems;
 import net.createmod.ponder.api.registration.SceneRegistryAccess;
 import net.createmod.ponder.foundation.PonderIndex;
 import net.createmod.ponder.foundation.PonderScene;
@@ -62,7 +63,7 @@ public final class PonderVisualScenario implements VisualScenario {
      * One pondered item.
      *
      * @param label          short name used in shot labels
-     * @param block          the block whose item opens the scenes
+     * @param block          the block (or item) whose item opens the scenes
      * @param expectedScenes how many storyboards {@code WareworksPonderScenes} registers for it
      */
     private record Subject(String label, ItemProviderEntry<?, ?> block, int expectedScenes) {
@@ -105,7 +106,9 @@ public final class PonderVisualScenario implements VisualScenario {
             // M30 (issue #21): one scene for both fluid bays, and both are toured for the rack bays' own reason — the
             // tier is the block, so two registrations can be lost independently.
             new Subject("tank-copper", WareworksBlocks.FLUID_BAY_COPPER, 1),
-            new Subject("tank-brass", WareworksBlocks.FLUID_BAY_BRASS, 1));
+            new Subject("tank-brass", WareworksBlocks.FLUID_BAY_BRASS, 1),
+            // Issue #37: the hand truck is an item, not a block, and has its one scene of its own.
+            new Subject("hand-truck", WareworksItems.HAND_TRUCK, 1));
 
     @Override
     public String name() {

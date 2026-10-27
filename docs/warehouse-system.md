@@ -7489,6 +7489,10 @@ The table above is covered by automated tests. What only a running game can reac
 | `releaseDelayTicks` | 100 | how long a holding aisle lingers after its last work before it lets go (5 s). The anti-thrash bound: work that comes back inside the window never releases in between (§11.4) |
 | `maxHoldTicks` | 72000 | the longest a single aisle may hold without a break (1 hour). When it runs out the aisle lets go, says so, and may only hold again once its work really changed. **0 means unlimited, and then one stuck aisle is a permanent chunk loader** (§11.4) |
 | `maxCollectHoldAislesPerLevel` | **0 (off)** | separate opt-in: how many aisles of one dimension may hold their chunks **only** because a collecting port has items waiting, with no job, request or order of their own. It keeps a **running** collection alive across the gap between one machine output and the next; it cannot make an idle aisle notice a machine that starts producing later (§11.1). These aisles also count against `maxTicketedAislesPerLevel`, so the smaller of the two wins |
+| `speedMultiplier` (section `handTruck`, issue #37) | 0.5 | how fast a player walks while a **loaded** hand truck is in their inventory, as a fraction of the normal walk, applied to the movement input like sneaking. An empty truck costs nothing; creative and spectator players are never slowed. 1.0 switches it off (`docs/hand-truck.md`, ADR-070) |
+| `preventSprinting` (`handTruck`) | true | a player carrying a loaded truck can neither start nor keep a sprint |
+| `preventElytra` (`handTruck`) | true | a player carrying a loaded truck cannot glide |
+| `maxLoadKiB` (`handTruck`) | 512 | the largest save data one carried container may have; a fuller one is refused with a message. Kept below the 2 MiB a network packet may carry |
 
 Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (`1/384 = 0.0026041666…`). The TOML file groups the keys into sections, so the full path of a key is `<section>.<key>`:
 
@@ -7500,6 +7504,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `storage` (M28, M30) | `woodBayStacks`, `andesiteBayStacks`, `brassBayStacks`; `copperFluidBayBuckets`, `brassFluidBayBuckets`, `fluidBayPipeExtraction` | 1–4096 each; 1–65536 each, boolean |
 | `controller` | `snapshotIntervalTicks`, `snapshotCycleTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 0–432000, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
+| `handTruck` (issue #37) | `speedMultiplier`, `preventSprinting`, `preventElytra`, `maxLoadKiB` | 0.1–1.0, boolean, boolean, 16–1024 |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 

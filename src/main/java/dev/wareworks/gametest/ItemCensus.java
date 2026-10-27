@@ -16,10 +16,14 @@ import com.simibubi.create.content.logistics.box.PackageItem;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.fluid.FluidContainers;
+import dev.wareworks.content.handtruck.HandTruckItem;
+import dev.wareworks.content.handtruck.HandTruckLoad;
+import dev.wareworks.content.handtruck.HandTruckSpill;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.registry.WareworksDataComponents;
 import dev.wareworks.registry.WareworksEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -39,6 +43,7 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 /**
  * Counts every item of a GameTest by exact identity ({@link ItemKey}: item and components), for the item conservation
@@ -246,6 +251,11 @@ final class ItemCensus {
     private static void add(Map<ItemKey, Long> counts, ItemStack stack, long copies) {
         if (stack.isEmpty() || copies == 0)
             return;
+        HandTruckLoad load = HandTruckItem.load(stack);
+        if (load != null) {
+            addLoadedTruck(counts, stack, load, copies);
+            return;
+        }
         if (!PackageItem.isPackage(stack)) {
             put(counts, ItemKey.of(stack), copies);
             return;
@@ -255,9 +265,22 @@ final class ItemCensus {
                 .forEach(held -> add(counts, held, copies * held.getCount()));
     }
 
+    /**
+     * A loaded hand truck (issue #37) counts as the empty truck plus what the carried container holds, and the carried
+     * container itself as nothing — it is a block, not an item, before and after the truck. Under that rule loading and
+     * unloading conserve items exactly; a truck that tips over adds the container's block item, which a test declares.
+     */
+    private static void addLoadedTruck(Map<ItemKey, Long> counts, ItemStack truck, HandTruckLoad load, long copies) {
+        ItemStack empty = truck.copy();
+        empty.remove(WareworksDataComponents.HAND_TRUCK_LOAD.get());
+        put(counts, ItemKey.of(empty), copies);
+        for (ItemStack held : HandTruckSpill.contents(load, ServerLifecycleHooks.getCurrentServer().registryAccess()))
+            add(counts, held, copies * held.getCount());
+    }
+
     /** Counts {@code amount} items of {@code key}, a package again as its contents. */
     private static void add(Map<ItemKey, Long> counts, ItemKey key, long amount) {
-        if (key.getItem() instanceof PackageItem) {
+        if (key.getItem() instanceof PackageItem || key.getItem() instanceof HandTruckItem) {
             add(counts, key.toStack(), amount);
             return;
         }

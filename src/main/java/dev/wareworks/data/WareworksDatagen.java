@@ -4,6 +4,7 @@ import com.tterrag.registrate.providers.ProviderType;
 import com.tterrag.registrate.providers.RegistrateLangProvider;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.registry.WareworksTags;
 import net.neoforged.neoforge.data.event.GatherDataEvent;
 
 /**
@@ -24,6 +25,8 @@ public final class WareworksDatagen {
             return;
         Wareworks.registrate().<RegistrateLangProvider>addDataGenerator(ProviderType.LANG,
                 provider -> WareworksLangGen.generate(provider::add));
+        // Issue #37: the hand truck's carriable and denied block tags, which no block builder owns.
+        Wareworks.registrate().addDataGenerator(ProviderType.BLOCK_TAGS, WareworksTags::generateHandTruckTags);
     }
 
     public static void gatherData(GatherDataEvent event) {
