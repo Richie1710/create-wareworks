@@ -143,8 +143,13 @@ public final class WareworksNetwork {
      * {@code ProductionScreenState} may carry up to 36 patterns, pattern checks and stopped products (was 8). The bytes
      * did not change, but a reader with the old bound of 8 stops in the middle of the 9th pattern and reads its entries
      * as the order count, so the versions must not mix. No new payload type, no new field.
+     * <p>
+     * <b>{@code "17"} is issue #36</b> (the clipboard list question as a table, ADR-069): the list question in
+     * {@link TerminalListAnswerPayload} carries one row per entry — its split, the planner's refusal by name with the
+     * item it names, and the missing materials — instead of totals and five named entries. A reader of the old shape
+     * would read the first row as totals, so the versions must not mix. {@link TerminalListActionPayload} is unchanged.
      */
-    public static final String VERSION = "16";
+    public static final String VERSION = "17";
 
     private WareworksNetwork() {
     }

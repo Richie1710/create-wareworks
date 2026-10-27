@@ -1675,7 +1675,7 @@ public final class TerminalCraftFetchGameTests {
         ListOrderConfirmation<ItemKey> whole = asked.question().orElseThrow();
         helper.assertValueEqual(whole.producing(), (long) listed, "its planks have to be made");
         helper.assertValueEqual(menu.listAction(player, TerminalListActionPayload.Action.FETCH, whole.missing(),
-                whole.producing(), whole.entriesDropped(), RequestAcknowledgement.NONE).result(),
+                whole.madeTotal(), whole.entriesDropped(), RequestAcknowledgement.NONE).result(),
                 TerminalListResult.STARTED, "and the Yes starts it");
         return clickId;
     }

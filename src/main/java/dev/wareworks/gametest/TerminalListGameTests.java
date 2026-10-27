@@ -324,8 +324,8 @@ public final class TerminalListGameTests {
                             "and what is missing");
                     helper.assertValueEqual(question.producing(), 0L, "nothing can be made here");
                     helper.assertValueEqual(question.entriesShort(), 1, "one entry falls short");
-                    helper.assertValueEqual(question.named().size(), 1, "and the dialog names it");
-                    helper.assertValueEqual(question.named().getFirst().key(), DIAMOND, "by item");
+                    helper.assertValueEqual(question.lines().size(), 1, "and the dialog names it");
+                    helper.assertValueEqual(question.lines().getFirst().key(), DIAMOND, "by item");
 
                     // Answered no: nothing was ever started, so there is nothing to undo.
                     helper.assertFalse(terminal.hasListOrder(), "no order exists");
@@ -343,7 +343,7 @@ public final class TerminalListGameTests {
                             .orElseThrow();
                     // Answered yes: the same numbers back, which the server measures again before it acts on them.
                     TerminalListOutcome accepted = terminal.fetchList(player, question.missing(),
-                            question.producing(), question.entriesDropped());
+                            question.madeTotal(), question.entriesDropped());
                     helper.assertValueEqual(accepted.result(), TerminalListResult.STARTED, "the answer starts it");
                 })
                 .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(TERMINAL_RACK, DIAMOND),
@@ -428,7 +428,7 @@ public final class TerminalListGameTests {
                     Player player = playerAt(helper, aisle.rackPos(TERMINAL_RACK));
                     ListOrderConfirmation<ItemKey> question = terminal.fetchList(player, 0L, 0L, 0L).question()
                             .orElseThrow();
-                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.producing(),
+                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.madeTotal(),
                             question.entriesDropped()).result(), TerminalListResult.STARTED,
                             "the answer starts the list");
                 })
@@ -443,10 +443,13 @@ public final class TerminalListGameTests {
     /**
      * <b>A question one portion raised can be shown again, said no to, and answered.</b>
      * <p>
-     * The list asks for {@value #LISTED_PLANK} plank and the pattern makes {@value #PLANKS_PER_LOG} at a time, so the
-     * Yes given at Fetch (production total 1) cannot pay for the whole run the portion would start (4) and the order
-     * stops on the ordinary panel. That is the common shape, not a corner: any list amount that is not a whole multiple
-     * of a pattern's yield lands here.
+     * The list asks for {@value #LISTED_PLANK} plank and the racks hold one, so Fetch starts it without a question and
+     * a production budget of 0. A click then promises that plank to someone else before the list's first portion is
+     * offered, so the portion has to have a whole run made ({@value #PLANKS_PER_LOG} planks), which the budget does not
+     * cover, and the order stops on the ordinary panel. That is the shape every warehouse that moves between the Fetch
+     * and a portion reaches. (Until issue #36 a list amount that was not a whole multiple of a pattern's yield landed
+     * here as well, because the Fetch's Yes agreed to the promise instead of the whole runs; it now agrees to the runs,
+     * {@code terminallisttorchwholerun}.)
      * <p>
      * Three things are proved, and before this review fix none of them existed. The question is a <b>described</b> one —
      * it names the item, the amount and what would be made, which is all a player has to act on, and an aisle without
@@ -457,7 +460,7 @@ public final class TerminalListGameTests {
     @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
     public static void terminalListPortionQuestionIsShownAgainAndCanBeRefused(GameTestHelper helper) {
         AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
-        aisle.storage(STORAGE_A, LOG.toStack(LOGS_IN_STOCK));
+        aisle.storage(STORAGE_A, LOG.toStack(LOGS_IN_STOCK), PLANK.toStack(LISTED_PLANK));
         aisle.storage(STORAGE_B);
         aisle.terminal(TERMINAL_RACK);
         aisle.production(PRODUCTION_RACK);
@@ -466,7 +469,7 @@ public final class TerminalListGameTests {
         helper.assertTrue(station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, PLANK, PLANKS_PER_LOG),
                 "and its result");
         ItemStack clipboard = clipboard(entry(PLANK, LISTED_PLANK));
-        Map<ItemKey, Long> conserved = ItemCensus.of(LOG, LOGS_IN_STOCK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(LOG, LOGS_IN_STOCK, PLANK, LISTED_PLANK);
         helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved,
                 "while a portion's question is waiting for an answer"));
 
@@ -480,13 +483,14 @@ public final class TerminalListGameTests {
                     WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
                     putClipboard(helper, terminal, clipboard);
                     Player player = playerAt(helper, aisle.rackPos(TERMINAL_RACK));
-                    ListOrderConfirmation<ItemKey> whole = terminal.fetchList(player, 0L, 0L, 0L).question()
-                            .orElseThrow();
-                    helper.assertValueEqual(whole.producing(), (long) LISTED_PLANK, "the list would have one made");
-                    helper.assertValueEqual(terminal.fetchList(player, whole.missing(), whole.producing(),
-                            whole.entriesDropped()).result(), TerminalListResult.STARTED, "and the Yes starts it");
+                    helper.assertValueEqual(terminal.fetchList(player, 0L, 0L, 0L).result(),
+                            TerminalListResult.STARTED, "the racks cover the list, so it starts without a question");
+                    // Someone else takes the plank before the list's first portion is offered.
+                    helper.assertTrue(terminal.requestFromTerminal(player, PLANK, LISTED_PLANK,
+                            RequestAcknowledgement.ANY).result().orElseThrow().isAccepted(),
+                            "a click promises the plank elsewhere");
                 })
-                // The portion plans a whole run of the pattern, which costs more production than the Yes paid for.
+                // The portion now plans a whole run of the pattern, which costs production the Fetch never agreed to.
                 .thenWaitUntil(() -> helper.assertValueEqual(
                         aisle.terminalAt(TERMINAL_RACK).listState().state(), ListOrderState.ASKING,
                         "a portion the budget no longer covers stops the order and asks"))
@@ -504,6 +508,8 @@ public final class TerminalListGameTests {
                             "so production alone is what this one is about - and the panel has to say so");
                     helper.assertValueEqual(aisle.controller().productionOrders().size(), 0,
                             "nothing was started by asking");
+                    helper.assertValueEqual(aisle.controller().openRequestCount(), 1,
+                            "only the click's request is open");
 
                     // "Show it to me again": nothing changes, and the question is still there to be answered.
                     helper.assertValueEqual(terminal.answerListQuestion(player, Optional.empty(),
@@ -597,7 +603,7 @@ public final class TerminalListGameTests {
                     ListOrderConfirmation<ItemKey> whole = terminal.fetchList(player, 0L, 0L, 0L).question()
                             .orElseThrow();
                     helper.assertValueEqual(whole.missing(), (long) LISTED_STARS, "the stars are missing");
-                    helper.assertValueEqual(terminal.fetchList(player, whole.missing(), whole.producing(),
+                    helper.assertValueEqual(terminal.fetchList(player, whole.missing(), whole.madeTotal(),
                             whole.entriesDropped()).result(), TerminalListResult.STARTED, "the Yes starts the list");
                 })
                 .thenWaitUntil(() -> assertListAsking(helper, aisle))
@@ -893,7 +899,7 @@ public final class TerminalListGameTests {
                     helper.assertValueEqual(question.entriesImpossible(), 1, "one entry cannot be had at all");
                     helper.assertValueEqual(question.entriesServed(), 1, "and one is covered");
                     helper.assertValueEqual(question.missing(), (long) LISTED_STARS, "the stars are missing");
-                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.producing(),
+                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.madeTotal(),
                             question.entriesDropped()).result(), TerminalListResult.STARTED,
                             "the answer starts the rest");
                 })
@@ -947,9 +953,9 @@ public final class TerminalListGameTests {
                     helper.assertValueEqual(question.producing(), 0L, "and nothing has to be made");
                     helper.assertFalse(terminal.hasListOrder(), "nothing was started by asking");
 
-                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.producing(), 0L)
+                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.madeTotal(), 0L)
                             .result(), TerminalListResult.ASKING, "a Yes that says nothing about them asks again");
-                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.producing(),
+                    helper.assertValueEqual(terminal.fetchList(player, question.missing(), question.madeTotal(),
                             question.entriesDropped()).result(), TerminalListResult.STARTED,
                             "and the Yes that names them starts the list");
                     TerminalListState state = terminal.listState();

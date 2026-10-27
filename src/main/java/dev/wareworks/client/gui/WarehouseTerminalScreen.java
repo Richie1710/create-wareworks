@@ -24,6 +24,7 @@ import com.simibubi.create.foundation.gui.widget.ScrollInput;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.ListTableLayout;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftResult;
@@ -459,6 +460,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     @Nullable
     private ListOrderConfirmation<ItemKey> listConfirming;
+    /**
+     * The table {@link #listConfirming} is drawn as (issue #36): built once when the question arrives, laid out again
+     * with the panel, and kept across a resize so the rows stay scrolled where the player left them.
+     */
+    @Nullable
+    private TerminalListTable listTable;
     /**
      * The list question the player has just confirmed, kept until the server has answered in turn — the counterpart of
      * {@link #confirmed} for the other of the two dialogs (M23 review fix).
@@ -1629,6 +1636,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             costChanged = listConfirmed != null && !listConfirmed.equals(question);
             listConfirmed = null;
             listConfirming = question;
+            listTable = TerminalListTable.of(question, font);
             // Only one dialog at a time: the list's question wins over a chain a player was reading (M20/M23).
             confirming = null;
             confirmed = null;
@@ -1659,6 +1667,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     @Nullable
     public ListOrderConfirmation<ItemKey> listConfirmation() {
         return listConfirming;
+    }
+
+    /**
+     * The table the list question is drawn as, laid out for the window as it is now; {@code null} while the list is
+     * not being asked about. Public for the dev harness, which reads its rows and scrolls it with the real wheel.
+     */
+    @Nullable
+    public TerminalListTable listTable() {
+        return listConfirming == null || panel() == null ? null : listTable;
     }
 
     // --- crafting panel (M32, issue #24) ---------------------------------------------------------------------------
@@ -2200,7 +2217,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // Kept until the server answers, so a second question can be told from a first one (M23 review fix).
         listConfirmed = question;
         PacketDistributor.sendToServer(TerminalListActionPayload.fetch(menu.containerId, question.missing(),
-                question.producing(), question.entriesDropped()));
+                question.madeTotal(), question.entriesDropped()));
         playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.2F);
     }
 
@@ -2297,49 +2314,44 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     }
 
     /**
-     * The lines of the list dialog: the numbers first, then the few entries worth naming, then the question itself.
-     * They are named rather than described, exactly as a click's question names its numbers — "1300 of 2000 are not in
-     * stock" is a fact a player can act on.
+     * The lines above the list question's table (issue #36): the question, which names the result — "Fetch what there
+     * is (210 of 212)?" while something is missing, "Fetch all of it (212)?" while production or the entry cap is all
+     * there is to ask about, with "4 made" in it when whole runs make more than the entries ask for (the
+     * production number a Yes agrees to) — then the split of the whole list, and the two notices. The entries
+     * themselves are the table's ({@link TerminalListTable}).
      */
-    private List<Component> listConfirmationLines(ListOrderConfirmation<ItemKey> question) {
-        List<Component> lines = new ArrayList<>(7 + question.named().size());
-        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_TITLE).copy()
-                .withStyle(ChatFormatting.GOLD));
+    private List<Component> listQuestionLines(ListOrderConfirmation<ItemKey> question) {
+        List<Component> lines = new ArrayList<>(4);
+        String wanted = LangNumberFormat.format(question.wanted());
+        String obtainable = LangNumberFormat.format(question.obtainable());
+        // A Yes agrees to whole runs (ListOrderConfirmation#madeTotal): when they make more than the entries ask for,
+        // the question names that number, so the dialog shows the production the Yes is charged.
+        boolean surplus = question.madeTotal() > question.producing();
+        String made = LangNumberFormat.format(question.madeTotal());
+        Component asked;
+        if (question.missing() > 0L)
+            asked = surplus
+                    ? WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_PARTIAL_MADE, obtainable,
+                            wanted, made)
+                    : WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_PARTIAL, obtainable,
+                            wanted);
+        else
+            asked = surplus
+                    ? WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_WHOLE_MADE, wanted, made)
+                    : WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_WHOLE, wanted);
+        lines.add(asked.copy().withStyle(ChatFormatting.GOLD));
+        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TABLE_SUMMARY,
+                LangNumberFormat.format(question.serveable()), LangNumberFormat.format(question.producing()),
+                LangNumberFormat.format(question.missing())).copy().withStyle(ChatFormatting.WHITE));
         if (costChanged)
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CONFIRM_CHANGED).copy()
                     .withStyle(ChatFormatting.GOLD));
-        if (question.missing() > 0L)
-            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_SHORT,
-                    Component.literal(LangNumberFormat.format(question.missing())),
-                    Component.literal(LangNumberFormat.format(question.wanted()))).copy()
-                    .withStyle(ChatFormatting.WHITE));
-        if (question.producing() > 0L)
-            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_PRODUCE,
-                    Component.literal(LangNumberFormat.format(question.producing()))).copy()
-                    .withStyle(ChatFormatting.WHITE));
-        if (question.entriesImpossible() > 0)
-            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_IMPOSSIBLE,
-                    Component.literal(LangNumberFormat.format(question.entriesImpossible()))).copy()
-                    .withStyle(ChatFormatting.WHITE));
         // What the entry cap left behind, in the dialog the player consents in and not only in a tooltip they have to
         // know to hover: pressing Fetch on "this list" must never quietly order part of it (M23 review fix).
         if (question.truncated())
             lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_TRUNCATED,
                     Component.literal(LangNumberFormat.format(question.entriesDropped()))).copy()
                     .withStyle(ChatFormatting.GOLD));
-        for (ListOrderConfirmation.Line<ItemKey> line : question.named())
-            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_ENTRY,
-                    line.key().toStack().getHoverName(),
-                    Component.literal(LangNumberFormat.format(line.serveable() + line.producing())),
-                    Component.literal(LangNumberFormat.format(line.wanted()))).copy()
-                    .withStyle(ChatFormatting.GRAY));
-        int unnamed = question.entriesShort() + question.entriesProducing() + question.entriesImpossible()
-                - question.named().size();
-        if (unnamed > 0)
-            lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_MORE,
-                    Component.literal(LangNumberFormat.format(unnamed))).copy().withStyle(ChatFormatting.DARK_GRAY));
-        lines.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LIST_CONFIRM_ASK).copy()
-                .withStyle(ChatFormatting.WHITE));
         return lines;
     }
 
@@ -2516,6 +2528,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         // Enter confirms, Escape drops it — and Escape must not close the whole screen while a question is up.
         if (isAskingSomething()) {
+            // The list question's table scrolls with the arrow and page keys (issue #36); Enter and Escape still answer.
+            if (confirming == null && listConfirming != null && listTable != null && listTable.keyPressed(keyCode))
+                return true;
             if (keyCode == InputConstants.KEY_RETURN || keyCode == InputConstants.KEY_NUMPADENTER)
                 confirmRequest();
             else if (keyCode == InputConstants.KEY_ESCAPE)
@@ -2560,7 +2575,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         // A dialog owns the wheel as it owns every click: nothing behind a question or the step panel moves, neither
-        // the grid nor the door choice a Yes would not follow anyway (M27 fix).
+        // the grid nor the door choice a Yes would not follow anyway (M27 fix). The one thing it moves is the list
+        // question's own table, wherever the mouse is (issue #36).
+        if (confirming == null && listConfirming != null && listTable != null) {
+            listTable.scroll(scrollY);
+            return true;
+        }
         if (isAskingSomething() || openPlan != null)
             return true;
         // The door button, inverted like Create's selection inputs: the wheel down goes to the next entry.
@@ -3554,9 +3574,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             return null;
         if (panel != null)
             return panel;
+        if (confirming == null && listConfirming != null) {
+            panel = listPanel(listConfirming);
+            return panel;
+        }
         List<Component> lines = confirming != null ? confirmationLines(confirming)
-                : listConfirming != null ? listConfirmationLines(listConfirming)
-                        : craftFetchConfirmationLines(craftConfirming);
+                : craftFetchConfirmationLines(craftConfirming);
         List<FormattedCharSequence> rows = new ArrayList<>();
         int text = 0;
         for (Component line : lines) {
@@ -3575,6 +3598,28 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 buttonStart + confirmWidth + CONFIRM_BUTTON_GAP, y + height - CONFIRM_PADDING - CONFIRM_BUTTON_HEIGHT,
                 confirmWidth, cancelWidth);
         return panel;
+    }
+
+    /**
+     * The list question's panel (issue #36): the full width of the window's content, the question and the summary on
+     * top, the table under them as tall as the window allows ({@link TerminalListTable#layOut}), and the two buttons at
+     * the bottom. The table's rows scroll; nothing else in the panel moves.
+     */
+    private ConfirmPanel listPanel(ListOrderConfirmation<ItemKey> question) {
+        if (listTable == null)
+            listTable = TerminalListTable.of(question, font);
+        List<FormattedCharSequence> rows = new ArrayList<>();
+        for (Component line : listQuestionLines(question))
+            rows.addAll(font.split(line, confirmTextWidth()));
+        int x = leftPos + TerminalMenuLayout.MARGIN;
+        listTable.layOut(rows.size(), x, topPos, layout.height());
+        int width = ListTableLayout.PANEL_WIDTH;
+        int confirmWidth = confirmButtonWidth(true);
+        int cancelWidth = confirmButtonWidth(false);
+        int buttons = confirmWidth + cancelWidth + CONFIRM_BUTTON_GAP;
+        int buttonStart = x + (width - buttons) / 2;
+        return new ConfirmPanel(List.copyOf(rows), x, listTable.panelY(), width, listTable.panelHeight(), buttonStart,
+                buttonStart + confirmWidth + CONFIRM_BUTTON_GAP, listTable.buttonY(), confirmWidth, cancelWidth);
     }
 
     private void renderConfirmation(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -3597,8 +3642,18 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             graphics.drawString(font, line, shown.x() + CONFIRM_PADDING, textY, COLOR_TEXT, false);
             textY += font.lineHeight + 2;
         }
+        TerminalListTable table = confirming == null && listConfirming != null ? listTable : null;
+        if (table != null)
+            table.render(graphics, font, mouseX, mouseY);
         renderConfirmButton(graphics, shown, mouseX, mouseY, true);
         renderConfirmButton(graphics, shown, mouseX, mouseY, false);
+        // The table's tooltip last, over everything the panel drew: a shortened name in full, an entry's split and
+        // reason, or the entries a missing material is needed by.
+        if (table != null) {
+            List<Component> tooltip = table.tooltipAt(mouseX, mouseY);
+            if (!tooltip.isEmpty())
+                graphics.renderComponentTooltip(font, tooltip, mouseX, mouseY);
+        }
         graphics.pose().popPose();
     }
 

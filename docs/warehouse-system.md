@@ -2682,22 +2682,72 @@ full, an unticked one was not.
 that asks, exactly as the issue required.
 
 * **Fetch raises one dialog for the whole list** (`ListOrderConfirmation`, measured over every line before anything is
-  requested): what the racks fall short of — *"13 of the 67 items on the list are not in stock. Glass: 12 of 25. Fetch
-  what there is?"* — and what would have to be **produced**. Shared stock is spent, not counted twice: the lines are
-  classified against a *running* stock and production budget in list order, so two entries of 1300 cobblestone are not
-  both told they can be served, and `wanted == serveable + producing + missing` always holds. At most
-  `MAX_NAMED = 5` entries are named before the panel counts the rest; the panel's order is title, what is missing,
-  what would be produced, how many entries cannot be had at all, how many entries the **entry cap** left on the
-  clipboard, the named entries, "More entries: N", and the question. A list a stocked warehouse covers from the racks
-  starts with **no dialog at all**.
+  requested): what the racks fall short of — *"Fetch what there is (54 of 67)?"* with one row per entry under it
+  (issue #36) — and what would have to be **produced**. A list a stocked warehouse covers from the racks starts with
+  **no dialog at all**.
+* **Every entry is measured exactly like a click** (issue #36, ADR-069, `ListOrderConfirmation.measure`, through
+  `WarehouseControllerBlockEntity#listConfirmation`). In list order, each entry takes what the racks still hold of its
+  item, and the rest is planned with the click's own chain planner (§3.5.6) against what is left; an accepted chain
+  spends its ingredients before the next entry is measured (`SequentialPlans.forList`). So a lantern whose nuggets and
+  torch have to be made by further patterns first is producible exactly when a click would make it, a stopped item is
+  refused as `PAUSED` as a click refuses it, two entries of 1300 cobblestone are not both told they can be served, and
+  "Iron Nugget x16" followed by "Lantern x2" does not promise the same nuggets twice. `wanted == serveable + producing +
+  missing` always holds. Two bounds of a click are deliberately not applied across the list: the accepted chains do
+  **not use up order slots** for the later entries (a list's portions are planned one after another, so slots free up
+  between them), and the per-click `maxPlanIngredientItems` is lifted to its hard ceiling (every portion is planned
+  with the real bound and clamps itself). The step bound is kept, so a chain too long for a click is refused here as
+  `TOO_MANY_STEPS` too. A clamped plan is followed by another for the rest, at most four per entry; the refusal that
+  ends the walk is the entry's reason, with the item the planner names. Cost: at most five plans per entry, once per
+  Fetch press, never per tick, and nothing is ordered or claimed by measuring.
+* **The question is one row per entry** that still wants something, at most 1024: its split (wanted, from stock,
+  produced, made in whole runs, missing), the planner's refusal with the item it names, and at most three **missing
+  materials** — for `MISSING_INGREDIENT` the raw materials a what-if plan of the missing part cannot pay for (every raw
+  material, one no pattern of the aisle makes, counted as unlimited there), for any other reason the entry's own item.
+  Every total, the entry's status (`ListEntryStatus`: not possible, partly, crafted, available — also the table's sort
+  order) and the Missing section (`ListShortage`: every material summed, with the entries that need it) are derived
+  from the rows on both sides, so none of them is sent. The Missing total can overstate by a leftover two short
+  entries could both use, never understate. On the wire (`TerminalListAnswerPayload`, protocol `"17"`) the refusal
+  travels by name, an unknown one reads as none, and more than 1024 rows or more than three materials in a row are a
+  `DecoderException`; a full list is about 100 KiB.
+* **The terminal shows the question as a table** (issue #36, ADR-069, `client.gui.TerminalListTable`, geometry in the
+  pure `content.station.ListTableLayout`). On top, the question names the result — *"Fetch what there is (441 of
+  500)?"* while something is missing, *"Fetch all of it (500)?"* when only production or the entry cap asks, and with
+  the whole runs in it when they make more than the entries ask for (*"Fetch all of it (2, 4 made)?"*: the production
+  number the Yes agrees to) — with the list's split under it (*"436 from stock, 5 produced, 59 missing"*) and, when
+  they apply, the "changed since you were asked" notice and how many entries the **entry cap** left on the clipboard.
+  Under that, one row per entry in table order: **not possible** (red), **partly** (gold), **crafted** (blue),
+  **available** (green), ties in list order. A row is the item's icon (a block drawn as a block, like an inventory
+  slot), its name, the wanted amount and the coloured status word, and a grey detail line: the split for an available or
+  crafted entry (*"0 from stock, 4 produced"*), *"what is to be had of what is wanted: the reason"* for a partly one,
+  and the reason alone for one that is not possible — the planner's own sentence about the item it names (*"Iron Ingot
+  is missing"*, *"No pattern makes Glass"*), or *"Not in stock"* without one. After the entries comes a **Missing**
+  section: one row per material with its total and how many entries need it. Confirm and Cancel stay at the bottom.
+  * **Columns.** The panel is the window's content width, 216 px (204 inside, 198 for the columns beside a 4 px scroll
+    bar): icon 16 + 2, the name, the amount right-aligned, the status word. The amount and status columns are as wide
+    as their measured headers, widest amount (at most 40 px) and widest status word; the name takes the rest, at least
+    40 px (about 77 px in English, 79 in German). Every text is shortened to its column with an ellipsis, and the full
+    text is one hover away: the name over the icon or the name; the status, the split ("from stock, produced,
+    missing"), what machines make in whole runs and the reason over the rest of an entry's row; the entries that need
+    a material (at most eight named) over its row. An amount the column had to shorten (a Missing total above
+    999,999) is named in full in the first line of that tooltip, *"Cobblestone (1,000,000)"*.
+  * **Scrolling.** Rows are 20 px and scroll **whole**, one per wheel notch, so nothing is ever cut and no scissor is
+    needed; the arrow keys move one row, Page Up/Down a page, Home and End to either end, and the wheel moves the table
+    wherever the mouse is while the question is up. As many rows are shown as fit the window: at the smallest window
+    any buffer size allows, with four lines of text above, still at least three (seven at the default buffer).
+  * **Built once per question.** Every row's stack, texts and tooltips are made when the question arrives; a resize or
+    a GUI-scale change only lays the panel out again, and the scroll row is kept and clamped.
 * **A clipboard the entry cap cut short always asks** (`entriesDropped`). The untaken entries are no part of any other
   number — the order never took them — but they are part of the **question**, because a player presses Fetch on "this
   list" and may not be told about the rest only by a tooltip they have to know to hover.
-* **The answer is measured again** when the Yes arrives (`covers(acceptedMissing, acceptedProducing,
-  acceptedDropped)`): a warehouse that lost stock in between asks a second time instead of quietly ordering more
-  production than was agreed to. Nothing is promised by measuring — `TerminalListResult.ASKING` means no request and no
-  production order exists.
+* **The answer is measured again** when the Yes arrives (`covers(acceptedMissing, acceptedProducing, acceptedDropped)`,
+  the production number in whole runs): a warehouse that lost stock in between asks a second time instead of quietly
+  ordering more production than was agreed to. Nothing is promised by measuring — `TerminalListResult.ASKING` means no
+  request and no production order exists.
 * **A Yes becomes the order's consent budget**, and the budget is *production only* (`ListOrderConfirmation#budget`).
+  It is counted in **whole runs** (`madeTotal`, every row's `made`), not in the rows' promise (`producing`), because a
+  portion is charged the whole runs its chain makes (`RequestConfirmation#made`): "Torch x2" from a four-torch pattern
+  promises two and costs four, and a budget of two stopped the order with a second question right after the Yes
+  (issue #36 review fix; the old dialog had the same gap).
   The other two costs — a reserve and a maximum — cannot be measured over a list without walking a plan per entry, and
   they are exactly the ones a player must not be able to sign away blindly.
 * **A portion that costs more than the budget covers stops the order** (`ListOrderState.ASKING`) and the next player to
@@ -2840,9 +2890,18 @@ plus one appended field put the network `VERSION` at `7`.
   item not paying for another, the answered portion being offered first, a no parking the order, parking and the
   interval back-off, release and restore; issue #24 added 6 (42 now): the share each request gets back, a merged click
   surviving a share-only release, two orders crediting one delivery in turn, and a random interleaving of both checked
-  against the delivered count. `ListOrderConfirmationTest` (16) — the running stock and production budgets,
-  the four entry kinds, the `wanted == serveable + producing + missing` invariant, a truncated clipboard always being
-  asked about, `covers` and the production-only budget. `RequestScopeTest` (11, 15 since issue #24 added `CRAFT`) —
+  against the delivered count. `ListOrderConfirmationTest` (29 since issue #36, rewritten onto `measure`) — the four
+  statuses, the `wanted == serveable + producing + missing` invariant, shared stock, a chain's ingredients spent
+  before a later entry, the lantern whose nuggets and torch are made first (the regression test of issue #36), order
+  slots not shared across entries, a clamped chain planned again and then naming its raw material, paused, too long,
+  busy and no pattern, the what-if materials, the table order, the record's own clamps, a truncated clipboard always
+  being asked about, `covers` and the production-only budget in whole runs. `ListShortageTest` (4) — the Missing
+  section's sums, entries and order. `SequentialPlansTest` gained `forList`'s unshared slots. `ListTableLayoutTest` (10)
+  — the table's columns, at least three rows at the smallest window of every buffer size with one to four lines above,
+  the panel inside the window with the buttons at the bottom, one row per wheel notch, the hit test and the thumb;
+  `TerminalListTableTextWidthTest` (2) — the column headers, status words and detail lines in English and German
+  against their columns and the lines above the table against two lines, with the font's real glyph advances, and
+  every `gui.terminal.list.table.*` key measured. `RequestScopeTest` (11, 15 since issue #24 added `CRAFT`) —
   the two things a scope changes, and that `CLICK` is byte-for-byte what it was.
 * **GameTests** (`gametest.TerminalListGameTests`, 11, all with an `ItemCensus` on every tick):
   `terminallistworkedoffcompletely` (a read-only, Schematicannon-shaped clipboard a stocked warehouse covers: both
@@ -2862,26 +2921,50 @@ plus one appended field put the network `VERSION` at `7`.
   `terminallisttickmarksneverleaktoasharedclipboard` (one clipboard split off a stack of two, so both carry the same
   `ClipboardContent` instance: the list is worked off, and the clipboard left behind is still unticked, still orderable,
   and the ticked one carries a **new** content instance — which is what makes the menu resync it);
-  `terminallistportionquestionisshownagainandcanberefused` (1 plank from a 4-plank pattern, so one portion costs more
-  production than the Fetch paid for: the question is the described, production-only shape, asking for it again changes
-  nothing, a no parks the order, Resume asks it again, a Yes naming another question is not taken, and the Yes starts
-  exactly one production order); `terminallistnamesitsrefusal` (three nether stars and six planks behind a reserve:
+  `terminallistportionquestionisshownagainandcanberefused` (1 plank the racks cover, so the Fetch starts with no
+  production budget, then a click promises that plank elsewhere and the portion needs a whole run of a 4-plank pattern
+  the Fetch never agreed to — until issue #36 any amount that was not a multiple of a pattern's yield got here: the
+  question is the described, production-only shape, asking for it again changes nothing, a no parks the order, Resume
+  asks it again, a Yes naming another question is not taken, and the Yes starts exactly one production order);
+  `terminallistnamesitsrefusal` (three nether stars and six planks behind a reserve:
   the stars' refusal is named through the planks' question, carried by `TerminalListPayload`, never saved, forgotten by
   a no and found again after Resume, and forgotten for good once stars are stocked and granted);
   `terminallisttruncatedclipboardasksfirst` (the entry cap lowered to one, in its own batch: a two-entry clipboard is
   asked about although everything it took is in stock, a Yes that is silent about the dropped entry asks again, and the
-  untaken entry stays unticked). The silent re-assertion of a mark that is already there is asserted in
-  `terminallistworkedoffcompletely`. The menu's own slot count and boundaries, and that only a clipboard may enter the
-  list slot, are in `WarehouseTerminalMenuGameTests`.
-* **Visual** (`./gradlew runVisualTest -Pwareworks.visualTest=checklist`, 21 shots): a **real Schematicannon** prints
+  untaken entry stays unticked). `gametest.TerminalListTableGameTests` (8, issue #36): the lantern from stock with the
+  click agreeing (`terminallistlanternfromstock`), through a chain of ingots to nuggets and coal and a stick to torches
+  with the click and the Yes agreeing and no second question (`terminallistlanternthroughachain`, the owner's case),
+  "Torch x2" from a four-torch run whose Yes covers the run and starts the list without a second question while a Yes to
+  the promise alone is asked again (`terminallisttorchwholerun`), a chain too long for `maxProductionPlanSteps` 2 and a
+  paused torch refused by the list with exactly the click's reason and item (`terminallistlanternchaintoolong`,
+  `terminallistlanternpaused`), five entries sharing one ingot with the Missing totals
+  (`terminallistentriesshareonestock`), the partly case (`terminallistlanternpartly`), and the payload round trip with
+  its bounds: a 1024-row question with three materials each under 256 KiB, more rows or materials than the caps
+  rejected, an unknown reason read as none (`terminallistanswerpayloadroundtrip`). The silent re-assertion of a mark
+  that is already there is asserted in `terminallistworkedoffcompletely`. The menu's own slot count and boundaries, and
+  that only a clipboard may enter the list slot, are in `WarehouseTerminalMenuGameTests`.
+* **Visual** (`./gradlew runVisualTest -Pwareworks.visualTest=checklist`, 22 shots): a **real Schematicannon** prints
   the material checklist of a 5x5 hut onto a clipboard, and the terminal works that clipboard off — the partial dialog
-  with its drawn lines, 80 ticks of a full destination delivering nothing, the ticks appearing one after another, the
-  missing glass fed in and the last entry following, and the finished receipt opened in **Create's own clipboard
-  screen**. Every claim a shot makes is asserted on the server first, including that the number of tick marks equals
-  the number of complete lines the order reports. One shot is a **client-side** check of a panel this warehouse cannot
-  raise by itself: a single portion's production-only question is handed to the screen's own packet handler and the
-  lines it draws are read back, because that is the shape that used to be empty (`checkPortionQuestionPanel`; its
-  server half is `terminallistportionquestionisshownagainandcanberefused`).
+  with its table rows (since issue #36), 80 ticks of a full destination delivering nothing, the ticks appearing one
+  after another, the missing glass fed in and the last entry following, and the finished receipt opened in **Create's
+  own clipboard screen**. Every claim a shot makes is asserted on the server first, including that the number of tick
+  marks equals the number of complete lines the order reports. One shot is a **client-side** check of a panel this
+  warehouse cannot raise by itself: a single portion's production-only question is handed to the screen's own packet
+  handler and the lines it draws are read back, because that is the shape that used to be empty
+  (`checkPortionQuestionPanel`; its server half is `terminallistportionquestionisshownagainandcanberefused`).
+* **Visual** (`./gradlew runVisualTest -Pwareworks.visualTest=listtable`, 11 shots, issue #36): a stocked aisle with
+  the lantern chain at a production station (an ingot to nine nuggets, coal and a stick to four torches, eight nuggets
+  and a torch to a lantern) and a 16-entry clipboard with every status — Diamond, Iron Nugget and Chest not possible,
+  Glass and Lantern partly, the torches crafted, ten entries available, the first of them Polished Blackstone Bricks,
+  whose name no column holds. Real clicks on the list button, Cancel and Confirm, the real wheel over the table (three
+  notches, to the end, past the top), the mouse resting on the shortened name and on the missing iron ingot (its
+  tooltip names Lantern and Iron Nugget), and the window put to 1280 x 960 at GUI scale 4 (320 x 240) and back, in
+  English and then German. Before every shot the question's totals (500 wanted, 436 from stock, 5 produced, 59
+  missing), every row's status in table order, the planner's reasons, the Missing totals (Glass 44, Diamond 3, Iron
+  Ingot 2, Chest 2) and that no text is wider than its column are asserted; asking starts nothing, `SceneItemCensus`
+  brackets Cancel and Confirm, and Confirm (in the Flywheel-off pass) starts the list with no second question. Grep
+  `listtable: ALL CHECKS PASSED in English and German` and `[WareworksVisual] PASSED: 11 shots`. The `checklist`
+  scenario reads its dialog from the same table.
 * **The clipboard is deliberately outside `ItemCensus`**: ticking an entry off changes its data component by design, so
   its `ItemKey` changes and no fixed census expectation could hold. Clipboard conservation is asserted explicitly
   instead — still in the slot after every test, the same item handed back when it is pulled out, dropped by

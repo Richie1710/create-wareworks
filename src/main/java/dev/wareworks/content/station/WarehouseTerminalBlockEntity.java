@@ -1169,13 +1169,11 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
                 WareworksConfig.maxTerminalListEntries(), RequestAcknowledgement.NONE, now);
         if (resolved.entries() == 0)
             return TerminalListOutcome.of(TerminalListResult.EMPTY_LIST);
-        // One lookup per line and one walk of the aisle's patterns for the whole list: what could be produced right
-        // now is the server's own number, which no screen could derive (M11, ADR-024).
-        Map<ItemKey, Long> producible = controller.producibleAmounts();
+        // Every entry is measured with the click's own planner against one ledger (issue #36, ADR-069): what could be
+        // produced is the server's own number, which no screen could derive, and it is the number a click would get.
         // The entries the cap left behind are part of the question, not only of a tooltip: a player presses Fetch on
         // "this list" and has to be told in the dialog they consent in that part of it was left out (M23 review fix).
-        ListOrderConfirmation<ItemKey> question = ListOrderConfirmation.of(resolved.lines(), resolved.dropped(),
-                controller::availableStock, key -> producible.getOrDefault(key, 0L));
+        ListOrderConfirmation<ItemKey> question = controller.listConfirmation(resolved.lines(), resolved.dropped());
         if (question.required() && !question.covers(acceptedMissing, acceptedProducing, acceptedDropped))
             return TerminalListOutcome.asking(question);
         listOrder = ListOrder.restore(resolved.lines(), resolved.dropped(), ListOrderState.RUNNING, question.budget(),

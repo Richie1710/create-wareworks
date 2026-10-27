@@ -34,6 +34,7 @@ import com.simibubi.create.content.schematics.cannon.SchematicannonBlockEntity;
 import com.simibubi.create.content.schematics.cannon.SchematicannonMenu;
 import com.simibubi.create.foundation.utility.CreatePaths;
 
+import dev.wareworks.client.gui.TerminalListTable;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
 import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
@@ -57,6 +58,7 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.terminal.ListEntry;
+import dev.wareworks.core.terminal.ListEntryStatus;
 import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.RequestConfirmation;
@@ -1161,23 +1163,37 @@ public final class ChecklistVisualScenario implements VisualScenario {
             throw new VisualTestException("the question counts served=" + question.entriesServed() + " short="
                     + question.entriesShort() + " producing=" + question.entriesProducing() + " impossible="
                     + question.entriesImpossible() + ", expected " + ENTRIES_SERVED + "/1/0/0");
-        ListOrderConfirmation.Line<ItemKey> named = question.named().stream()
+        ListOrderConfirmation.Line<ItemKey> named = question.lines().stream()
                 .filter(line -> line.key().equals(ROOF_ITEM)).findFirst()
                 .orElseThrow(() -> new VisualTestException("the question does not name the glass entry: "
-                        + question.named()));
-        if (named.wanted() != ROOF_BLOCKS || named.serveable() != GLASS_IN_STOCK || named.missing() != GLASS_MISSING)
+                        + question.lines()));
+        if (named.wanted() != ROOF_BLOCKS || named.fromStock() != GLASS_IN_STOCK || named.missing() != GLASS_MISSING)
             throw new VisualTestException("the named glass entry reads " + named + ", expected " + ROOF_BLOCKS + "/"
                     + GLASS_IN_STOCK + "/" + GLASS_MISSING);
-        // What a player really reads: the panel's own lines, which no screenshot can be trusted to prove.
-        List<String> lines = ScreenInput.terminalListConfirmationLines(screen).stream().map(Component::getString)
-                .toList();
-        String text = String.join(" | ", lines);
-        for (String number : List.of(String.valueOf(GLASS_MISSING), String.valueOf(LISTED_ITEMS)))
-            if (!text.contains(number))
-                throw new VisualTestException("the panel does not name " + number + ": " + text);
-        if (!text.contains(ROOF_ITEM.toStack().getHoverName().getString()))
-            throw new VisualTestException("the panel does not name the item it is about: " + text);
-        LOGGER.info(PREFIX + "checklist: the dialog reads {}", lines);
+        // What a player really reads: the table's own rows (issue #36), which no screenshot can be trusted to prove.
+        // The glass entry is the only one with a problem, so it is the first row, gold and partly served; the three
+        // the racks cover follow in green, and the Missing section names the glass that is missing.
+        TerminalListTable table = ScreenInput.terminalListTable(screen);
+        List<TerminalListTable.RowText> rows = table.rowTexts();
+        String glass = ROOF_ITEM.toStack().getHoverName().getString();
+        if (rows.size() != LISTED_ENTRIES + 2)
+            throw new VisualTestException("the table has " + rows.size() + " rows, expected " + LISTED_ENTRIES
+                    + " entries, the Missing heading and one material: " + rows);
+        TerminalListTable.RowText first = rows.get(0);
+        if (!first.nameFull().equals(glass) || first.statusKind() != ListEntryStatus.PARTLY
+                || !first.wanted().equals(String.valueOf(ROOF_BLOCKS))
+                || !first.detailFull().contains(String.valueOf(GLASS_IN_STOCK)))
+            throw new VisualTestException("the first row is not the partly served glass: " + first);
+        for (TerminalListTable.RowText row : rows.subList(1, LISTED_ENTRIES))
+            if (row.statusKind() != ListEntryStatus.AVAILABLE)
+                throw new VisualTestException("a row the racks cover is not shown as available: " + row);
+        TerminalListTable.RowText missing = rows.get(rows.size() - 1);
+        if (missing.kind() != TerminalListTable.Kind.SHORTAGE || !missing.nameFull().equals(glass)
+                || !missing.wanted().equals(String.valueOf(GLASS_MISSING)))
+            throw new VisualTestException("the Missing section does not name the missing glass: " + missing);
+        if (table.overflows())
+            throw new VisualTestException("a text of the table is wider than its column: " + rows);
+        LOGGER.info(PREFIX + "checklist: the table reads {}", rows);
     }
 
     /**

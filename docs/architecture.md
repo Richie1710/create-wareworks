@@ -3038,7 +3038,8 @@ scan for `fullBackoffTicks` to protect, and the dispatcher arms that back-off on
 `NO_MATCHING_FILTER` and `PORT_FULL`, which hold storing back and never a retrieval. The sentences now say "skip"; what
 they describe — the request stays open and the order waits — is what the code always did. *Amended by ADR-062:* a
 terminal now runs up to two list orders, its clipboard order and a craft order, and giving either up gives back only
-its own share of each request.
+its own share of each request. *Amended by ADR-069 (issue #36):* the list question is measured entry by entry with the
+click's own planner and travels as one row per entry; the order and its portions are unchanged.
 
 ### ADR-037 — A player's terminal order and their request counts are a data attachment on the player; the server owns the numbers and the client does the sorting (M24, issue #17)
 
@@ -6795,6 +6796,111 @@ pattern list they read is walked once per question, and the candidates of an ite
   failing its hit test, `select` scrolling it back, the red tick of a hidden refused row and only that one, no tick
   once it is in view, the gold tick of the hidden selected row, the 320 × 240 floor and the German tooltip). The layout
   test also keeps every row's tick inside the scroll bar's track at 19–36 patterns.
+
+### ADR-069 — A clipboard list is measured entry by entry with the click's planner against one ledger; order slots and the per-click ingredient cap are not applied across the list; the question travels as one row per entry (amends ADR-036) ([issue #36](https://github.com/Richie1710/create-wareworks/issues/36))
+
+*Context:* ADR-036 measured a whole list before anything was requested, with a lookup per line for the stock and one
+walk of the aisle's patterns for production: `WarehouseControllerBlockEntity#producibleAmounts()`, i.e.
+`ProduciblePlanner`, which looks **one level deep** — an ingredient counts only if it is in the racks now. A click
+(and every list portion, which goes through the same `request(..., RequestScope.LIST)`) plans with the M20 chain
+planner (ADR-032). The owner's case: a Lantern with a pattern (eight iron nuggets around a torch) whose nuggets and
+torch exist only through further patterns (an ingot to nine nuggets, coal and a stick to four torches) was reported
+"0 of 2 / cannot be had at all", while a click planned and made a three-step chain. The order itself would still have
+run, after one more question per portion, so the dialog was wrong and not the crane. The same single-level number
+also ignored the safety stop (a paused item with its ingredients in stock was promised, and its portion was then
+refused and parked the order), and the running "makeable" map never spent a chain's ingredients, so "Iron Nugget x16"
+followed by "Lantern x2" with 16 nuggets in stock was counted twice. The dialog itself named only five entries, as
+"Name: a of b", with no reason. Clipboard keys and stock availability were checked and are not the cause: a clipboard
+entry's key is built like the stock grid's, and the list's and the click's availability are the same number for a
+player.
+
+*Decision:*
+* **Every entry is measured with the click's planner** (`ListOrderConfirmation.measure`, pure Java). In list order,
+  each entry first takes what the racks still hold of its item, then the rest is planned with `ProductionPlanner.plan`
+  against what is left; an accepted chain spends its `leafDemand` before the next entry is measured. A plan clamped by
+  the stock or an item's maximum is followed by another for the rest, at most four per entry, and the refusal that ends
+  the walk is the entry's reason, with the item the planner names.
+* **One ledger, `SequentialPlans.forList`.** The stock ledger is the craft fetch's (`SequentialPlans.over`), with one
+  difference: accepted chains **do not use up order slots** for later entries. A craft fetch's lines are requested in
+  the same tick; a list keeps at most `terminalListOpenRequests` portions open and plans each when it is offered, so
+  slots free up between portions. Items are really consumed, so they are shared.
+* **The per-click ingredient cap is lifted for the measurement** (`PlanLimits(maxProductionPlanSteps,
+  PlanLimits.MAX_INGREDIENT_ITEMS)`, `WarehouseControllerBlockEntity#listConfirmation`). `maxPlanIngredientItems`
+  bounds what one click may hand to machines; a list hands it out portion by portion, each planned with the real
+  bounds and clamping itself, so applying it to a whole entry would call a 212-lantern entry "partly 28" although the
+  order makes all of it. The step bound is per chain shape and is kept, so a chain too long for a click is refused
+  exactly as the click refuses it.
+* **Per entry the question carries** its split (wanted, from stock, produced, made in whole runs, and missing, which is
+  derived), the planner's refusal with the item it names, and up to three **materials**: for `MISSING_INGREDIENT`, a
+  what-if plan of the missing part that does not touch the ledger, with every raw material (one no pattern of the
+  aisle makes) worth as much as anyone could ask for, names the raw leaves the ledger cannot pay; for any other reason
+  the entry's own item is the material. A pure `ListShortage` sums them for the Missing section, with the entries that
+  need each.
+* **Every total is derived from the lines** (`ListOrderConfirmation(lines, entriesDropped)`), so wire and record cannot
+  disagree. `producing()` keeps its meaning — items production makes for the list, the promise, the "produced" of the
+  table. The **Yes agrees to whole runs** (`madeTotal()`, every line's `made`): it is the production number the client
+  sends (`TerminalListActionPayload`, unchanged in shape), what `covers` compares it with and the consent budget the
+  order spends down, because each portion is charged the whole runs its chain makes (`RequestConfirmation#made`). "Torch
+  x2" from a four-torch pattern promises two and costs four; a budget of the promise stopped the order with a second
+  question right after the Yes (review fix; the old dialog had the same gap). When the runs make more than the promise,
+  the question names them ("Fetch all of it (2, 4 made)?"; a fourth number in the summary would not fit two lines at the
+  widest totals). A status (`ListEntryStatus`: not possible, partly, crafted, available) is derived from a line's split
+  on both sides; its declaration order is the table's sort order.
+* **The wire is one row per entry**, at most 1024 (`ListOrder.MAX_ENTRIES`) with at most three materials each, the
+  refusal by name (an unknown name reads as none); more rows or materials than the caps are a `DecoderException`.
+  `WareworksNetwork.VERSION` 16 → 17.
+* **The terminal shows the question as a scrollable table** (`client.gui.TerminalListTable`, geometry in the pure
+  `content.station.ListTableLayout`). One row per entry in table order — not possible (red), partly (gold), crafted
+  (blue), available (green), ties in list order — with the item's icon (a block drawn as a block, like a slot), its
+  name, the wanted amount and the status word, and a grey detail line under them: the split ("0 from stock, 4
+  produced"), or "what is to be had of what is wanted: the reason" in the planner's own sentence about the item it
+  names. After the entries, a Missing section with one row per material and its total. Above the table the question
+  names the result ("Fetch what there is (441 of 500)?", or "Fetch all of it (500)?" when nothing is missing) with the
+  list's split under it and the two notices; Confirm and Cancel stay at the bottom. The panel is the window's content
+  width (216 px); the name column takes what the measured headers, amounts and status words leave (at least 40 px),
+  and every text is shortened to its column with an ellipsis, the full text in a tooltip — the name over the icon or
+  the name, the split and the reason over the rest of an entry's row, the entries that need a material over its row;
+  an amount its column had to shorten is named in full in the first line of that row's tooltip.
+* **Rows scroll whole**, one per wheel notch, with the arrow, page, Home and End keys too; the wheel moves the table
+  wherever the mouse is while the question is up. Every row's stack, texts and tooltips are built once per question,
+  only the vertical layout is redone on a resize, and the scroll row is kept and clamped.
+
+*Alternatives rejected:*
+* **Scroll by pixels with a scissor.** Smoother, but a row cut in half hides exactly the number or the status word a
+  player reads, and item icons do not clip with the text; whole rows need no clipping at all.
+* **Keep the old lines and add a reason to each.** Five named entries and "More entries: N" cannot show a list of a
+  hundred entries, and a sentence per entry wraps at 204 px; a table puts the same facts in columns.
+* **Keep the single-level number and only show it better.** It is the bug: a table of wrong numbers is still wrong.
+* **Measure each entry in chunks of `maxTerminalRequestAmount`, as the portions are cut.** Exact for the ingredient
+  cap, but a 2000-cobblestone entry would cost dozens of plans for the same answer; lifting the cap gives the same
+  answer for one plan, because every portion clamps itself anyway.
+* **Share the order slots like a craft fetch.** A list with more producible entries than free slots would then call
+  the later ones busy, although its portions never run at the same time.
+* **Sum the shortages on the server and send them.** They are a function of the rows, so sending them could only make
+  the two disagree; the client derives them.
+
+*Consequences:*
+* **Cost.** At most five plans per entry (four chains and one what-if), each the planner's own bounded walk: at the
+  default 128 entries at most 640, at the 1024 ceiling at most 5120, once per Fetch press within the menu's action
+  budget, never per tick. Nothing is ordered, claimed or saved by measuring.
+* **The Missing total can overstate, never understate.** Each entry's materials are measured against what the earlier
+  entries left; a leftover two short entries could both use is counted for each.
+* **An entry can be short without a reason** in one rare case: four plans in a row were each clamped (an item's
+  maximum, or a bound) and all succeeded. It is shown as not in stock.
+* **Payload size.** A full list with three materials per row is about 100 KiB with plain item keys, far below the
+  client-bound packet limit; the GameTest `terminallistanswerpayloadroundtrip` asserts under 256 KiB.
+* Clients and servers of 0.15 and this version cannot talk to each other.
+* Tests: JUnit `ListOrderConfirmationTest` (the four statuses, the invariant, shared stock, a chain's ingredients spent
+  before a later entry, the lantern through a chain, slots not shared, clamp then reason, paused, too long, no pattern,
+  materials, table order, record clamps, the Yes in whole runs), `ListShortageTest`, `SequentialPlansTest` (`forList`);
+  GameTests `TerminalListTableGameTests` (the lantern from stock and through a chain with the click and the Yes
+  agreeing, "Torch x2" from a four-torch run started by one Yes, a chain too long and a paused torch refused exactly as
+  the click refuses them, five entries sharing one stock with the Missing totals, the partly case, the payload round
+  trip and its bounds). JUnit `ListTableLayoutTest` (columns, at least three rows at the smallest window of every buffer
+  size, the panel inside the window, the wheel, the hit test and the thumb) and `TerminalListTableTextWidthTest` (the
+  English and German column words, status words, detail lines and the lines above the table, measured with the font's
+  real advances). The visual scenario `listtable` (11 shots) clicks Fetch, Cancel and Confirm, turns the real wheel,
+  hovers a shortened name and a material, and shrinks the window to 320 x 240, in English and German.
 
 ## Persistence & sync
 

@@ -96,8 +96,8 @@ import dev.wareworks.core.terminal.RequestAcknowledgement;
 public record CraftFetchQuestion<K>(int asked, int ready, int stockRuns, int madeRuns, int roomRuns,
                                     Optional<K> about, long producing, List<Line<K>> named,
                                     Optional<PlanRefusal> chainRefusal, Optional<K> chainAbout) {
-    /** How many keys the question names, the same as a clipboard's question ({@link ListOrderConfirmation}). */
-    public static final int MAX_NAMED = ListOrderConfirmation.MAX_NAMED;
+    /** How many keys the question names: the same number the old clipboard list dialog named. */
+    public static final int MAX_NAMED = 5;
 
     public CraftFetchQuestion {
         Objects.requireNonNull(about, "about");

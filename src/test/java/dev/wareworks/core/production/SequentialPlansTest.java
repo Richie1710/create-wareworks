@@ -426,4 +426,20 @@ class SequentialPlansTest {
         assertEquals(ChainPreview.accepted(5L, 8L), ChainPreview.of(plan),
                 "two runs of four planks for five promised");
     }
+
+    @Test
+    void aListLedgerSharesTheItemsButNotTheOrderSlots() {
+        stock.put(LOG, 3L);
+        SequentialPlans<String, String> list = SequentialPlans.forList(busy(1, 4));
+        assertTrue(list.plan(PLANK, 4L).accepted());
+        assertEquals(1, list.usedSlots(), "the chain is counted");
+        assertEquals(1, list.freeOrderSlots(), "but a list's portions run one after another, so the slot is free");
+        assertTrue(list.plan(PLANK, 4L).accepted(), "and the next entry's chain gets it");
+        assertEquals(1L, list.available(LOG), "while the logs are spent all the same");
+
+        SequentialPlans<String, String> fetch = SequentialPlans.over(busy(1, 4));
+        assertTrue(fetch.plan(PLANK, 4L).accepted());
+        assertEquals(0, fetch.freeOrderSlots(), "a craft fetch's lines are requested together and share the slots");
+        assertTrue(fetch.plan(PLANK, 4L).refusedWith(PlanRefusal.ORDERS_BUSY));
+    }
 }

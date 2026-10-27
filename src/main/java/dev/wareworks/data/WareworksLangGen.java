@@ -643,16 +643,38 @@ public final class WareworksLangGen {
         // and "1 items" before the M23 review fix, and Minecraft's lang format has no plural selection.
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TRUNCATED),
                 "Entries not taken from the clipboard: %1$s");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_TITLE), "Fetch this list?");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_SHORT),
-                "%1$s of the %2$s items on the list are not in stock.");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_PRODUCE),
-                "In total %1$s would be produced for the list.");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_IMPOSSIBLE),
-                "Entries that cannot be had at all and stay unticked: %1$s");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_ENTRY), "%1$s: %2$s of %3$s");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_MORE), "More entries: %1$s");
-        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_CONFIRM_ASK), "Fetch what there is?");
+        // The list question's table (issue #36): column words and status words are short on purpose, the name
+        // column takes what they leave (ListTableLayout).
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_PARTIAL),
+                "Fetch what there is (%1$s of %2$s)?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_WHOLE), "Fetch all of it (%1$s)?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_PARTIAL_MADE),
+                "Fetch what there is (%1$s of %2$s, %3$s made)?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_QUESTION_WHOLE_MADE),
+                "Fetch all of it (%1$s, %2$s made)?");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_SUMMARY),
+                "%1$s from stock, %2$s produced, %3$s missing");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_HEADER_ITEM), "Item");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_HEADER_WANTED), "Wanted");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_HEADER_STATUS), "Status");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_STATUS_AVAILABLE), "Available");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_STATUS_CRAFTED), "Crafted");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_STATUS_PARTLY), "Partly");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_STATUS_IMPOSSIBLE), "Not possible");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_DETAIL_AVAILABLE), "%1$s from stock");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_DETAIL_CRAFTED),
+                "%1$s from stock, %2$s produced");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_DETAIL_PARTLY), "%1$s of %2$s: %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_REASON_NONE), "Not in stock");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_TOOLTIP_SPLIT),
+                "%1$s from stock, %2$s produced, %3$s missing");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_TOOLTIP_MADE),
+                "Machines make %1$s in whole runs");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_MISSING_TITLE), "Missing (%1$s)");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_MISSING_ENTRIES), "Entries: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_MISSING_NEEDED_BY), "Needed by:");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_MISSING_ENTRY), "%1$s (%2$s)");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_TABLE_MISSING_MORE), "and %1$s more");
         // One word each, because this is a **column**, not a sentence: it is drawn inside the parentheses of
         // "List 4/9, 320 left (…)", and that frame already spends 152 of the status row's 216 px on three numbers
         // whose ceilings are config values (maxTerminalListEntries, maxTerminalRequestAmount). The phrases these used

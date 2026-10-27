@@ -996,20 +996,74 @@ public final class WareworksLang {
      * in the list slot's tooltip, so a truncated list is never started without saying so (M23 review fix).
      */
     public static final String TERMINAL_LIST_TRUNCATED = "gui.terminal.list.truncated";
-    /** Title of the one dialog a Fetch raises. */
-    public static final String TERMINAL_LIST_CONFIRM_TITLE = "gui.terminal.list.confirm.title";
-    /** {@code "%1$s of the %2$s items on the list are not in stock."}: the partial case (issue #19). */
-    public static final String TERMINAL_LIST_CONFIRM_SHORT = "gui.terminal.list.confirm.short";
-    /** {@code "In total %1$s would be produced for the list."}: the production case, which asks as well (issue #19). */
-    public static final String TERMINAL_LIST_CONFIRM_PRODUCE = "gui.terminal.list.confirm.produce";
-    /** {@code "Entries that cannot be had at all and stay unticked: %1$s"} */
-    public static final String TERMINAL_LIST_CONFIRM_IMPOSSIBLE = "gui.terminal.list.confirm.impossible";
-    /** {@code "%1$s: %2$s of %3$s"}: one named entry of the dialog (item, what is to be had, what it asked for). */
-    public static final String TERMINAL_LIST_CONFIRM_ENTRY = "gui.terminal.list.confirm.entry";
-    /** {@code "More entries: %1$s"}: the entries past the few the dialog names. */
-    public static final String TERMINAL_LIST_CONFIRM_MORE = "gui.terminal.list.confirm.more";
-    /** {@code "Fetch what there is?"}: the question itself, under the numbers. */
-    public static final String TERMINAL_LIST_CONFIRM_ASK = "gui.terminal.list.confirm.ask";
+    /**
+     * {@code "Fetch what there is (%1$s of %2$s)?"}: the question when part of the list cannot be had (what is to be
+     * had, what the list wants) (issue #36).
+     */
+    public static final String TERMINAL_LIST_TABLE_QUESTION_PARTIAL = "gui.terminal.list.table.question.partial";
+    /**
+     * {@code "Fetch all of it (%1$s)?"}: the question when all of the list can be had, but only with production or with
+     * entries left on the clipboard (issue #36).
+     */
+    public static final String TERMINAL_LIST_TABLE_QUESTION_WHOLE = "gui.terminal.list.table.question.whole";
+    /**
+     * {@code "Fetch what there is (%1$s of %2$s, %3$s made)?"}: the partial question while whole runs make
+     * more than the entries ask for; the third number is the production a Yes agrees to (issue #36).
+     */
+    public static final String TERMINAL_LIST_TABLE_QUESTION_PARTIAL_MADE =
+            "gui.terminal.list.table.question.partial_made";
+    /**
+     * {@code "Fetch all of it (%1$s, %2$s made)?"}: the whole question while whole runs make more than the
+     * entries ask for; the second number is the production a Yes agrees to (issue #36).
+     */
+    public static final String TERMINAL_LIST_TABLE_QUESTION_WHOLE_MADE = "gui.terminal.list.table.question.whole_made";
+    /** {@code "%1$s from stock, %2$s produced, %3$s missing"}: the line under the question (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_SUMMARY = "gui.terminal.list.table.summary";
+    /** {@code "Item"}: the header over the icon and the name (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_HEADER_ITEM = "gui.terminal.list.table.header.item";
+    /** {@code "Wanted"}: the header over the amount (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_HEADER_WANTED = "gui.terminal.list.table.header.wanted";
+    /** {@code "Status"}: the header over the status word (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_HEADER_STATUS = "gui.terminal.list.table.header.status";
+    /** {@code "Available"}: an entry the racks cover in full (green) (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_STATUS_AVAILABLE = "gui.terminal.list.table.status.available";
+    /** {@code "Crafted"}: an entry covered in full with production (blue) (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_STATUS_CRAFTED = "gui.terminal.list.table.status.crafted";
+    /** {@code "Partly"}: an entry only part of which can be had (gold) (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_STATUS_PARTLY = "gui.terminal.list.table.status.partly";
+    /** {@code "Not possible"}: an entry nothing of which can be had (red) (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_STATUS_IMPOSSIBLE = "gui.terminal.list.table.status.impossible";
+    /** {@code "%1$s from stock"}: the detail line of an available entry (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_DETAIL_AVAILABLE = "gui.terminal.list.table.detail.available";
+    /** {@code "%1$s from stock, %2$s produced"}: the detail line of a crafted entry (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_DETAIL_CRAFTED = "gui.terminal.list.table.detail.crafted";
+    /**
+     * {@code "%1$s of %2$s: %3$s"}: the detail line of a partly entry (what is to be had, what it wants, the reason)
+     * (issue #36).
+     */
+    public static final String TERMINAL_LIST_TABLE_DETAIL_PARTLY = "gui.terminal.list.table.detail.partly";
+    /** {@code "Not in stock"}: the reason of a short entry the planner named no reason for (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_REASON_NONE = "gui.terminal.list.table.reason.none";
+    /** {@code "%1$s from stock, %2$s produced, %3$s missing"}: an entry's tooltip: its whole split (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_TOOLTIP_SPLIT = "gui.terminal.list.table.tooltip.split";
+    /**
+     * {@code "Machines make %1$s in whole runs"}: an entry's tooltip: what its chains make in whole runs, beyond what
+     * it asks for (issue #36).
+     */
+    public static final String TERMINAL_LIST_TABLE_TOOLTIP_MADE = "gui.terminal.list.table.tooltip.made";
+    /** {@code "Missing (%1$s)"}: the Missing section's heading (how many materials) (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_MISSING_TITLE = "gui.terminal.list.table.missing.title";
+    /** {@code "Entries: %1$s"}: a material's detail line: how many entries need it (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_MISSING_ENTRIES = "gui.terminal.list.table.missing.entries";
+    /** {@code "Needed by:"}: a material's tooltip, above the entries that need it (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_MISSING_NEEDED_BY = "gui.terminal.list.table.missing.needed_by";
+    /**
+     * {@code "%1$s (%2$s)"}: one entry in a material's tooltip (its item, what it wants), and the name line of a row's
+     * tooltip whose amount the column had to shorten (issue #36).
+     */
+    public static final String TERMINAL_LIST_TABLE_MISSING_ENTRY = "gui.terminal.list.table.missing.entry";
+    /** {@code "and %1$s more"}: the entries past those a material's tooltip names (issue #36). */
+    public static final String TERMINAL_LIST_TABLE_MISSING_MORE = "gui.terminal.list.table.missing.more";
     /** {@code "Delivered here"}: label above the terminal's own buffer slots. */
     public static final String TERMINAL_BUFFER = "gui.terminal.buffer";
     /** {@code "+%1$s not shown"}: item types the aisle holds beyond {@code maxTerminalStockEntries}. */

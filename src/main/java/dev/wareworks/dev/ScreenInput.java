@@ -11,6 +11,7 @@ import com.simibubi.create.foundation.gui.widget.IconButton;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
 import dev.wareworks.client.gui.TerminalCraftPanel;
+import dev.wareworks.client.gui.TerminalListTable;
 import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.client.gui.WarehouseStockKeeperScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
@@ -19,7 +20,6 @@ import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.StockKeeperMenuLayout;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
-import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
@@ -69,8 +69,6 @@ final class ScreenInput {
     private static final Method TERMINAL_CANCEL_MARK_X = method(WarehouseTerminalScreen.class, "cancelMarkX");
     private static final Method TERMINAL_CONFIRM_LINES = method(WarehouseTerminalScreen.class, "confirmationLines",
             RequestConfirmation.class);
-    private static final Method TERMINAL_LIST_CONFIRM_LINES = method(WarehouseTerminalScreen.class,
-            "listConfirmationLines", ListOrderConfirmation.class);
     /** The toggle that folds the crafting panel out and in, and the panel's Clear button (M32, issue #24). */
     private static final Field TERMINAL_CRAFT_TOGGLE = field(WarehouseTerminalScreen.class, "craftToggle");
     private static final Field TERMINAL_CRAFT_CLEAR = field(WarehouseTerminalScreen.class, "craftClear");
@@ -399,7 +397,7 @@ final class ScreenInput {
      * and 3), as it is drawn: the question with the crafts a Yes starts, the "changed" line of a repeated one, what
      * binds it — the buffer's room or the warehouse's stock — and what a Yes would have made first, with what the racks
      * alone could serve. The counterpart of {@link #terminalConfirmationLines} and
-     * {@link #terminalListConfirmationLines} for the third question the one panel shows.
+     * {@link #terminalListTable} for the third question the one panel shows.
      */
     static List<Component> terminalCraftConfirmationLines(WarehouseTerminalScreen screen) {
         CraftFetchQuestion<ItemKey> question = screen.craftConfirmation();
@@ -429,19 +427,22 @@ final class ScreenInput {
     }
 
     /**
-     * Every line of the terminal's panel while a whole <b>clipboard list</b> is being asked about (M23, issue #19), as
-     * it is drawn: the totals, the entries worth naming and the question itself.
-     * <p>
-     * The counterpart of {@link #terminalConfirmationLines} for the other of the two questions the one panel shows. A
-     * screenshot cannot be trusted to prove which numbers a dialog names, so a run reads them.
+     * The table the terminal's panel draws while a whole <b>clipboard list</b> is being asked about (issue #36), laid
+     * out for the window as it is now: its rows exactly as drawn, its scroll row and where each row sits. A screenshot
+     * cannot be trusted to prove which numbers a dialog names, so a run reads them.
      */
-    static List<Component> terminalListConfirmationLines(WarehouseTerminalScreen screen) {
-        ListOrderConfirmation<ItemKey> question = screen.listConfirmation();
-        if (question == null)
-            throw new VisualTestException("the terminal is not asking about a list, so it draws no list panel");
-        @SuppressWarnings("unchecked")
-        List<Component> lines = (List<Component>) invoke(TERMINAL_LIST_CONFIRM_LINES, screen, question);
-        return lines;
+    static TerminalListTable terminalListTable(WarehouseTerminalScreen screen) {
+        TerminalListTable table = screen.listTable();
+        if (table == null)
+            throw new VisualTestException("the terminal is not asking about a list, so it draws no list table");
+        return table;
+    }
+
+    /** A point of the list table, as the table computed it for the window as it is now. */
+    static Point terminalListPoint(TerminalListTable.Spot spot, String what) {
+        if (spot == null)
+            throw new VisualTestException("the list table does not show " + what + " right now");
+        return new Point(spot.x(), spot.y());
     }
 
     /**

@@ -27,6 +27,7 @@ final class VisualScenarios {
             Map.entry(PonderVisualScenario.NAME, PonderVisualScenario::new),
             Map.entry(TerminalVisualScenario.NAME, TerminalVisualScenario::new),
             Map.entry(ChecklistVisualScenario.NAME, ChecklistVisualScenario::new),
+            Map.entry(ListTableVisualScenario.NAME, ListTableVisualScenario::new),
             Map.entry(StockKeeperVisualScenario.NAME, StockKeeperVisualScenario::new),
             Map.entry(StockRulesVisualScenario.NAME, StockRulesVisualScenario::new),
             Map.entry(RestockVisualScenario.NAME, RestockVisualScenario::new),

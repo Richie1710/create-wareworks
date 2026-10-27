@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The clipboard list question is a table** ([#36](https://github.com/Richie1710/create-wareworks/issues/36)).
+  Pressing Fetch on a list now shows one row per entry with its icon, name, wanted amount and status: available
+  (green), crafted (blue, with how much comes from stock and how much is produced), partly (gold) or not possible
+  (red, with the reason and the item it names). The rows are sorted with the problems first and scroll with the mouse
+  wheel; a name too long for its column is shortened and shown in full when you hover it. A Missing section at the end
+  sums every missing material and names the entries that need it, and the question names the result, e.g. "Fetch what
+  there is (441 of 500)?"
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because the clipboard list question now carries one row per list entry
+  ([#36](https://github.com/Richie1710/create-wareworks/issues/36))
+
+### Fixed
+
+- A clipboard list entry whose ingredients have to be made first by other patterns (a lantern from iron nuggets made
+  from ingots) was reported as impossible, and an entry whose production is stopped was reported as producible. The
+  list is now measured exactly like a click, entry by entry, and two entries no longer count the same ingredients twice
+  ([#36](https://github.com/Richie1710/create-wareworks/issues/36))
+- Saying Yes to a clipboard list with an entry whose pattern makes more per run than the entry asks for (two torches
+  from a pattern that makes four) stopped the list right away with a second question. The Yes now agrees to the whole
+  runs the machines make, and the dialog names that number
+  ([#36](https://github.com/Richie1710/create-wareworks/issues/36))
+
 ## [0.15.0-beta] - 2026-10-27
 
 ### Changed

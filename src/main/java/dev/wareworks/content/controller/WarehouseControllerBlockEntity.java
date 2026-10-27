@@ -72,6 +72,7 @@ import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.production.FetchPreview;
 import dev.wareworks.core.production.PlanBudget;
+import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.production.PlanNode;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProduciblePlanner;
@@ -100,6 +101,8 @@ import dev.wareworks.core.stock.StockRuleEvaluation;
 import dev.wareworks.core.stock.StockRulePause;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.stock.StockRules;
+import dev.wareworks.core.terminal.ListLine;
+import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
@@ -1855,6 +1858,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private ProductionPlanInput<ItemKey, RackPosition> productionPlanInput(List<AislePattern> patterns,
             ToLongFunction<ItemKey> ingredients) {
+        return productionPlanInput(patterns, ingredients, WareworksConfig.planLimits());
+    }
+
+    /** {@link #productionPlanInput(List, ToLongFunction)} with other bounds than a click's. */
+    private ProductionPlanInput<ItemKey, RackPosition> productionPlanInput(List<AislePattern> patterns,
+            ToLongFunction<ItemKey> ingredients, PlanLimits limits) {
         productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
         List<StationPattern<ItemKey, RackPosition>> stationPatterns = new ArrayList<>(patterns.size());
         for (AislePattern candidate : patterns)
@@ -1863,8 +1872,40 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         int freeSlots = slots - productionOrders.openCount();
         // productionRoomFor answers Long.MAX_VALUE for an item no rule caps, which is exactly ProductionPlanInput's
         // "as much room as anyone could ask for", so an aisle without stock keepers pays nothing for the question.
-        return new ProductionPlanInput<>(stationPatterns, PlanBudget.of(ingredients), WareworksConfig.planLimits(),
-                freeSlots, slots, stockPauses::containsKey, this::productionRoomFor);
+        return new ProductionPlanInput<>(stationPatterns, PlanBudget.of(ingredients), limits, freeSlots, slots,
+                stockPauses::containsKey, this::productionRoomFor);
+    }
+
+    /**
+     * Server: what pressing Fetch on a clipboard list would mean against this aisle as it is now
+     * ({@code docs/warehouse-system.md} §3.4.4, issue #36, ADR-069) — one row per entry, measured with the click's own
+     * planner ({@link ListOrderConfirmation#measure}).
+     * <p>
+     * The snapshot is the one a click builds ({@link #productionPlanInput(List, ToLongFunction)} over what a player may
+     * have of the racks, {@link StockAvailability#of} for {@link StockAccess#PLAYER}) with one difference: the bound on
+     * ingredient items is lifted to {@link PlanLimits#MAX_INGREDIENT_ITEMS}. {@code maxPlanIngredientItems} bounds what
+     * <b>one click</b> may hand to machines; a list hands its production out portion by portion, and every portion is
+     * planned with the real bounds and clamps itself, so applying the bound to a whole entry would call a 212-lantern
+     * entry "partly 28" although the order makes all of it. The step bound is per chain shape and is kept, so a chain
+     * too long for a click is refused here exactly as the click refuses it.
+     * <p>
+     * Side-effect free: no order, no request, no promise and no reservation is created. On a client or without an aisle
+     * every entry is measured against nothing at all.
+     *
+     * @param lines   the list order's lines, in list order
+     * @param dropped orderable entries the entry cap left on the clipboard
+     */
+    public ListOrderConfirmation<ItemKey> listConfirmation(List<ListLine<ItemKey>> lines, int dropped) {
+        Objects.requireNonNull(lines, "lines");
+        if (level == null || level.isClientSide || isRemoved() || layout == null)
+            return ListOrderConfirmation.measure(lines, dropped,
+                    ProductionPlanInput.<ItemKey, RackPosition>of(List.of(), PlanBudget.of(key -> 0L),
+                            WareworksConfig.planLimits(), 0));
+        PlanLimits clicks = WareworksConfig.planLimits();
+        ProductionPlanInput<ItemKey, RackPosition> base = productionPlanInput(aislePatterns(),
+                StockAvailability.of(stockRules(), StockAccess.PLAYER, availabilityLookup()),
+                new PlanLimits(clicks.maxSteps(), PlanLimits.MAX_INGREDIENT_ITEMS));
+        return ListOrderConfirmation.measure(lines, dropped, base);
     }
 
     /**

@@ -1646,12 +1646,11 @@ you get tired of waiting, and put it back before judging check 160.
     milestone would have to answer.
 
 168. **Read the Fetch dialog with your own eyes, in both languages.** Make a list the warehouse cannot cover — two
-    entries it has plenty of, one it has part of, one it has none of — and press the list button. The panel must say,
-    in this order: **"Fetch this list?"**, how many of the list's items are **not in stock**, how many would be
-    **produced** (only if any would), how many entries cannot be had at all and stay unticked, then up to five named
-    entries as "what there is of what it asked for", then "More entries: N" if there are, and finally
-    **"Fetch what there is?"**. (A clipboard longer than `maxTerminalListEntries` adds "Entries not taken from the
-    clipboard: N" in gold, before the named entries.) Then:
+    entries it has plenty of, one it has part of, one it has none of — and press the list button. Since issue #36 the
+    panel is a table (section BG): the question names the result, **"Fetch what there is (x of y)?"**, with the split
+    "from stock, produced, missing" under it, then one row per entry with its status and reason, problems first, and a
+    Missing section. (A clipboard longer than `maxTerminalListEntries` adds "Entries not taken from the clipboard: N" in
+    gold, above the table.) Then:
     can you tell from it what you will get and what you will not, without counting? Restart with a German client
     (`de_de`) and read it again — German is the longer language and the automated run only ever renders English, so a
     line that overflows its box or clips can only show up here. The same for the **production** case: put a pattern in
@@ -3439,4 +3438,46 @@ you get tired of waiting, and put it back before judging check 160.
      red tick at the bottom. **By eye:** does the bar read as a scroll bar, and is the red tick seen?
 338. **Versions.** A dedicated server with this version refuses a 0.14.0 client and the other way round. With matching
      versions on a dedicated server (`./gradlew runServer` and `./gradlew runClient`), 334 and 335 behave the same and
+     neither log has an error mentioning `wareworks`.
+
+## BG. The list table ([issue #36](https://github.com/Richie1710/create-wareworks/issues/36))
+
+> Pressing Fetch on a clipboard now asks with a table: one row per entry with its icon, name, wanted amount and status
+> (not possible in red, partly in gold, crafted in blue, available in green, problems first), a grey detail line with
+> the split or the planner's reason, and a Missing section at the end. Every entry is measured with the click's own
+> planner (ADR-069). The JUnit tests `ListOrderConfirmationTest`, `ListTableLayoutTest` and
+> `TerminalListTableTextWidthTest`, the GameTests in `TerminalListTableGameTests` (the owner's lantern case among them)
+> and the visual scenario `listtable` (real clicks and wheel, 320 x 240, English and German) check the numbers and the
+> layout. What is left is what only a player can judge.
+
+339. **Every status by eye.** Build an aisle with a production station holding the lantern chain (1 iron ingot → 9 iron
+     nuggets, 1 coal + 1 stick → 4 torches, 8 iron nuggets + 1 torch → 1 lantern) and put 1 iron ingot, 2 coal, 2
+     sticks, 20 glass and 64 cobblestone into the racks. Write a clipboard with Cobblestone 64, Glass 64, Lantern 2,
+     Torch 4, Diamond 3 and Iron Nugget 9, put it into the terminal's list slot and press Fetch. The question reads
+     "Fetch what there is (89 of 146)?"; Diamond and Iron Nugget are red "Not possible" ("No pattern makes Diamond",
+     "Iron Ingot is missing"), Glass and Lantern gold "Partly", Torch blue "Crafted" ("0 from stock, 4 produced"),
+     Cobblestone green "Available". **Can you tell the four colours apart at a glance, and is each icon the item's
+     own (glass and cobblestone drawn as blocks)?**
+340. **Scrolling.** Add entries until the table has more rows than it shows (a slim bar appears at its right). Turn the
+     mouse wheel anywhere over the dialog: one row per notch, it stops at the first and the last row, and the question,
+     the summary and the Confirm/Cancel buttons do not move. The arrow keys, Page Up/Down, Home and End scroll too;
+     Enter still confirms and Escape still cancels.
+341. **Tooltips.** An entry with a long name (Polished Blackstone Bricks) is shortened with "…"; hover its icon or
+     name: the tooltip shows the full name. Hover the amount or the status of a red or gold row: the status, "x from
+     stock, y produced, z missing" and the reason. Scroll to the Missing section and hover a material: "Needed by:"
+     and the entries that need it with their amounts. **Is anything cut that you would want to read without hovering?**
+342. **German at the floor.** With a German client (`de_de`), GUI scale 4 and a 1280 x 960 window (320 x 240), open the
+     same dialog: "Holen, was da ist (… von …)?", "Nicht möglich", "Teilweise", "Hergestellt", "Verfügbar", the
+     Missing section "Es fehlen (…)". At least three rows are visible, nothing overlaps, and both buttons can be clicked.
+     Resize the window while the table is scrolled: it stays scrolled.
+343. **The owner's lantern.** With only the ingot, coal and stick in stock (no nuggets, no torches), a clipboard with
+     Lantern 1 shows "Crafted" ("0 from stock, 1 produced"), not "cannot be had". Confirm: the warehouse makes the
+     nuggets, the torch and the lantern (play the station's machine by hand or with arms) and delivers it, without a
+     second question for the list.
+344. **Whole runs.** With only 1 coal and 1 stick in stock (no torches) and the torch pattern (1 coal + 1 stick → 4
+     torches), a clipboard with Torch 2 shows "Crafted" ("0 from stock, 2 produced") and the question names the whole
+     run: "Fetch all of it (2, 4 made)?" (German "Alles holen (2, 4 gefertigt)?"). Confirm: the list starts without a
+     second question, and the two extra torches land in a rack.
+345. **Versions.** A dedicated server with this version refuses a 0.15.0 client and the other way round. With matching
+     versions on a dedicated server (`./gradlew runServer` and `./gradlew runClient`), 339 and 341 behave the same and
      neither log has an error mentioning `wareworks`.

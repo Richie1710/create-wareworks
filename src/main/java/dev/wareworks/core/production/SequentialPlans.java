@@ -49,13 +49,19 @@ import java.util.SequencedMap;
  */
 public final class SequentialPlans<K, L> {
     private final ProductionPlanInput<K, L> base;
+    /**
+     * Whether the accepted chains take free order slots away from the later ones: {@code true} for a craft fetch,
+     * {@code false} for a clipboard list ({@link #forList}).
+     */
+    private final boolean shareSlots;
     /** Items taken out of the racks so far: the lines' own takes and every accepted chain's leaf demand. */
     private final Map<K, Long> spent = new LinkedHashMap<>();
     /** Production orders the accepted chains would open. */
     private int usedSlots;
 
-    private SequentialPlans(ProductionPlanInput<K, L> base) {
+    private SequentialPlans(ProductionPlanInput<K, L> base, boolean shareSlots) {
         this.base = Objects.requireNonNull(base, "base");
+        this.shareSlots = shareSlots;
     }
 
     /**
@@ -66,7 +72,23 @@ public final class SequentialPlans<K, L> {
      *             items and the headroom. It is never mutated
      */
     public static <K, L> SequentialPlans<K, L> over(ProductionPlanInput<K, L> base) {
-        return new SequentialPlans<>(base);
+        return new SequentialPlans<>(base, true);
+    }
+
+    /**
+     * An empty ledger for the entries of a <b>clipboard list</b> ({@code docs/warehouse-system.md} §3.4.4, issue #36,
+     * ADR-069): items are shared exactly as {@link #over} shares them — every entry's take and every accepted chain's
+     * leaf demand are spent — but the accepted chains <b>do not use up order slots</b> for the later entries
+     * ({@link #freeOrderSlots()} stays {@link ProductionPlanInput#freeOrderSlots()}; {@link #usedSlots()} still counts).
+     * <p>
+     * The difference is when the requests are made. A craft fetch's lines are requested in the same tick, so their
+     * chains really compete for the free slots. A list order keeps at most {@code terminalListOpenRequests} portions
+     * open and plans each portion when it is offered, so the slots one entry's chain takes are free again before a
+     * later entry is planned. The items, on the other hand, are really consumed, which is why the stock ledger is
+     * shared all the same.
+     */
+    public static <K, L> SequentialPlans<K, L> forList(ProductionPlanInput<K, L> base) {
+        return new SequentialPlans<>(base, false);
     }
 
     /**
@@ -167,9 +189,12 @@ public final class SequentialPlans<K, L> {
         return usedSlots;
     }
 
-    /** Production orders the aisle could still open for the next chain. */
+    /**
+     * Production orders the aisle could still open for the next chain: the free slots minus what the accepted chains
+     * would open, or the free slots as they are for a list ({@link #forList}).
+     */
     public int freeOrderSlots() {
-        return Math.max(0, base.freeOrderSlots() - usedSlots);
+        return shareSlots ? Math.max(0, base.freeOrderSlots() - usedSlots) : base.freeOrderSlots();
     }
 
     /**
