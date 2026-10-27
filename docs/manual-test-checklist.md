@@ -3428,7 +3428,8 @@ you get tired of waiting, and put it back before judging check 160.
      terminal: it is made like any other.
 335. **Selection.** Click a tab in the last row, scroll up until it is hidden: the grid still shows that pattern, and the
      bar shows a gold tick at the bottom where its row is. Close the screen and open it again: the first pattern is
-     selected and its row is at the top, with no error in the log. Resize the window while a tab in the last row is selected: its row is scrolled into view again.
+     selected and its row is at the top, with no error in the log.
+     Resize the window while a tab in the last row is selected: its row is scrolled into view again.
 336. **Small screens.** At GUI scale 4 make the window 1280 x 960 (320 x 240, the smallest scaled screen vanilla
      allows) and then 1920 x 1080 (480 x 270): the window fits, all 6 columns and the bar are inside the frame, and
      nothing overlaps the grid, the arrow or the result.
