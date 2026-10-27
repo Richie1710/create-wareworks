@@ -4,7 +4,9 @@ Last verified: 2026-09-17 against Create 6.0.10 and NeoForge 21.1.250; the NeoFo
 2026-09-27 against the same NeoForge version, and the Create clipboard row on 2026-10-02 against Create 6.0.10-280, and the
 Create package rows on 2026-10-03 against the same Create build, and the JEI rows on 2026-10-15 against the JEI API sources
 19.21.0.247, the JEI 19.57.0.451 binaries and runs on JEI 19.8.4.110 to 19.64.0.454, and the component meanings row
-on 2026-10-17 against Create 6.0.10-280.
+on 2026-10-17 against Create 6.0.10-280, and the CC: Tweaked rows on 2026-10-27 against the CC: Tweaked 1.116.1 API
+jars and sources and the 1.120.2 jars, and the Create: Electro Energetics rows on 2026-10-27 against the CEE
+1.21.1-1.1.4 jar.
 
 Update this file whenever a dependency version changes.
 
@@ -31,7 +33,8 @@ Update this file whenever a dependency version changes.
 | `dev.engine-room.vanillin:vanillin-neoforge-1.21.1` | 1.1.3-41 | localRuntime | `https://maven.createmod.net` |
 
 Runtime dependency ranges declared in `neoforge.mods.toml`: `create [6.0.10,6.1)`, `ponder [1.0.82,)`, and the optional,
-client-only `jei [19.8.4.110,)` (see [Optional integration: JEI](#optional-integration-jei)).
+client-only `jei [19.8.4.110,)` (see [Optional integration: JEI](#optional-integration-jei)), and the optional
+`computercraft [1.116.1,)` on both sides (see [Optional integration: CC: Tweaked](#optional-integration-cc-tweaked)).
 
 ### How the Create version was determined
 
@@ -103,6 +106,94 @@ grid). The mod compiles against JEI's API and never bundles or requires it:
   boolean, boolean)` for removal and added a default `transferRecipe(IRecipeTransferContext, boolean)` that calls it.
   19.57 calls the new method, 19.21 the old one, so a handler that implements the six-argument method works on both. A
   future JEI that removes the old method would need the handler to move to the new one.
+
+## Optional integration: CC: Tweaked
+
+| Artifact | Version | Scope | Repository |
+|---|---|---|---|
+| `cc.tweaked:cc-tweaked-1.21.1-core-api` | **1.116.1** (`cc_tweaked_version`) | compileOnly | `https://maven.squiddev.cc` (`includeGroup 'cc.tweaked'`) |
+| `cc.tweaked:cc-tweaked-1.21.1-forge-api` | 1.116.1 | compileOnly | `https://maven.squiddev.cc` |
+| `cc.tweaked:cc-tweaked-1.21.1-forge` (the whole mod, NeoForge despite the name) | `cc_tweaked_version`, or any other with `-Pwareworks.cc=<version>` | localRuntime, **only** with `-Pwareworks.cc` | `https://maven.squiddev.cc` |
+
+CC: Tweaked is an **optional** integration on both sides (issue #9, ADR-074): with it installed, the warehouse terminal is
+a peripheral (`wareworks_terminal`) a computer can read the stock from and place requests through
+(`docs/computercraft.md`). The mod compiles against CC's two API jars and never bundles or requires it:
+
+* **Version.** The mod compiles against 1.116.1, the CC: Tweaked that Create 6.0.10-280's POM names (runtime scope).
+  Every signature used (`PeripheralCapability#get`, `IPeripheral`, `@LuaFunction(mainThread)`, `IArguments` with its
+  `opt*`, `LuaException`, `MethodResult`, `ObjectArguments`, `VanillaDetailRegistries.ITEM_STACK`) was checked with
+  `javap` in the 1.116.1 API jars and in 1.120.2, the newest for 1.21.1 on 2026-10-27. `neoforge.mods.toml` declares
+  `computercraft` as `optional`, `side = "BOTH"`, range `cc_tweaked_version_range` (`[1.116.1,)`): FML treats an
+  out-of-range optional dependency as a loading error, so the floor is the version compiled against and there is no
+  ceiling. The CurseForge upload lists CC: Tweaked as an optional relation (`optional('cc-tweaked')` in
+  `publishMods`; the slug `cc-tweaked` was checked on CurseForge on 2026-10-27, where CC: Tweaked's page says it is
+  no longer published there and points to Modrinth).
+* **Dev runs have no CC: Tweaked by default**, so every visual scenario and every other gate runs as before.
+  `-Pwareworks.cc` (empty or `true`) adds CC: Tweaked `cc_tweaked_version` to every run; `-Pwareworks.cc=<version>`
+  adds another published one for 1.21.1; `-Pwareworks.cc=false` or no property adds none. With CC in the dev runtime,
+  Create's own ComputerCraft integration activates as well.
+* **`transitive = false`**, like every Create artifact: the forge-api jar's module metadata names the core-api jar, which
+  is listed explicitly instead. The full mod declares no dependencies; it jar-in-jars `cc.tweaked:cobalt` and
+  `com.jcraft:jzlib`, which FML's `JarInJarDependencyLocator` picks up from
+  the mod jar in dev runs as in production (1.116.1 nests `cobalt` 0.9.6 and `jzlib` 1.1.3; the GameTest log of a
+  `-Pwareworks.cc` run says `Found 4 dependencies adding them to mods collection`, two more than without CC), so they
+  are not listed.
+* **Code boundary.** Only `compat.computercraft.WareworksPeripherals` and `TerminalPeripheral` name a CC type;
+  `ComputerCraftCompat` names none and calls `WareworksPeripherals` only after `ModList#isLoaded("computercraft")`, so
+  without CC no CC class is ever resolved. The logic lives in `content.computer` and `core.computer`, which name no CC
+  type either. The one other place is the GameTest body class `gametest.ComputerCraftPeripheralBodies` (test code, not
+  in the jar), reached only through a generator that returns no tests without CC. Only `dan200.computercraft.api.*` is
+  imported. The JUnit text scan `compat.computercraft.ComputerCraftBoundaryTest` fails the build on a CC type anywhere
+  else, on a use of the compat package outside its allowed callers and on an import below `dan200.computercraft.api`.
+  Nothing of it is client code, so a dedicated server loads it like any other common class.
+* **Peripheral lookup.** CC: Tweaked asks the `PeripheralCapability` first and falls back to its generic peripherals
+  (the `inventory` methods over `Capabilities.ItemHandler.BLOCK`) only when that answers `null`
+  (`PlatformHelperImpl.PeripheralAccess#get`, read in the 1.116.1 sources). So the terminal is a `wareworks_terminal` and
+  no longer a generic inventory; every other Wareworks block keeps CC's generic behaviour.
+* **Create's own ComputerCraft layer is not used.** Its `ComputerBehaviour` builds peripherals through a fixed list of
+  Create's block entities and throws for any other, so a Wareworks block using it would crash as soon as CC is
+  installed (ADR-074).
+* **Checked at runtime** by `./gradlew runGameTestServer -Pwareworks.cc` (`ComputerCraftPeripheralGameTests`: the real
+  peripheral through CC's capability) and `./gradlew runServer -Pwareworks.cc`. The peripheral's logic is tested without
+  CC in every GameTest run (`ComputerAccessGameTests`).
+
+## Dev runtime only: Create: Electro Energetics
+
+| Artifact | Version | Scope | Repository |
+|---|---|---|---|
+| `maven.modrinth:create-electro-energetics` | **1.21.1-1.1.4** (`cee_version`), or any other with `-Pwareworks.cee=<version>` | localRuntime, **only** with `-Pwareworks.cee` | `https://api.modrinth.com/maven` (`includeGroup 'maven.modrinth'`) |
+
+Create: Electro Energetics (CEE, mod id `electroenergetics`) needs **no code and no dependency entry** (issue #9,
+ADR-074): its Electric Motor (`electroenergetics:<colour>_electric_motor`, 16 colours) is a Create
+`GeneratingKineticBlockEntity`, an ordinary rotation source, so it drives the stacker crane through the shaft under the
+dock like any other motor. The mod is only put into the dev runtime to prove that:
+
+* **Why Modrinth Maven.** CEE publishes no Maven artifact of its own (its build only publishes to a local `repo`
+  folder). Modrinth's Maven serves every Modrinth upload under `maven.modrinth:<slug>:<version number>`; the repository
+  is limited to that group. `transitive = false` like every other mod artifact here (the generated POM names nothing
+  we need). The version number is Modrinth's (`1.21.1-1.1.4`, published 2026-10-14, the newest for 1.21.1 NeoForge on
+  2026-10-27).
+* **Nested jar.** CEE 1.21.1-1.1.4 jar-in-jars `dev.ryanhcode.sable-companion:sable-companion-common-1.21.1` 1.6.0, which
+  FML picks up from the mod jar in dev runs as in production (`Found 3 dependencies adding them to mods collection`, one
+  more than without CEE), so it is not listed.
+* **No `neoforge.mods.toml` entry and no CurseForge relation.** Nothing in Wareworks calls CEE, so a version range would
+  only turn players away; CEE itself requires Create `[6.0.7,6.1.0)`, which every Create Wareworks accepts satisfies.
+  CEE is never compiled against and never bundled.
+* **Dev runs have no CEE by default.** `-Pwareworks.cee` (empty or `true`) adds `cee_version` to every run;
+  `-Pwareworks.cee=<version>` another Modrinth version; `-Pwareworks.cee=false` or no property none. It combines with
+  `-Pwareworks.cc`.
+* **Facts for players (CEE's default server config, `electroenergetics-server.toml`).** The motor stands still below
+  `motorMinVoltage` (80 V). Its stress capacity is V² / `motorResistance` (30 Ω) x `rotorStressMultiplier` (1)
+  SU, whatever speed it is set to; it turns at its set speed (default 32 RPM, up to 256). The crane needs 4 SU per RPM
+  (Wareworks' `stressImpact` default), so a motor alone carries it from about 88 V at 64 RPM, 124 V at 128 RPM and
+  175 V at 256 RPM; below that the network is overstressed and the crane waits (`OVERSTRESSED`, ADR-071's recheck
+  applies as for any source).
+* **Checked at runtime** by `./gradlew runGameTestServer -Pwareworks.cee` (`gametest.CeeMotorGameTests`: a white Electric
+  Motor under the dock, a Creative Battery wired to it with the Creative Wire Spool; at 230 V the crane stores and
+  retrieves with every item accounted for, at 70 V it stands still with no job and moves once the battery is raised to
+  230 V) and `./gradlew runServer -Pwareworks.cc -Pwareworks.cee`. The test class names no CEE type: blocks and items are
+  looked up by id, the battery's voltage is set through Create's `ScrollValueBehaviour` (millivolts), and the terminal
+  positions come from the blocks' public `getNodePositions(Level, BlockPos, BlockState)` called by reflection.
 
 ## Create / NeoForge APIs in use or planned
 
@@ -195,6 +286,11 @@ Classes in this table are verified only to exist. Method signatures must be chec
   category '<category>'` for keys 19.57 no longer has (`buttonNavigationVisibility`, `drawBackground`,
   `crashingTestItemsEnabled`), then `[WARN] ... Legacy MezzConfig source '...' had N problem(s)`. Seen in `run/visual`
   after switching versions; it is dev state under `run/`, not the mod's.
+* Harmless with CEE 1.21.1-1.1.4 in a dev run (`-Pwareworks.cee`): `Reference map 'electroenergetics.refmap.json' for
+  electroenergetics.mixins.json could not be read` (dev environment) and `Error loading class:
+  dev/ryanhcode/sable/api/SubLevelAssemblyHelper` / `@Mixin target dev.ryanhcode.sable.api.SubLevelAssemblyHelper was not
+  found electroenergetics.mixins.json:SubLevelAssemblyHelperMixin` (an optional mixin into the Sable mod, which is not
+  installed).
 * Create's version checker reports `OUTDATED Current: 6.0.10 Target: 6.0.10+mc1.21.1`. This is a version-string format mismatch, not an actual update.
 * A dev run whose world was last saved with a different `mod_version` logs once `CommonHooks/WP: The following mods have version differences that were not resolved: wareworks (version X -> Y)`. Seen in a `runServer` run, because `run/server/world` was created while `mod_version` was briefly `0.1.0` before it was reverted to `0.1.0-alpha`. It is a property of the saved dev world (`run/` is gitignored), not of the mod or the release jar; deleting the dev world removes it.
 * `runVisualTest` (dev tooling, ADR-014): the last pass leaves Flywheel's client config in `run/visual/config/flywheel-client.toml` at backend `off`; the next run selects `DEFAULT` again before its first pass, and other run directories are not affected. A failed run stops the game on purpose through a crash report (`run/visual/crash-reports/crash-*-client.txt`, description "Wareworks visual smoke test failed: ..."), so the Gradle task exits non-zero.

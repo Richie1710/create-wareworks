@@ -70,6 +70,21 @@ repositories {
             includeGroup 'mezz.jei'
         }
     }
+    maven {
+        name = 'CC: Tweaked'
+        url = 'https://maven.squiddev.cc'
+        content {
+            includeGroup 'cc.tweaked'
+        }
+    }
+    maven {
+        // Create: Electro Energetics publishes no Maven artifact of its own; it is only ever a dev runtime mod here.
+        name = 'Modrinth'
+        url = 'https://api.modrinth.com/maven'
+        content {
+            includeGroup 'maven.modrinth'
+        }
+    }
 }
 
 neoForge {
@@ -170,6 +185,23 @@ var jeiRuntimeProperty = providers.gradleProperty('wareworks.jei').orNull
 var jeiRuntimeVersion = jeiRuntimeProperty == null || jeiRuntimeProperty == 'false' ? null
         : (jeiRuntimeProperty.isEmpty() || jeiRuntimeProperty == 'true' ? project.jei_version : jeiRuntimeProperty)
 
+// CC: Tweaked is an optional integration on both sides (compat.computercraft, issue #9, ADR-074): compiled against its two
+// API jars and never bundled. The dev runs only get the full CC: Tweaked on request, like JEI, so every other run (the
+// visual scenarios included) stays exactly as it was:
+//   -Pwareworks.cc             the CC: Tweaked of cc_tweaked_version (gradle.properties)
+//   -Pwareworks.cc=<version>   any other published CC: Tweaked for this Minecraft version (e.g. a newer one)
+var ccRuntimeProperty = providers.gradleProperty('wareworks.cc').orNull
+var ccRuntimeVersion = ccRuntimeProperty == null || ccRuntimeProperty == 'false' ? null
+        : (ccRuntimeProperty.isEmpty() || ccRuntimeProperty == 'true' ? project.cc_tweaked_version : ccRuntimeProperty)
+
+// Create: Electro Energetics needs no code here (issue #9, ADR-074): its Electric Motor is an ordinary Create rotation
+// source. It only enters the dev runs on request, for the motor GameTests (gametest.CeeMotorGameTests):
+//   -Pwareworks.cee             the CEE of cee_version (gradle.properties)
+//   -Pwareworks.cee=<version>   any other CEE version published on Modrinth for this Minecraft version
+var ceeRuntimeProperty = providers.gradleProperty('wareworks.cee').orNull
+var ceeRuntimeVersion = ceeRuntimeProperty == null || ceeRuntimeProperty == 'false' ? null
+        : (ceeRuntimeProperty.isEmpty() || ceeRuntimeProperty == 'true' ? project.cee_version : ceeRuntimeProperty)
+
 dependencies {
     // Create's published POM declares many optional integrations (Architectury, FTB, JourneyMap, JEI, ...)
     // as runtime dependencies. We never want those, so every Create-related artifact is non-transitive
@@ -187,6 +219,15 @@ dependencies {
     if (jeiRuntimeVersion != null)
         localRuntime("mezz.jei:jei-${minecraft_version}-neoforge:${jeiRuntimeVersion}") { transitive = false }
 
+    // The forge-api jar needs the core-api jar (its module metadata says so); listed explicitly, as everything else here.
+    compileOnly("cc.tweaked:cc-tweaked-${minecraft_version}-core-api:${cc_tweaked_version}") { transitive = false }
+    compileOnly("cc.tweaked:cc-tweaked-${minecraft_version}-forge-api:${cc_tweaked_version}") { transitive = false }
+    if (ccRuntimeVersion != null)
+        localRuntime("cc.tweaked:cc-tweaked-${minecraft_version}-forge:${ccRuntimeVersion}") { transitive = false }
+
+    if (ceeRuntimeVersion != null)
+        localRuntime("maven.modrinth:create-electro-energetics:${ceeRuntimeVersion}") { transitive = false }
+
     testImplementation(platform('org.junit:junit-bom:5.11.4'))
     testImplementation('org.junit.jupiter:junit-jupiter')
     testRuntimeOnly('org.junit.platform:junit-platform-launcher')
@@ -202,6 +243,7 @@ var generateModMetadata = tasks.register('generateModMetadata', ProcessResources
             create_version_range   : create_version_range,
             ponder_version         : ponder_version,
             jei_version_range      : jei_version_range,
+            cc_tweaked_version_range: cc_tweaked_version_range,
             mod_id                 : mod_id,
             mod_name               : mod_name,
             mod_license            : mod_license,
@@ -332,5 +374,6 @@ publishMods {
         server = true
         requires('create')
         optional('jei')
+        optional('cc-tweaked')
     }
 }

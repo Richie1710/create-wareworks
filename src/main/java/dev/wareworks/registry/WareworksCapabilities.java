@@ -3,6 +3,7 @@ package dev.wareworks.registry;
 import java.util.List;
 import java.util.function.Consumer;
 
+import dev.wareworks.compat.computercraft.ComputerCraftCompat;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
@@ -59,6 +60,10 @@ import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
  * a warehouse's storage is a bay, and a pallet a machine could fill would be the portable container the owner refused.
  * A vanilla hopper under a pallet drains it and a Create Deployer can take from it; Create's own belts, chutes and
  * funnels cannot see it, which also means no Create logistics block can delete or teleport one.
+ * <p>
+ * <b>The last entry is optional</b> (issue #9, ADR-074): with CC: Tweaked installed, the warehouse terminal also answers
+ * CC's peripheral capability ({@code compat.computercraft}). Without CC: Tweaked the registrar returns at once and no CC
+ * class is ever loaded.
  */
 public final class WareworksCapabilities {
     private static final List<Consumer<RegisterCapabilitiesEvent>> REGISTRARS = List.of(
@@ -68,7 +73,8 @@ public final class WareworksCapabilities {
             WarehouseProductionBlockEntity::registerCapabilities,
             RackBayBlockEntity::registerCapabilities,
             FluidBayBlockEntity::registerCapabilities,
-            PalletEntity::registerCapabilities);
+            PalletEntity::registerCapabilities,
+            ComputerCraftCompat::registerCapabilities);
 
     private WareworksCapabilities() {
     }

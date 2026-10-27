@@ -52,6 +52,12 @@ dev.wareworks
 ├── command                    WareworksCommands (`/wareworks chunks`, permission 2: what the mod holds force-loaded per
 │                              dimension, and the release valve — a hard requirement of M19, because nothing outside
 │                              NeoForge's own validation callback can enumerate a mod's chunk tickets, ADR-031)
+├── compat                     integrations with optional mods that run on both sides
+│   └── computercraft          the optional CC: Tweaked integration (issue #9, ADR-074): ComputerCraftCompat (names no
+│                              CC type; registers the peripheral only after ModList#isLoaded), WareworksPeripherals
+│                              (the PeripheralCapability registration on the warehouse terminal) and TerminalPeripheral
+│                              (the `wareworks_terminal` peripheral, a thin shell over content.computer that only reads
+│                              Lua arguments and adds CC's item details) - the only two classes that name a CC type
 ├── config                     WareworksConfig (SERVER ModConfigSpec + safe typed getters)
 ├── core                       ── pure logic, no Minecraft world access ──
 │   ├── address                AisleGeometry (size only), StorageAddress (A-LL-PP + side), Side, RackPosition (M2;
@@ -204,6 +210,9 @@ dev.wareworks
 │   │                          one-tick carry window) and HandTruckLimits (the size budget of one carried container)
 │   ├── kinetics               OverstressRecheck (issue #38, ADR-071): when an overstressed kinetic consumer has its
 │   │                          network recomputed, and whether the recomputed totals show its flag is stale
+│   ├── computer               what a computer asks for, as pure logic (issue #9, ADR-074): ResultPage (a 1-based page
+│   │                          of at most 256 rows and the next page's start) and ItemChoice (which listed key an item
+│   │                          id and an optional fingerprint mean: the plain one, the only variant, ambiguous or absent)
 │   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
 │                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
 │                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
@@ -397,6 +406,12 @@ dev.wareworks
 │   ├── kinetics               StaleOverstressCheck (issue #38, ADR-071): clears an overstress Create keeps after the
 │   │                          network has the capacity again; one per stacker crane dock and Crafter Feeder, called
 │   │                          from their server tick
+│   ├── computer               the warehouse terminal as a computer sees it, without one CC type (issue #9, ADR-074):
+│   │                          TerminalComputerAccess (every peripheral method: the access rules, the cached stock
+│   │                          pages, requests through WarehouseTerminalBlockEntity#requestFromComputer, the request and
+│   │                          door tables), ComputerItemSelector (the item argument and its stable SHA-1 fingerprint),
+│   │                          ComputerReplies (the reply words: lowercase enum names) and ComputerArgumentException
+│   │                          (a Lua error's message)
 │   └── display                the seven Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -619,7 +634,15 @@ dev.wareworks
 │                              a container over the size budget), the click winning over a depot and a warehouse
 │                              input, a menu, a container item, a hopper, a tossed truck and a death that each end
 │                              with no loaded truck outside the player's inventory, and the penalty flags (issue #37,
-│                              ADR-070)
+│                              ADR-070);
+│                              ComputerAccessGameTests: the terminal's computer access without CC - stock pages, item
+│                              arguments, requests delivered by the crane, refusals, a stock rule's reserve held back
+│                              from a computer only, door requests, merging with a player's request, the config switch,
+│                              a removed terminal and the stock cache (issue #9, ADR-074); ComputerCraftPeripheralGameTests
+│                              with ComputerCraftPeripheralBodies: the real peripheral through CC's capability, only with
+│                              -Pwareworks.cc (its generator returns no tests without CC); CeeMotorGameTests: a Create:
+│                              Electro Energetics Electric Motor wired to a Creative Battery drives the crane at 230 V and
+│                              stops it at 70 V, only with -Pwareworks.cee, without a CEE type in the class (issue #9)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -7151,6 +7174,92 @@ port, and the production station has the very same body. (ADR-071 is taken by th
   GameTests `CraneJobGameTests#craneDeliversIntoATerminalAtTheStationStroke` and
   `#craneDeliversIntoAnOutputAtTheStationStroke` (the arm at the stroke for the whole drop, full stroke at storage,
   items conserved, the stroke-aware trip time).
+
+### ADR-074 — Computers talk to the warehouse through the terminal: an optional CC: Tweaked peripheral of our own, and Create: Electro Energetics needs no code ([issue #9](https://github.com/Richie1710/create-wareworks/issues/9))
+
+(ADR-073 belongs to M31, which was developed in parallel.)
+
+*Context:* Issue #9 asks for two integrations. The owner decided (2026-10-27): a **CC: Tweaked** peripheral that only
+loads when CC: Tweaked is installed, through which a computer can read stock and place requests that obey every
+existing rule; and proof that **Create: Electro Energetics**' Electric Motor drives the stacker crane, with what players
+need to know documented. Declined, not built: a CEE part in the crane recipe, powering the rail, CEE voltage signals
+instead of redstone, and any dependency on CC: Computer Energetics. Create 6.0.10 has its own ComputerCraft layer
+(`com.simibubi.create.compat.computercraft`), used by its Stock Ticker and Redstone Requester peripherals.
+
+*Decision:*
+* **The warehouse terminal is the only peripheral, type `wareworks_terminal`.** A request needs a destination station,
+  and the terminal is one (itself, or one of its package doors, exactly as a click names them). Its stock snapshot
+  already applies every rule its screen applies: network stock, promised requests, production and stock rules. The
+  controller was considered and **deferred**: it has no destination of its own, a second stock view would duplicate the
+  terminal's, and a computer reaches any terminal through a wired modem.
+* **Our own small `IPeripheral`, not Create's `ComputerBehaviour`.** `ComputerCraftProxy#behaviour` builds a
+  `ComputerBehaviour`, whose constructor looks the peripheral up in a fixed `instanceof` chain over Create's own block
+  entities and throws `IllegalArgumentException` for any other: a Wareworks block using it would crash as soon as CC
+  is installed, and there is no extension hook. We follow Create's **route** instead: the block capability
+  `PeripheralCapability.get()` registered behind the loaded check, `@LuaFunction(mainThread = true)` methods, CC's
+  `VanillaDetailRegistries.ITEM_STACK` for item details. `SyncedPeripheral` (attached-computer bookkeeping) is not
+  needed without events.
+* **Loading boundary.** CC's two API jars are `compileOnly` (1.116.1, the version Create 6.0.10 is built against;
+  every signature checked in 1.116.1 and 1.120.2); `neoforge.mods.toml` declares `computercraft` optional on both sides
+  with range `[1.116.1,)`. `compat.computercraft.ComputerCraftCompat` names no CC type and reaches
+  `WareworksPeripherals` only after `ModList#isLoaded("computercraft")`; `WareworksPeripherals` and `TerminalPeripheral`
+  are the only main classes that name a CC type. The logic is `content.computer.TerminalComputerAccess` (no CC type, so
+  every GameTest run drives it) with pure helpers in `core.computer`. `ComputerCraftBoundaryTest` (JUnit, a source scan)
+  keeps it that way. Nothing is client code, so a dedicated server is safe. Dev runs get CC only with `-Pwareworks.cc`.
+* **CC asks our capability first.** CC: Tweaked 1.116.1 (`PlatformHelperImpl.PeripheralAccess#get`) asks the
+  `PeripheralCapability` and falls back to its generic peripherals only when that answers `null`, so the terminal is a
+  `wareworks_terminal` and no longer a generic `inventory`. Every other block with `Capabilities.ItemHandler.BLOCK`
+  keeps CC's generic `inventory` peripheral, as before this decision. CC's `pushItems` there is CC moving items between
+  adjacent inventories, an existing property of CC; Wareworks code still moves items only through a crane.
+* **A computer request is an ordinary automation request.** `WarehouseTerminalBlockEntity#requestFromComputer` shares
+  one private checks method with the click path (without the player checks) and then makes the call a warehouse
+  output's redstone pulse makes: `controller.request(destination, key, amount, maxTerminalRequestAmount,
+  StockAccess.AUTOMATION)` with acknowledgement `ANY`. A stock rule's reserve therefore holds items back from computers
+  (`reserved`), the merged amount and the queue caps bound it, production starts as for a redstone request, and only
+  the crane moves items. A computer's refusal is not remembered on the terminal's goggles and a computer request does
+  not count towards a player's "most used" (the reasoning of ADR-065 D6 and ADR-037).
+* **Lua API v1:** `getStatus`, `getStock` (pages of at most 256, `nextStart`), `getItem`, `request(item, amount
+  [, door])` (`true, {id, granted, pending, producing, merged}` or `false, reason [, item]`, the reason being the
+  lowercase `RequestRejection` name), `getRequests`, `getRequest(id)`, `getDoors`. An item is a string id or
+  `{name, fingerprint}`; the fingerprint is 8 hex digits of a SHA-1 over the item id and the key's saved form with
+  sorted compound keys, because `ComponentHash` (ADR-064) mixes in identity hash codes and changes with every start.
+  Bad arguments, an ambiguous item, computer access switched off (server config `computers.computerAccess`) and a
+  terminal that is gone are Lua errors; refusals are return values. `ComputerRepliesTest` pins every reply word to its
+  enum. The full contract is `docs/computercraft.md`.
+* **Server thread and bounds.** Every method runs with `mainThread = true` and checks that it is on the server thread.
+  The stock snapshot is cached on the terminal for `WarehouseTerminalMenu.REFRESH_INTERVAL_TICKS` (10) ticks, the rate
+  of an open screen, in a transient field that is never saved. No persistence, payload or `WareworksNetwork.VERSION`
+  change, and no new game text (Lua replies are English machine words).
+* **Create: Electro Energetics needs no code.** Its Electric Motor is a Create `GeneratingKineticBlockEntity`.
+  `CeeMotorGameTests` (only with `-Pwareworks.cee`, CEE from the Modrinth Maven in the dev runtime only, no CEE type
+  in the class) wires a motor under the dock to a Creative Battery: at 230 V the crane stores and retrieves with every
+  item accounted for, at 70 V it stands still (`NO_ROTATION`) and resumes when the voltage is raised. No
+  `neoforge.mods.toml` entry: a version range would only lock players out of a mod we never call. The player facts
+  (default CEE config: stops below 80 V, capacity V²/30 SU, about 88 / 124 / 175 V at 64 / 128 / 256 RPM) are in the
+  README and `dependencies.md`.
+
+*Alternatives rejected:*
+* **Create's `AbstractComputerBehaviour` with a `SyncedPeripheral` subclass.** Possible in principle, but both are
+  Create internals (`compat.*`, not API) that would have to be re-verified on every Create update, and their only gain
+  is the attached-computer flag Create's own screens show.
+* **A controller peripheral in v1.** See above; it can be added later beside the terminal's without changing it.
+* **Events** (for example `wareworks_request_done`). They need a hook in the controller's delivery and cancel paths
+  and per-peripheral attachment bookkeeping. Deferred: polling `getRequest(id)` answers "is it through", and an event
+  can be added later without changing a method.
+* **Cancel.** A request's id is shared by merged clicks and list portions (ADR-020), so a computer cancelling "its"
+  request would cancel players' amounts too. Deferred until requests carry their contributors.
+* **`ComponentHash` as the fingerprint.** Not stable across restarts (see above).
+
+*Consequences:*
+* With CC installed, a computer can request at any terminal it can reach; the server switch `computerAccess` is the
+  operator's off switch. The queue caps and `maxTerminalRequestAmount` bound what a looping script can do.
+* An item beyond the terminal's `maxTerminalStockEntries` window cannot be named by a computer (`not_in_stock`), as it
+  cannot be clicked in the screen.
+* `getRequest` cannot tell delivered from cancelled in v1.
+* Tests: JUnit `ResultPageTest`, `ItemChoiceTest`, `ComputerRepliesTest`, `ComputerCraftBoundaryTest`; GameTests
+  `ComputerAccessGameTests` (every run), `ComputerCraftPeripheralGameTests` (only with `-Pwareworks.cc`) and
+  `CeeMotorGameTests` (only with `-Pwareworks.cee`). The in-game Lua checks (real Lua through Cobalt), the CEE wiring
+  by hand and a dedicated server with a player are checklist section BL.
 
 ## Persistence & sync
 

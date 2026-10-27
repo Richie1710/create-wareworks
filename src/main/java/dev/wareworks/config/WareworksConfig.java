@@ -530,6 +530,16 @@ public final class WareworksConfig {
         return HandTruckLimits.clampKiB(get(SERVER.handTruckMaxLoadKiB));
     }
 
+    // --- computers -----------------------------------------------------------------------------------------------
+
+    /**
+     * Whether CC: Tweaked computers may use a warehouse terminal as a peripheral (issue #9, ADR-074). Off, every
+     * peripheral method answers with an error; without CC: Tweaked the value is never read.
+     */
+    public static boolean computerAccess() {
+        return get(SERVER.computerAccess);
+    }
+
     /** The config values. Read them through the static getters of {@link WareworksConfig}. */
     public static final class Server {
         public final ModConfigSpec.IntValue maxAisleLength;
@@ -604,6 +614,8 @@ public final class WareworksConfig {
         public final ModConfigSpec.BooleanValue handTruckPreventSprinting;
         public final ModConfigSpec.BooleanValue handTruckPreventElytra;
         public final ModConfigSpec.IntValue handTruckMaxLoadKiB;
+
+        public final ModConfigSpec.BooleanValue computerAccess;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -1111,6 +1123,16 @@ public final class WareworksConfig {
                                     + "the maximum stays well below what one packet may carry.")
                     .defineInRange("maxLoadKiB", HandTruckLimits.DEFAULT_KIB, HandTruckLimits.MIN_KIB,
                             HandTruckLimits.MAX_KIB);
+            builder.pop();
+
+            builder.comment("Computers (CC: Tweaked, optional)").push("computers");
+            computerAccess = builder
+                    .comment("Lets CC: Tweaked computers read a warehouse terminal's stock and place requests through "
+                            + "it (peripheral type wareworks_terminal). Ignored without CC: Tweaked.",
+                            "A computer's request is an ordinary automation request: a stock rule's reserve holds "
+                                    + "items back from it like from a redstone request, and maxTerminalRequestAmount "
+                                    + "and the open request caps bound it.")
+                    .define("computerAccess", true);
             builder.pop();
         }
     }

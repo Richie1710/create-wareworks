@@ -198,6 +198,7 @@ mod in beta.
 | NeoForge | 21.1.250 or newer |
 | Create | 6.0.10 |
 | JEI (optional, client only) | any JEI for 1.21.1 (19.8.4.110 or newer), if installed |
+| CC: Tweaked (optional) | 1.116.1 or newer, if installed: computers can read stock and place requests |
 
 ## Installation
 
@@ -780,6 +781,44 @@ items; the amount field says how many items Fetch brings ingredients for.
 **EMI** is not supported directly: Wareworks has no EMI plugin, so with EMI and no JEI, EMI's **+** does not work at
 the terminal, and the crafting grid works exactly as without a recipe viewer.
 
+### CC: Tweaked
+
+With **CC: Tweaked** (1.116.1 or newer) installed, a **Warehouse Terminal** is a peripheral of type
+`wareworks_terminal`: a computer next to it, or connected through a wired modem, can read the terminal's stock list,
+place requests delivered into the terminal or through one of its package doors, and follow its open requests.
+
+```lua
+local terminal = peripheral.find("wareworks_terminal")
+local ok, result = terminal.request("minecraft:iron_ingot", 16)
+```
+
+A computer request is an ordinary request, like a warehouse output's redstone pulse: the crane fetches the items, a
+stock rule's reserve holds items back from it, and the usual caps (`maxTerminalRequestAmount`, the open request limits)
+apply. There are no events and no cancel yet. A server can switch computer access off with `computers.computerAccess`.
+Without CC: Tweaked nothing changes. The full Lua API with examples is in [docs/computercraft.md](docs/computercraft.md).
+
+### Create: Electro Energetics
+
+The **Electric Motor** of Create: Electro Energetics is an ordinary Create rotation source, so it drives a stacker crane
+through the shaft under the dock like any other motor; Wareworks needs no setting for it. What to know, with CEE's
+default config:
+
+* **Below 80 V the motor stops** (`motorMinVoltage`), and with it the crane, which waits as on any lost rotation and
+  carries on when the voltage is back.
+* **Its stress capacity depends on the voltage, not on the speed:** V² / 30 SU (`motorResistance` 30 Ω). A sagging
+  supply can therefore overstress the network, and the crane waits until the capacity is back.
+* The crane needs 4 SU per RPM (`stressImpact`), so a motor driving only the crane needs about:
+
+| Crane speed | Stress | Voltage |
+|---|---|---|
+| 64 RPM | 256 SU | 88 V |
+| 128 RPM | 512 SU | 124 V |
+| 256 RPM | 1024 SU | 175 V |
+
+The motor turns at 32 RPM until you set its speed. A different CEE or Wareworks config (`motorMinVoltage`,
+`motorResistance`, `rotorStressMultiplier`, `stressImpact`) changes these numbers; anything else on the same network adds
+its own stress.
+
 ### Create: Schematic Checker (for server operators)
 
 A server that runs **Create: Schematic Checker** has to list Wareworks in `config/CSC/config.toml`. The checker's
@@ -827,6 +866,8 @@ Requires a JDK 21 (`JAVA_HOME` must point to it).
 
 The development runs start without JEI. Add `-Pwareworks.jei` to run with the JEI the mod is compiled against, or
 `-Pwareworks.jei=<version>` for another JEI for Minecraft 1.21.1.
+In the same way, `-Pwareworks.cc[=<version>]` adds CC: Tweaked and `-Pwareworks.cee[=<version>]` Create: Electro
+Energetics to the development runs.
 
 On Windows use `gradlew.bat`. To play the showcase world, copy `run/showcase/saves/wareworks_showcase` into `run/saves`,
 start `./gradlew runClient` and pick **"Wareworks Showcase"**.
@@ -838,6 +879,7 @@ start `./gradlew runClient` and pick **"Wareworks Showcase"**.
   rules, config
 * [Stacker crane](docs/stacker-crane.md): block, state machine, kinetics, rendering, sounds
 * [Hand truck](docs/hand-truck.md): what it carries, the penalty, why a loaded truck stays with you, config
+* [Computers](docs/computercraft.md): the CC: Tweaked peripheral on the warehouse terminal, its Lua API and examples
 * [Dependencies](docs/dependencies.md): versions, Create APIs in use, known harmless log warnings
 * [Roadmap](docs/roadmap.md): milestones and planned features
 * [Manual test checklist](docs/manual-test-checklist.md): play-test checks

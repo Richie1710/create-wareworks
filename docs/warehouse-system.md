@@ -7212,6 +7212,36 @@ Classes: `content.controller.CraneDispatch` (package-private, owned by the contr
 
 Checked without a change: clamping and refusal of requests (§7.2), the `WAREHOUSE_FULL` back-off without oscillation, reroutes to storage or input and holding (§8), finishing and holding without a controller and adoption by a new one, the rotation guard, FIFO over several outputs, and the travel time model against real job durations.
 
+### 7.7 Computer requests (issue #9)
+
+With **CC: Tweaked** installed, a warehouse terminal is a peripheral of type `wareworks_terminal`; the full Lua API is in
+[`docs/computercraft.md`](computercraft.md), the decision in ADR-074. For the warehouse a computer is one more entry
+point for **ordinary requests**, and nothing else:
+
+* **A computer request is an automation request to the terminal as its destination**, or to one of the terminal's
+  package doors (§3.4, ADR-065) when the call names one. `WarehouseTerminalBlockEntity#requestFromComputer` runs the
+  checks of a click without the player's (removed terminal, amount, loaded controller, the door, held or producible)
+  and then makes the call a warehouse output's redstone pulse makes: `controller.request(destination, key, amount,
+  maxTerminalRequestAmount, StockAccess.AUTOMATION)`. The controller plans it, the crane carries it, and the
+  item-conservation rules of §8 hold unchanged; nothing in the computer code moves an item.
+* **Automation rules apply.** A stock rule's reserve holds items back from a computer as from a redstone request
+  (`reserved`, §7.2); the merged amount of one open request at one destination is capped by
+  `maxTerminalRequestAmount`, and `maxOpenRequests` and `maxOpenRequestsPerOutput` bound how many requests a computer
+  can keep open; an item that is only producible starts a production order as for a redstone request. A computer is never
+  asked a question (ADR-027): like a redstone request it passes `RequestAcknowledgement.ANY`, and the reserve clamps or
+  refuses it at the queue instead.
+* **It merges like any request.** A computer request for an item the destination already waits for is merged into that
+  open request, which may be a player's; the two then share one request id. That is why v1 has no cancel (ADR-074).
+* **Not remembered for players.** A computer's refusal never becomes the terminal's goggle line, and a computer request
+  never counts towards a player's "most used" order (§3.4, ADR-037).
+* **Reads are bounded and slightly stale.** The stock a computer reads is the terminal's own stock snapshot, cut to
+  `maxTerminalStockEntries` like the screen's and cached for 10 ticks, so a computer polling every tick costs one
+  snapshot per 10 ticks, the rate of an open screen. Pages hold at most 256 rows. Requests, doors and the status are
+  read live.
+* **No persistence of its own.** A computer request is saved as the controller request it is; the peripheral keeps no
+  state, so there is no save, payload or network change.
+* The server config switch `computers.computerAccess` (§9) turns the peripheral's methods off on a server.
+
 ## 8. Robustness rules (item conservation)
 
 **Invariant:** every item is in exactly one of: source inventory, crane grabber (persisted), target inventory, or an `ItemEntity` in the world.
@@ -7493,6 +7523,7 @@ The table above is covered by automated tests. What only a running game can reac
 | `preventSprinting` (`handTruck`) | true | a player carrying a loaded truck can neither start nor keep a sprint |
 | `preventElytra` (`handTruck`) | true | a player carrying a loaded truck cannot glide |
 | `maxLoadKiB` (`handTruck`) | 512 | the largest save data one carried container may have; a fuller one is refused with a message. Kept below the 2 MiB a network packet may carry |
+| `computerAccess` (section `computers`, issue #9) | true | whether CC: Tweaked computers may use a warehouse terminal as a peripheral (`wareworks_terminal`, §7.7, `docs/computercraft.md`). Off, every peripheral method answers with an error. Never read without CC: Tweaked |
 
 Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (`1/384 = 0.0026041666…`). The TOML file groups the keys into sections, so the full path of a key is `<section>.<key>`:
 
@@ -7505,6 +7536,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `controller` | `snapshotIntervalTicks`, `snapshotCycleTicks`, `dispatchIntervalTicks`, `retryTicks`, `holdRetryTicks`, `fullBackoffTicks`, `maxOpenRequests`, `maxOpenRequestsPerOutput`, `maxSnapshotsPerTick`, `collectPollIntervalTicks`, `maxProductionOrders`, `productionOrderTimeoutTicks`, `maxProductionPlanSteps`, `maxPlanIngredientItems`, `maxStockRules`, `stockRuleIntervalTicks`, `maxRestockOrders`, `maxRestockOrdersPerRule`, `maxRestockOrderAmount`, `maxRestockIngredientItems` | 1–1200, 0–432000, 1–200, 1–1200, 1–1200, 1–1200, 1–256, 1–256, 1–64, 1–1200, 1–64, 200–72000, 1–1024, 1–65536, 1–256, 5–1200, 0–64, 0–16, 1–65536, 1–65536 |
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
 | `handTruck` (issue #37) | `speedMultiplier`, `preventSprinting`, `preventElytra`, `maxLoadKiB` | 0.1–1.0, boolean, boolean, 16–1024 |
+| `computers` (issue #9) | `computerAccess` | boolean |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 

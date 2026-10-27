@@ -152,6 +152,11 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     private TerminalCraftOrder craftOrder;
     /** The craft order's numbers for the goggles: built on the server when observed, received on the client. */
     private TerminalCraftOrderState shownCraft = TerminalCraftOrderState.NONE;
+    /** The last {@link #computerStockSnapshot()}, transient (issue #9); {@code null} until a computer asks. */
+    @Nullable
+    private List<TerminalStockEntry> computerSnapshot;
+    /** The game time {@link #computerSnapshot} was built at. */
+    private long computerSnapshotTime;
 
     public WarehouseTerminalBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.terminalBufferSlots());
@@ -323,6 +328,24 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
                 pinned.add(entry(controller, rules, levels, key, 0L, 0L, false, 0L));
         }
         return window(entries, pinned);
+    }
+
+    /**
+     * Server: {@link #stockSnapshot()} for computers (issue #9, ADR-074), built at most once per
+     * {@link WarehouseTerminalMenu#REFRESH_INTERVAL_TICKS} ticks — the rate of one open screen — however often the
+     * computers attached to this terminal ask. The same list instance is returned until it is that old.
+     * <p>
+     * The cache is transient: plain fields, never saved or synced, and dropped when the block entity is invalidated
+     * (removal, chunk unload). Requests never read it; they check the live state themselves.
+     */
+    public List<TerminalStockEntry> computerStockSnapshot() {
+        long now = level == null ? 0L : level.getGameTime();
+        if (computerSnapshot == null || now < computerSnapshotTime
+                || now - computerSnapshotTime >= WarehouseTerminalMenu.REFRESH_INTERVAL_TICKS) {
+            computerSnapshot = stockSnapshot();
+            computerSnapshotTime = now;
+        }
+        return computerSnapshot;
     }
 
     /**
@@ -634,30 +657,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      */
     private TerminalRequestOutcome requestTo(Player player, ItemKey key, int amount, RequestAcknowledgement acknowledged,
             Optional<BlockPos> door) {
-        if (level == null || level.isClientSide || isRemoved())
-            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
-        // Player-scoped refusals are answered, not remembered: they say nothing about this terminal (see above).
-        if (!canPlayerUse(player))
-            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.OUT_OF_REACH));
-        if (amount < 1)
-            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.INVALID_AMOUNT));
-        Optional<WarehouseControllerBlockEntity> found = controller();
-        if (found.isEmpty())
-            return TerminalRequestOutcome.of(rememberHere(door, RequestResult.rejected(RequestRejection.NO_CONTROLLER)));
-        WarehouseControllerBlockEntity controller = found.get();
-        // G-door (ADR-065 D4): the one rule the screen's door rows are built by, before the stock is looked at, and
-        // answered rather than remembered (D6).
-        if (door.isPresent()) {
-            Optional<RequestRejection> notADoor = PackageDoors.refusal(level, controller, door.get());
-            if (notADoor.isPresent())
-                return TerminalRequestOutcome.of(RequestResult.rejected(notADoor.get()));
-        }
-        // Resolve against the server's own state: a key the aisle neither holds nor can produce is refused before it
-        // reaches the queue, whatever the client claimed. ItemKey compares item and components, so a matching key is
-        // the indexed one. A producible key is allowed through here and the controller decides how much of it can
-        // really be promised (M11, ADR-024).
-        if (controller.countOf(key) <= 0 && !controller.producibleKeys().contains(key))
-            return TerminalRequestOutcome.of(rememberHere(door, RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
+        RequestCheck checked = checkRequest(player, key, amount, door);
+        if (checked.refusal().isPresent())
+            return TerminalRequestOutcome.of(checked.refusal().get());
+        WarehouseControllerBlockEntity controller = checked.controller();
         // One call for the question and the request: the controller measures what this click would cross from the very
         // snapshot it would then start the order against, so what the player is told and what happens cannot differ and
         // a click walks the aisle's patterns once (M15 review fix). It is also the re-check of an answer that was given
@@ -681,6 +684,90 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         if (outcome.result().filter(RequestResult::isAccepted).isPresent())
             TerminalPreferences.countRequest(player, key);
         return outcome;
+    }
+
+    /**
+     * Server: an automation request from a computer attached to this terminal (issue #9, ADR-074,
+     * {@code docs/computercraft.md}) for up to {@code amount} items of {@code key}, delivered here or to the package
+     * door at {@code door}.
+     * <p>
+     * <b>An ordinary request, and the very one a warehouse output's redstone pulse makes</b>: the checks of a click
+     * ({@link #checkRequest}) minus the player's reach, then the controller's request with
+     * {@link StockAccess#AUTOMATION} and {@link RequestAcknowledgement#ANY}. So a stock rule's reserve holds items back
+     * from a computer as it does from redstone, {@code maxTerminalRequestAmount} bounds the merged amount, the open
+     * request caps bound how many a computer can queue, a production chain starts exactly as for a redstone request,
+     * and only the crane moves the items. A computer is asked nothing, so the outcome is always a result.
+     * <p>
+     * Nothing is remembered: no refusal goes into this terminal's {@code lastRejection} (its goggle line is about the
+     * players at it, as ADR-065 D6 says for doors), and nothing counts towards anyone's "most used" order. The request
+     * itself is saved with the controller's queue like every other.
+     *
+     * @param door the package door to deliver to; empty, or this terminal's own position, for here
+     * @return the accepted request with the amount this call granted, or the reason it was refused
+     */
+    public RequestResult requestFromComputer(ItemKey key, int amount, Optional<BlockPos> door) {
+        Objects.requireNonNull(key, "key");
+        Optional<BlockPos> target = door == null ? Optional.empty()
+                : door.filter(pos -> !pos.equals(worldPosition)).map(BlockPos::immutable);
+        RequestCheck checked = checkRequest(null, key, amount, target);
+        if (checked.refusal().isPresent())
+            return checked.refusal().get();
+        return checked.controller().request(target.orElse(worldPosition), key, amount,
+                Math.max(1, WareworksConfig.maxTerminalRequestAmount()), StockAccess.AUTOMATION);
+    }
+
+    /**
+     * The checks every request at this terminal passes before it reaches the controller, in this order: server side and
+     * not removed ({@link RequestRejection#NO_CONTROLLER}); for a player, {@link #canPlayerUse}
+     * ({@link RequestRejection#OUT_OF_REACH}); {@code amount >= 1} ({@link RequestRejection#INVALID_AMOUNT}); a loaded
+     * controller ({@link RequestRejection#NO_CONTROLLER}); the door ({@link PackageDoors#refusal}); the item held or
+     * producible ({@link RequestRejection#NOT_IN_STOCK}).
+     * <p>
+     * A player's refusals of the aisle and of the item, for a request to here, are remembered ({@link #rememberHere});
+     * a computer's ({@code player == null}) never are.
+     *
+     * @param player the clicking player, or {@code null} for a computer
+     */
+    private RequestCheck checkRequest(@Nullable Player player, ItemKey key, int amount, Optional<BlockPos> door) {
+        if (level == null || level.isClientSide || isRemoved())
+            return RequestCheck.refused(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
+        // Player-scoped refusals are answered, not remembered: they say nothing about this terminal (see above).
+        if (player != null && !canPlayerUse(player))
+            return RequestCheck.refused(RequestResult.rejected(RequestRejection.OUT_OF_REACH));
+        if (amount < 1)
+            return RequestCheck.refused(RequestResult.rejected(RequestRejection.INVALID_AMOUNT));
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return RequestCheck.refused(remembered(player, door,
+                    RequestResult.rejected(RequestRejection.NO_CONTROLLER)));
+        WarehouseControllerBlockEntity controller = found.get();
+        // G-door (ADR-065 D4): the one rule the screen's door rows are built by, before the stock is looked at, and
+        // answered rather than remembered (D6).
+        if (door.isPresent()) {
+            Optional<RequestRejection> notADoor = PackageDoors.refusal(level, controller, door.get());
+            if (notADoor.isPresent())
+                return RequestCheck.refused(RequestResult.rejected(notADoor.get()));
+        }
+        // Resolve against the server's own state: a key the aisle neither holds nor can produce is refused before it
+        // reaches the queue, whatever the client claimed. ItemKey compares item and components, so a matching key is
+        // the indexed one. A producible key is allowed through here and the controller decides how much of it can
+        // really be promised (M11, ADR-024).
+        if (controller.countOf(key) <= 0 && !controller.producibleKeys().contains(key))
+            return RequestCheck.refused(remembered(player, door,
+                    RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
+        return new RequestCheck(controller, Optional.empty());
+    }
+
+    /** A player's refusal goes through {@link #rememberHere}; a computer's ({@code player == null}) is never stored. */
+    private RequestResult remembered(@Nullable Player player, Optional<BlockPos> door, RequestResult result) {
+        return player == null ? result : rememberHere(door, result);
+    }
+
+    /** What {@link #checkRequest} found: the controller to ask, or the refusal. */
+    private record RequestCheck(@Nullable WarehouseControllerBlockEntity controller, Optional<RequestResult> refusal) {
+        static RequestCheck refused(RequestResult result) {
+            return new RequestCheck(null, Optional.of(result));
+        }
     }
 
     /**
@@ -1751,6 +1838,13 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // The clipboard and the order were saved together, but a tick mark is written to the item and the lines live in
         // the block entity: re-asserting them once after the load is what makes the two agree whatever the save caught.
         listTicksPending = listOrder != null;
+    }
+
+    /** Removal or chunk unload: the computers' stock cache is dropped with the block entity (issue #9). */
+    @Override
+    public void invalidate() {
+        super.invalidate();
+        computerSnapshot = null;
     }
 
     @Override

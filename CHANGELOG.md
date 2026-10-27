@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Computers can use a warehouse terminal (CC: Tweaked)** ([#9](https://github.com/Richie1710/create-wareworks/issues/9)).
+  With CC: Tweaked 1.116.1 or newer installed, a Warehouse Terminal is a peripheral of type `wareworks_terminal`. A
+  computer next to it or behind a wired modem can page through its stock list (with stable fingerprints for item
+  variants and CC's item details on request), look up one item, request items into the terminal or through one of its
+  package doors, list and follow the open requests there, and read the doors and the warehouse's status. A computer
+  request is an ordinary automation request like a warehouse output's redstone pulse: the crane fetches the items, a
+  stock rule's reserve holds items back from it, and `maxTerminalRequestAmount` and the open request caps bound it. A
+  refused request answers with a reason such as `not_in_stock` or `reserved`. Results are bounded (256 rows a page)
+  and the stock is read at most every 10 ticks. There are no events and no cancel in this version. The new server
+  config switch `computers.computerAccess` turns it off. CC: Tweaked stays optional; without it nothing changes. The
+  Lua API with examples is in `docs/computercraft.md`.
+- **Create: Electro Energetics' Electric Motor is tested as a crane power source**
+  ([#9](https://github.com/Richie1710/create-wareworks/issues/9)). It drives the stacker crane through the shaft under
+  the dock like any Create motor, with no setting needed. The README explains what to know with CEE's default config:
+  the motor stops below 80 V, its stress capacity is V²/30 SU, and the crane needs about 88 V at 64 RPM, 124 V at
+  128 RPM and 175 V at 256 RPM.
+
 ## [0.17.1-beta] - 2026-10-27
 
 ### Fixed

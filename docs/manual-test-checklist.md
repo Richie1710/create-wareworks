@@ -3567,3 +3567,58 @@ you get tired of waiting, and put it back before judging check 160.
      core.
 362. **Save while the arm is out.** Save and quit while the arm is out at a terminal (a large request), then rejoin:
      the arm settles at half a block and the delivery completes with nothing lost or duplicated.
+
+## BL. Computers and Electro Energetics ([issue #9](https://github.com/Richie1710/create-wareworks/issues/9))
+
+> Section BK belongs to M31, which was developed in parallel. With CC: Tweaked installed the warehouse terminal is a
+> peripheral of type `wareworks_terminal` (ADR-074, `docs/computercraft.md`); Create: Electro Energetics' Electric Motor
+> drives the crane like any Create motor. The GameTests `ComputerAccessGameTests` (every run),
+> `ComputerCraftPeripheralGameTests` (`-Pwareworks.cc`) and `CeeMotorGameTests` (`-Pwareworks.cee`) check the logic,
+> the real peripheral called from Java and the motor at 230 V and 70 V. What is left is real Lua, real wiring and a
+> real server. Setup: CC: Tweaked 1.116.1 or newer and Create: Electro Energetics installed (`./gradlew runClient
+> -Pwareworks.cc -Pwareworks.cee` in a dev checkout), a stocked warehouse with a terminal.
+
+363. **Find it.** Place an advanced computer next to the terminal and run `lua`, then
+     `t = peripheral.find("wareworks_terminal")`: `t` is a table. `peripheral.getType(t)` is `wareworks_terminal`,
+     and `peripheral.getNames()` lists it on the side it touches. `t.getStatus()` shows `connected = true`,
+     `status = "ready"`, the aisle letter and the same item types and totals as the terminal's goggles.
+364. **Read the stock.** `t.getStock()` returns the rows in the screen's order; the counts match the screen. With
+     `t.getStock({ limit = 2 })` there is a second value, the start of the next page; `t.getStock({ start = 3,
+     limit = 2 })` continues there. `t.getStock({ name = "minecraft:oak_log", detailed = true })[1].details` holds
+     CC's item details. `t.getItem("minecraft:dirt")` is `nil` when the warehouse has none.
+365. **Request.** `ok, r = t.request("minecraft:iron_ingot", 16)` gives `ok = true` and a table `r` with an `id`.
+     The crane fetches the ingots into the terminal's buffer; `t.getRequests()` lists the request while it is open,
+     and `t.getRequest(r.id)` returns `nil` once it is delivered. Nothing appears in the buffer that the crane did not carry.
+366. **Refusals and errors.** `t.request("minecraft:dirt", 1)` with no dirt in stock returns `false, "not_in_stock"`.
+     `t.request("minecraft:iron_ingot", 0)`, `t.request("minecraft:iron_ingot", 2.5)` and `t.request("nothing:here", 1)`
+     raise errors with readable messages.
+     Set a stock keeper's reserve on an item and request more than lies above it: the computer gets only what lies
+     above the reserve (or `false, "reserved"`), while a click on the screen can still take it. Run
+     `for i = 1, 30 do print(t.request("minecraft:iron_ingot", 1024)) end` with several item types: it ends in
+     `request_full`, `output_full` or `queue_full`, never in more items than the caps allow.
+367. **Merged with a player.** Click an item in the screen, then request the same item from the computer before the
+     crane delivers: the computer's answer has `merged = true` and the screen shows one request with both amounts.
+368. **Package door.** At a terminal with a package door (warehouse port with a Packager and a sign), `t.getDoors()`
+     lists it with its label, rack address and state. `t.request("minecraft:iron_ingot", 8, { x = ..., y = ..., z =
+     ... })` with that door's position sends the items through the door as a screen request to the door would; a
+     position that is no door returns `false, "not_a_door"`.
+369. **Wired modem.** Connect a second terminal far away to the computer with wired modems and cable; it appears as
+     `wareworks_terminal_0` (or similar). Requests through it deliver at that terminal.
+370. **Config off.** Set `computers.computerAccess = false` in the server config: every method raises
+     `computer access is disabled on this server`; the terminal's screen still works. Set it back: the computer
+     works again without replacing anything.
+371. **Terminal gone.** Break the terminal while a program holds `t`: the next call raises an error (`terminal is gone`
+     or CC's own error for a detached peripheral), and nothing else breaks.
+372. **Dedicated server.** Run a dedicated server with CC: Tweaked and join it with a player: checks 363 and 365 work
+     the same, and the server log shows no error naming wareworks or computercraft.
+373. **Without CC: Tweaked.** Remove CC: Tweaked: the game starts, the world loads, the terminal works as before and
+     its tooltip and screen are unchanged.
+374. **CEE motor drives the crane.** Place a white Electric Motor facing up under the dock, set it to 128 RPM, and wire
+     it to a Creative Battery set to 230 V with the Creative Wire Spool. The crane runs, stores items from an input
+     and delivers a request. The Stressometer on the network shows a capacity of about V² / 30 SU (about 1763 SU at
+     230 V).
+375. **Below 80 V it stops.** Lower the battery to 70 V: the motor stops, the crane's goggles say it has no rotation
+     and it starts no job; no item is lost. Raise it to 230 V again: the crane carries on by itself.
+376. **Voltage sag overstresses.** At 128 RPM lower the battery to 100 V: the motor turns but the network is
+     overstressed (about 333 SU for 512 SU of crane), and the crane waits "overstressed". Raise the voltage above
+     about 124 V: the crane runs again within about five seconds.

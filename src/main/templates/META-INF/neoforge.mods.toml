@@ -44,3 +44,12 @@ type = "optional"
 versionRange = "${jei_version_range}"
 ordering = "NONE"
 side = "CLIENT"
+
+# Optional, both sides: with CC: Tweaked installed, the warehouse terminal is a peripheral a computer can read the stock
+# from and place requests through (issue #9, docs/computercraft.md).
+[[dependencies.${mod_id}]]
+modId = "computercraft"
+type = "optional"
+versionRange = "${cc_tweaked_version_range}"
+ordering = "NONE"
+side = "BOTH"

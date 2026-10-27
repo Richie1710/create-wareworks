@@ -55,3 +55,9 @@ Named as later steps of finished milestones, and not scheduled yet:
   right list exactly once, and a delivery while the list's terminal is not loaded has to be remembered by the
   warehouse, or the list would be sent twice. What it must contain is recorded in ADR-065 (D10) in
   `docs/architecture.md`.
+* **More for computers**, the step after the CC: Tweaked peripheral
+  ([issue #9](https://github.com/Richie1710/create-wareworks/issues/9)). A computer can read a warehouse terminal's
+  stock and place requests there (`docs/computercraft.md`). Not yet: an event when a request is through (today a
+  script polls `getRequest`), cancelling a request (merged requests share one id, so a computer would cancel a player's
+  items too; requests first have to know who asked for what) and a peripheral on the controller. Why each was deferred
+  is recorded in ADR-074 in `docs/architecture.md`.
