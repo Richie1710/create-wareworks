@@ -7072,16 +7072,18 @@ owner's server is not known, and does not need to be: the fix targets the part t
 * **A mixin into `KineticNetwork#addSilently` or `KineticBlockEntity#initialize`.** It would fix Create's members too, but
   would be the mod's first mixin (ADR-066, ADR-070 rejected one for less) against private Create internals.
 * **Recomputing on every tick, or periodically while not overstressed.** Pays per tick for a healthy network, and while
-  the generators' chunk is unloaded a recomputation would itself drop them and overstress a network that was fine; a
-  recheck that runs only while already overstressed never causes what it repairs.
+  the generators' chunk is unloaded a recomputation would itself drop them and overstress a network that was fine.
 * **Setting `networkDirty` instead of calling `updateNetwork`.** Same result one tick later, but without the sync fallback
   for equal totals.
 
 *Consequences:*
 * Cost: one counter per tick per dock and feeder; while overstressed, one `updateNetwork` (two iterations over the
-  members, two more only when the flag survives it) every 100 ticks. The recomputation looks members up with `Level#getBlockEntity` as Create does on every
-  network change, which for a generator in an unloaded chunk loads that chunk once and drops it from the network; this
-  can only happen while the member is already overstressed.
+  members, two more only when the flag survives it) every 100 ticks.
+* The recomputation looks members up with `Level#getBlockEntity`, as Create does on every network change, and that
+  loads a chunk that is not loaded and drops the generator in it, which would overstress a network whose only fault was
+  this member's stale flag (release audit for 0.17.1-beta). The recheck is therefore skipped while any member's chunk
+  is not loaded (`Level#isLoaded`, which loads nothing) and tried again 100 ticks later; it runs once the generators'
+  chunk is back.
 * A network whose own machines only (no Wareworks consumer) were saved overstressed is still Create's behaviour.
 * A stale overstress lasts at most about 40 ticks after a load and about 100 ticks after the generators came back; until
   then the goggles say "overstressed".

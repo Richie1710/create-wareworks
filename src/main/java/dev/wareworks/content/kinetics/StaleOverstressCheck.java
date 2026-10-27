@@ -4,6 +4,7 @@ import com.simibubi.create.content.kinetics.KineticNetwork;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 
 import dev.wareworks.core.kinetics.OverstressRecheck;
+import net.minecraft.world.level.Level;
 
 /**
  * Clears an overstress that Create keeps after its network has the capacity again (issue #38, ADR-071). One instance
@@ -16,9 +17,12 @@ import dev.wareworks.core.kinetics.OverstressRecheck;
  * that is not overstressed costs one counter reset per tick. No mixin and nothing of Create's is replaced; both calls
  * are public and are what Create itself runs after a member joins or leaves.
  * <p>
- * Create's recomputation drops a generator whose block entity is no longer the one in the world (its chunk unloaded)
- * and looks it up with {@code Level#getBlockEntity}, as on every network change; since the check only runs while the
- * member is already overstressed, it never drops a generator from a network that was fine.
+ * Create's recomputation looks every member up with {@code Level#getBlockEntity}, which on the server loads a chunk
+ * that is not loaded, and drops a member whose block entity is not the one found there. A generator whose chunk is
+ * unloaded would so be loaded for a moment without ticking, dropped, and its capacity lost until its chunk ticks
+ * again. The check therefore skips a recheck while any member's chunk is not loaded and tries again on the next one.
+ * A member whose chunk was unloaded and is loaded again is dropped as Create always does: its new block entity has
+ * already joined in its place.
  */
 public final class StaleOverstressCheck {
     private final OverstressRecheck schedule = new OverstressRecheck();
@@ -28,10 +32,20 @@ public final class StaleOverstressCheck {
         if (!schedule.tick(be.isOverStressed()) || !be.hasNetwork())
             return;
         KineticNetwork network = be.getOrCreateNetwork();
+        if (!allMembersLoaded(be.getLevel(), network))
+            return;
         network.updateNetwork();
         // Short-circuit: the totals are only recomputed a second time when the flag survived updateNetwork.
         if (be.isOverStressed() && OverstressRecheck.staleAfterRecompute(true, network.calculateCapacity(),
                 network.calculateStress()))
             network.sync();
+    }
+
+    /** Whether every member's chunk is loaded, so a recomputation loads none (members include the sources). */
+    private static boolean allMembersLoaded(Level level, KineticNetwork network) {
+        for (KineticBlockEntity member : network.members.keySet())
+            if (!level.isLoaded(member.getBlockPos()))
+                return false;
+        return true;
     }
 }
