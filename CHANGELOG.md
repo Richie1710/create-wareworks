@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1-beta] - 2026-10-27
+
 ### Fixed
 
 - **A stacker crane no longer stays "Paused: overstressed" after a server restart although its kinetic network has
-  the capacity** ([#38](https://github.com/Richie1710/create-wareworks/issues/38)). Create keeps the overstress a machine was saved with, and a steady
-  network (water wheels with an unchanged flow, a fixed Rotation Speed Controller) never recomputes it. A crane that
+  the capacity** ([#38](https://github.com/Richie1710/create-wareworks/issues/38)). Create keeps the overstress a
+  machine was saved with, and a steady network (water wheels with an unchanged flow, a fixed Rotation Speed Controller) never recomputes it. A crane that
   had been overstressed once, for example while the chunk of its generators was unloaded and the network changed, so
   stayed paused after every restart until a block of the network was broken and placed again. An overstressed crane
   now has its network recomputed two seconds after it is loaded and then every five seconds for as long as it stays
@@ -1362,7 +1364,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.17.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.17.1-beta...HEAD
+[0.17.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.0-beta...v0.17.1-beta
 [0.17.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.16.0-beta...v0.17.0-beta
 [0.16.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.15.0-beta...v0.16.0-beta
 [0.15.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.14.0-beta...v0.15.0-beta
