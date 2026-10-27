@@ -7,15 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0-beta] - 2026-10-27
+
 ### Changed
 
 - **The clipboard list question is a table** ([#36](https://github.com/Richie1710/create-wareworks/issues/36)).
   Pressing Fetch on a list now shows one row per entry with its icon, name, wanted amount and status: available
   (green), crafted (blue, with how much comes from stock and how much is produced), partly (gold) or not possible
   (red, with the reason and the item it names). The rows are sorted with the problems first and scroll with the mouse
-  wheel; a name too long for its column is shortened and shown in full when you hover it. A Missing section at the end
-  sums every missing material and names the entries that need it, and the question names the result, e.g. "Fetch what
-  there is (441 of 500)?"
+  wheel or the arrow, Page Up/Down, Home and End keys; a name too long for its column is shortened and shown in full
+  when you hover it. A Missing section at the end sums every missing material and names the entries that need it, and
+  the question names the result, e.g. "Fetch what there is (441 of 500)?"
 - **Server and players have to update together.** A client with this version cannot join a server with an older one,
   and the other way round, because the clipboard list question now carries one row per list entry
   ([#36](https://github.com/Richie1710/create-wareworks/issues/36))
@@ -1320,7 +1322,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.15.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.16.0-beta...HEAD
+[0.16.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.15.0-beta...v0.16.0-beta
 [0.15.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.14.0-beta...v0.15.0-beta
 [0.14.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.13.1-beta...v0.14.0-beta
 [0.13.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.13.0-beta...v0.13.1-beta
