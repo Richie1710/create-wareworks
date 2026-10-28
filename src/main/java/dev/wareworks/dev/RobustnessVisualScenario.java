@@ -2046,8 +2046,26 @@ public final class RobustnessVisualScenario implements VisualScenario {
      * After an interruption the request to the door is the one that was saved: still open for the whole order, with
      * nothing delivered forgotten, and every item it counts as delivered really in the door's port — and none of it in
      * the terminal.
+     * <p>
+     * Or the order is already done (issue #41): the world runs from the moment the player is back, and after the rejoin
+     * the crane only has its trip in hand and one more to carry, which on a quick restart of the power train fits into
+     * the ticks before this check. A finished order has no request left, so it counts as having come back only when the
+     * door's port holds the whole of it, the crane none and the terminal none: an order lost on the way leaves at most
+     * the trips before it in the port.
      */
     private void assertDoorOrderCameBack(MinecraftServer server, VisualContext context, String after) {
+        if (controller(server, context).requestsFor(doorPos(context)).isEmpty()) {
+            long inPort = port(server, context).bufferedItems().count(DOOR_ITEM);
+            int held = crane(server, context).heldItems().count(DOOR_ITEM);
+            long inTerminal = terminal(server, context).bufferedItems().count(DOOR_ITEM);
+            if (inPort != DOOR_ORDER || held != 0 || inTerminal != 0)
+                throw new VisualTestException("the door order is gone after " + after + " although the door's port "
+                        + "holds " + inPort + " of " + DOOR_ORDER + " (" + doorDeliveredBefore + " before), the crane "
+                        + held + " and the terminal " + inTerminal);
+            LOGGER.info(PREFIX + "robustness: PASS the door order came back after {} and finished already: {} of {} "
+                    + "in the door ({} before)", after, inPort, DOOR_ORDER, doorDeliveredBefore);
+            return;
+        }
         RetrievalRequest<ItemKey, BlockPos> request = requireDoorOrderOpen(server, context, "after " + after);
         if (request.requested() != DOOR_ORDER || request.delivered() < doorDeliveredBefore)
             throw new VisualTestException("the door order came back as " + request + " after " + after + ", with "
