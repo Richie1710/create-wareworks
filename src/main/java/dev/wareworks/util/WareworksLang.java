@@ -1753,7 +1753,12 @@ public final class WareworksLang {
 
     /** "Status: phase" with the phase highlighted. */
     public static LangBuilder craneStatus(CranePhase phase) {
-        return translate(GOGGLES_CRANE_STATUS, translate(cranePhaseKey(phase)).style(ChatFormatting.WHITE))
+        return craneStatus(cranePhaseKey(phase));
+    }
+
+    /** "Status: text" for a status key relative to the {@code wareworks} namespace. */
+    public static LangBuilder craneStatus(String statusKey) {
+        return translate(GOGGLES_CRANE_STATUS, translate(statusKey).style(ChatFormatting.WHITE))
                 .style(ChatFormatting.GRAY);
     }
 

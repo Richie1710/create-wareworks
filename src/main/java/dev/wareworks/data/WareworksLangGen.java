@@ -1244,6 +1244,8 @@ public final class WareworksLangGen {
                 case STRANDED -> "Cut off from its dock: the rails between them are closed or gone";
             });
         }
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_STATUS_HOLDING), "Holding position");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_STATUS_MOVING_ASIDE), "Moving aside");
         lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_TRAFFIC_WAITING_FOR), "Waiting for crane %1$s");
         lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_RESERVED), "Reserved: %1$s to %2$s");
         // The estimate never counts a wait, and says so while there is one (ADR-075 §8.3).

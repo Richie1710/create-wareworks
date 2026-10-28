@@ -226,7 +226,8 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
     public void addGoggleLines(List<Component> tooltip, int indent, boolean withHeld, boolean detailed,
             boolean bending, OptionalLong remainingTicks) {
         Optional<CraneTrafficInfo> shownTraffic = detailed ? traffic : Optional.empty();
-        WareworksLang.craneStatus(phase).forGoggles(tooltip, indent);
+        WareworksLang.craneStatus(traffic.flatMap(CraneTrafficLang::statusKey)
+                .orElse(WareworksLang.cranePhaseKey(phase))).forGoggles(tooltip, indent);
         if (pauseReason != CranePauseReason.NONE)
             WareworksLang.cranePaused(pauseReason.langKey()).forGoggles(tooltip, indent);
         shownTraffic.flatMap(info -> CraneTrafficLang.trafficLine(info, railAddress(info.heldBranch(), info.heldX())))

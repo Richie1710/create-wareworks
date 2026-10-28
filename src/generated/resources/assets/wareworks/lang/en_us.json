@@ -250,6 +250,8 @@
   "wareworks.gui.goggles.crane_roster.waiting": "%1$s: waiting for crane %2$s",
   "wareworks.gui.goggles.crane_route": "From %1$s to %2$s",
   "wareworks.gui.goggles.crane_status": "Status: %1$s",
+  "wareworks.gui.goggles.crane_status_traffic.holding": "Holding position",
+  "wareworks.gui.goggles.crane_status_traffic.moving_aside": "Moving aside",
   "wareworks.gui.goggles.crane_traffic.crane_stopped": "Waiting for crane %1$s: it is stopped",
   "wareworks.gui.goggles.crane_traffic.crane_unloaded": "Waiting for crane %1$s: its chunk is not loaded",
   "wareworks.gui.goggles.crane_traffic.giving_way": "Giving way to crane %1$s",

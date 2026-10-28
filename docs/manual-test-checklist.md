@@ -3699,8 +3699,8 @@ you get tired of waiting, and put it back before judging check 160.
 394. **Moving aside.** Place a home point for crane 2 in the middle of the main run, and order something crane 1 must
      fetch beyond it: crane 2 moves aside — to its dock, because its home point is in the way — and drives back to its
      home point about ten seconds after crane 1 is gone.
-395. **Why a crane waits.** Look at a waiting crane's dock through goggles: the line names the other crane and the rail it
-     holds, "About N s left, not counting the wait" stands under the job, and "Reserved: … to …" names the stretch.
+395. **Why a crane waits.** Look at a waiting crane's dock through goggles: the status reads "Holding position" ("Hält
+     an"; "Moving aside" while it makes way), the line names the other crane and the rail it holds, "About N s left, not counting the wait" stands under the job, and "Reserved: … to …" names the stretch.
      Read it in German as well.
 396. **A crane without rotation.** Stop one crane's motor while the other works: the other keeps working; a job that
      needs the stopped crane's rails waits with "Waiting for crane 2: it is stopped". Motor on: everything finishes.

@@ -233,6 +233,8 @@
   "wareworks.gui.goggles.crane_roster.waiting": "%1$s: wartet auf Gerät %2$s",
   "wareworks.gui.goggles.crane_route": "Von %1$s nach %2$s",
   "wareworks.gui.goggles.crane_status": "Status: %1$s",
+  "wareworks.gui.goggles.crane_status_traffic.holding": "Hält an",
+  "wareworks.gui.goggles.crane_status_traffic.moving_aside": "Weicht aus",
   "wareworks.gui.goggles.crane_traffic.crane_stopped": "Wartet auf Gerät %1$s: Es steht still",
   "wareworks.gui.goggles.crane_traffic.crane_unloaded": "Wartet auf Gerät %1$s: Sein Chunk ist nicht geladen",
   "wareworks.gui.goggles.crane_traffic.giving_way": "Lässt Gerät %1$s vor",

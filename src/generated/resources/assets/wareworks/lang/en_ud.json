@@ -250,6 +250,8 @@
   "wareworks.gui.goggles.crane_roster.waiting": "%2$s ǝuɐɹɔ ɹoɟ buıʇıɐʍ :%1$s",
   "wareworks.gui.goggles.crane_route": "%2$s oʇ %1$s ɯoɹℲ",
   "wareworks.gui.goggles.crane_status": "%1$s :snʇɐʇS",
+  "wareworks.gui.goggles.crane_status_traffic.holding": "uoıʇısod buıpןoH",
+  "wareworks.gui.goggles.crane_status_traffic.moving_aside": "ǝpısɐ buıʌoW",
   "wareworks.gui.goggles.crane_traffic.crane_stopped": "pǝddoʇs sı ʇı :%1$s ǝuɐɹɔ ɹoɟ buıʇıɐM",
   "wareworks.gui.goggles.crane_traffic.crane_unloaded": "pǝpɐoן ʇou sı ʞunɥɔ sʇı :%1$s ǝuɐɹɔ ɹoɟ buıʇıɐM",
   "wareworks.gui.goggles.crane_traffic.giving_way": "%1$s ǝuɐɹɔ oʇ ʎɐʍ buıʌı⅁",

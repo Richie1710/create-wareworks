@@ -26,6 +26,10 @@ import net.minecraft.network.chat.MutableComponent;
 public final class CraneTrafficLang {
     /** {@code "Crane %1$s of %2$s"}: the dock's line in a warehouse with several cranes. */
     public static final String GOGGLES_CRANE_NUMBER = "gui.goggles.crane_number";
+    /** {@code "Holding position"}: the status of a crane its traffic line says stands still. */
+    public static final String GOGGLES_STATUS_HOLDING = "gui.goggles.crane_status_traffic.holding";
+    /** {@code "Moving aside"}: the status of a crane that drives out of another crane's way. */
+    public static final String GOGGLES_STATUS_MOVING_ASIDE = "gui.goggles.crane_status_traffic.moving_aside";
     /** {@code "Waiting for crane %1$s"}: a held path whose rail the ledger did not name. */
     public static final String GOGGLES_TRAFFIC_WAITING_FOR = "gui.goggles.crane_traffic.waiting_for";
     /** {@code "Reserved: %1$s to %2$s"}: the stretch of rails a crane holds beyond the blocks it stands on. */
@@ -125,6 +129,17 @@ public final class CraneTrafficLang {
         else
             built = WareworksLang.translate(line.langKey());
         return Optional.of(built.style(colour));
+    }
+
+    /**
+     * The status text that replaces the phase while traffic decides what the crane does: a crane held at the rails is
+     * still in a travel phase, and "Travelling to the target" under a line that says it waits contradicts itself.
+     * Empty when the phase tells the truth.
+     */
+    public static Optional<String> statusKey(CraneTrafficInfo info) {
+        if (info.line() == CraneTrafficInfo.Line.MOVING_ASIDE)
+            return Optional.of(GOGGLES_STATUS_MOVING_ASIDE);
+        return info.line().isWaiting() ? Optional.of(GOGGLES_STATUS_HOLDING) : Optional.empty();
     }
 
     /** "Reserved: A-03 to B-02". */
