@@ -127,7 +127,9 @@ dev.wareworks
 │   │                          surface reads — never saved, M25, issue #16, ADR-039). Since M21
 │   │                          CranePose carries the branch it stands on and a continuous yaw in quarter turns, and
 │   │                          CraneMotion gains exactly one precedence rule — turn towards the leg's heading with X
-│   │                          frozen — between "retract the arm" and "move X and Y"
+│   │                          frozen — between "retract the arm" and "move X and Y";
+│   │                          RemainingTrip (about how long a crane's job still takes, priced like the planner) and
+│   │                          WarehouseThroughput (the sum of several cranes' minutes, M33, issue #14, ADR-075)
 │   ├── terminal               the terminal screen's pure logic (M6): StockCount / StockLine (one item line),
 │   │                          StockListModel (list, search, sort, paging), TerminalSearch, TerminalSort,
 │   │                          TerminalAmounts (click → amount), CountFormat (compact cell amounts),
@@ -222,6 +224,14 @@ dev.wareworks
 │   ├── computer               what a computer asks for, as pure logic (issue #9, ADR-074): ResultPage (a 1-based page
 │   │                          of at most 256 rows and the next page's start) and ItemChoice (which listed key an item
 │   │                          id and an optional fingerprint mean: the plain one, the only variant, ambiguous or absent)
+│   ├── traffic                several cranes on one warehouse (M33, issue #14, ADR-075): TrackGraph (one cell per aisle
+│   │                          block, every dock a dead end, the escape search), DockSite, TrafficWant (the stop a
+│   │                          crane asks for, a pure function of its state), TrafficPriority, TrafficHealth,
+│   │                          TrafficCrane (what the ledger reads of one crane), EscapeCheck (I3: nobody cut off
+│   │                          from its dock), TrafficLedger (claims, atomic committed grants, the once-per-tick pass,
+│   │                          yield orders), TrafficVerdict / TrafficWait (what a crane is told and why), CraneChoice
+│   │                          (the nearest free crane and per-crane eligibility) and HomeAssignment (home points
+│   │                          paired with cranes)
 │   └── stock                  stock rules (M15, ADR-027): StockRule (item + minimum/maximum/reserve and every
 │                              question about them), StockRuleAdjustment (what a clamp had to correct), StockRules
 │                              (one aisle's rules, shadowing, the cap), StockLevels (stocked/inbound/expected/
@@ -320,6 +330,10 @@ dev.wareworks
 │   │                          promised at each bay; rebuilt from the tracked jobs and the queue, never saved) and
 │   │                          FillRecipes (the fluid, the amount and the empty container a filled key derives to,
 │   │                          memoised per key) (M31, issue #21, ADR-073)
+│   │                          CraneMember (one crane of a warehouse with several: number, dock, dock site, stranded),
+│   │                          CraneTraffic (the warehouse's crane list, track graph and ledger, the per-tick pass at
+│   │                          first access), CraneCounts / CraneRoster / CraneRosters (what the goggles, the terminal
+│   │                          and the displays say about every crane) (M33, issue #14, ADR-075)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock (since M21 four derived cosmetic
 │   │   │                      connection booleans and a CLOSED state the topology really reads; the wrench toggles
 │   │   │                      CLOSED instead of turning the now cosmetic AXIS), RailNetworkScan (M2 as RailScan,
@@ -331,7 +345,11 @@ dev.wareworks
 │   │   │                      (server-played crane sounds, M4); CraneThroughputLines (the four throughput goggle
 │   │   │                      lines, M25, issue #16, ADR-039: the numbers stay pure, only the Components live here);
 │   │   │                      MastHeightValueBox (value box on the rail bed, M4 review);
-│   │   │                      CraneServerHooks (resets the once-per-server warning state on ServerStartingEvent, M5)
+│   │   │                      CraneServerHooks (resets the once-per-server warning state on ServerStartingEvent, M5);
+│   │   │                      CraneMembership (a member crane's frame: its controller, the anchor dock, its dock site,
+│   │   │                      number and crane count), CraneTrafficClaim (the claim it saves), CraneTrafficInfo (the
+│   │   │                      traffic line its goggles show) and DockJoinStatus (why a dock facing a warehouse's rails
+│   │   │                      is no crane of it) (M33, issue #14, ADR-075)
 │   │   └── head               HandlingHead (API), HeldItems, InventoryGrabber (MVP impl), TransferContext /
 │   │                          TransferContexts (storage interface, input, output; since M18 a fourth kind, the
 │   │                          extract-only CollectContext over the inventory behind a collecting port, ADR-030) (M3)
@@ -552,6 +570,10 @@ dev.wareworks
 │                              door; registered last on both stations, M26, issue #18, ADR-040;
 │                              warehouse/ordering_to_a_door: the terminal's door button sends a click to that door,
 │                              registered last on the terminal and the output, M27, ADR-065 D15)
+│                              and TwoCraneScenes (warehouse/two_cranes: a second dock joining the comb of
+│                              PonderNetwork#twoCranes, both cranes at once, a reservation and a wait, moving aside and
+│                              the pass on a comb, registered after warehouse/junction on the crane and the rail; two
+│                              cranes moving at once are scripted with CraneScript#start, M33, issue #14, ADR-075)
 ├── data                       WareworksDatagen (GatherDataEvent hooks), WareworksLangGen (English lang),
 │                              WareworksBlockStateGen (the blockstate generators Create's BlockStateGen does not cover:
 │                              the terminal's multipart state, M10, ADR-022; the stock keeper's three lamp models over
@@ -786,6 +808,10 @@ dev.wareworks
 │                              an empty bucket to the bay and the filled one on to the terminal, partial service, the
 │                              red row and the make offer, a census of items and fluid around every move, M31, issue
 │                              #21, ADR-073),
+│                              CranesVisualScenario (two cranes on one comb: both moving, one waiting for the other's
+│                              rails, a redstone retrieval and a terminal order at once, a crane moving aside to its
+│                              dock, a crane without rotation, the goggle lines in English and German, issue #14,
+│                              ADR-075),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -793,7 +819,8 @@ dev.wareworks
                                M21, so no pure class has to import a world type),
                                GoggleObservers (server-side, per player: notifies the block entity a
                                goggle-wearing player looks at), SyncThrottle (shared goggle sync throttle),
-                               LogThrottle (shared rate limit for the storage-interop diagnostics, M5)
+                               LogThrottle (shared rate limit for the storage-interop diagnostics, M5),
+                               CraneTrafficLang (every lang key and builder of several cranes, M33, ADR-075)
 ```
 
 `interface` is a Java keyword, so the Warehouse Interface lives in `content.storage`.
@@ -7431,6 +7458,242 @@ instead of redstone, and any dependency on CC: Computer Energetics. Create 6.0.1
   `ComputerAccessGameTests` (every run), `ComputerCraftPeripheralGameTests` (only with `-Pwareworks.cc`) and
   `CeeMotorGameTests` (only with `-Pwareworks.cee`). The in-game Lua checks (real Lua through Cobalt), the CEE wiring
   by hand and a dedicated server with a player are checklist section BL.
+
+### ADR-075 — Several cranes share one warehouse: a free dock facing into the rails joins it; cranes reserve whole routes of single blocks atomically; no crane may cut another off from its dock; the oldest request wins and cranes in its way move aside, to their dock the second time; the nearest free crane takes the job (M33, [issue #14](https://github.com/Richie1710/create-wareworks/issues/14))
+
+*Context:* Up to 0.17.1 a warehouse had exactly one crane. A second dock on the same rails was a wall
+(`NetworkStop.SECOND_DOCK`), and a comb of side aisles had the throughput of one machine (M22). Issue #14 asks for
+several cranes on one rail network, each with its own dock, sharing one controller, one stock list and every terminal.
+The owner decided (2026-10-27, on the issue, binding): traffic is a path reservation like railway signals, **no
+passing**; a crane reserves every stretch up to its stop before it moves, otherwise it waits; every crane may go
+anywhere; deadlock is ruled out by the reservation rule and the design has to prove it; a crane standing in another's
+way moves aside to its parking spot. The warehouse assigns: the nearest free crane takes the job with a deterministic
+tie-break; home points only say where each crane parks. At most `aisle.maxCranesPerNetwork` cranes per network, default
+4; a dock beyond it is refused and reported like a second dock is. The binding design was written before the build and
+is summarised here; where the build deviated, the deviation is listed at the end.
+
+*Decision:*
+* **Who joins.** A dock **without a controller of its own** whose facing points at an aisle block of a warehouse becomes
+  a **member**: crane 2, 3, … in discovery order (`RailGraph.Cell.FREE_DOCK`, `RailNetwork#memberDocks`). It is an aisle
+  block of the warehouse that connects **only along its facing**, so a member dock at the far end of an aisle, facing
+  back, extends that aisle by one block, and one beside an aisle forms a one-rail stub aisle with its own letter. A dock
+  **with** its own controller stays a separate warehouse and a wall, exactly as before (`OTHER_DOCK`, and
+  `RobustnessGameTests#twoAislesShareARackPlane` unchanged). A dock beyond the cap is a wall reported as the new stop
+  **`MAX_CRANES`**, like the other configured maxima; at **`maxCranesPerNetwork = 1` every free dock is a wall reported as
+  `SECOND_DOCK`, which reproduces 0.17.1 exactly** and is the off switch and the regression oracle, as
+  `aisle.maxBranches = 1` was for M21. The controller learns its members from its own dock's scan (no world search, no
+  registry index); a joining crane's pose, target and job are relabelled into the warehouse frame through the world
+  blocks they stand for (`CraneMembership`, the anchor is the warehouse's own dock).
+* **The segment is one aisle block.** `core.traffic.TrackGraph` has one cell per aisle block, edges along the branches,
+  link blocks merged. A railway signals the stretch between junctions because a train is longer than a block; a crane
+  is one block long, and with junction-to-junction segments two cranes on one straight aisle with a dock at each end
+  could never both work. Goggles speak of *stretches* ("Reserved: A-03 to B-02").
+* **Every dock cell is a dead end** (degree 1), because a dock connects only along its facing. The whole deadlock
+  argument rests on this one property (`TrackGraphTest#everyDockIsADeadEnd`).
+* **Claims, atomic grants, commitment** (`core.traffic.TrafficLedger`). A crane holds a claim: the one or two cells its
+  chassis covers, plus the whole route of its current grant. It asks for the **whole route to its next stop** and gets
+  all of it or nothing (I1: claims are disjoint; I2: a crane moves only inside its claim — together: *two cranes never
+  share a block*). A granted route is **committed** until the crane stands on its stop, even if its target changes; the
+  next route is posted ahead during the pick, so no tick is lost. The gate in `CraneExecution` decides each tick:
+  normal tick, a pure `CraneEvent.Detour` along a route it already holds, or a hold tick with `CraneSpeeds.STOPPED`
+  (nothing changes, no timer runs, not a pause). A crane needs a grant only to leave its standing cells: extending,
+  transferring, turning in its cell never need one.
+* **The pass is once per game tick per warehouse, at the first access** from the controller or any member, so it reads
+  every crane as it stood at the end of the previous tick and its result does not depend on block entity tick order.
+  It does nothing when no crane's fingerprint changed.
+* **The escape invariant I3: no crane may ever cut another off from its own dock.** For every healthy crane there is a
+  path from where it will stand (its committed stop, or its standing cells) to its own dock that avoids where every
+  other crane will stand; a grant is given only if I3 still holds with the requester at its stop. On a line with a dock
+  at each end this is exactly "no passing"; on a comb a side aisle is a siding, so one crane stands in it while the
+  other drives the main run; on a ring the cranes go round.
+* **Priority and moving aside** (`TrafficPriority`). Yield orders first, with the priority of the request they serve;
+  then `JOB` wants, oldest first, then lower crane number; then `REST` wants. The **top request** is the oldest waiting
+  job. Lower requests that would touch the top request's route or its escape, or make their crane a new blocker, are
+  held back (`GIVING_WAY`). Every crane standing in the top request's way, or that would be cut off by it, gets a
+  **yield order** to its park: its home point the first time — if that is not in the way itself and I3 holds there —
+  and its **dock** the second time, or at once when the home point is in the way.
+* **Why it cannot deadlock** (design §6, five lemmas and a theorem, checked by machine, below). *Safety:* a grant adds
+  only cells no other claim holds, claims otherwise only shrink, a crane moves only inside its claim. *Dead ends:* a
+  crane on its own dock lies on no path between two other cells, so it is never in anybody's route or escape.
+  *I3 is preserved* by every grant, settle and release. *Someone can always go home:* in a standing state with I3,
+  every crane not on its dock can be granted a yield to its dock along its escape, and with it there every other
+  escape survives. *The top request is admissible once its blockers are gone.* Hence every job want is granted after
+  finitely many passes: movers finish, no lower grant creates a new blocker, each blocker yields at most twice per top
+  request (the second time to its dock, where it can never block again), and then the top request is granted.
+  **Why a lock order alone would not do:** a crane always holds the block it stands on, so hold-and-wait is built into
+  the physics — two cranes on a line, each with a stop behind the other, wait for each other's standing block under
+  any order. Only moving one out of the way breaks that, and only a rule like I3 guarantees there is somewhere to move.
+  *Not covered:* an unpowered, overstressed, broken, unloaded or stranded crane keeps the safety guarantee but not the
+  progress guarantee; the cranes that need its blocks wait and say why.
+* **The warehouse decides who does what** (`CraneDispatch`, `core.traffic.CraneChoice`). One planner run decides *what*
+  to do with what any free crane could reach; the crane that reaches the source soonest **at its own speeds** takes it
+  (ties: fewer blocks, then lower crane number), and the planner re-runs once for that crane if it was not the planning
+  one. Per crane a rack is excluded above its own mast, beside another crane's dock cell (the blocks beside a dock are
+  its own crane's), or behind a crane that has a job. With one crane the run is literally today's.
+* **The ledger with several jobs.** Every crane's job is adopted into the one `ReservationLedger`; reports are accepted
+  from every member. New `Reservation.Kind.BUFFER` covers items promised out of an input or a collect buffer, never
+  counted into the stock (and skipped by `LocationReservationSummary`). The planner subtracts the transit and room other
+  jobs already hold at a delivery target (`reservedInbound`). One crane collects from a port at a time, and one crane
+  brings a retrieve to a warehouse port at a time. In a one-crane warehouse every one of these is zero, because it
+  plans only while its crane holds no job.
+* **Home points per crane.** Returning home is now also on for one straight aisle when it has more than one crane.
+  Home points are paired with cranes by route distance from each crane's dock, then crane number, then
+  `RackPosition.ORDER` (`core.traffic.HomeAssignment`); a crane without one parks on its own dock.
+* **Persistence.** An optional `Traffic` compound on a dock (frame, number, crane count, claim) and an optional `Cranes`
+  list on the controller (members by dock position, number, dock site, stranded flag, and the last pose, claim and job
+  the controller saw of each). A warehouse with one crane
+  writes neither, so every save up to 0.17.1 reads and writes back byte for byte
+  (`MigrationGameTests#onecranesaveisbytewise`). After a load the ledger is rebuilt from exactly the claims the cranes
+  saved.
+* **What a player sees.** The dock's goggles name the crane ("Crane 2 of 3"), why it waits and for whom ("Waiting for
+  crane 1: it holds the rails at A-07", "Moving aside for crane 1", "Waiting for crane 2: it is stopped"), the reserved
+  stretch, the remaining trip ("About 14 s left", "… not counting the wait") and, for a lower mast, which levels the
+  others serve. The controller lists the cranes ("Cranes: 3 (2 working, 1 waiting)", one line each, at most six).
+  Home points say which crane waits there. The terminal shows "3 cranes: 2 working, 1 waiting"
+  (`WareworksNetwork.VERSION` 19; 18 is M31). A crane on a fill trip (M31, ADR-073) reads "filling" in the crane list,
+  and a fill trip's containers count towards its target's inbound room, so a second crane never plans into room a
+  filled bucket on its way will take. Crane Status gains a traffic variant of its activity row on a dock, and both
+  Crane Status and Crane Throughput are now also bound to the **controller**, after its four sources so every existing
+  link keeps its preselected one: one row per crane, and the warehouse's sum.
+
+*Alternatives rejected:*
+* **Junction-to-junction segments.** Too coarse: two cranes could never share a straight aisle with a dock at each end.
+* **Passing on a line, explicit zones per crane, a per-crane assignment screen.** The owner decided against passing;
+  zones and a screen add a configuration a player has to keep in step with the rails, and home points already say where
+  a crane belongs.
+* **A lock order alone**, or a banker's-algorithm search over global states: neither removes the hold-and-wait the
+  physics builds in (above), and a state search is not bounded the way one pass is.
+* **Posting wants into a double buffer and deciding at the end of the tick.** The first-access pass gives the same
+  tick-order independence without a second copy of every want.
+* **A seventh throughput bucket for "waiting for another crane".** It would change the packed throughput format and
+  every goggle line for one cause the traffic line already names; a hold counts as `BLOCKED`.
+* **Merging the warehouses of two controllers.** It would have to merge two stock indexes, two request queues and two
+  sets of production orders; a dock with its own controller stays its own warehouse, and its goggles say that it faces
+  the other one.
+
+*Consequences:*
+* A warehouse with one crane runs no traffic code, builds no track graph, gates no tick and writes no new tag; every JUnit
+  test from before, the tick-exact trip GameTests and every one-crane visual scenario stay valid unchanged, and a
+  whole `runGameTestServer` run with `aisle.maxCranesPerNetwork = 1` passes.
+* **Behaviour change for old worlds:** a dock without a controller that faces into a warehouse's rails, which used to be
+  a wall, joins as a crane (CHANGELOG *Changed*; `1` is the way back). A downgrade to 0.17.1 ignores the new tags, the
+  member dock is a wall again and its crane is put back on its own rails by the lost-aisle recovery; no item is lost.
+* Throughput on one straight aisle is limited by physics: two cranes split it, and every order at one end serialises
+  them. The docs recommend docks at opposite ends and side aisles as sidings.
+* Cost: a pass is skipped when nothing changed; otherwise O(n · (n + N)) per candidate grant with n ≤ 16 cranes and
+  N ≤ 1025 cells. `TrafficCostTest` pins the worst case the config allows (16 cranes, 1009 cells: 661 279 cells searched
+  against a bound of 4 · 16² · 1025).
+* Tests. JUnit `core.traffic`: `TrackGraphTest`, `EscapeCheckTest`, `TrafficPassTest` (one behaviour per rule),
+  `TrafficFailureTest`, `TrafficCostTest`, `CraneChoiceTest`, `HomeAssignmentTest`, `TrafficWantTest`,
+  `TrafficSimulationPropertyTest` (seeded random runs on rings, combs, dead-end trees, ladders, tees and lines, 300 per
+  shape; every tick I1, I2 and I3, every job finishes, the crane order does not change the trace) and
+  `TrafficModelCheckTest` (every reachable state of small graphs with two and three cranes; no reachable state is a
+  fixed point with waiting wants — the proof checked by machine). Both fail with move-aside orders or the cut-off check
+  disabled. Plus `RailGraphTest`, `HomeReturnTest`, `CraneStateMachineTest`, `ReservationLedgerTest`, `JobPlannerTest`,
+  `RemainingTripTest`, `WarehouseThroughputTest`, `CraneTrafficInfoTest`, `CraneRosterTest`, `TrafficRestoreTest`
+  (deviations 26 and 27) and `MemberJobsTest` (deviation 28). GameTests `MultiCraneGameTests` (32),
+  `MigrationGameTests#onecranesaveisbytewise` / `#twocranesavereplaysmidflight`,
+  `RailNetworkGameTests#networktakesaseconddockasacrane`, `DisplayLinkGameTests` (crane sources on the controller), all
+  of them also in a run with the cap at 1. Visual scenario `cranes`, the `two cranes in flight` phase of `robustness`,
+  and the Ponder scene `warehouse/two_cranes` (owner's runs, `docs/manual-test-checklist.md` section BM).
+
+*Deviations from the design:*
+1. **Stopped or unloaded cranes keep their escape;** only a stranded crane is exempt from I3. A crane granted a stop
+   between a stopped crane and its dock left both stuck for good after the stopped one recovered
+   (`TrafficFailureTest`). To match, a waiting request is never made the top request while a crane that cannot move
+   holds its route, stands on its route or its way back to its dock, or would be cut off by it.
+2. **Driving cranes are not ordered aside;** a crane in another's way that is still driving a granted route finishes it
+   first, and only standing cranes get a yield order.
+3. **The move-aside count resets** once the top request stops waiting; the bound of the proof is unchanged.
+4. **The waiting time lives in the ledger** (`TrafficLedger#since`, restored on load), not in `TrafficWant`.
+5. **The path search is a priority queue** (a step costs 1, a discouraged cell one more), the same as the 0-1 search.
+6. **An extended arm always gets a normal tick,** with or without a grant, so a held crane can still retract.
+7. **Giving way stops once the top request is granted;** lower requests are held back only while it waits.
+8. **Smaller three-crane shapes in the exhaustive check** (a tee of 8 cells, a 2 × 2 square loop, a comb of 9): the ring
+   of 10 cells with three cranes ran the test JVM out of memory.
+9. **More classes than listed:** `TrafficCrane` (the ledger's input), `TrafficHealth`, the `Commitment` record and the
+   gate helpers `gate()` / `detourRoute()`.
+10. **Member docks are not rails:** they count neither towards `aisle.maxNetworkRails` nor towards `RailNetwork#rails`.
+11. **A dock lets others join only with its own controller behind it;** a controller-less dock scans with a limit of one
+    crane, so it discovers exactly what 0.17.1 did, and rescans at once when a controller is placed behind it.
+12. **A dock joins at once, even with a job** (the design said: once idle and empty). Its job is relabelled through the
+    world blocks and adopted, as a controller placed behind a busy dock adopts that dock's job.
+13. **Without a loaded controller a crane holds as soon as it would leave its blocks** (the design let it finish its
+    committed move). Just as safe; the claim is restored when the controller is back.
+14. **The track graph lives in `CraneTraffic`,** not in `WarehouseLayout`, because it depends on the member docks; it is
+    still built once per shape and crane list. **Committed routes are dropped whenever the rails or the crane list
+    change,** not only on a remap; the first ledger built after a load keeps them.
+15. **Crane numbers follow discovery order with stranded members last;** a crane leaving renumbers the ones after it,
+    so last known claims are stored by dock position. **Stranded** means: the block the dock faces is no longer an aisle
+    block of the warehouse while the machine still stands on one. A dock whose chunk is unloaded stays listed as an
+    obstacle. How the cap treats cranes the warehouse already has is deviation 24.
+16. **Eligibility:** a crane whose chunk is not loaded counts as busy (its job cannot be seen); a crane that is merely
+    stopped but idle does not, so the other waits with `CRANE_STOPPED`.
+17. **One crane per warehouse port at a time** for retrieves (added), because the reserved inbound room does not cover a
+    retrieve that has not picked yet.
+18. **Client packet keys:** the detour is `Route` inside the `Traffic` compound, and the dock's tag also carries the crane
+    count (`Cranes`). With several cranes a home point never reports `SINGLE_AISLE`; one no crane is paired with reports
+    `SECOND`, or `UNREACHABLE` when no crane can reach it. A joining idle crane turns to face its aisle at once.
+19. **The new codecs are pure `pack()` / `unpack()` records tested in JUnit;** the NBT and byte-buffer round trips are
+    GameTests, because the JUnit source set has no Minecraft classes (ADR-013). `WarehouseRegistry` gained one
+    read-only query (`findByAisleBlock`, no new index), asked only while a player looks at a dock.
+20. **Two tooltips reworded, not one:** the home point's "a warehouse has only one" became false too. **The remaining trip
+    slightly overestimates** (a full arm stroke and transfer at every stop). With several cranes the **controller shows
+    the crane list instead of crane 1's own block**, and its list lines name no item. **Crane Throughput on the
+    controller sums the loaded cranes only.** German numbers cranes "Gerät N".
+21. **The Ponder stage is the junction scene's comb with the second dock on its last block,** not one main run with a
+    single side aisle. With one side aisle the two cranes can never pass (I3 cuts the one in the siding off as soon as
+    the other goes beyond it), so the scene could not show the one thing a player has to see; with two side aisles one
+    crane stands in aisle C while the other drives past it into aisle B. The beats are: the second dock joins, both work
+    at once, home points, a reservation and a wait, crane 2 moving aside to its **dock** because its home point is on
+    crane 1's way, the pass on the comb, the rule. A Ponder level draws no goggle tooltip, so the goggle line is a
+    caption.
+22. **The `cranes` scenario** keeps the build of the design but has no input or belt (no act stores, so the racks are
+    filled before the warehouse reads them); both terminal orders go to the one terminal in the middle, so
+    `cranes-waiting` is whichever crane has to wait for the other at that block (by the assignment, crane 2 for crane 1);
+    the design's production supply in act 5 is a redstone retrieval at a warehouse output in aisle D (production on two
+    cranes is GameTest `productionsuppliesrunonbothcranes`); the German goggle shots are taken at the frozen moments
+    themselves, the client language switched while the ticks stand still, rather than restaged afterwards.
+    `GoggleShots` gained an overload whose camera is computed when the step starts.
+23. **The robustness phase** gives the second dock an input of its own beside its dock (the input beside crane 1's dock
+    is crane 1's alone), runs before the broken blocks and takes its scaffolding down again afterwards, puts what the
+    broken dock dropped into crane 1's input (an item entity would despawn before the run ends), and dedicates one rack
+    to the stranded leg's item so crane 2 drives far enough from its dock before the rail behind it closes.
+
+*Corrections from the review of the build (2026-10-28):*
+
+24. **A crane is never dropped mid trip.** The flood used to take free docks in its own order up to the cap, so a new
+    dock nearer the warehouse's own dock, or a lowered cap, pushed a working member out of the scan; it left the
+    warehouse, its claim left the ledger and it drove on ungated. Now (a) the docks the controller already lists,
+    stranded ones included, keep their places in the scan against any dock it meets for the first time
+    (`RailGraph.CellProbe#listedDock`), (b) stranded members keep their places of the cap, so a new dock only gets what
+    is left after them (`CellProbe#reservedPlaces`) and a warehouse never has more cranes than the cap, (c) a listed
+    dock is taken even beyond a lowered cap: its crane is kept as a **leaving** member that takes no new job, drives
+    straight home to its own dock and leaves only once it is parked there (`StackerCraneBlockEntity#parkedOnOwnDock`);
+    its dock is then scanned away at once. With the cap lowered to 1, whose scan takes no dock at all, such a crane stays
+    a stranded obstacle until it stands on its dock. (d) When the warehouse itself goes — the controller broken or no
+    longer listing the crane, the own dock gone — a crane that is not parked keeps its role and its claim, finds no
+    controller and holds inside its own blocks, until it is parked or a controller takes it in again
+    (`StackerCraneBlockEntity#warehouseDissolved`); several cranes on shared rails never drive on ungated.
+25. **A crane is gated under the number the controller lists for its dock** (`CraneTraffic#numberOf`), not the one it
+    saved. A crane renumbered while its chunk was away would otherwise read, and drive, another crane's slot of the
+    ledger. Until the next relink names it again it takes the no-controller branch: it holds, keeps its own claim and
+    asks for a relink.
+26. **Restore in two steps** (`TrafficLedger#restoreAll`): first the blocks every crane stands on, then the committed
+    routes in crane order, so a saved route is checked against the blocks of every other crane, later ones included.
+    The last known claim of a crane whose chunk is away now follows the ledger after every pass, so a route a rebuild
+    dropped is never saved again, and the controller marks its chunk unsaved whenever a crane's blocks or claim change.
+27. **The pose a crane stopped at is recorded after its motion** (`CraneTraffic#noteStanding`), so the last known pose of
+    a crane whose chunk unloads is never one motion step stale. And whatever the ledger believed, the blocks a loaded
+    crane really stands on win: another crane's route over them is dropped and that crane holds and asks again
+    (`TrafficLedger` repairs, logged); a healthy pass never repairs.
+28. **The reservations keep the job of a crane whose chunk is away** (`core.traffic.MemberJobs`): the last job seen on
+    each crane, from its block entity and its reports, saved with the crane list. Without it its stock, its room and
+    its share of a request dropped out of the ledger, and another crane was planned against them.
+29. **A reduced request counts every crane's trip together:** unpicked trips of the request are cancelled, largest
+    first, until no more is coming than is still wanted (picked trips and those of cranes whose chunks are away count
+    but cannot be told). With one crane this is the old rule. And the re-plan for the chosen crane starts the arrival
+    round robin where the first run did, so the nearest crane is given the first run's work, not the next input's.
 
 ## Persistence & sync
 

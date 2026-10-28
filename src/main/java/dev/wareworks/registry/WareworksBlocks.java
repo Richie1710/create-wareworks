@@ -101,9 +101,12 @@ public final class WareworksBlocks {
                     .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK))
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
+                    // The two crane sources come last (issue #14, ADR-075): read off the controller they speak for every
+                    // crane of the warehouse, and appended so every link already hung here keeps its preselected source.
                     .transform(WareworksDisplaySources.bind(WareworksDisplaySources.AISLE_SUMMARY,
                             WareworksDisplaySources.STOCK_LIST, WareworksDisplaySources.FLUID_STOCK,
-                            WareworksDisplaySources.WAREHOUSE_NUMBER))
+                            WareworksDisplaySources.WAREHOUSE_NUMBER, WareworksDisplaySources.CRANE_STATUS,
+                            WareworksDisplaySources.CRANE_THROUGHPUT))
                     .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))

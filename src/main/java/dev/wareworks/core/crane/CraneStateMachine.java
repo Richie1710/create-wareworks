@@ -147,6 +147,7 @@ public final class CraneStateMachine<K, L> {
         double[] swung = new double[1];
         CraneState<K, L> next = switch (event) {
             case CraneEvent.Tick<K, L> tick -> tick(state, tick.speeds(), effects, swung);
+            case CraneEvent.Detour<K, L> detour -> detour(state, detour, swung);
             case CraneEvent.JobAssigned<K, L> assigned -> assign(state, assigned.job(), effects);
             case CraneEvent.PickResult<K, L> result -> picked(state, result.picked(), effects);
             case CraneEvent.DropResult<K, L> result -> dropped(state, result.delivered(), result.leftover(), effects);
@@ -203,6 +204,23 @@ public final class CraneStateMachine<K, L> {
                         effects);
             }
         };
+    }
+
+    /**
+     * One motion tick along a route the crane already holds, towards a pose that is not its phase's own target (issue
+     * #14, ADR-075 §4.1, {@link CraneEvent.Detour}): the pose moves, and phase, timers, job, held items and the phase's
+     * target stay exactly as they were. Nothing moves while the arm is out, while paused or at stopped speeds — the
+     * previous pose is still stored, as every tick does.
+     */
+    private CraneState<K, L> detour(CraneState<K, L> state, CraneEvent.Detour<K, L> detour, double[] swung) {
+        CraneState<K, L> s = state.withPreviousPose(state.pose());
+        if (s.paused() || detour.speeds().isStopped() || s.pose().arm() > CranePose.RETRACTED)
+            return s;
+        CranePose pose = s.pose();
+        CranePose moved = CraneMotion.step(pose, detour.target().withArm(CranePose.RETRACTED), detour.speeds(),
+                detour.route(), network.turnPenaltyBlocks());
+        swung[0] += CraneMotion.quarterTurnsSwung(pose, moved, detour.route());
+        return s.withPoses(pose, moved);
     }
 
     /**

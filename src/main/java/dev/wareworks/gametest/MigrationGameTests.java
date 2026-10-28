@@ -147,6 +147,8 @@ public final class MigrationGameTests {
     private static final BlockPos DOCK = new BlockPos(1, BASE_Y, AISLE_Z);
     /** Key of the crane's state inside the dock's save ({@code CranePersistence.STATE_TAG}). */
     private static final String CRANE_TAG = "Crane";
+    /** Create's flag on a kinetic block entity read from a save: its speed is recomputed on the next tick. */
+    private static final String NEEDS_SPEED_UPDATE = "NeedsSpeedUpdate";
     private static final int TIMEOUT_TICKS = 600;
     private static final int JOB_TIMEOUT_TICKS = 1200;
     private static final int TEST_RPM = 128;
@@ -556,6 +558,125 @@ public final class MigrationGameTests {
                     helper.assertValueEqual(aisle.storedAt(TARGET, IRON), (long) STORED_IRON,
                             "and the aisle it was measured on finished the job");
                     aisle.assertIdleAndEmpty();
+                })
+                .thenSucceed();
+    }
+
+    // --- several cranes (issue #14, ADR-075) ------------------------------------------------------------------------
+
+    /**
+     * A warehouse of one crane writes nothing of several cranes — no {@code Traffic} on the dock, no {@code Cranes} on
+     * the controller, while a job is really in flight — and both block entities read what they write and write back
+     * exactly what they read, byte for byte. This is what keeps every world built up to 0.17.1 the world it was.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void onecranesaveisbytewise(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS);
+        aisle.build(true);
+        aisle.storage(TARGET);
+        aisle.input(INPUT);
+        AtomicLong expected = new AtomicLong();
+        helper.onEachTick(() -> assertConserved(helper, aisle, expected.get()));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 1, 0))
+                .thenExecute(() -> {
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                    aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT)), IRON.toStack(STORED_IRON));
+                    expected.set(STORED_IRON);
+                })
+                .thenWaitUntil(() -> aisle.assertCarrying(CranePhase.TRAVEL_TO_TARGET, IRON, STORED_IRON))
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    CompoundTag dockTag = aisle.dock().saveWithoutMetadata(registries);
+                    CompoundTag controllerTag = aisle.controller().saveWithoutMetadata(registries);
+                    helper.assertValueEqual(occurrences(dockTag, "Traffic"), 0, "the dock writes no traffic claim");
+                    helper.assertValueEqual(occurrences(controllerTag, "Cranes"), 0,
+                            "the controller writes no list of cranes");
+
+                    StackerCraneBlockEntity dock = freshDock(helper, aisle.dock());
+                    dock.loadWithComponents(dockTag, registries);
+                    CompoundTag again = dock.saveWithoutMetadata(registries);
+                    // Create marks every kinetic block entity it reads from a save to recompute its speed in the next
+                    // tick; that flag is the kinetic network's own bookkeeping of a load, never this mod's data.
+                    if (!dockTag.contains(NEEDS_SPEED_UPDATE))
+                        again.remove(NEEDS_SPEED_UPDATE);
+                    helper.assertValueEqual(again, dockTag, "the dock writes back exactly what it read");
+                    WarehouseControllerBlockEntity controller = freshController(helper, aisle.controller());
+                    controller.loadWithComponents(controllerTag, registries);
+                    helper.assertValueEqual(controller.saveWithoutMetadata(registries), controllerTag,
+                            "and so does the controller");
+                    helper.assertTrue(controller.craneMembers().size() <= 1, "a warehouse of one crane");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.storedAt(TARGET, IRON), (long) STORED_IRON, "the job finished");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Two cranes carry at once and the controller's save is read back into the <b>live</b> controller, which is what
+     * opening the world does for it: the list of cranes and their claims come back, the ledger is rebuilt from them,
+     * and both jobs finish with every item where it belongs. With one crane per warehouse the same build is served by
+     * crane 1 alone.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = JOB_TIMEOUT_TICKS)
+    public static void twocranesavereplaysmidflight(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS - 1);
+        aisle.build(true);
+        aisle.motor().generatedSpeed.setValue(TEST_RPM);
+        BlockPos memberDock = DOCK.east(RAILS);
+        helper.setBlock(memberDock.below(), AllBlocks.CREATIVE_MOTOR.getDefaultState()
+                .setValue(CreativeMotorBlock.FACING, Direction.UP));
+        helper.setBlock(memberDock, WareworksBlocks.STACKER_CRANE.getDefaultState()
+                .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, Direction.WEST));
+        CreativeMotorBlockEntity memberMotor = com.simibubi.create.AllBlockEntityTypes.MOTOR
+                .getNullable(helper.getLevel(), helper.absolutePos(memberDock.below()));
+        if (memberMotor == null) {
+            helper.fail("missing creative motor", memberDock.below());
+            return;
+        }
+        memberMotor.generatedSpeed.setValue(TEST_RPM);
+        RackPosition westSource = new RackPosition(2, 0, Side.LEFT);
+        RackPosition westOutput = new RackPosition(1, 0, Side.RIGHT);
+        RackPosition eastSource = new RackPosition(12, 0, Side.LEFT);
+        RackPosition eastOutput = new RackPosition(13, 0, Side.RIGHT);
+        aisle.storage(westSource, IRON.toStack(STORED_IRON));
+        aisle.storage(eastSource, GOLD.toStack(STORED_IRON));
+        aisle.output(westOutput);
+        aisle.output(eastOutput);
+        Map<ItemKey, Long> census = ItemCensus.take(helper);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, census, "while two cranes replay a save"));
+        boolean several = WareworksConfig.maxCranesPerNetwork() > 1;
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(2, 0, 2);
+                    helper.assertValueEqual(aisle.controller().craneCount(), several ? 2 : 1, "the cranes listed");
+                })
+                .thenExecute(() -> {
+                    helper.assertTrue(aisle.controller().request(aisle.absoluteRackPos(westOutput), IRON, STORED_IRON)
+                            .isAccepted(), "the iron is requested");
+                    helper.assertTrue(aisle.controller().request(aisle.absoluteRackPos(eastOutput), GOLD, STORED_IRON)
+                            .isAccepted(), "the gold is requested");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(aisle.dock().currentJob().isPresent(), "crane 1 works"))
+                .thenExecute(() -> {
+                    HolderLookup.Provider registries = helper.getLevel().registryAccess();
+                    WarehouseControllerBlockEntity live = aisle.controller();
+                    CompoundTag saved = live.saveWithoutMetadata(registries);
+                    helper.assertValueEqual(saved.getList("Cranes", Tag.TAG_COMPOUND).size(), several ? 2 : 0,
+                            "the save lists the cranes of a warehouse with several, and nothing for one");
+                    live.loadWithComponents(saved, registries);
+                    helper.assertValueEqual(live.craneMembers().size(), several ? 2 : 1, "and they come back");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(westOutput, IRON), (long) STORED_IRON,
+                            "the iron arrived");
+                    helper.assertValueEqual(aisle.stationCount(eastOutput, GOLD), (long) STORED_IRON,
+                            "the gold arrived");
+                    helper.assertTrue(aisle.dock().currentJob().isEmpty(), "crane 1 is done");
                 })
                 .thenSucceed();
     }

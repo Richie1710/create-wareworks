@@ -11,6 +11,7 @@ import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseLayout;
 import dev.wareworks.content.crane.RailNetworkScan;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
@@ -27,8 +28,10 @@ import dev.wareworks.core.warehouse.RailNetwork;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.GameType;
@@ -64,6 +67,8 @@ public final class RailNetworkGameTests {
     /** More junctions than any shape in this holder has, so {@code aisle.maxJunctions} is never what is under test. */
     private static final int MANY_JUNCTIONS = 64;
     private static final char LETTER = 'A';
+    /** Config overrides need their own batch, because the tests of one batch run at the same time. */
+    static final String LEGACY_DOCK_BATCH = "wareworksrailseconddock";
 
     private RailNetworkGameTests() {
     }
@@ -177,9 +182,14 @@ public final class RailNetworkGameTests {
         helper.succeed();
     }
 
-    /** Another dock on the same rails is a wall: neither warehouse swallows the other. */
-    @GameTest(template = EMPTY_7X5X7)
+    /**
+     * Another dock on the same rails is a wall: neither warehouse swallows the other. Pinned with
+     * {@code aisle.maxCranesPerNetwork = 1}, the off switch that keeps every warehouse one crane exactly as up to
+     * 0.17.1 (issue #14); {@link #networktakesaseconddockasacrane} is the same build with the default.
+     */
+    @GameTest(template = EMPTY_7X5X7, batch = LEGACY_DOCK_BATCH)
     public static void networkstopsataseconddock(GameTestHelper helper) {
+        ConfigOverrides.set(helper, WareworksConfig.SERVER.maxCranesPerNetwork, 1);
         placeDock(helper, DOCK);
         placeStraightLeg(helper);
         BlockPos other = DOCK.offset(STRAIGHT_RAILS + 1, 0, 0);
@@ -196,6 +206,47 @@ public final class RailNetworkGameTests {
                 Direction.WEST, limits());
         helper.assertValueEqual(fromTheOtherEnd.firstBranchLength(), STRAIGHT_RAILS, "and the other one works too");
         helper.assertValueEqual(fromTheOtherEnd.stop(), NetworkStop.SECOND_DOCK, "stopping at this dock");
+        helper.succeed();
+    }
+
+    @AfterBatch(batch = LEGACY_DOCK_BATCH)
+    public static void restoreDockConfig(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /**
+     * The twin of {@link #networkstopsataseconddock} with the default {@code aisle.maxCranesPerNetwork} (issue #14,
+     * ADR-075): the dock with a controller behind it is the warehouse's own, and the dock at the far end of its line,
+     * which has no controller of its own and faces back, is taken as a member — an aisle block at the end of the line,
+     * so the line is one block longer and the rails simply end. With the off switch on it is the wall it always was.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void networktakesaseconddockasacrane(GameTestHelper helper) {
+        helper.setBlock(DOCK.west(), WareworksBlocks.WAREHOUSE_CONTROLLER.getDefaultState()
+                .setValue(WarehouseControllerBlock.FACING, Direction.EAST));
+        placeDock(helper, DOCK);
+        placeStraightLeg(helper);
+        BlockPos other = DOCK.offset(STRAIGHT_RAILS + 1, 0, 0);
+        helper.setBlock(other, dockState(Direction.WEST));
+
+        RailNetwork network = scan(helper);
+        if (WareworksConfig.maxCranesPerNetwork() <= 1) {
+            RailNetwork configured = configuredScan(helper);
+            helper.assertValueEqual(configured.stop(), NetworkStop.SECOND_DOCK, "a wall with the off switch on");
+            helper.assertTrue(configured.memberDocks().isEmpty(), "and no member");
+            helper.succeed();
+            return;
+        }
+        RailNetwork configured = configuredScan(helper);
+        helper.assertValueEqual(configured.memberDocks().size(), 1, "the other dock is a member");
+        helper.assertValueEqual(configured.memberDocks().getFirst().x(), STRAIGHT_RAILS + 1,
+                "at the end of the line");
+        helper.assertValueEqual(configured.firstBranchLength(), STRAIGHT_RAILS + 1,
+                "which it makes one block longer");
+        helper.assertValueEqual(configured.rails(), STRAIGHT_RAILS, "although it is no rail");
+        helper.assertValueEqual(configured.stop(), NetworkStop.END, "and the rails simply end");
+        helper.assertValueEqual(network.stop(), NetworkStop.SECOND_DOCK,
+                "with one crane per warehouse the same build stops at the other dock");
         helper.succeed();
     }
 
@@ -412,9 +463,13 @@ public final class RailNetworkGameTests {
 
     /** The bounds the dock itself walks with: the server config, exactly as {@code refreshGeometry} reads it. */
     private static RailGraph.Limits configuredLimits(StackerCraneBlockEntity dock) {
+        // A dock lets other docks join only while it has a controller of its own (issue #14).
+        boolean primary = dock.getLevel() != null
+                && RailNetworkScan.hasOwnController(dock.getLevel(), dock.getBlockPos(), dock.facing());
         return new RailGraph.Limits(WareworksConfig.maxNetworkRails(), WareworksConfig.maxBranches(),
                 WareworksConfig.maxJunctions(),
-                Math.min(WareworksConfig.maxAisleLength(), AisleGeometry.MAX_LENGTH), dock.mastHeight());
+                Math.min(WareworksConfig.maxAisleLength(), AisleGeometry.MAX_LENGTH), dock.mastHeight(),
+                primary ? WareworksConfig.maxCranesPerNetwork() : RailGraph.Limits.MIN_CRANES);
     }
 
     private static StackerCraneBlockEntity dockAt(GameTestHelper helper) {

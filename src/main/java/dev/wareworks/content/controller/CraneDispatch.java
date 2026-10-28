@@ -2,15 +2,18 @@ package dev.wareworks.content.controller;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -43,6 +46,9 @@ import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.traffic.CraneChoice;
+import dev.wareworks.core.traffic.MemberJobs;
+import dev.wareworks.core.traffic.TrackGraph;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.RouteTable;
@@ -103,6 +109,16 @@ import net.minecraft.world.level.Level;
  * drop: {@code CraneExecution} then drops what the port takes and takes the rest back into storage at the first retry
  * where the port takes nothing, and the request, which stays open, is planned again once the port has room.
  * <p>
+ * <b>Several cranes</b> (issue #14, ADR-075 §8, §9): a warehouse whose controller lists more than one crane plans in a
+ * loop while a crane is free ({@link #tickCranes}). One planner run decides <i>what</i> to do, with the union of what
+ * the free cranes may reach; the <b>nearest free crane</b> takes it ({@link CraneChoice}: approach time at its own
+ * speeds, then blocks, then crane number), and the work is planned once more from that crane's own point if it was not
+ * the one the first run started from. A crane may serve a rack below its own mast, not served from another crane's
+ * dock, and reachable without passing a crane that has a job ({@link CraneChoice.Eligibility}). The ledger holds every
+ * crane's job, so no two jobs promise the same stock, room, buffered items or port room, and a collecting port is
+ * collected by one crane at a time. A warehouse of one crane takes none of these paths: its dispatch is literally the
+ * one it was.
+ * <p>
  * <b>Reservations are derived from the crane's job</b> ({@code docs/warehouse-system.md} §7.4): every report re-tracks
  * the reported job, and every dispatch interval the ledger is rebuilt from the dock's current job
  * ({@link #adopt}), which also adopts the job of a crane that a new or reloaded controller finds. Reservations of
@@ -143,6 +159,19 @@ final class CraneDispatch {
      */
     private boolean unreachableSkipped;
     /**
+     * The warehouse ports another crane is already bringing a retrieve to, while a warehouse of several cranes plans
+     * (issue #14, ADR-075 §9): a port's room is measured live when a trip is planned, and two cranes sizing their trips
+     * by the same room would bring twice what it takes. One crane per port at a time; always empty for one crane.
+     */
+    private Set<RackPosition> busyPorts = Set.of();
+    /**
+     * Per crane dock of a warehouse with several (issue #14, ADR-075 §9): the last job seen on that crane, from its
+     * block entity while its chunk ticks and from its reports. A crane whose chunk is away keeps its reservations through
+     * this, so no other crane is planned against its stock, its room or its share of a request. Saved with the cranes
+     * ({@code ControllerPersistence#writeCranes}); always empty for a warehouse of one crane.
+     */
+    private final MemberJobs<BlockPos, TransportJob<ItemKey, RackPosition>> memberJobs = new MemberJobs<>();
+    /**
      * Rate limits for the storage-interop diagnostics. A one-shot latch was used before, which silenced every
      * <b>other</b> failing inventory of this aisle for the rest of the controller's life.
      */
@@ -173,6 +202,7 @@ final class CraneDispatch {
     /** The aisle is gone or replaced: no reservations, no planning state. */
     void reset() {
         unreachableSkipped = false;
+        memberJobs.clear();
         ledger.clear();
         tracked.clear();
         insertRefusals.clear();
@@ -194,6 +224,11 @@ final class CraneDispatch {
         if (now < nextDispatchTick)
             return;
         nextDispatchTick = now + Math.max(1, WareworksConfig.dispatchIntervalTicks());
+        Optional<CraneTraffic> traffic = controller.traffic();
+        if (traffic.isPresent()) {
+            tickCranes(level, layout, now, traffic.get());
+            return;
+        }
         Optional<StackerCraneBlockEntity> dock = controller.linkedDockEntity();
         if (dock.isEmpty())
             return;
@@ -241,34 +276,7 @@ final class CraneDispatch {
         if (!retrieveOnly)
             arrivalCursor = result.nextArrivalCursor();
         if (result.job().isEmpty()) {
-            if (retrieveOnly)
-                return; // the back-off's planning result stays
-            // A rack the crane cannot drive to was skipped exactly like one in an unloaded chunk, so the planner's own
-            // answer would be about stock or filters — true of what was left, and useless to a player whose rails are
-            // broken. UNREACHABLE arms no back-off: it is a map lookup, not a candidate scan (M21, ADR-033).
-            lastReason = unreachableSkipped ? NoJobReason.UNREACHABLE
-                    : result.primaryReason().orElse(NoJobReason.NO_WORK);
-            // Both mean "this input's items fit nowhere right now", and re-running the full candidate scan every
-            // dispatch interval would cost the most in exactly the warehouse that produces them (ADR-021, §7.4).
-            // NoJobReason.AT_MAXIMUM deliberately does not belong here (M15): a stock rule's maximum is answered by
-            // one lookup before any candidate work, so there is no expensive scan to protect, and backing off would
-            // stop storing for every other input of the aisle because a single item type is capped on purpose.
-            // NoJobReason.PORT_FULL does belong here (M17): unlike a maximum it is reached only after a full candidate
-            // walk with an estimate and a live simulation per candidate, which is exactly the work this back-off exists
-            // to protect, and an overflow port that is full stays full until a funnel drains it.
-            // NoJobReason.COLLECT_SOURCE_EMPTY does not belong here either (M18 review), with M15's argument again: a
-            // machine that hands nothing out is answered by a map lookup and at most one live extract per item type,
-            // before any candidate is ranked — and it is the resting state of every production loop, so backing off would
-            // suspend storing from every input station of the aisle for as long as a machine is empty.
-            // NoJobReason.OUTPUT_FULL stays out as well (M27, ADR-065): a warehouse port too full for a whole trip costs
-            // one live simulation per open request, and storing has to go on while it waits to be emptied.
-            // NoJobReason.NO_EMPTY_CONTAINERS stays out too (M31, issue #21): a fill request that lacks an empty container
-            // is answered by index lookups before any live call, and backing off would stop storing from every input
-            // of the aisle — including the input a bucket arriving would cure the request through.
-            if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
-                    || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
-                    || result.reasons().contains(NoJobReason.PORT_FULL))
-                backoffUntilTick = now + Math.max(1, WareworksConfig.fullBackoffTicks());
+            noJob(result, retrieveOnly, now);
             return;
         }
         lastReason = null;
@@ -283,6 +291,356 @@ final class CraneDispatch {
         controller.markChunkKeepDirty();
         spendPortToken(job, job.target(), job.targetKind());
         spendCollectToken(job);
+    }
+
+    /**
+     * What a planning run that found nothing to do leaves behind: the reason the goggles show, and the back-off for the
+     * reasons whose candidate scan is worth not repeating.
+     */
+    private void noJob(PlanResult<ItemKey, RackPosition> result, boolean retrieveOnly, long now) {
+        if (retrieveOnly)
+            return; // the back-off's planning result stays
+        // A rack the crane cannot drive to was skipped exactly like one in an unloaded chunk, so the planner's own
+        // answer would be about stock or filters — true of what was left, and useless to a player whose rails are
+        // broken. UNREACHABLE arms no back-off: it is a map lookup, not a candidate scan (M21, ADR-033).
+        lastReason = unreachableSkipped ? NoJobReason.UNREACHABLE
+                : result.primaryReason().orElse(NoJobReason.NO_WORK);
+        // Both mean "this input's items fit nowhere right now", and re-running the full candidate scan every
+        // dispatch interval would cost the most in exactly the warehouse that produces them (ADR-021, §7.4).
+        // NoJobReason.AT_MAXIMUM deliberately does not belong here (M15): a stock rule's maximum is answered by
+        // one lookup before any candidate work, so there is no expensive scan to protect, and backing off would
+        // stop storing for every other input of the aisle because a single item type is capped on purpose.
+        // NoJobReason.PORT_FULL does belong here (M17): unlike a maximum it is reached only after a full candidate
+        // walk with an estimate and a live simulation per candidate, which is exactly the work this back-off exists
+        // to protect, and an overflow port that is full stays full until a funnel drains it.
+        // NoJobReason.COLLECT_SOURCE_EMPTY does not belong here either (M18 review), with M15's argument again: a
+        // machine that hands nothing out is answered by a map lookup and at most one live extract per item type,
+        // before any candidate is ranked — and it is the resting state of every production loop, so backing off would
+        // suspend storing from every input station of the aisle for as long as a machine is empty.
+        // NoJobReason.OUTPUT_FULL stays out as well (M27, ADR-065): a warehouse port too full for a whole trip costs
+        // one live simulation per open request, and storing has to go on while it waits to be emptied.
+        // NoJobReason.NO_EMPTY_CONTAINERS stays out too (M31, issue #21): a fill request that lacks an empty container
+        // is answered by index lookups before any live call, and backing off would stop storing from every input
+        // of the aisle — including the input a bucket arriving would cure the request through.
+        if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
+                || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
+                || result.reasons().contains(NoJobReason.PORT_FULL))
+            backoffUntilTick = now + Math.max(1, WareworksConfig.fullBackoffTicks());
+    }
+
+    // --- several cranes (issue #14, ADR-075 §8) ----------------------------------------------------------------------
+
+    /** One free crane of a dispatch run: where it stands, its speeds, and what it may serve. */
+    private record FreeCrane(StackerCraneBlockEntity crane, int number, CranePose pose, CraneSpeeds speeds,
+                             Predicate<RackPosition> reach) {
+    }
+
+    /**
+     * The dispatch of a warehouse with several cranes: while a crane is free, one run plans what to do with the union
+     * of what the free cranes may reach, the nearest eligible free crane takes it, and the work is planned once more
+     * from that crane's own point when it was not the crane the run started from. At most two planner runs per job,
+     * so at most twice as many as there are free cranes per dispatch interval.
+     */
+    private void tickCranes(Level level, WarehouseLayout layout, long now, CraneTraffic traffic) {
+        List<StackerCraneBlockEntity> cranes = controller.cranes();
+        adopt(warehouseJobs(traffic));
+        List<FreeCrane> free = new ArrayList<>();
+        for (StackerCraneBlockEntity crane : cranes) {
+            // A stranded crane and one the warehouse has no room for any more finish what they carry and take nothing.
+            if (crane.canAcceptJob() && isOnTheWarehouse(layout, crane.craneState().pose())
+                    && !isStranded(traffic, crane) && !controller.isLeaving(crane.getBlockPos()))
+                free.add(freeCrane(layout, crane));
+        }
+        if (free.isEmpty())
+            return;
+        boolean retrieveOnly = isBackingOff(now);
+        List<RackPosition> collectSources = retrieveOnly ? List.of() : controller.collectSources();
+        if (retrieveOnly ? controller.openRequestCount() == 0 && controller.supplyNeeds().isEmpty()
+                : !hasWork(level, layout, collectSources)) {
+            if (!retrieveOnly)
+                lastReason = NoJobReason.NO_WORK;
+            return;
+        }
+        boolean assigned = false;
+        try {
+            while (!free.isEmpty()) {
+                // One crane collects from a port at a time: a second trip would find the machine empty, and one crane
+                // brings a retrieve to a port at a time: a second would be sized by the same room (ADR-075 §9).
+                List<TransportJob<ItemKey, RackPosition>> working = warehouseJobs(traffic);
+                busyPorts = portsReceiving(level, layout, working);
+                // A crane that took a job in the last round is busy now, and nobody is sent past it (§8.2).
+                if (assigned)
+                    free.replaceAll(candidate -> freeCrane(layout, candidate.crane()));
+                Planned planned = planOne(level, layout, now, free, withoutCollectedPorts(collectSources, working),
+                        retrieveOnly, assigned);
+                if (planned == Planned.NOTHING)
+                    return;
+                assigned |= planned == Planned.ASSIGNED;
+            }
+        } finally {
+            busyPorts = Set.of();
+        }
+    }
+
+    /** What one round of {@link #planOne} achieved. */
+    private enum Planned {
+        /** Nothing more can be planned in this dispatch. */
+        NOTHING,
+        /** A free crane left the round without a job; the others are asked next. */
+        SKIPPED,
+        /** A crane took a job. */
+        ASSIGNED
+    }
+
+    /** Plans one job and gives it to the nearest free crane that may do it, which then leaves {@code free}. */
+    private Planned planOne(Level level, WarehouseLayout layout, long now, List<FreeCrane> free,
+            List<RackPosition> sources, boolean retrieveOnly, boolean assigned) {
+        Predicate<RackPosition> anyFree = rack -> {
+            boolean drivable = false;
+            for (FreeCrane candidate : free) {
+                if (candidate.reach().test(rack))
+                    return true;
+                drivable |= layout.routes().canDrive(candidate.pose().branch(), candidate.pose().x(),
+                        rack.branch(), rack.x());
+            }
+            // Only a rack no free crane can drive to at all is unreachable; one another crane stands in front of
+            // is simply someone else's for now (M21's goggle reason keeps its meaning, issue #14).
+            if (!drivable)
+                unreachableSkipped = true;
+            return false;
+        };
+        FreeCrane planning = free.getFirst();
+        unreachableSkipped = false;
+        // Both runs start the arrival round robin at the same input, so the crane chosen for the first run's job is
+        // planned the same work from its own point rather than the next input's (issue #14). The cursor moves on only
+        // with the job that is really assigned.
+        PlanResult<ItemKey, RackPosition> result = plan(level, layout, planning, anyFree, sources, retrieveOnly,
+                now);
+        if (result == null)
+            return Planned.NOTHING;
+        if (result.job().isEmpty()) {
+            if (!retrieveOnly)
+                arrivalCursor = result.nextArrivalCursor();
+            if (!assigned)
+                noJob(result, retrieveOnly, now);
+            return Planned.NOTHING;
+        }
+        TransportJob<ItemKey, RackPosition> job = result.job().get().job();
+        FreeCrane chosen = nearest(layout, free, job);
+        if (chosen == null || chosen != planning) {
+            // The work again, from the chosen crane's own point and with only what it may reach — or, when no
+            // single free crane may serve both ends, with the first free crane's own reach.
+            FreeCrane replanning = chosen == null ? planning : chosen;
+            PlanResult<ItemKey, RackPosition> again = plan(level, layout, replanning, replanning.reach(), sources,
+                    retrieveOnly, now);
+            if (again == null)
+                return Planned.NOTHING;
+            if (again.job().isEmpty()) {
+                if (chosen == null) {
+                    free.remove(planning); // nothing this crane may do alone: the others are asked next
+                    return Planned.SKIPPED;
+                }
+            } else {
+                result = again; // the re-plan's job is the one assigned, so its cursor is the one kept
+                job = again.job().get().job();
+            }
+            chosen = replanning;
+        }
+        if (!retrieveOnly)
+            arrivalCursor = result.nextArrivalCursor();
+        lastReason = null;
+        track(job);
+        free.remove(chosen);
+        if (!chosen.crane().assignJob(job)) {
+            ledger.releaseJob(job.id());
+            return Planned.SKIPPED;
+        }
+        rememberJob(chosen.crane(), job);
+        controller.markChunkKeepDirty();
+        spendPortToken(job, job.target(), job.targetKind());
+        spendCollectToken(job);
+        return Planned.ASSIGNED;
+    }
+
+    /** One planner run for {@code planning}'s point and speeds, with {@code reach} as what may be served. */
+    @Nullable
+    private PlanResult<ItemKey, RackPosition> plan(Level level, WarehouseLayout layout, FreeCrane planning,
+            Predicate<RackPosition> reach, List<RackPosition> collectSources, boolean retrieveOnly, long now) {
+        PlannerInput.Builder<ItemKey, RackPosition> builder = input(level, layout, planning.crane(), collectSources,
+                reach).inputCursor(arrivalCursor);
+        if (retrieveOnly)
+            builder.inputs(List.of()).collectSources(List.of());
+        try {
+            return planner.plan(builder.build());
+        } catch (RuntimeException e) {
+            if (planningFailures.tryLog(now))
+                LOGGER.error("Warehouse controller at {} could not plan a job", controller.getBlockPos(), e);
+            return null;
+        }
+    }
+
+    /**
+     * The free crane that takes {@code job}: of those that may serve both its source and its target, the one that gets
+     * to the source soonest at its own speeds, then in fewer blocks, then the lower crane number ({@link CraneChoice}).
+     * {@code null} when no single free crane may serve both.
+     */
+    @Nullable
+    private FreeCrane nearest(WarehouseLayout layout, List<FreeCrane> free, TransportJob<ItemKey, RackPosition> job) {
+        RouteTable routes = layout.routes();
+        double penalty = WareworksConfig.turnPenaltyBlocks();
+        List<CraneChoice.Offer> offers = new ArrayList<>(free.size());
+        for (FreeCrane candidate : free) {
+            boolean eligible = candidate.reach().test(job.source()) && candidate.reach().test(job.target());
+            CranePose pose = candidate.pose();
+            RackPosition source = job.source();
+            long ticks = travelCost(routes, candidate.speeds()).travelTicks(pose.branch(), pose.x(), pose.y(),
+                    source.branch(), source.x(), source.y());
+            double blocks = pose.branch() == source.branch() ? Math.abs(pose.x() - source.x())
+                    : routes.routeBlocks(pose.branch(), pose.x(), source.branch(), source.x(), penalty)
+                            .orElse(Double.MAX_VALUE);
+            offers.add(new CraneChoice.Offer(candidate.number(), eligible && ticks != TravelTimeModel.UNAVAILABLE,
+                    ticks, blocks));
+        }
+        OptionalInt chosen = CraneChoice.choose(offers);
+        if (chosen.isEmpty())
+            return null;
+        for (FreeCrane candidate : free) {
+            if (candidate.number() == chosen.getAsInt())
+                return candidate;
+        }
+        return null;
+    }
+
+    private FreeCrane freeCrane(WarehouseLayout layout, StackerCraneBlockEntity crane) {
+        return new FreeCrane(crane, crane.craneNumber(), crane.craneState().pose(), crane.currentSpeeds(),
+                reachOf(layout, crane));
+    }
+
+    /** Whether {@code crane} is stranded: a member whose dock a closed rail cut off. It finishes, but takes nothing. */
+    private static boolean isStranded(CraneTraffic traffic, StackerCraneBlockEntity crane) {
+        return traffic.member(crane.craneNumber()).map(CraneMember::stranded).orElse(false);
+    }
+
+    /**
+     * What {@code crane} may serve (ADR-075 §8.2): a rack it can drive to from where it stands, and — on a warehouse
+     * with several cranes — below its own mast, not beside another crane's dock and not behind a crane that has a job
+     * or cannot move. For the crane of a warehouse with one crane this is exactly the reach it always had.
+     */
+    private Predicate<RackPosition> reachOf(WarehouseLayout layout, StackerCraneBlockEntity crane) {
+        RouteTable routes = layout.routes();
+        CranePose pose = crane.craneState().pose();
+        int branch = pose.branch();
+        double x = pose.x();
+        Optional<CraneTraffic> traffic = controller.traffic();
+        TrackGraph graph = traffic.map(CraneTraffic::graph).orElse(null);
+        if (traffic.isEmpty() || graph == null)
+            return rack -> canDriveTo(routes, branch, x, rack);
+        int number = crane.craneNumber();
+        List<int[]> busy = new ArrayList<>();
+        for (CraneMember member : traffic.get().members()) {
+            if (member.number() == number)
+                continue;
+            // A crane with a job finishes it, so nobody is sent past it; an idle one moves aside instead. One whose
+            // chunk is away may have a job nobody can see, so it counts as having one.
+            Optional<StackerCraneBlockEntity> other = controller.craneOf(member);
+            if (other.isEmpty() || other.get().currentJob().isPresent())
+                busy.add(traffic.get().settledCells(member.number()));
+        }
+        CraneChoice.Eligibility eligibility = CraneChoice.Eligibility.of(graph, graph.standingCells(branch, x),
+                crane.mastHeight(), traffic.get().dockCell(number), graph.docks(), busy);
+        return rack -> eligibility.allows(rack) && routes.canDrive(branch, x, rack.branch(), rack.x());
+    }
+
+    /**
+     * The warehouse ports a crane of this warehouse is bringing a retrieve to: the targets of retrieve jobs that have
+     * not delivered yet, where the target is a port, whose room is what such a trip is sized by.
+     */
+    private static Set<RackPosition> portsReceiving(Level level, WarehouseLayout layout,
+            List<TransportJob<ItemKey, RackPosition>> jobs) {
+        Set<RackPosition> ports = new HashSet<>();
+        for (TransportJob<ItemKey, RackPosition> job : jobs) {
+            if (job.type() == JobType.RETRIEVE && job.deliveredAmount() == 0
+                    && level.isLoaded(layout.rackPos(job.target()))
+                    && level.getBlockEntity(layout.rackPos(job.target())) instanceof WarehouseOutputBlockEntity)
+                ports.add(job.target());
+        }
+        return ports;
+    }
+
+    /** The collecting ports no crane has an unpicked collect job at: one crane collects from a port at a time. */
+    private static List<RackPosition> withoutCollectedPorts(List<RackPosition> sources,
+            List<TransportJob<ItemKey, RackPosition>> jobs) {
+        if (sources.isEmpty())
+            return sources;
+        Set<RackPosition> busy = new HashSet<>();
+        for (TransportJob<ItemKey, RackPosition> job : jobs) {
+            if (job.type() == JobType.COLLECT && !job.picked())
+                busy.add(job.source());
+        }
+        if (busy.isEmpty())
+            return sources;
+        List<RackPosition> left = new ArrayList<>(sources.size());
+        for (RackPosition source : sources) {
+            if (!busy.contains(source))
+                left.add(source);
+        }
+        return left;
+    }
+
+    private static List<TransportJob<ItemKey, RackPosition>> jobsOf(List<StackerCraneBlockEntity> cranes) {
+        List<TransportJob<ItemKey, RackPosition>> jobs = new ArrayList<>(cranes.size());
+        for (StackerCraneBlockEntity crane : cranes)
+            crane.currentJob().ifPresent(jobs::add);
+        return jobs;
+    }
+
+    /**
+     * The job of every crane of a warehouse with several (issue #14, ADR-075 §9): read from each crane whose chunk
+     * ticks, and the last one seen for a crane whose chunk is away, so its stock, its room and its share of a request
+     * stay promised to it ({@link MemberJobs}). One block entity lookup per crane.
+     */
+    private List<TransportJob<ItemKey, RackPosition>> warehouseJobs(CraneTraffic traffic) {
+        Map<BlockPos, Optional<StackerCraneBlockEntity>> cranes = readCranes(traffic);
+        return memberJobs.refresh(List.copyOf(cranes.keySet()), dock -> cranes.get(dock).isPresent(),
+                dock -> cranes.get(dock).flatMap(StackerCraneBlockEntity::currentJob));
+    }
+
+    /** The jobs of cranes this warehouse lists but cannot read now, because their chunks are away (issue #14). */
+    private List<TransportJob<ItemKey, RackPosition>> rememberedJobsOfAbsentCranes() {
+        Optional<CraneTraffic> traffic = controller.traffic();
+        if (traffic.isEmpty())
+            return List.of();
+        Map<BlockPos, Optional<StackerCraneBlockEntity>> cranes = readCranes(traffic.get());
+        return memberJobs.ofAbsent(List.copyOf(cranes.keySet()), dock -> cranes.get(dock).isPresent());
+    }
+
+    /** Every listed crane's dock, in crane order, with its block entity while it can be read. */
+    private Map<BlockPos, Optional<StackerCraneBlockEntity>> readCranes(CraneTraffic traffic) {
+        Map<BlockPos, Optional<StackerCraneBlockEntity>> cranes = new java.util.LinkedHashMap<>();
+        for (CraneMember member : traffic.members())
+            cranes.put(member.dock(), controller.craneOf(member));
+        return cranes;
+    }
+
+    /** The last job seen on every crane dock, for the save (issue #14); empty for a warehouse of one crane. */
+    Map<BlockPos, TransportJob<ItemKey, RackPosition>> memberJobs() {
+        return memberJobs.snapshot();
+    }
+
+    /** Takes in the jobs a save remembered for the cranes of a warehouse with several (issue #14). */
+    void restoreMemberJobs(Map<BlockPos, TransportJob<ItemKey, RackPosition>> jobs) {
+        memberJobs.restore(jobs);
+    }
+
+    /** {@code crane} reported {@code job}: it is the job remembered for it while a warehouse has several cranes. */
+    void rememberJob(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
+        if (controller.traffic().isPresent())
+            memberJobs.remember(crane.getBlockPos().immutable(), job);
+    }
+
+    /** {@code crane} finished, gave up or lost its job: nothing is remembered for it any more. */
+    void forgetJob(StackerCraneBlockEntity crane) {
+        memberJobs.forget(crane.getBlockPos());
     }
 
     /**
@@ -340,6 +698,15 @@ final class CraneDispatch {
 
     private PlannerInput.Builder<ItemKey, RackPosition> input(Level level, WarehouseLayout layout,
             StackerCraneBlockEntity dock, List<RackPosition> collectSources) {
+        return input(level, layout, dock, collectSources, reachOf(layout, dock));
+    }
+
+    /**
+     * The planner input for {@code dock}'s point and speeds, with {@code reach} deciding which racks may be served
+     * besides being loaded.
+     */
+    private PlannerInput.Builder<ItemKey, RackPosition> input(Level level, WarehouseLayout layout,
+            StackerCraneBlockEntity dock, List<RackPosition> collectSources, Predicate<RackPosition> reach) {
         CranePose pose = dock.craneState().pose();
         long now = level.getGameTime();
         int craneBranch = pose.branch();
@@ -369,8 +736,9 @@ final class CraneDispatch {
                 .outputs(rerouteOutputs())
                 .inputBuffers(rack -> inputBuffer(level, layout, rack))
                 // A rack on an aisle the crane cannot drive to is skipped exactly like one in an unloaded chunk, so no
-                // job is ever planned towards a place the machine cannot physically reach (ADR-033).
-                .available(rack -> canDriveTo(routes, craneBranch, craneX, rack) && isLoaded(level, layout, rack))
+                // job is ever planned towards a place the machine cannot physically reach (ADR-033). With several
+                // cranes it is what any free crane may serve (issue #14).
+                .available(rack -> reach.test(rack) && isLoaded(level, layout, rack))
                 // A fluid bay is the one storage location whose room is not an item question at all: it holds no items,
                 // so its snapshot has zero slots and the snapshot estimate answers 0 — which would drop it before any
                 // live call, exactly as it rightly drops a warehouse interface whose chest was taken away. The two
@@ -547,7 +915,7 @@ final class CraneDispatch {
         for (RetrievalRequest<ItemKey, BlockPos> request : controller.openRequests()) {
             Optional<RackPosition> output = controller.rackOf(request.destination());
             if (output.isEmpty() || controller.kindAt(output.get()).orElse(null) != LocationKind.OUTPUT
-                    || request.remaining() < 1)
+                    || request.remaining() < 1 || busyPorts.contains(output.get()))
                 continue;
             result.add(new PlannerInput.OpenRequest<>(request.id(), request.key(), request.remaining(), output.get(),
                     request.kind()));
@@ -639,16 +1007,31 @@ final class CraneDispatch {
 
     /** Rebuilds the reservations from the crane's current job (adoption and drift correction). */
     void adopt(Optional<TransportJob<ItemKey, RackPosition>> craneJob) {
-        if (craneJob.isEmpty()) {
+        adopt(craneJob.map(List::of).orElse(List.of()));
+    }
+
+    /**
+     * Rebuilds the reservations from the jobs of every crane of the warehouse (issue #14, ADR-075 §9): a warehouse of
+     * several cranes adopts all of them, so no two jobs ever promise the same stock or room.
+     */
+    void adoptAll() {
+        Optional<CraneTraffic> traffic = controller.traffic();
+        adopt(traffic.isPresent() ? warehouseJobs(traffic.get()) : jobsOf(controller.cranes()));
+    }
+
+    private void adopt(List<TransportJob<ItemKey, RackPosition>> jobs) {
+        if (jobs.isEmpty()) {
             if (!ledger.isEmpty())
                 ledger.clear();
             tracked.clear();
             return;
         }
-        ledger.restoreFrom(List.of(craneJob.get()));
+        ledger.restoreFrom(jobs);
         tracked.clear();
-        tracked.put(craneJob.get().id(), craneJob.get());
-        detachUnknownRequest(craneJob.get());
+        for (TransportJob<ItemKey, RackPosition> job : jobs) {
+            tracked.put(job.id(), job);
+            detachUnknownRequest(job);
+        }
     }
 
     /** Re-tracks a reported job (its reservations follow its stage). */
@@ -698,10 +1081,38 @@ final class CraneDispatch {
      * reroute of its own, and the items have already left the racks.
      */
     void onRequestReduced(UUID id, int remaining) {
-        controller.linkedDockEntity().ifPresent(dock -> dock.currentJob()
-                .filter(job -> !job.picked() && job.plannedAmount() > remaining
-                        && job.requestId().filter(id::equals).isPresent())
-                .ifPresent(job -> dock.cancelJob(job.id())));
+        // Every crane of the warehouse: a request can be served by several at once (issue #14), so what counts is what
+        // all of them together are bringing, the held items of a crane that picked and the planned ones of one that has
+        // not.
+        long coming = 0;
+        List<StackerCraneBlockEntity> cancellable = new ArrayList<>();
+        for (StackerCraneBlockEntity dock : controller.cranes()) {
+            Optional<TransportJob<ItemKey, RackPosition>> job = dock.currentJob()
+                    .filter(found -> found.requestId().filter(id::equals).isPresent());
+            if (job.isEmpty())
+                continue;
+            coming += job.get().picked() ? job.get().heldAmount() : job.get().plannedAmount();
+            if (!job.get().picked())
+                cancellable.add(dock);
+        }
+        // A crane whose chunk is away cannot be told anything; what it brings still counts.
+        for (TransportJob<ItemKey, RackPosition> job : rememberedJobsOfAbsentCranes()) {
+            if (job.requestId().filter(id::equals).isPresent())
+                coming += job.picked() ? job.heldAmount() : job.plannedAmount();
+        }
+        if (coming <= remaining)
+            return;
+        // The largest unpicked trips first, then by crane number, until no more is coming than is still wanted. With
+        // one crane this cancels exactly the one trip planned for more than is left, as before.
+        cancellable.sort(Comparator.comparingInt((StackerCraneBlockEntity dock) -> dock.currentJob().orElseThrow()
+                .plannedAmount()).reversed().thenComparingInt(StackerCraneBlockEntity::craneNumber));
+        for (StackerCraneBlockEntity dock : cancellable) {
+            if (coming <= remaining)
+                break;
+            TransportJob<ItemKey, RackPosition> job = dock.currentJob().orElseThrow();
+            if (dock.cancelJob(job.id()))
+                coming -= job.plannedAmount();
+        }
     }
 
     /**
@@ -720,9 +1131,11 @@ final class CraneDispatch {
             return;
         for (UUID id : ids)
             ledger.detachRequest(id);
-        controller.linkedDockEntity().ifPresent(dock -> dock.currentJob()
-                .filter(job -> job.requestId().filter(ids::contains).isPresent())
-                .ifPresent(job -> dock.cancelJob(job.id())));
+        for (StackerCraneBlockEntity dock : controller.cranes()) {
+            dock.currentJob()
+                    .filter(job -> job.requestId().filter(ids::contains).isPresent())
+                    .ifPresent(job -> dock.cancelJob(job.id()));
+        }
     }
 
     /**

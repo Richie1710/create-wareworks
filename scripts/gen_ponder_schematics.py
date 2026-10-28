@@ -50,6 +50,9 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 #   (dev.wareworks.client.ponder.scenes.PonderNetwork).
 # The junction scene (M22) uses that plate as a comb: the main run east at z = 2 over x = 1..8, with two side aisles
 #   south at x = 3 and x = 6 over z = 2..6, racks on the far side of each and the collecting port at x = 1, z = 3.
+# The two cranes scene (issue #14) uses the junction scene's comb on the same plate: its last main-run block x = 8 is a
+#   second Stacker Crane dock facing west instead of a rail, with its own creative motor in the plate below it
+#   (dev.wareworks.client.ponder.scenes.TwoCraneScenes, PonderNetwork#twoCranes).
 # The two aisle-free rack bay scenes (M28) have no aisle at all, because a bay works standalone: rack_bay is one bay in
 #   the middle of a square 3 plate, and rack_wall is a 3 x 3 wall on the far row (z = 4) of a square 7 plate, so
 #   nothing stands between the camera and the bays' fronts (dev.wareworks.client.ponder.scenes.RackBayScenes).
@@ -76,6 +79,7 @@ TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
     "warehouse/junction": (9, 7, 9),
+    "warehouse/two_cranes": (9, 7, 9),
     "warehouse/interface": (7, 6, 7),
     "warehouse/filters": (9, 7, 9),
     "warehouse/storing": (9, 7, 9),

@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.CraneTraffic;
 import dev.wareworks.content.controller.StorageMember;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseLayout;
@@ -43,6 +44,9 @@ import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.RerouteTarget;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.traffic.TrafficVerdict;
+import dev.wareworks.core.traffic.TrafficWait;
+import dev.wareworks.core.warehouse.CraneRoute;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.RouteTable;
 import dev.wareworks.util.LogThrottle;
@@ -80,6 +84,13 @@ import net.minecraft.world.level.Level;
  * the controller no longer counts for an open request detaches it as well, so the controller never counts a request
  * twice.
  * <p>
+ * <b>Traffic (issue #14, ADR-075).</b> A crane of a warehouse with several cranes asks its controller's traffic ledger
+ * before every motion tick ({@link #trafficTick}): a <b>normal</b> tick while it stays on its blocks or drives a route
+ * its claim covers, a <b>detour</b> tick along the route it is committed to when its phase wants somewhere it has not
+ * been granted yet, and otherwise a <b>hold</b> tick with stopped speeds, in which nothing changes at all. Without a
+ * loaded controller it may still work on the blocks it stands on, and holds everything else. A crane of a warehouse
+ * with one crane never asks and never holds.
+ * <p>
  * <b>Head and job stay in step.</b> The job's held amount always equals the head's count of the job key. After loading
  * (or if a foreign inventory broke the contract), {@link #reconcileHeadWithJob} makes the job follow the real head, and
  * items of other keys are dropped at the dock, never deleted.
@@ -108,6 +119,11 @@ final class CraneExecution {
     private CranePauseReason pauseReason = CranePauseReason.NONE;
     private boolean resumePending;
     private boolean syncRequested;
+    /** The warehouse traffic that gated this tick's motion, if any; told the pose the tick ended at (issue #14). */
+    @Nullable
+    private CraneTraffic trafficOfThisTick;
+    /** Whether this crane already asked for a relink because the controller lists its dock under another number. */
+    private boolean relinkAsked;
     /**
      * Ticks this crane has had nothing to do ({@link HomeReturn#countIdle}). Derived, never saved and never synced: a
      * crane that has just loaded starts waiting from zero, which is the harmless direction — it waits a little longer
@@ -148,6 +164,22 @@ final class CraneExecution {
     private final LogThrottle contractViolations = new LogThrottle();
     /** Rate limit for "the aisle under the crane left the warehouse", which a player fixes by putting one rail back. */
     private final LogThrottle lostAisles = new LogThrottle();
+
+    /** What the traffic ledger lets a crane do in one tick (issue #14, ADR-075 §4.1). */
+    private enum TrafficStep {
+        /** An ordinary tick. */
+        NORMAL,
+        /** One motion tick along the committed route, everything else unchanged ({@link CraneEvent.Detour}). */
+        DETOUR,
+        /** No motion at all: the tick is applied with stopped speeds. */
+        HOLD
+    }
+
+    /** The step of this tick, and for a detour the route and where it ends. */
+    private record TrafficTick(TrafficStep step, @Nullable CraneRoute route, @Nullable CranePose target) {
+        static final TrafficTick NORMAL = new TrafficTick(TrafficStep.NORMAL, null, null);
+        static final TrafficTick HOLD = new TrafficTick(TrafficStep.HOLD, null, null);
+    }
 
     CraneExecution(StackerCraneBlockEntity crane) {
         this.crane = Objects.requireNonNull(crane, "crane");
@@ -248,10 +280,22 @@ final class CraneExecution {
         if (paused != crane.craneState().paused())
             apply(level, paused ? CraneEvent.paused() : CraneEvent.resumed());
         returnHomeIfIdle();
-        apply(level, CraneEvent.tick(speeds));
+        // A crane of a warehouse with one crane never asks: the step is a normal tick, exactly as up to 0.17.1.
+        TrafficTick traffic = crane.inTraffic() ? trafficTick(now) : TrafficTick.NORMAL;
+        CraneSpeeds applied = traffic.step() == TrafficStep.HOLD ? CraneSpeeds.STOPPED : speeds;
+        switch (traffic.step()) {
+            case NORMAL, HOLD -> apply(level, CraneEvent.tick(applied));
+            case DETOUR -> apply(level, CraneEvent.detour(speeds, traffic.target(), traffic.route()));
+        }
 
         CraneState<ItemKey, RackPosition> after = crane.craneState();
-        sounds.afterTick(level, crane, before.pose(), after, speeds);
+        // Where the machine really stopped this tick, for the controller's save and for a ledger built while this
+        // chunk is away: the pose before the step would leave the block it moved onto unclaimed (issue #14).
+        CraneTraffic gatedBy = trafficOfThisTick;
+        trafficOfThisTick = null;
+        if (gatedBy != null)
+            gatedBy.noteStanding(crane.getBlockPos(), after.pose());
+        sounds.afterTick(level, crane, before.pose(), after, applied);
         recordThroughput(now, before, after);
         if (after.phase() != before.phase() || !after.target().equals(before.target())
                 || !after.job().equals(before.job()))
@@ -312,23 +356,41 @@ final class CraneExecution {
         idleTicks = HomeReturn.countIdle(idleTicks, waiting);
         if (!waiting)
             return;
+        if (crane.isLeavingWarehouse()) {
+            // The warehouse has no room for this crane any more (issue #14, ADR-075 §2.5): it goes straight to its own
+            // dock, whatever the idle delay says, and the controller lets it go once it is parked there.
+            CranePose dock = crane.homePose();
+            if (!state.target().equals(dock)) {
+                crane.setCraneState(state.withTarget(dock));
+                syncRequested = true;
+            }
+            return;
+        }
         // The two cheapest questions first, because they are the ones that answer "nothing to do" for every warehouse
         // that does not return its crane: a config read and a counter, with nothing built and nothing allocated. A
         // warehouse of one straight aisle — every world built before M21 — leaves here on every tick.
-        if (WareworksConfig.returnHomeIdleTicks() <= HomeReturn.OFF || crane.aisleCount() <= 1)
+        // A warehouse of several cranes returns them even on one straight aisle (issue #14): a crane left where its
+        // last job ended may stand in another one's way.
+        if (WareworksConfig.returnHomeIdleTicks() <= HomeReturn.OFF || (crane.aisleCount() <= 1 && !crane.inTraffic()))
             return;
         HomeReturn rule = crane.homeReturn();
         if (!rule.returnsAfter(idleTicks))
             return;
         WarehouseLayout warehouse = crane.warehouse();
         NetworkGeometry network = warehouse.network();
-        int homeBranch = rule.homeBranch();
-        if (homeBranch >= network.branchCount())
-            return; // the aisle it names is gone: the next geometry refresh gives this dock another home point
-        CranePose home = rule.parkPose(network.branch(homeBranch).heading()).orElseThrow();
-        BranchGeometry branch = network.branch(homeBranch);
-        home = home.withXY(Mth.clamp(home.x(), 0.0, branch.length()),
-                Mth.clamp(home.y(), 0.0, network.height() - 1.0));
+        CranePose home;
+        if (rule.home().isEmpty() && crane.isMember()) {
+            // A member without a home point parks on its own dock, which is no position 0 of the first aisle.
+            home = crane.homePose();
+        } else {
+            int homeBranch = rule.homeBranch();
+            if (homeBranch >= network.branchCount())
+                return; // the aisle it names is gone: the next geometry refresh gives this dock another home point
+            home = rule.parkPose(network.branch(homeBranch).heading()).orElseThrow();
+            BranchGeometry branch = network.branch(homeBranch);
+            home = home.withXY(Mth.clamp(home.x(), 0.0, branch.length()),
+                    Mth.clamp(home.y(), 0.0, network.height() - 1.0));
+        }
         // A machine already named on the aisle it has to reach always can, so the route question — which derives the
         // network's corner blocks — is asked only for a trip that really crosses one ({@code RouteTable#canDrive} says
         // the same, but it would build the table first, on every tick of a crane that is simply parked).
@@ -340,6 +402,140 @@ final class CraneExecution {
             return; // already there, or already on the way
         crane.setCraneState(state.withTarget(wanted));
         syncRequested = true;
+    }
+
+    /**
+     * Asks the traffic ledger what this crane may do in this tick (issue #14, ADR-075 §4.1), for a crane of a warehouse
+     * with several cranes only. The pass of this game tick runs first if nobody has run it yet, so whatever block
+     * entity ticks first, every crane of the warehouse is judged as it stood at the end of the last tick.
+     * <ul>
+     * <li>Without a loaded controller nobody can grant anything: the crane works on the blocks it stands on and holds
+     * everything else, keeping its claim.</li>
+     * <li>An idle crane ordered aside rests where it is sent — its resting target follows the order — and every crane
+     * that moves aside waits a whole {@code crane.returnHomeIdleTicks} there before it drives home again.</li>
+     * <li>The ledger's claim and whether the crane is held or detouring are kept on the dock, for its save and for
+     * clients, which must not animate a held crane on.</li>
+     * </ul>
+     */
+    private TrafficTick trafficTick(long now) {
+        CraneState<ItemKey, RackPosition> state = crane.craneState();
+        CranePose pose = state.pose();
+        CranePose target = state.target();
+        Optional<WarehouseControllerBlockEntity> controller = crane.linkedControllerEntity();
+        Optional<CraneTraffic> traffic = controller.flatMap(WarehouseControllerBlockEntity::traffic);
+        // How many levels the warehouse has, for the mast note of a crane whose own mast is lower (issue #14).
+        int levels = controller.flatMap(WarehouseControllerBlockEntity::warehouse)
+                .map(warehouse -> warehouse.network().height()).orElse(0);
+        if (traffic.isPresent()) {
+            traffic.get().ensurePass(now);
+            // The number the controller lists this dock under, not the one this crane saved: a crane before it may
+            // have left while this chunk was away, and the ledger's slot of the saved number is then another crane's.
+            if (traffic.get().numberOf(crane.getBlockPos()).orElse(0) != crane.craneNumber()) {
+                if (!relinkAsked)
+                    controller.get().requestRelink(); // once: the relink names it again, or lets it go
+                relinkAsked = true;
+                traffic = Optional.empty();
+            } else {
+                relinkAsked = false;
+            }
+        }
+        if (traffic.isEmpty()) {
+            boolean stays = pose.arm() > CranePose.RETRACTED || staysOnItsBlocks(pose, target);
+            if (crane.setTrafficState(crane.trafficClaim(), !stays, null))
+                syncRequested = true;
+            if (crane.setTrafficInfo(trafficInfo(null, !stays, levels)))
+                syncRequested = true;
+            return stays ? TrafficTick.NORMAL : TrafficTick.HOLD;
+        }
+        CraneTraffic ledger = traffic.get();
+        trafficOfThisTick = ledger;
+        int number = crane.craneNumber();
+        if (ledger.verdict(number) instanceof TrafficVerdict.Yield yield) {
+            idleTicks = 0;
+            if (state.phase() == CranePhase.IDLE && state.job().isEmpty()) {
+                CranePose park = StackerCraneBlockEntity.detourTarget(pose, yield.route());
+                if (!target.equals(park)) {
+                    crane.setCraneState(state.withTarget(park));
+                    target = park;
+                    syncRequested = true;
+                }
+            }
+        }
+        CraneRoute motionRoute = pose.branch() == target.branch() ? null
+                : crane.craneNetwork().route(pose.branch(), pose.x(), target.branch(), target.x()).orElse(null);
+        TrafficTick tick = switch (ledger.gate(number, pose, target, motionRoute)) {
+            case NORMAL -> TrafficTick.NORMAL;
+            case HOLD -> TrafficTick.HOLD;
+            case DETOUR -> ledger.detourRoute(number, pose)
+                    .map(route -> new TrafficTick(TrafficStep.DETOUR, route,
+                            StackerCraneBlockEntity.detourTarget(pose, route)))
+                    .orElse(TrafficTick.HOLD);
+        };
+        if (crane.setTrafficState(ledger.claim(number), tick.step() == TrafficStep.HOLD, tick.route()))
+            syncRequested = true;
+        if (crane.setTrafficInfo(trafficInfo(ledger, tick.step() == TrafficStep.HOLD, levels)))
+            syncRequested = true;
+        return tick;
+    }
+
+    /**
+     * What this crane's goggles say about the other cranes this tick (issue #14, ADR-075 §15.1): its number, the
+     * reason it stands still and the crane and rail that reason names, the rails it has reserved, and how many levels
+     * its mast serves when that is fewer than the warehouse has. Built from what the tick already decided — the
+     * ledger's verdict, the claim the crane keeps, whether it is held — so it costs a record and no lookup.
+     *
+     * @param ledger the warehouse's traffic, or {@code null} while the controller is not loaded
+     * @param held   whether the crane stands still for traffic this tick
+     * @param levels the levels the warehouse has, 0 when unknown
+     */
+    private CraneTrafficInfo trafficInfo(@Nullable CraneTraffic ledger, boolean held, int levels) {
+        int number = crane.craneNumber();
+        int mast = crane.mastHeight();
+        CraneTrafficInfo info = CraneTrafficInfo.quiet(number, crane.craneCount(),
+                levels > 0 && mast < levels ? mast : 0);
+        CraneTrafficClaim claim = crane.trafficClaim();
+        if (claim.committed()) {
+            CraneRoute route = claim.route().get();
+            info = info.withReservation(route.fromBranch(), (int) Math.round(route.fromX()), claim.stopBranch(),
+                    claim.stopX());
+        }
+        if (ledger == null)
+            return held ? info.withLine(CraneTrafficInfo.Line.NO_CONTROLLER, 0, CraneTrafficInfo.NO_POSITION,
+                    CraneTrafficInfo.NO_POSITION) : info;
+        if (ledger.stranded(number))
+            return info.withLine(CraneTrafficInfo.Line.STRANDED, 0, CraneTrafficInfo.NO_POSITION,
+                    CraneTrafficInfo.NO_POSITION);
+        TrafficVerdict verdict = ledger.verdict(number);
+        if (verdict instanceof TrafficVerdict.Yield yield)
+            return info.withLine(CraneTrafficInfo.Line.MOVING_ASIDE, yield.forCrane(), CraneTrafficInfo.NO_POSITION,
+                    CraneTrafficInfo.NO_POSITION);
+        if (!held || !(verdict instanceof TrafficVerdict.Hold hold))
+            return info;
+        TrafficWait waiting = hold.waiting();
+        CraneState<ItemKey, RackPosition> state = crane.craneState();
+        // An idle crane that cannot get to where it parks waits for nothing a job needs: it says so in its own words.
+        boolean resting = state.phase() == CranePhase.IDLE && state.job().isEmpty();
+        CraneTrafficInfo.Line line = switch (waiting.reason()) {
+            case PATH_HELD, CRANE_STOPPED, CRANE_UNLOADED -> resting ? CraneTrafficInfo.Line.PARK_BLOCKED
+                    : switch (waiting.reason()) {
+                        case CRANE_STOPPED -> CraneTrafficInfo.Line.CRANE_STOPPED;
+                        case CRANE_UNLOADED -> CraneTrafficInfo.Line.CRANE_UNLOADED;
+                        default -> CraneTrafficInfo.Line.PATH_HELD;
+                    };
+            case GIVING_WAY -> CraneTrafficInfo.Line.GIVING_WAY;
+            case WOULD_CUT_OFF -> CraneTrafficInfo.Line.WOULD_CUT_OFF;
+            case NO_PATH -> CraneTrafficInfo.Line.NO_PATH;
+            case NO_CONTROLLER -> CraneTrafficInfo.Line.NO_CONTROLLER;
+        };
+        int[] rail = line == CraneTrafficInfo.Line.PATH_HELD ? ledger.railOf(waiting.cell()).orElse(null) : null;
+        return info.withLine(line, waiting.otherCrane(), rail == null ? CraneTrafficInfo.NO_POSITION : rail[0],
+                rail == null ? CraneTrafficInfo.NO_POSITION : rail[1]);
+    }
+
+    /** Whether the target lies on the one or two blocks the machine stands on, so reaching it needs no grant. */
+    private static boolean staysOnItsBlocks(CranePose pose, CranePose target) {
+        return pose.branch() == target.branch() && target.x() >= Math.floor(pose.x())
+                && target.x() <= Math.ceil(pose.x());
     }
 
     /**
@@ -943,10 +1139,10 @@ final class CraneExecution {
         // A warehouse always has the aisle at its dock, even when that aisle has no rails at all, so there is always
         // somewhere legal to put the machine. Only a label that really names nothing is rewritten: a crane standing
         // perfectly well on an aisle it still has must not be moved because its target vanished.
-        WarehouseLayout warehouse = crane.warehouse();
         CraneState<ItemKey, RackPosition> next = state;
         if (poseLost) {
-            CranePose parked = warehouse.parkedAtDock(pose);
+            // A member goes back to its own dock, which is where it is drawn once its aisle is gone (issue #14).
+            CranePose parked = crane.parkedAtOwnDock(pose);
             next = next.withPoses(parked, parked);
             if (lostAisles.tryLog(level.getGameTime()))
                 LOGGER.info("Stacker crane at {}: its aisle {} is no longer part of the warehouse, so the machine is "
@@ -954,7 +1150,7 @@ final class CraneExecution {
                         parked.x());
         }
         if (targetLost)
-            next = next.withTarget(warehouse.parkedAtDock(target));
+            next = next.withTarget(crane.parkedAtOwnDock(target));
         crane.setCraneState(next);
         syncRequested = true;
     }

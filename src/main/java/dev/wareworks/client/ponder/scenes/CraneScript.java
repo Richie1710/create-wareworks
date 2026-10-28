@@ -8,6 +8,7 @@ import org.jetbrains.annotations.Nullable;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.crane.CraneMembership;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.core.address.Heading;
 import dev.wareworks.core.address.NetworkGeometry;
@@ -50,6 +51,12 @@ import net.minecraft.world.item.Item;
  * #onNetwork(CreateSceneBuilder, BlockPos, NetworkGeometry)} hands it over with every pose, and the same network is
  * used to work out how long a move takes — so the {@code idle} of a beat that crosses a corner includes the quarter
  * turn ({@code crane.turnPenaltyBlocks}) exactly as the machine spends it.
+ * <p>
+ * <b>A warehouse with several cranes</b> (issue #14, ADR-075) needs one thing more again: crane 2 and later stand on a
+ * dock that is not the warehouse's own, and a Ponder level has no controller to tell them so. {@link #memberOnNetwork}
+ * hands such a crane its frame with every pose, so it draws its machine on the warehouse's rails. Two cranes that move
+ * at the same time are scripted with {@link #start} and {@link #startDwell}, which enqueue a move without idling and
+ * return how long it takes, so the scene can idle once for both.
  */
 public final class CraneScript {
     /** Kinetic speed the scenes drive the dock with: slow enough to read, fast enough not to drag. */
@@ -65,20 +72,24 @@ public final class CraneScript {
     /** The rails the shown machine drives on, or {@code null} for a warehouse of one straight aisle. */
     @Nullable
     private final NetworkGeometry network;
+    /** The frame of a crane whose dock is not the warehouse's own, or {@code null} for the crane at the controller. */
+    @Nullable
+    private final CraneMembership frame;
     private final CraneNetwork rails;
     private CranePose pose;
     private List<KeyCount<Item>> held = List.of();
 
     public CraneScript(CreateSceneBuilder scene, BlockPos dock, int rpm, CranePose start) {
-        this(scene, dock, rpm, null, start);
+        this(scene, dock, rpm, null, null, start);
     }
 
     private CraneScript(CreateSceneBuilder scene, BlockPos dock, int rpm, @Nullable NetworkGeometry network,
-            CranePose start) {
+            @Nullable CraneMembership frame, CranePose start) {
         this.scene = scene;
         this.dock = dock;
         this.speeds = speedsAt(rpm);
         this.network = network;
+        this.frame = frame;
         this.rails = network == null ? CraneNetwork.SINGLE_BRANCH
                 : CraneNetwork.of(network, WareworksConfig.turnPenaltyBlocks());
         this.pose = start;
@@ -96,7 +107,18 @@ public final class CraneScript {
     public static CraneScript onNetwork(CreateSceneBuilder scene, BlockPos dock, NetworkGeometry network) {
         CranePose parked = StackerCraneBlockEntity.HOME_POSE
                 .facing(network.firstBranch().heading());
-        return new CraneScript(scene, dock, PONDER_RPM, network, parked);
+        return new CraneScript(scene, dock, PONDER_RPM, network, null, parked);
+    }
+
+    /**
+     * A crane script for crane {@code frame.number()} of a warehouse with several cranes (issue #14, ADR-075): its dock
+     * {@code dock} is not the warehouse's own, so every pose is named in the warehouse's frame and handed over together
+     * with {@code frame}. It starts parked on its own dock block, facing the way the aisle that block ends runs.
+     */
+    public static CraneScript memberOnNetwork(CreateSceneBuilder scene, BlockPos dock, NetworkGeometry network,
+            CraneMembership frame) {
+        CranePose parked = frame.dockPose(CranePose.yawOf(network.branch(frame.siteBranch()).heading()));
+        return new CraneScript(scene, dock, PONDER_RPM, network, frame, parked);
     }
 
     /**
@@ -189,11 +211,32 @@ public final class CraneScript {
      * @return the ticks idled
      */
     public int moveTo(CranePose target, CranePhase phase) {
+        int ticks = start(target, phase);
+        scene.idle(ticks);
+        return ticks;
+    }
+
+    /**
+     * Sets off towards {@code target} in {@code phase} <b>without</b> idling, for a scene in which another crane moves
+     * at the same time: the caller idles once, for as long as the longer of the two moves takes.
+     *
+     * @return the ticks the move takes
+     */
+    public int start(CranePose target, CranePhase phase) {
         CranePose from = pose;
         showPose(from, target, phase);
-        int ticks = Math.max(MIN_MOVE_TICKS, ticksBetween(from, target, speeds, rails));
-        scene.idle(ticks);
         pose = target;
+        return Math.max(MIN_MOVE_TICKS, ticksBetween(from, target, speeds, rails));
+    }
+
+    /**
+     * Shows the crane standing still in {@code phase} without idling, the counterpart of {@link #dwell} for a scene in
+     * which another crane moves at the same time.
+     *
+     * @return {@code ticks}, how long the caller should let it stand
+     */
+    public int startDwell(CranePhase phase, int ticks) {
+        show(phase);
         return ticks;
     }
 
@@ -204,6 +247,12 @@ public final class CraneScript {
     private void showPose(CranePose from, CranePose target, CranePhase phase) {
         List<KeyCount<Item>> shownHeld = held;
         NetworkGeometry rails = network;
+        CraneMembership shownFrame = frame;
+        if (shownFrame != null) {
+            scene.world().modifyBlockEntity(dock, StackerCraneBlockEntity.class,
+                    crane -> crane.showClientPose(shownFrame, rails, from, target, phase, shownHeld));
+            return;
+        }
         if (rails == null) {
             scene.world().modifyBlockEntity(dock, StackerCraneBlockEntity.class,
                     crane -> crane.showClientPose(from, target, phase, shownHeld));
@@ -215,8 +264,7 @@ public final class CraneScript {
 
     /** Stands still in {@code phase} for {@code ticks}, e.g. while the grabber transfers items. */
     public int dwell(CranePhase phase, int ticks) {
-        show(phase);
-        scene.idle(ticks);
+        scene.idle(startDwell(phase, ticks));
         return ticks;
     }
 }

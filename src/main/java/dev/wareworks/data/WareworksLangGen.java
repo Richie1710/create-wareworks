@@ -5,7 +5,10 @@ import java.util.function.BiConsumer;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.ChunkKeepReason;
 import dev.wareworks.content.controller.RequestRejection;
+import dev.wareworks.content.controller.CraneRoster;
 import dev.wareworks.content.crane.CranePauseReason;
+import dev.wareworks.content.crane.CraneTrafficInfo;
+import dev.wareworks.content.crane.DockJoinStatus;
 import dev.wareworks.content.station.HomePointStatus;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
@@ -27,6 +30,7 @@ import dev.wareworks.core.terminal.TerminalSort;
 import dev.wareworks.core.warehouse.NetworkStop;
 import dev.wareworks.core.warehouse.WarehouseNumber;
 import dev.wareworks.registry.WareworksCreativeTabs;
+import dev.wareworks.util.CraneTrafficLang;
 import dev.wareworks.util.WareworksLang;
 
 /**
@@ -75,6 +79,7 @@ public final class WareworksLangGen {
                 case MAX_BRANCHES -> "the warehouse has as many aisles as this server allows";
                 case MAX_JUNCTIONS -> "the warehouse has as many junctions as this server allows";
                 case MAX_LENGTH -> "this aisle is as long as this server allows";
+                case MAX_CRANES -> "the warehouse has as many stacker cranes as this server allows";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_ON_AISLE), "On aisle %1$s at position %2$s");
@@ -1173,14 +1178,15 @@ public final class WareworksLangGen {
         tooltip(lang, "block.wareworks.warehouse_home_point",
                 "Where the crane waits when it has nothing to do.",
                 "When there is more than one",
-                "A warehouse has only _one_; any further one lights up _red_.");
+                "Each _crane_ uses _one_; any further one lights up _red_.");
 
         tooltip(lang, "block.wareworks.warehouse_controller",
                 "Runs a _warehouse_. Goes directly _behind_ the _stacker crane_.");
 
         tooltip(lang, "block.wareworks.stacker_crane",
-                "The _dock_ of the stacker crane. Needs _rotation_ through a _shaft_ from _below_; nothing connects "
-                        + "at the sides.",
+                "The _dock_ of a stacker crane. Needs _rotation_ through a _shaft_ from _below_; nothing connects "
+                        + "at the sides. Without a _controller_ of its own, it becomes _another crane_ of the "
+                        + "warehouse whose _rails_ it faces.",
                 "When using the value panel",
                 "Hold _Right-Click_ to set the _mast height_.");
 
@@ -1209,6 +1215,88 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_PLACE_NOT_ALLOWED), "You may not set it down here");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_DROP_REFUSED), "Set it down with Right-Click");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_STAYS_WITH_YOU), "A loaded hand truck stays with you");
+
+        severalCranes(lang);
+    }
+
+    /**
+     * Issue #14 (ADR-075): several cranes on one warehouse — the dock's traffic lines, the controller's crane list, the
+     * home point that names its crane, the terminal's crane line and the two crane sources read off the controller.
+     * Every reason has its own sentence and names the crane it is about, because "why does my crane not move" has to
+     * be answerable at the machine.
+     */
+    private static void severalCranes(BiConsumer<String, String> lang) {
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_CRANE_NUMBER), "Crane %1$s of %2$s");
+        for (CraneTrafficInfo.Line line : CraneTrafficInfo.Line.values()) {
+            if (line == CraneTrafficInfo.Line.NONE)
+                continue;
+            lang.accept(WareworksLang.key(line.langKey()), switch (line) {
+                case NONE -> throw new IllegalStateException("NONE has no sentence");
+                case PATH_HELD -> "Waiting for crane %1$s: it holds the rails at %2$s";
+                case CRANE_STOPPED -> "Waiting for crane %1$s: it is stopped";
+                case CRANE_UNLOADED -> "Waiting for crane %1$s: its chunk is not loaded";
+                case GIVING_WAY -> "Giving way to crane %1$s";
+                case WOULD_CUT_OFF -> "Waiting: stopping there would cut crane %1$s off from its dock";
+                case NO_PATH -> "Waiting: no rails lead to its next stop";
+                case NO_CONTROLLER -> "Waiting: the warehouse controller is not loaded";
+                case MOVING_ASIDE -> "Moving aside for crane %1$s";
+                case PARK_BLOCKED -> "Way to its parking spot blocked by crane %1$s";
+                case STRANDED -> "Cut off from its dock: the rails between them are closed or gone";
+            });
+        }
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_TRAFFIC_WAITING_FOR), "Waiting for crane %1$s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_RESERVED), "Reserved: %1$s to %2$s");
+        // The estimate never counts a wait, and says so while there is one (ADR-075 §8.3).
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_TRIP_LEFT), "About %1$s s left");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_TRIP_LEFT_WAITING),
+                "About %1$s s left, not counting the wait");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_MAST_SERVED),
+                "Levels from %1$s up are served by the other cranes");
+        for (DockJoinStatus.Reason reason : DockJoinStatus.Reason.values()) {
+            lang.accept(WareworksLang.key(CraneTrafficLang.dockJoinKey(reason)), switch (reason) {
+                case ONE_CRANE -> "Not a crane of warehouse %1$s: this server allows one crane per warehouse";
+                case MAX_CRANES -> "Not a crane of warehouse %1$s: it has the %2$s cranes this server allows";
+                // The foreign-dock hint: a dock with a controller of its own is a warehouse by itself, and a wall.
+                case OWN_CONTROLLER -> "Faces warehouse %1$s, but has a controller of its own: a separate warehouse";
+                case PENDING -> "Joins warehouse %1$s as another crane at its next rail check";
+            });
+        }
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_CRANES), "Cranes: %1$s (%2$s)");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_CRANES_REFUSED),
+                "Docks left out: %1$s, this server allows %2$s cranes");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_ROSTER_JOB), "%1$s: %2$s to %3$s, about %4$s s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_ROSTER_JOB_NO_TIME), "%1$s: %2$s to %3$s");
+        for (CraneRoster.Activity activity : CraneRoster.Activity.values()) {
+            lang.accept(WareworksLang.key(CraneTrafficLang.rosterKey(activity)), switch (activity) {
+                case IDLE -> "%1$s: idle";
+                case STORING -> "%1$s: storing";
+                case RETRIEVING -> "%1$s: retrieving";
+                case SUPPLYING -> "%1$s: supplying";
+                case COLLECTING -> "%1$s: collecting";
+                case HANDING_OVER -> "%1$s: handing over";
+                case FILLING -> "%1$s: filling";
+                case WAITING -> "%1$s: waiting for crane %2$s";
+                case MOVING_ASIDE -> "%1$s: moving aside for crane %2$s";
+                case PAUSED -> "%1$s: paused";
+                case UNLOADED -> "%1$s: its chunk is not loaded";
+                case STRANDED -> "%1$s: cut off from its dock";
+            });
+        }
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_HOME_POINT_SERVING_CRANE), "Crane %1$s waits here");
+        lang.accept(WareworksLang.key(CraneTrafficLang.GOGGLES_HOME_POINT_SECOND_CRANES),
+                "Without effect: this warehouse has more home points than cranes");
+        lang.accept(WareworksLang.key(CraneTrafficLang.CRANES_WORKING), "%1$s working");
+        lang.accept(WareworksLang.key(CraneTrafficLang.CRANES_WAITING), "%1$s waiting");
+        lang.accept(WareworksLang.key(CraneTrafficLang.CRANES_PAUSED), "%1$s paused");
+        lang.accept(WareworksLang.key(CraneTrafficLang.CRANES_IDLE), "%1$s idle");
+        lang.accept(WareworksLang.key(CraneTrafficLang.TERMINAL_CRANES), "%1$s cranes: %2$s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.DISPLAY_CRANE_WAITING_FOR), "%1$s, waiting for crane %2$s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.DISPLAY_CRANE_MOVING_ASIDE), "Moving aside for crane %1$s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.DISPLAY_CRANE_ROW), "%1$s %2$s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.DISPLAY_CRANE_ROW_WAITING), "%1$s Waiting for %2$s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.DISPLAY_CRANE_ROW_MOVING_ASIDE), "%1$s Moving aside for %2$s");
+        lang.accept(WareworksLang.key(CraneTrafficLang.DISPLAY_CRANE_UNLOADED), "Not loaded");
+        lang.accept(WareworksLang.key(CraneTrafficLang.DISPLAY_CRANE_STRANDED), "Cut off");
     }
 
     /**

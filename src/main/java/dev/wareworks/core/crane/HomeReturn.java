@@ -19,7 +19,9 @@ import dev.wareworks.core.address.RackPosition;
  * <li><b>A warehouse of one straight aisle never returns.</b> That is what every warehouse did before M21 and it must
  * keep doing it: a crane on a single aisle stands where its last job left it, whatever a home point says. A home point
  * there is reported as having no effect rather than obeyed, because the alternative is a silent behaviour change in
- * every world built before this version.</li>
+ * every world built before this version. <b>Unless the aisle has two cranes</b> (issue #14, ADR-075): then a crane that
+ * stays where its last job left it may stand in the other one's way, so returning is on for them — and still off for
+ * one crane on one aisle, which no world built before could have had otherwise.</li>
  * <li><b>A delay of {@value #OFF} switches it off entirely</b> ({@code crane.returnHomeIdleTicks}), which is the
  * server owner's off switch and reproduces rule one on every warehouse.</li>
  * <li><b>Home is the home point, or the dock.</b> A warehouse without a home point parks its crane at position 0 of
@@ -34,9 +36,10 @@ import dev.wareworks.core.address.RackPosition;
  *
  * @param delayTicks  ticks a crane waits for work before it drives home; {@value #OFF} never returns
  * @param branchCount aisles of the warehouse the crane drives on, at least 1
- * @param home        the rack position of the warehouse's home point, or empty for the dock
+ * @param craneCount  stacker cranes of the warehouse, at least 1 (issue #14)
+ * @param home        the rack position of the crane's home point, or empty for the dock
  */
-public record HomeReturn(int delayTicks, int branchCount, Optional<RackPosition> home) {
+public record HomeReturn(int delayTicks, int branchCount, int craneCount, Optional<RackPosition> home) {
     /** A delay that switches returning home off. */
     public static final int OFF = 0;
     /**
@@ -46,7 +49,7 @@ public record HomeReturn(int delayTicks, int branchCount, Optional<RackPosition>
     public static final int MAX_IDLE_TICKS = 1 << 24;
 
     /** A warehouse that never sends its crane home: one aisle, no delay, no home point. */
-    public static final HomeReturn NEVER = new HomeReturn(OFF, 1, Optional.empty());
+    public static final HomeReturn NEVER = new HomeReturn(OFF, 1, 1, Optional.empty());
 
     public HomeReturn {
         Objects.requireNonNull(home, "home");
@@ -54,19 +57,34 @@ public record HomeReturn(int delayTicks, int branchCount, Optional<RackPosition>
             throw new IllegalArgumentException("delayTicks must not be negative: " + delayTicks);
         if (branchCount < 1)
             throw new IllegalArgumentException("a warehouse has at least one aisle: " + branchCount);
+        if (craneCount < 1)
+            throw new IllegalArgumentException("a warehouse has at least one crane: " + craneCount);
     }
 
-    /** The rule of a warehouse of {@code branchCount} aisles whose home point is {@code home}. */
+    /** The rule of a warehouse of one crane: what every warehouse was up to 0.17.1. */
+    public HomeReturn(int delayTicks, int branchCount, Optional<RackPosition> home) {
+        this(delayTicks, branchCount, 1, home);
+    }
+
+    /** The rule of a warehouse of {@code branchCount} aisles and one crane whose home point is {@code home}. */
     public static HomeReturn of(int delayTicks, int branchCount, Optional<RackPosition> home) {
-        return new HomeReturn(delayTicks, branchCount, home);
+        return new HomeReturn(delayTicks, branchCount, 1, home);
     }
 
     /**
-     * Whether this warehouse sends its crane home at all: more than one aisle and a configured delay. A home point is
-     * <b>not</b> required — without one the dock is home.
+     * The rule of a warehouse of {@code branchCount} aisles and {@code craneCount} cranes, for the crane whose home
+     * point is {@code home} (issue #14).
+     */
+    public static HomeReturn of(int delayTicks, int branchCount, int craneCount, Optional<RackPosition> home) {
+        return new HomeReturn(delayTicks, branchCount, craneCount, home);
+    }
+
+    /**
+     * Whether this warehouse sends its crane home at all: a configured delay, and more than one aisle or more than one
+     * crane. A home point is <b>not</b> required — without one the dock is home.
      */
     public boolean enabled() {
-        return delayTicks > OFF && branchCount > 1;
+        return delayTicks > OFF && (branchCount > 1 || craneCount > 1);
     }
 
     /**
@@ -133,6 +151,6 @@ public record HomeReturn(int delayTicks, int branchCount, Optional<RackPosition>
 
     /** This rule with another home point (or none, for the dock). */
     public HomeReturn withHome(Optional<RackPosition> newHome) {
-        return new HomeReturn(delayTicks, branchCount, newHome);
+        return new HomeReturn(delayTicks, branchCount, craneCount, newHome);
     }
 }

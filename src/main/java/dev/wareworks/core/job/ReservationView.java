@@ -42,6 +42,20 @@ public interface ReservationView<K, L> {
      */
     long reservedCapacityFor(K key);
 
+    /**
+     * Items of {@code key} in the buffer of the input station or collecting port {@code location} that a job will pick
+     * ({@link Reservation.Kind#BUFFER}, issue #14). A planner subtracts them from what the buffer holds, so two cranes
+     * never plan the same buffered items. Never part of any stock figure.
+     */
+    long reservedBuffer(L location, K key);
+
+    /**
+     * Everything other jobs are already bringing to {@code location}: the capacity reserved there and the items in
+     * transit to it (issue #14, ADR-075 section 9). A delivery target's live room is measured before these arrive, so
+     * a planner subtracts them; with a single crane no other job holds anything while one is planned, and this is 0.
+     */
+    long reservedInbound(L location);
+
     /** Stock of {@code key} reserved inside {@code location}. */
     long reservedStock(L location, K key);
 

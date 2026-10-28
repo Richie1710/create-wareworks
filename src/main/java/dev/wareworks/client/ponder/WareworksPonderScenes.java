@@ -15,6 +15,7 @@ import dev.wareworks.client.ponder.scenes.ProductionScenes;
 import dev.wareworks.client.ponder.scenes.RackBayScenes;
 import dev.wareworks.client.ponder.scenes.StockRuleScenes;
 import dev.wareworks.client.ponder.scenes.TerminalScenes;
+import dev.wareworks.client.ponder.scenes.TwoCraneScenes;
 import dev.wareworks.client.ponder.scenes.WarehouseScenes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksItems;
@@ -42,7 +43,7 @@ import net.minecraft.resources.ResourceLocation;
  *   <caption>Scenes per component</caption>
  *   <tr><th>Component</th><th>Scenes</th></tr>
  *   <tr><td>stacker_crane, warehouse_rail</td><td>stacker_crane/overview, warehouse/corner,
- *       warehouse/junction</td></tr>
+ *       warehouse/junction, warehouse/two_cranes</td></tr>
  *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
  *   <tr><td>warehouse_input</td><td>warehouse/storing, warehouse/packages_at_the_door</td></tr>
@@ -151,6 +152,15 @@ public final class WareworksPonderScenes {
         // split". It belongs to the same two components, because it is the same two blocks that make it happen.
         scenes.forComponents(WareworksBlocks.WAREHOUSE_RAIL, WareworksBlocks.STACKER_CRANE)
                 .addStoryBoard("warehouse/junction", NetworkScenes::junction,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
+
+        // Several cranes on one warehouse (issue #14, ADR-075), after the junction for the same reason the junction
+        // comes after the corner: a player meets "the rails may split" first and "and a second machine may share them"
+        // after it, and the scene's stage is the junction scene's comb. It belongs to the same two components, because
+        // the second crane is a second dock and the rails are what the two share. Registering it here moves no scene of
+        // any other block.
+        scenes.forComponents(WareworksBlocks.STACKER_CRANE, WareworksBlocks.WAREHOUSE_RAIL)
+                .addStoryBoard("warehouse/two_cranes", TwoCraneScenes::twoCranes,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
 
         // Packages at a door (M26, issue #18, ADR-040), and last for the same reason as every scene above: a player

@@ -22,7 +22,8 @@ import net.minecraft.world.item.Items;
 /**
  * What the goggles of a storage location show about its reservations ({@code docs/warehouse-system.md} §3.1): items a
  * crane job is bringing ({@code CAPACITY}, and {@code TRANSIT} at stations) and items reserved for a job to take out
- * ({@code STOCK}), each by item type with the {@value #MAX_ENTRIES} largest amounts.
+ * ({@code STOCK}), each by item type with the {@value #MAX_ENTRIES} largest amounts. A {@code BUFFER} reservation (items a
+ * store or collect job will pick out of a station's buffer, issue #14) is neither and is not shown.
  * <p>
  * Built on the server from the controller's reservation ledger while a player observes the interface, and synced in its
  * client packet. The synced form holds at most {@value #MAX_ENTRIES} item ids and counts per direction, whatever the
@@ -53,6 +54,10 @@ public record LocationReservationSummary(List<KeyCount<Item>> incoming, List<Key
         Map<Item, Long> in = new LinkedHashMap<>();
         Map<Item, Long> out = new LinkedHashMap<>();
         for (Reservation<ItemKey, ?> reservation : reservations) {
+            // Items a store or collect job will pick out of a station's buffer (issue #14) are neither arriving nor
+            // reserved stock: counting them as incoming would list a store job's own items as on their way in.
+            if (reservation.kind() == Reservation.Kind.BUFFER)
+                continue;
             Map<Item, Long> totals = reservation.kind() == Reservation.Kind.STOCK ? out : in;
             totals.merge(reservation.key().getItem(), (long) reservation.amount(), LocationReservationSummary::saturatedSum);
         }

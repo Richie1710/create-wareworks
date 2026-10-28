@@ -165,12 +165,32 @@ class HomeReturnTest {
         assertEquals(ticks + 1, HomeReturn.countIdle(ticks, true), "and it carries on where it left off");
     }
 
+    /**
+     * Two cranes on one straight aisle (issue #14, ADR-075): a crane that stays where its last job left it may stand in
+     * the other one's way, so returning is on for them — and still off for one crane on one aisle, which is every
+     * warehouse built before.
+     */
+    @Test
+    void twoCranesOnOneStraightAisleReturnHome() {
+        HomeReturn two = HomeReturn.of(DELAY, 1, 2, Optional.of(HOME));
+        assertTrue(two.enabled());
+        assertTrue(two.homePointHasEffect());
+        assertTrue(two.returnsAfter(DELAY));
+        assertEquals(2, two.withHome(Optional.empty()).craneCount(), "a new home point keeps the crane count");
+
+        HomeReturn one = HomeReturn.of(DELAY, 1, 1, Optional.of(HOME));
+        assertEquals(HomeReturn.of(DELAY, 1, Optional.of(HOME)), one, "the old rule is the rule of one crane");
+        assertFalse(one.enabled());
+        assertFalse(HomeReturn.of(HomeReturn.OFF, 1, 3, Optional.empty()).enabled(), "and a delay of 0 is still off");
+    }
+
     // --- bounds --------------------------------------------------------------------------------------------------
 
     @Test
     void anImpossibleRuleIsRefused() {
         assertThrows(IllegalArgumentException.class, () -> HomeReturn.of(-1, 2, Optional.empty()));
         assertThrows(IllegalArgumentException.class, () -> HomeReturn.of(DELAY, 0, Optional.empty()));
+        assertThrows(IllegalArgumentException.class, () -> HomeReturn.of(DELAY, 1, 0, Optional.empty()));
         assertThrows(NullPointerException.class, () -> HomeReturn.of(DELAY, 2, null));
         assertThrows(NullPointerException.class, () -> HomeReturn.of(DELAY, 2, Optional.of(HOME)).parkPose(null));
     }

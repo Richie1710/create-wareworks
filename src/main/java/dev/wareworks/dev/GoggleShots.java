@@ -57,7 +57,18 @@ final class GoggleShots {
      */
     static void shot(VisualScript script, String prefix, CameraView view, String label,
             Function<BlockPos, BlockPos> target, Predicate<VisualContext> synced, VisualScript.ClientAction check) {
-        script.camera(view)
+        shot(script, prefix, view.label(), context -> view, label, target, synced, check);
+    }
+
+    /**
+     * {@link #shot(VisualScript, String, CameraView, String, Function, Predicate, VisualScript.ClientAction)} with a
+     * camera worked out when the step starts, for a shot whose block is only known once the run has reached it (the
+     * dock of whichever crane a frozen moment is about, {@link CranesVisualScenario}).
+     */
+    static void shot(VisualScript script, String prefix, String cameraLabel, Function<VisualContext, CameraView> view,
+            String label, Function<BlockPos, BlockPos> target, Predicate<VisualContext> synced,
+            VisualScript.ClientAction check) {
+        script.camera(cameraLabel, view)
                 // The pass switched Flywheel's backend with a command, whose answer would otherwise sit in the chat
                 // line across the tooltip this shot is about.
                 .client(prefix + ": clear the chat before " + label, GoggleShots::clearChat)

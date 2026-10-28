@@ -44,6 +44,14 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.content.crane.CraneJobSummary;
 import dev.wareworks.content.crane.CranePauseReason;
+import dev.wareworks.content.crane.CraneTrafficInfo;
+import dev.wareworks.content.controller.CraneRoster;
+import dev.wareworks.content.display.CraneStatusDisplaySource;
+import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.core.crane.CranePhase;
+import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.warehouse.LocationKind;
+import dev.wareworks.util.CraneTrafficLang;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.display.StockListDisplaySource;
@@ -308,8 +316,10 @@ public final class DisplayLinkGameTests {
         List<List<DisplaySource>> expected = List.of(
                 List.of(WareworksDisplaySources.CRANE_STATUS.get(), WareworksDisplaySources.CRANE_THROUGHPUT.get()),
                 List.of(),
+                // The two crane sources last on the controller (issue #14): every link hung there before keeps its source.
                 List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get(),
-                        WareworksDisplaySources.FLUID_STOCK.get(), WareworksDisplaySources.WAREHOUSE_NUMBER.get()),
+                        WareworksDisplaySources.FLUID_STOCK.get(), WareworksDisplaySources.WAREHOUSE_NUMBER.get(),
+                        WareworksDisplaySources.CRANE_STATUS.get(), WareworksDisplaySources.CRANE_THROUGHPUT.get()),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()), List.of(),
                 List.of(WareworksDisplaySources.FILTERED_STOCK.get()),
                 List.of(WareworksDisplaySources.AISLE_SUMMARY.get(), WareworksDisplaySources.STOCK_LIST.get(),
@@ -1201,6 +1211,135 @@ public final class DisplayLinkGameTests {
                             measured.turnShare(), "the turning row");
                 })
                 .thenSucceed();
+    }
+
+    // --- crane sources off the controller (issue #14) -------------------------------------------------------------
+
+    /**
+     * "Crane Status" and "Crane Throughput" hung on the <b>controller</b> of a warehouse with one crane (issue #14,
+     * ADR-075 §15.3) read exactly what they read on its dock: the idle row and the empty grabber, and "Measuring" for a
+     * window that is not yet a minute.
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void cranesourcesoncontrolleronecrane(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STOCKED);
+        lectern(helper, LECTERN);
+        lectern(helper, SECOND_LECTERN);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(1, 0, 0))
+                .thenExecute(() -> {
+                    link(helper, aisle.controllerPos(), Direction.UP, LECTERN, WareworksDisplaySources.CRANE_STATUS);
+                    List<Component> pages = lecternPages(helper, LECTERN);
+                    helper.assertValueEqual(pages.size(), 2, "the dock's own rows: activity and grabber");
+                    assertKey(helper, pages.get(0), WareworksLang.DISPLAY_CRANE_IDLE, "activity");
+                    assertKey(helper, pages.get(1), WareworksLang.GOGGLES_EMPTY, "grabber");
+
+                    link(helper, aisle.controllerPos(), Direction.NORTH, SECOND_LECTERN,
+                            WareworksDisplaySources.CRANE_THROUGHPUT);
+                    List<Component> throughput = lecternPages(helper, SECOND_LECTERN);
+                    helper.assertValueEqual(throughput.size(), 1, "one line while the minute is filling");
+                    assertKey(helper, throughput.get(0), WareworksLang.DISPLAY_THROUGHPUT_MEASURING, "measuring");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The same two sources on the controller of a warehouse with <b>two</b> cranes (issue #14): one row per crane,
+     * "1 Idle" and "2 Idle", and "Measuring" until every crane has a whole minute. With
+     * {@code aisle.maxCranesPerNetwork = 1} the second dock is a wall and the controller reads its one dock, as above.
+     */
+    @GameTest(template = AISLE_16X10X7)
+    public static void cranesourcesoncontrollertwocranes(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(STOCKED);
+        BlockPos memberDock = aisle.dockPos().relative(AisleFixture.AISLE, RAILS + 1);
+        helper.setBlock(memberDock.below(), AllBlocks.CREATIVE_MOTOR.getDefaultState()
+                .setValue(CreativeMotorBlock.FACING, Direction.UP));
+        helper.setBlock(memberDock, WareworksBlocks.STACKER_CRANE.getDefaultState()
+                .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, AisleFixture.AISLE.getOpposite()));
+        lectern(helper, LECTERN);
+        lectern(helper, SECOND_LECTERN);
+        boolean several = WareworksConfig.maxCranesPerNetwork() > 1;
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(1, 0, 0);
+                    helper.assertValueEqual(aisle.controller().craneCount(), several ? 2 : 1, "the cranes listed");
+                })
+                .thenExecute(() -> {
+                    link(helper, aisle.controllerPos(), Direction.UP, LECTERN, WareworksDisplaySources.CRANE_STATUS);
+                    List<Component> pages = lecternPages(helper, LECTERN);
+                    if (!several) {
+                        assertKey(helper, pages.get(0), WareworksLang.DISPLAY_CRANE_IDLE, "the one dock's activity");
+                        return;
+                    }
+                    helper.assertValueEqual(pages.size(), 2, "one row per crane");
+                    for (int i = 0; i < 2; i++) {
+                        assertKey(helper, pages.get(i), CraneTrafficLang.DISPLAY_CRANE_ROW, "row " + (i + 1));
+                        Object[] args = argsOf(helper, pages.get(i), "row " + (i + 1));
+                        helper.assertValueEqual(argText(args[0]), number(i + 1L), "the crane number of row " + (i + 1));
+                        assertKey(helper, (Component) args[1], WareworksLang.DISPLAY_CRANE_IDLE, "and its activity");
+                    }
+
+                    link(helper, aisle.controllerPos(), Direction.NORTH, SECOND_LECTERN,
+                            WareworksDisplaySources.CRANE_THROUGHPUT);
+                    List<Component> throughput = lecternPages(helper, SECOND_LECTERN);
+                    helper.assertValueEqual(throughput.size(), 1, "one line until every crane has a minute");
+                    assertKey(helper, throughput.get(0), WareworksLang.DISPLAY_THROUGHPUT_MEASURING, "measuring");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The rows "Crane Status" writes for a crane of a warehouse with several cranes (issue #14, ADR-075 §15.3), built
+     * from goggle data the way a dock and a controller hand it over: the activity row names the crane that holds this
+     * one up — in the same row, so a four-row board loses nothing — or the crane it moves aside for; a pause beats both;
+     * and a crane of a warehouse with one crane reads exactly as before. One row per crane off the controller.
+     */
+    @GameTest(template = EMPTY_7X5X7)
+    public static void cranestatustrafficrows(GameTestHelper helper) {
+        CraneJobSummary job = new CraneJobSummary(JobType.STORE, Items.IRON_INGOT, 16, new RackPosition(2, 0, Side.LEFT),
+                new RackPosition(5, 1, Side.RIGHT), LocationKind.STORAGE);
+        CraneTrafficInfo waiting = CraneTrafficInfo.quiet(1, 2, 0).withLine(CraneTrafficInfo.Line.PATH_HELD, 2, 0, 7);
+        CraneGoggleInfo held = new CraneGoggleInfo(CranePhase.TRAVEL_TO_SOURCE, CranePauseReason.NONE,
+                Optional.of(job), List.of(), "A", Optional.empty(), Optional.of(waiting));
+        MutableComponent heldRow = CraneStatusDisplaySource.activityLine(held);
+        assertKey(helper, heldRow, CraneTrafficLang.DISPLAY_CRANE_WAITING_FOR, "a held crane's activity row");
+        Object[] heldArgs = argsOf(helper, heldRow, "a held crane's activity row");
+        assertKey(helper, (Component) heldArgs[0], WareworksLang.DISPLAY_CRANE_STORING, "the activity it keeps");
+        helper.assertValueEqual(argText(heldArgs[1]), number(2), "and the crane it waits for");
+
+        CraneGoggleInfo aside = new CraneGoggleInfo(CranePhase.IDLE, CranePauseReason.NONE, Optional.empty(),
+                List.of(), "A", Optional.empty(), Optional.of(CraneTrafficInfo.quiet(2, 3, 0)
+                        .withLine(CraneTrafficInfo.Line.MOVING_ASIDE, 3, CraneTrafficInfo.NO_POSITION,
+                                CraneTrafficInfo.NO_POSITION)));
+        MutableComponent asideRow = CraneStatusDisplaySource.activityLine(aside);
+        assertKey(helper, asideRow, CraneTrafficLang.DISPLAY_CRANE_MOVING_ASIDE, "a crane giving way");
+        helper.assertValueEqual(argText(argsOf(helper, asideRow, "a crane giving way")[0]), number(3), "for crane 3");
+
+        CraneGoggleInfo paused = new CraneGoggleInfo(CranePhase.TRAVEL_TO_SOURCE, CranePauseReason.NO_ROTATION,
+                Optional.of(job), List.of(), "A", Optional.empty(), Optional.of(waiting));
+        assertKey(helper, CraneStatusDisplaySource.activityLine(paused), WareworksLang.DISPLAY_CRANE_PAUSED,
+                "a pause beats the traffic");
+        CraneGoggleInfo alone = new CraneGoggleInfo(CranePhase.TRAVEL_TO_SOURCE, CranePauseReason.NONE,
+                Optional.of(job), List.of(), "A", Optional.empty());
+        assertKey(helper, CraneStatusDisplaySource.activityLine(alone), WareworksLang.DISPLAY_CRANE_STORING,
+                "one crane reads as it always did");
+
+        MutableComponent waitingRow = CraneStatusDisplaySource.row(new CraneRoster.Entry(2,
+                CraneRoster.Activity.WAITING, 1, Optional.empty(), -1));
+        assertKey(helper, waitingRow, CraneTrafficLang.DISPLAY_CRANE_ROW_WAITING, "2 Waiting for 1");
+        Object[] waitingArgs = argsOf(helper, waitingRow, "2 Waiting for 1");
+        helper.assertValueEqual(argText(waitingArgs[0]), number(2), "the row's crane");
+        helper.assertValueEqual(argText(waitingArgs[1]), number(1), "the crane it waits for");
+        MutableComponent unloadedRow = CraneStatusDisplaySource.row(new CraneRoster.Entry(3,
+                CraneRoster.Activity.UNLOADED, 0, Optional.empty(), -1));
+        assertKey(helper, unloadedRow, CraneTrafficLang.DISPLAY_CRANE_ROW, "3 Not loaded");
+        assertKey(helper, (Component) argsOf(helper, unloadedRow, "3 Not loaded")[1],
+                CraneTrafficLang.DISPLAY_CRANE_UNLOADED, "a crane nobody can see");
+        helper.succeed();
     }
 
     // --- warehouse number (issue #32) ----------------------------------------------------------------------------

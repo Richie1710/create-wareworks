@@ -1,9 +1,11 @@
 package dev.wareworks.core.warehouse;
 
+import java.util.List;
 import java.util.Objects;
 
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.NetworkGeometry;
+import dev.wareworks.core.traffic.DockSite;
 
 /**
  * What one discovery run found ({@link RailGraph#scan}): the network it could take, and where and why it ended
@@ -29,14 +31,34 @@ import dev.wareworks.core.address.NetworkGeometry;
  *                              ({@link AisleGeometry#scannedLength})
  * @param reachedUnloadedChunk  whether any position the scan looked at was in a chunk that is not loaded, so the
  *                              network may really be larger
+ * @param memberDocks           the docks without a controller of their own that joined this warehouse as aisle blocks,
+ *                              in discovery order: the docks of crane 2, 3, ... (issue #14, ADR-075). Empty for every
+ *                              warehouse of one crane
+ * @param refusedDocks          docks that faced into the rails but were left out because the warehouse already had
+ *                              {@code aisle.maxCranesPerNetwork} cranes
  */
 public record RailNetwork(NetworkGeometry geometry, NetworkStop stop, int stopDx, int stopDz, int rails,
-                          boolean firstBranchIncomplete, boolean reachedUnloadedChunk) {
+                          boolean firstBranchIncomplete, boolean reachedUnloadedChunk, List<DockSite> memberDocks,
+                          int refusedDocks) {
     public RailNetwork {
         Objects.requireNonNull(geometry, "geometry");
         Objects.requireNonNull(stop, "stop");
+        memberDocks = List.copyOf(Objects.requireNonNull(memberDocks, "memberDocks"));
         if (rails < 0)
             throw new IllegalArgumentException("rails must not be negative: " + rails);
+        if (refusedDocks < 0)
+            throw new IllegalArgumentException("refusedDocks must not be negative: " + refusedDocks);
+    }
+
+    /** A network of one crane: no member dock joined and none was refused, which is every network up to 0.17.1. */
+    public RailNetwork(NetworkGeometry geometry, NetworkStop stop, int stopDx, int stopDz, int rails,
+            boolean firstBranchIncomplete, boolean reachedUnloadedChunk) {
+        this(geometry, stop, stopDx, stopDz, rails, firstBranchIncomplete, reachedUnloadedChunk, List.of(), 0);
+    }
+
+    /** Stacker cranes this warehouse has: the one at its own dock plus one per member dock. */
+    public int craneCount() {
+        return 1 + memberDocks.size();
     }
 
     /** Number of straight branches, at least one. */

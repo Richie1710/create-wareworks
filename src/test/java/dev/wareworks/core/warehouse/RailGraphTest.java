@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import dev.wareworks.core.address.BranchGeometry;
 import dev.wareworks.core.address.BranchLink;
 import dev.wareworks.core.address.Heading;
+import dev.wareworks.core.traffic.DockSite;
 
 /**
  * Discovery, without a world: {@link RailGraph} walks a set of aisle blocks from the dock and cuts it into straight
@@ -379,6 +380,176 @@ class RailGraphTest {
         }
     }
 
+    // --- several cranes on one warehouse (issue #14, ADR-075) --------------------------------------------------
+
+    /** Room for four cranes, the default of {@code aisle.maxCranesPerNetwork}. */
+    private static final RailGraph.Limits FOUR_CRANES = new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 32, HEIGHT, 4);
+
+    @Test
+    void aDockAtTheFarEndFacingBackExtendsTheAisle() {
+        RailNetwork network = fixture().railsEast(1, 6).freeDock(7, 0, Heading.WEST).scan(Heading.EAST, FOUR_CRANES);
+        assertEquals(1, network.branchCount());
+        assertEquals(7, network.firstBranchLength(), "the second dock is the last block of the aisle");
+        assertEquals(List.of(new DockSite(7, 0, Heading.WEST, 0, 7)), network.memberDocks());
+        assertEquals(2, network.craneCount());
+        assertEquals(6, network.rails(), "a dock is no rail");
+        assertEquals(NetworkStop.END, network.stop());
+        assertEquals(0, network.refusedDocks());
+    }
+
+    @Test
+    void aDockBesideAnAisleFacingIntoItFormsAStubAisle() {
+        RailNetwork network = fixture().railsEast(1, 6).freeDock(3, 1, Heading.NORTH).scan(Heading.EAST, FOUR_CRANES);
+        assertEquals(2, network.branchCount());
+        assertEquals(6, network.firstBranchLength());
+        assertEquals(new BranchGeometry(1, 3, 0, Heading.SOUTH, 1), network.geometry().branch(1),
+                "the rail it faces and the dock itself, a stub of one block");
+        assertEquals(List.of(new BranchLink(0, 3, 1, 0)), network.geometry().links());
+        assertEquals(List.of(new DockSite(3, 1, Heading.NORTH, 1, 1)), network.memberDocks());
+        assertEquals(6, network.rails());
+    }
+
+    @Test
+    void aDockThatDoesNotFaceIntoTheRailsStaysAWall() {
+        for (Heading facing : List.of(Heading.EAST, Heading.NORTH, Heading.SOUTH)) {
+            RailNetwork network = fixture().railsEast(1, 6).freeDock(7, 0, facing).scan(Heading.EAST, FOUR_CRANES);
+            assertEquals(6, network.firstBranchLength(), "facing " + facing);
+            assertEquals(List.of(), network.memberDocks());
+            assertEquals(NetworkStop.SECOND_DOCK, network.stop(), "reported as the wall it always was");
+            assertEquals(7, network.stopDx());
+        }
+    }
+
+    @Test
+    void aDockWithAControllerOfItsOwnStaysAWall() {
+        RailNetwork network = fixture().railsEast(1, 6).otherDock(7, 0).scan(Heading.EAST, FOUR_CRANES);
+        assertEquals(6, network.firstBranchLength());
+        assertEquals(List.of(), network.memberDocks(), "it is the first crane of its own warehouse");
+        assertEquals(NetworkStop.SECOND_DOCK, network.stop());
+    }
+
+    @Test
+    void aDockBeyondTheMaximumIsLeftOutAndNamed() {
+        Fixture two = fixture().railsEast(1, 6).freeDock(3, 1, Heading.NORTH).freeDock(7, 0, Heading.WEST);
+        RailNetwork capped = two.scan(Heading.EAST, new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 32, HEIGHT, 2));
+        assertEquals(List.of(new DockSite(3, 1, Heading.NORTH, 1, 1)), capped.memberDocks(),
+                "the dock the rails reach first joins");
+        assertEquals(NetworkStop.MAX_CRANES, capped.stop(), "and the maximum is named, with the dock it left out");
+        assertEquals(7, capped.stopDx());
+        assertEquals(0, capped.stopDz());
+        assertEquals(1, capped.refusedDocks());
+        assertEquals(6, capped.firstBranchLength(), "the refused dock is a wall");
+        assertFalse(capped.isComplete());
+
+        RailNetwork both = two.scan(Heading.EAST, FOUR_CRANES);
+        assertEquals(3, both.craneCount());
+        assertEquals(NetworkStop.END, both.stop());
+    }
+
+    /**
+     * {@code aisle.maxCranesPerNetwork = 1} is the off switch, and it is exact: the warehouse a free dock stands in is
+     * the very record a dock with a controller of its own gives, which is what every version up to 0.17.1 found.
+     */
+    @Test
+    void withOneCraneEveryOtherDockIsTheWallItAlwaysWas() {
+        RailNetwork free = fixture().railsEast(1, 6).freeDock(7, 0, Heading.WEST).scan(Heading.EAST, LIMITS);
+        RailNetwork owned = fixture().railsEast(1, 6).otherDock(7, 0).scan(Heading.EAST, LIMITS);
+        assertEquals(owned, free);
+        assertEquals(NetworkStop.SECOND_DOCK, free.stop());
+        assertEquals(List.of(), free.memberDocks());
+        assertEquals(1, free.craneCount());
+
+        RailNetwork stub = fixture().railsEast(1, 6).freeDock(3, 1, Heading.NORTH).scan(Heading.EAST, LIMITS);
+        assertEquals(fixture().railsEast(1, 6).otherDock(3, 1).scan(Heading.EAST, LIMITS), stub);
+    }
+
+    /**
+     * A crane the warehouse already has keeps its place when a new dock appears nearer the warehouse's own dock: the new
+     * one is the dock left out, so a working crane is never pushed out of its warehouse mid trip (issue #14).
+     */
+    @Test
+    void aListedDockKeepsItsPlaceAgainstANewerNearerOne() {
+        Fixture two = fixture().railsEast(1, 6).freeDock(3, 1, Heading.NORTH).freeDock(7, 0, Heading.WEST)
+                .listed(7, 0);
+        RailNetwork capped = two.scan(Heading.EAST, new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 32, HEIGHT, 2));
+        assertEquals(List.of(new DockSite(7, 0, Heading.WEST, 0, 7)), capped.memberDocks(),
+                "the listed dock at the far end stays the member");
+        assertEquals(1, capped.refusedDocks(), "the newer dock beside the aisle is the one left out");
+        assertEquals(NetworkStop.MAX_CRANES, capped.stop());
+        assertEquals(3, capped.stopDx());
+        assertEquals(1, capped.stopDz());
+        assertEquals(1, capped.branchCount(), "and it forms no stub aisle");
+        assertEquals(7, capped.firstBranchLength());
+    }
+
+    /**
+     * Docks the warehouse already has are taken even beyond a cap that was lowered, so their cranes can still drive home
+     * under the traffic's gate; the controller decides which of them are left out once they are parked.
+     */
+    @Test
+    void listedDocksBeyondALoweredCapAreStillTaken() {
+        Fixture two = fixture().railsEast(1, 6).freeDock(3, 1, Heading.NORTH).freeDock(7, 0, Heading.WEST)
+                .listed(3, 1).listed(7, 0);
+        RailNetwork capped = two.scan(Heading.EAST, new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 32, HEIGHT, 2));
+        assertEquals(2, capped.memberDocks().size());
+        assertEquals(0, capped.refusedDocks());
+        assertEquals(NetworkStop.END, capped.stop());
+        assertEquals(capped, fixture().railsEast(1, 6).freeDock(3, 1, Heading.NORTH).freeDock(7, 0, Heading.WEST)
+                .scan(Heading.EAST, FOUR_CRANES), "the same warehouse a cap with room for both finds");
+    }
+
+    /**
+     * A stranded crane keeps its place of the cap although the walk cannot reach its dock, so a dock the warehouse does
+     * not have yet gets only what is left (issue #14): with room for three cranes and one stranded, one new dock joins.
+     */
+    @Test
+    void placesStrandedCranesTakeAreNotGivenToNewDocks() {
+        RailGraph.Limits three = new RailGraph.Limits(64, 26, MANY_JUNCTIONS, 32, HEIGHT, 3);
+        Fixture two = fixture().railsEast(1, 6).freeDock(3, 1, Heading.NORTH).freeDock(7, 0, Heading.WEST);
+        assertEquals(2, two.scan(Heading.EAST, three).memberDocks().size(), "without a stranded crane both join");
+        RailNetwork reserved = two.reserved(1).scan(Heading.EAST, three);
+        assertEquals(List.of(new DockSite(3, 1, Heading.NORTH, 1, 1)), reserved.memberDocks());
+        assertEquals(1, reserved.refusedDocks());
+        assertEquals(NetworkStop.MAX_CRANES, reserved.stop());
+        assertEquals(7, reserved.stopDx());
+        RailNetwork listedFar = two.listed(7, 0).scan(Heading.EAST, three);
+        assertEquals(List.of(new DockSite(7, 0, Heading.WEST, 0, 7)), listedFar.memberDocks(),
+                "the dock the warehouse already has keeps the place that is left");
+    }
+
+    @Test
+    void theStraightWalkTakesASecondDockAtTheFarEndOfTheLine() {
+        Fixture line = fixture().railsEast(1, 6).freeDock(7, 0, Heading.WEST).rail(8, 0);
+        RailNetwork network = line.scan(Heading.EAST, new RailGraph.Limits(64, 1, MANY_JUNCTIONS, 32, HEIGHT, 2));
+        assertEquals(7, network.firstBranchLength(), "two cranes on one straight aisle with branching off");
+        assertEquals(List.of(new DockSite(7, 0, Heading.WEST, 0, 7)), network.memberDocks());
+        assertEquals(NetworkStop.END, network.stop(), "and nothing beyond the dock is read");
+
+        RailNetwork single = line.scan(Heading.EAST, new RailGraph.Limits(64, 1, MANY_JUNCTIONS, 32, HEIGHT));
+        assertEquals(6, single.firstBranchLength());
+        assertEquals(NetworkStop.SECOND_DOCK, single.stop());
+    }
+
+    @Test
+    void aDockSeenFromItsSideFirstIsStillTakenFromTheBlockItFaces() {
+        // The flood meets the dock at (2, 1) from (2, 0) first, beside it; it faces (3, 1), which it reaches later.
+        Fixture fixture = fixture().railsEast(1, 4).rail(3, 1).rail(4, 1).freeDock(2, 1, Heading.EAST);
+        RailNetwork network = fixture.scan(Heading.EAST, FOUR_CRANES);
+        assertEquals(1, network.memberDocks().size());
+        assertEquals(2, network.memberDocks().getFirst().dx());
+        assertEquals(NetworkStop.END, network.stop(), "a dock that joined is never named as a wall");
+    }
+
+    @Test
+    void aDockAtTheFarEndOfARingEndsTheAisleAtTheDock() {
+        // The rails go on beyond the dock, round a loop back to the aisle: the dock still ends the first aisle.
+        Fixture fixture = fixture().railsEast(1, 3).freeDock(4, 0, Heading.WEST).rail(5, 0).railsSouth(5, 1, 2)
+                .railsSouth(3, 1, 2).rail(4, 2);
+        RailNetwork network = fixture.scan(Heading.EAST, FOUR_CRANES);
+        assertEquals(4, network.firstBranchLength(), "the first aisle ends at the dock that faces back along it");
+        assertEquals(List.of(new DockSite(4, 0, Heading.WEST, 0, 4)), network.memberDocks());
+    }
+
     // --- fixture ---------------------------------------------------------------------------------------------------
 
     /** Turns an east-relative offset onto {@code heading}, the way a rotated copy of a build sits in the world. */
@@ -397,6 +568,9 @@ class RailGraphTest {
     /** A hand-built world of aisle blocks around a dock at {@code (0, 0)}. */
     private static final class Fixture {
         private final Map<Long, RailGraph.Cell> cells = new HashMap<>();
+        private final Map<Long, Heading> facings = new HashMap<>();
+        private final java.util.Set<Long> listed = new java.util.HashSet<>();
+        private int reserved;
 
         Fixture rail(int dx, int dz) {
             return put(dx, dz, RailGraph.Cell.RAIL);
@@ -408,6 +582,24 @@ class RailGraphTest {
 
         Fixture otherDock(int dx, int dz) {
             return put(dx, dz, RailGraph.Cell.OTHER_DOCK);
+        }
+
+        /** A dock without a controller of its own, facing {@code facing} (issue #14). */
+        Fixture freeDock(int dx, int dz, Heading facing) {
+            facings.put(RailGraph.cell(dx, dz), facing);
+            return put(dx, dz, RailGraph.Cell.FREE_DOCK);
+        }
+
+        /** The free dock at {@code (dx, dz)} is a crane the warehouse already lists (issue #14). */
+        Fixture listed(int dx, int dz) {
+            listed.add(RailGraph.cell(dx, dz));
+            return this;
+        }
+
+        /** {@code places} of the cap are taken by stranded cranes (issue #14). */
+        Fixture reserved(int places) {
+            reserved = places;
+            return this;
         }
 
         Fixture unloaded(int dx, int dz) {
@@ -436,7 +628,31 @@ class RailGraphTest {
         }
 
         RailNetwork scan(Heading dockHeading, RailGraph.Limits limits) {
-            return RailGraph.scan(this::at, dockHeading, limits);
+            return RailGraph.scan(probe(), dockHeading, limits);
+        }
+
+        private RailGraph.CellProbe probe() {
+            return new RailGraph.CellProbe() {
+                @Override
+                public RailGraph.Cell at(int dx, int dz) {
+                    return Fixture.this.at(dx, dz);
+                }
+
+                @Override
+                public Heading dockFacing(int dx, int dz) {
+                    return facings.get(RailGraph.cell(dx, dz));
+                }
+
+                @Override
+                public boolean listedDock(int dx, int dz) {
+                    return listed.contains(RailGraph.cell(dx, dz));
+                }
+
+                @Override
+                public int reservedPlaces() {
+                    return reserved;
+                }
+            };
         }
 
         /** The same scan, counting the <b>distinct</b> positions it read, which is what the cost is bounded in. */

@@ -36,7 +36,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       live room, so the crane never waits in front of a port while the world runs. Candidates are the locations
  *       holding the key per index, available and not fully reserved, ranked by travel time crane → source → output.
  *       Amount =
- *       {@code min(need, carryLimit, liveExtractable − reservedStock)}, and for a port also its room. <b>Store filters
+ *       {@code min(need, carryLimit, liveExtractable − reservedStock)}, and for a port also its room. The target's
+ *       live room is measured less what other jobs already bring there ({@link ReservationView#reservedInbound}, issue
+ *       #14), which is 0 for a warehouse of one crane. <b>Store filters
  *       never restrict retrieval</b> (§3.1): items already inside a location can always be fetched, even when its
  *       filter no longer accepts them. A <b>fill</b> request ({@link RequestKind#FILL}, M31, issue #21, ADR-073) is
  *       served by {@link #planFill} instead: one {@code FILL} job that picks empty containers from a rack, has a
@@ -65,7 +67,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       (a2) holding nothing or only items of the same type ({@link PlannerInput#itemType()}), then (a3) the storage
  *       priority a player gave the location ({@link PlannerInput#storePriority()}, higher first, M16), then (b) travel
  *       time crane → input → location. Amount =
- *       {@code min(buffered, storeHeadroom, carryLimit, liveInsertable − reservedCapacity)}. The aisle's <b>accepting
+ *       {@code min(buffered, storeHeadroom, carryLimit, liveInsertable − reservedCapacity)}, where {@code buffered}
+ *       leaves out what other jobs will already pick there ({@link ReservationView#reservedBuffer}, issue #14). The
+ *       aisle's <b>accepting
  *       warehouse ports</b> ({@link PlannerInput#ports()}, M17) are candidates of the same ranking, above (a0) by their
  *       target class: a <b>diversion</b> (positive {@link PlannerInput#portRank()}) outranks every location, an
  *       <b>overflow</b> (negative) loses to every location that may take the item, and their amount is bounded by the
@@ -372,9 +376,12 @@ public final class JobPlanner<K, L> {
             // for the player, and only the first is relieved by a retrieval (ADR-021, §7.4).
             StoreSurvey survey = new StoreSurvey();
             for (K key : buffer.keys()) {
+                // What the buffer holds that no other crane's job will already pick (issue #14, ADR-075): with one
+                // crane nothing is reserved here while it plans, so this is the buffer's own count.
+                long buffered = Math.max(0L, buffer.count(key) - input.reservations().reservedBuffer(station, key));
                 // What one trip can carry of this key, whatever it ends up being carried to. This bounds an accepting
                 // port's amount (M17): a port is not storage, so no stock rule's maximum applies to it.
-                int portLimit = limit(buffer.count(key), input.carryLimit().applyAsInt(key));
+                int portLimit = limit(buffered, input.carryLimit().applyAsInt(key));
                 if (portLimit < 1)
                     continue;
                 // A stock rule's maximum decides before anything else costs something: one lookup, no candidate walk,
@@ -389,7 +396,7 @@ public final class JobPlanner<K, L> {
                     survey.atMaximum = true;
                 }
                 int storageLimit = headroom <= 0 ? 0
-                        : limit(Math.min(buffer.count(key), headroom), input.carryLimit().applyAsInt(key));
+                        : limit(Math.min(buffered, headroom), input.carryLimit().applyAsInt(key));
                 Optional<Selection<L>> selection = selectStoreTarget(input, key, portLimit, storageLimit, null,
                         stationPos.branch(), stationPos.x(), stationPos.y(), toStation, budget, survey);
                 if (selection.isPresent()) {
@@ -598,7 +605,13 @@ public final class JobPlanner<K, L> {
         // Asked only for a trip that may be bound, and only after the target was found available: the content layer
         // answers it with one block entity lookup, which must never reach an unloaded position.
         boolean bounded = mayBeBound && input.roomBound().test(target);
-        int room = input.liveInsert().simulateInsert(target, key, bounded ? limit : 1);
+        // What other jobs are already bringing there is not in the live room yet (issue #14, ADR-075 section 9): it is
+        // asked for on top and taken off again, so a second crane never sets off towards room the first is about to
+        // fill. With one crane no other job is in the ledger while it plans, and the question is the old one.
+        long inbound = input.reservations().reservedInbound(target);
+        int probe = CapacityMath.toIntClamped((bounded ? limit : 1) + inbound);
+        int room = CapacityMath.toIntClamped(Math.max(0L, input.liveInsert().simulateInsert(target, key, probe)
+                - inbound));
         // The smallest trip worth setting off for: the whole one, or one full stack of a larger one. Without it a port
         // drained item by item would be served item by item, and requests are planned before storing.
         int minimum = bounded ? Math.min(limit, Math.max(1, input.stackSize().applyAsInt(key))) : 1;
@@ -735,8 +748,9 @@ public final class JobPlanner<K, L> {
      * That is the exact opposite of an accepting port, which deliberately ignores it, and the asymmetry is the point: a
      * maximum is what makes an overflow necessary and what makes collecting stop, so the two preconditions of the churn
      * loop are mutually exclusive;</li>
-     * <li>it reserves nothing at the source: a foreign inventory is not indexed stock, so two aisles sharing a rack plane
-     * may both plan against the same chest and the real extract decides (§8).</li>
+     * <li>it reserves no stock at the source: a foreign inventory is not indexed stock, so two aisles sharing a rack
+     * plane may both plan against the same chest and the real extract decides (§8). Within one warehouse the items a
+     * job will fetch are held as a buffer reservation (issue #14), so a second crane of it never plans them again.</li>
      * </ul>
      * Why it got no job is answered by {@link StoreSurvey#collectReason()} rather than {@link StoreSurvey#reason()}: a
      * machine that hands out nothing is not a full warehouse, and reporting one would both mislead and arm the aisle's
@@ -772,7 +786,10 @@ public final class JobPlanner<K, L> {
                 survey.atMaximum = true;
                 continue;
             }
-            int limit = limit(Math.min(held.count(key), headroom), input.carryLimit().applyAsInt(key));
+            // Items another crane's collect job will already pick out of this port are not offered twice (issue #14).
+            long reservedHere = input.reservations().reservedBuffer(source, key);
+            int limit = limit(Math.min(Math.max(0L, held.count(key) - reservedHere), headroom),
+                    input.carryLimit().applyAsInt(key));
             if (limit < 1) {
                 survey.collectNothingToFetch = true;
                 continue;
@@ -782,7 +799,9 @@ public final class JobPlanner<K, L> {
             // What the machine really hands out right now. A stale snapshot therefore costs one simulation rather than a
             // wasted trip; the real pick still decides, and a zero pick aborts cleanly (§2). Nothing handed out is noted
             // as such and never as a full warehouse: no storage candidate was even looked at yet (M18 review).
-            int extractable = input.liveExtract().simulateExtract(source, key, limit);
+            int extractable = CapacityMath.toIntClamped(Math.max(0L,
+                    input.liveExtract().simulateExtract(source, key, CapacityMath.toIntClamped(limit + reservedHere))
+                            - reservedHere));
             if (extractable < 1) {
                 survey.collectNothingToFetch = true;
                 continue;

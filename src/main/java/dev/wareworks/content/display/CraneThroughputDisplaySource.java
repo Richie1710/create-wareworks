@@ -2,15 +2,19 @@ package dev.wareworks.content.display;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import com.simibubi.create.api.behaviour.display.DisplaySource;
 import com.simibubi.create.content.redstone.displayLink.DisplayLinkContext;
 import com.simibubi.create.content.redstone.displayLink.target.DisplayTargetStats;
 
+import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.core.crane.CraneThroughput;
+import dev.wareworks.core.crane.WarehouseThroughput;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.world.level.block.entity.BlockEntity;
 
 /**
  * Display Link source "Crane Throughput" ({@code docs/warehouse-system.md} §10, {@code docs/stacker-crane.md} §9, M25,
@@ -36,6 +40,12 @@ import net.minecraft.network.chat.MutableComponent;
  * It keeps Create's default {@link #getPassiveRefreshTicks()} of 100 ticks rather than the 20 of "Crane Status": a
  * rolling minute does not change meaningfully every second, and a board that flips its flaps to redraw identical
  * numbers is noise.
+ * <p>
+ * <b>Off the controller (issue #14, ADR-075 §15.3).</b> Bound to the controller as well, after its own sources, it
+ * speaks for the whole warehouse: the dock's numbers for one crane, and for several the sum ADR-039 said the
+ * milestone with several cranes would need ({@link WarehouseThroughput}) — trips and items added up, the busy and
+ * turning shares as the mean over the cranes — in the same four rows, with "Measuring" until every loaded crane has a
+ * whole minute.
  */
 public class CraneThroughputDisplaySource extends DisplaySource {
     /** Rows this source writes once the window holds a whole minute. */
@@ -43,26 +53,35 @@ public class CraneThroughputDisplaySource extends DisplaySource {
 
     @Override
     public List<MutableComponent> provideText(DisplayLinkContext context, DisplayTargetStats stats) {
-        if (!(context.getSourceBlockEntity() instanceof StackerCraneBlockEntity dock))
+        BlockEntity source = context.getSourceBlockEntity();
+        List<CraneThroughput> windows = new ArrayList<>();
+        if (source instanceof StackerCraneBlockEntity dock)
+            windows.add(dock.throughput());
+        else if (source instanceof WarehouseControllerBlockEntity controller && !controller.isRemoved())
+            for (StackerCraneBlockEntity crane : controller.cranes())
+                windows.add(crane.throughput());
+        if (windows.isEmpty())
             return WarehouseDisplays.limit(
                     List.of(WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_NO_CRANE)), stats);
 
-        CraneThroughput measured = dock.throughput();
-        if (!measured.isFullMinute())
+        // One crane is its own total; several are added up, and only once every one of them has a whole minute.
+        Optional<WarehouseThroughput> measured = WarehouseThroughput.of(windows);
+        if (measured.isEmpty())
             return WarehouseDisplays.limit(
                     List.of(WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_MEASURING)), stats);
 
+        WarehouseThroughput total = measured.get();
         List<MutableComponent> lines = new ArrayList<>(ROWS);
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_TRIPS,
-                WareworksLang.number(measured.trips())));
+                WareworksLang.number(total.trips())));
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_ITEMS,
-                WareworksLang.number(measured.items())));
+                WareworksLang.number(total.items())));
         // Through the one key in the mod that carries a percent sign, like every other share (ADR-039): German puts a
         // space before it, and a row that wrote the sign itself would be the second place to get that wrong.
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_BUSY,
-                WareworksLang.percent(measured.busyShare())));
+                WareworksLang.percent(total.busyShare())));
         lines.add(WareworksLang.translateDirect(WareworksLang.DISPLAY_THROUGHPUT_LINE_TURNING,
-                WareworksLang.percent(measured.turnShare())));
+                WareworksLang.percent(total.turnShare())));
         return WarehouseDisplays.limit(lines, stats);
     }
 }

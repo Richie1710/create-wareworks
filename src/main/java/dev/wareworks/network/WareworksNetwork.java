@@ -162,8 +162,13 @@ public final class WareworksNetwork {
      * the screen's state ({@code StockKeeperScreenState.RowView}) also gained what it counts and its container's
      * capacity at its end, which an older reader would leave in the buffer, and {@link StockKeeperRulePayload} gained
      * the field value {@code StockKeeperRules.FIELD_UNIT}, which an older server would ignore.
+     * <p>
+     * <b>{@code "19"} is issue #14</b> (several cranes on one rail network, ADR-075): the terminal status in
+     * {@link TerminalStatusPayload} carries the number of cranes and how many of them work, wait for another crane's
+     * rails and are paused, appended after the crane's pause reason, which a reader of the old shape would stop before
+     * and leave in the buffer. No new payload type.
      */
-    public static final String VERSION = "18";
+    public static final String VERSION = "19";
 
     private WareworksNetwork() {
     }

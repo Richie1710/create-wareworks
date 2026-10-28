@@ -16,6 +16,7 @@ import com.simibubi.create.AllBlocks;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.CraneCounts;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -646,10 +647,21 @@ public final class WarehouseTerminalMenuGameTests {
                 "and the reserve is still a part of what the player may claim");
 
         TerminalScreenStatus status = new TerminalScreenStatus(true, ControllerStatus.READY, 'C', 12, 3456L, 4, 2, 64L,
-                16L, true, CranePhase.TRAVEL_TO_TARGET, CranePauseReason.OVERSTRESSED);
+                16L, true, CranePhase.TRAVEL_TO_TARGET, CranePauseReason.OVERSTRESSED, new CraneCounts(1, 1, 0, 0));
         TerminalStatusPayload decodedStatus = roundTrip(helper, new TerminalStatusPayload(3, status),
                 TerminalStatusPayload.STREAM_CODEC);
         helper.assertValueEqual(decodedStatus.status(), status, "status round trip");
+        // The crane counts ride after the pause reason (issue #14, VERSION 18), every one of the four in its own
+        // place: four different numbers, so a swapped pair cannot pass.
+        TerminalScreenStatus several = new TerminalScreenStatus(true, ControllerStatus.READY, 'C', 12, 3456L, 4, 2,
+                64L, 16L, true, CranePhase.IDLE, CranePauseReason.NONE, new CraneCounts(9, 4, 3, 1));
+        TerminalScreenStatus decodedSeveral = roundTrip(helper, new TerminalStatusPayload(3, several),
+                TerminalStatusPayload.STREAM_CODEC).status();
+        helper.assertValueEqual(decodedSeveral, several, "status round trip with several cranes");
+        helper.assertTrue(decodedSeveral.severalCranes(), "several cranes are counted on the screen");
+        helper.assertValueEqual(decodedSeveral.cranes().idle(), 1, "and the rest of them is idle");
+        helper.assertValueEqual(roundTrip(helper, new TerminalStatusPayload(3, TerminalScreenStatus.NONE),
+                TerminalStatusPayload.STREAM_CODEC).status(), TerminalScreenStatus.NONE, "no aisle, no crane");
 
         TerminalRequestPayload request = new TerminalRequestPayload(3, DIAMOND, 42);
         TerminalRequestPayload decodedRequest = roundTrip(helper, request, TerminalRequestPayload.STREAM_CODEC);

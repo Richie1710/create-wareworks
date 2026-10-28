@@ -10,6 +10,7 @@ import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseLayout;
+import dev.wareworks.content.crane.CraneMembership;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.core.address.BranchGeometry;
@@ -19,6 +20,8 @@ import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.address.StorageAddress;
+import dev.wareworks.content.station.WarehouseHomePointBlock;
+import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.registry.WareworksBlocks;
@@ -79,15 +82,22 @@ import net.minecraft.world.level.block.state.BlockState;
  * {@code NetworkScenes#RUN_TWIN_X}: only this way round does each of them show the camera the face its caption is
  * about.
  * <p>
+ * <b>The comb with a second dock</b> ({@link #twoCranes}, issue #14, ADR-075) is the same comb with the last block of
+ * the main run a <b>second Stacker Crane dock</b> instead of a rail, facing back west along the run: a dock without a
+ * controller of its own that faces into the rails is another crane of the warehouse, and its block is the last position
+ * of the aisle it extends. The discovery numbers the aisles exactly as on the plain comb, so {@link #COMB} is its shape
+ * too; only what stands on that one block differs.
+ * <p>
  * Everything is placed with {@code scene.world().setBlock(...)}, so no Wareworks block state lives in the {@code .nbt}
  * ({@link PonderAisle}). A {@code SchematicLevel} runs <b>no neighbour updates at all</b>, so the rails' connection
  * flags — which are what draws a corner as a corner — are written here explicitly, exactly as
  * {@code WarehouseRailBlock#withConnections} would compute them in a world.
  *
- * @param warehouse the mapping of the whole network, with the aisle letters the scene quotes
- * @param plateSize edge length of the square base plate
+ * @param warehouse  the mapping of the whole network, with the aisle letters the scene quotes
+ * @param plateSize  edge length of the square base plate
+ * @param secondDock whether the far end of the main run is a second dock rather than a rail ({@link #twoCranes})
  */
-public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
+public record PonderNetwork(WarehouseLayout warehouse, int plateSize, boolean secondDock) {
     /** Y of everything standing on the base plate, shared with the straight stage. */
     public static final int FLOOR_Y = PonderAisle.FLOOR_Y;
     /** Mast height of a network stage: levels 0 and 1, as on the straight stage. */
@@ -152,21 +162,29 @@ public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
 
     /** The corner stage on the scene grid of {@code util}, with aisle letters A and B. */
     public static PonderNetwork corner(SceneBuildingUtil util) {
-        return stage(util, CORNER_AISLE_Z, CORNER, List.of(Optional.of('A'), Optional.of('B')));
+        return stage(util, CORNER_AISLE_Z, CORNER, List.of(Optional.of('A'), Optional.of('B')), false);
     }
 
     /** The comb stage on the scene grid of {@code util}, with aisle letters A, B and C. */
     public static PonderNetwork comb(SceneBuildingUtil util) {
-        return stage(util, COMB_AISLE_Z, COMB, List.of(Optional.of('A'), Optional.of('B'), Optional.of('C')));
+        return stage(util, COMB_AISLE_Z, COMB, List.of(Optional.of('A'), Optional.of('B'), Optional.of('C')), false);
+    }
+
+    /**
+     * The comb stage with a <b>second dock</b> at the far end of its main run (issue #14, ADR-075): crane 2 of the same
+     * warehouse, on the block where the plain comb has its last rail ({@link #memberDock()}).
+     */
+    public static PonderNetwork twoCranes(SceneBuildingUtil util) {
+        return stage(util, COMB_AISLE_Z, COMB, List.of(Optional.of('A'), Optional.of('B'), Optional.of('C')), true);
     }
 
     /** One stage: the dock on the scene grid, the shape around it and the letters its aisles carry. */
     private static PonderNetwork stage(SceneBuildingUtil util, int aisleZ, NetworkGeometry network,
-            List<Optional<Character>> letters) {
+            List<Optional<Character>> letters, boolean secondDock) {
         BlockPos dock = util.grid().at(DOCK_X, FLOOR_Y, aisleZ);
         WarehouseLayout layout = WarehouseLayout.of(dock, Headings.direction(network.firstBranch().heading()), network,
                 letters.getFirst()).withBranchLetters(letters);
-        return new PonderNetwork(layout, CORNER_PLATE);
+        return new PonderNetwork(layout, CORNER_PLATE, secondDock);
     }
 
     /** The dock-relative shape, which is what the crane script and the block entity need. */
@@ -186,6 +204,32 @@ public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
     /** The creative motor in the base plate layer that drives the dock from below. */
     public BlockPos motor() {
         return warehouse.dock().below();
+    }
+
+    /**
+     * The second dock of {@link #twoCranes}: the last position of the main run, facing back along it towards the
+     * warehouse's own dock (issue #14).
+     *
+     * @throws IllegalStateException on a stage without one
+     */
+    public BlockPos memberDock() {
+        if (!secondDock)
+            throw new IllegalStateException("this stage has no second dock");
+        return warehouse.aislePos(FIRST, length(FIRST));
+    }
+
+    /** The way the second dock faces: back along the main run, which is what makes it a crane of this warehouse. */
+    public Direction memberFacing() {
+        return warehouse.facing().getOpposite();
+    }
+
+    /**
+     * What crane 2 is told about the warehouse it works in, which a Ponder level has no controller to tell it: the
+     * frame of the warehouse's own dock, its own dock as the last position of aisle A, and its number
+     * ({@code StackerCraneBlockEntity#showClientPose} with a frame).
+     */
+    public CraneMembership memberFrame() {
+        return new CraneMembership(controller(), dock(), warehouse.facing(), FIRST, length(FIRST), 2, 2);
     }
 
     /** Number of aisles this stage is made of. */
@@ -271,7 +315,8 @@ public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
      */
     public Selection rails(SceneBuildingUtil util, int branch) {
         BlockPos from = aisle(branch, branch == FIRST ? 1 : 0);
-        BlockPos to = aisle(branch, length(branch));
+        // A second dock is the last position of the main run, but no rail.
+        BlockPos to = aisle(branch, branch == FIRST && secondDock ? length(branch) - 1 : length(branch));
         return util.select().fromTo(from, to);
     }
 
@@ -330,6 +375,15 @@ public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
                 .setValue(CreativeMotorBlock.FACING, Direction.UP), false);
         for (int branch = FIRST; branch < warehouse.branchCount(); branch++)
             placeRails(scene, branch);
+        if (secondDock) {
+            // The second dock has a motor of its own in the base plate, like the first: each dock is turned by itself.
+            scene.world().setBlock(memberDock(), WareworksBlocks.STACKER_CRANE.getDefaultState()
+                    .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, memberFacing()), false);
+            scene.world().modifyBlockEntityNBT(util.select().position(memberDock()), StackerCraneBlockEntity.class,
+                    nbt -> nbt.putInt(SCROLL_VALUE, SCENE_MAST_HEIGHT));
+            scene.world().setBlock(memberDock().below(), AllBlocks.CREATIVE_MOTOR.getDefaultState()
+                    .setValue(CreativeMotorBlock.FACING, Direction.UP), false);
+        }
     }
 
     /**
@@ -338,7 +392,8 @@ public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
      * before it, which is a rail and is placed with the earlier aisle.
      */
     private void placeRails(CreateSceneBuilder scene, int branch) {
-        for (int x = 1; x <= length(branch); x++)
+        int last = branch == FIRST && secondDock ? length(branch) - 1 : length(branch);
+        for (int x = 1; x <= last; x++)
             scene.world().setBlock(aisle(branch, x), railAt(branch, x), false);
     }
 
@@ -346,18 +401,26 @@ public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
      * The state of the rail at position {@code x} of {@code branch}: its cosmetic axis is the way its own aisle runs,
      * and a connection flag is set towards every horizontal neighbour that offers one — another rail, or the dock
      * towards its own facing ({@code WarehouseRailBlock#connectsTowards}). The corner block therefore carries one flag
-     * per aisle and draws itself as a corner.
+     * per aisle and draws itself as a corner, and the rail in front of a second dock one towards that dock.
      */
     private BlockState railAt(int branch, int x) {
         BlockPos pos = aisle(branch, x);
         BlockState state = WarehouseRailBlock.along(warehouse.branch(branch).facing().getAxis());
         for (Direction direction : Direction.Plane.HORIZONTAL) {
             BlockPos neighbour = pos.relative(direction);
-            boolean connects = isAisleBlock(neighbour)
-                    && (!neighbour.equals(dock()) || warehouse.facing() == direction.getOpposite());
+            boolean connects = isAisleBlock(neighbour) && offersConnection(neighbour, direction.getOpposite());
             state = state.setValue(WarehouseRailBlock.connection(direction), connects);
         }
         return state;
+    }
+
+    /** Whether the aisle block {@code neighbour} offers a connection towards {@code towards}: a dock only its facing. */
+    private boolean offersConnection(BlockPos neighbour, Direction towards) {
+        if (neighbour.equals(dock()))
+            return warehouse.facing() == towards;
+        if (secondDock && neighbour.equals(memberDock()))
+            return memberFacing() == towards;
+        return true;
     }
 
     /** Whether {@code pos} carries a rail or the dock of this network, i.e. a block the crane drives on. */
@@ -410,5 +473,17 @@ public record PonderNetwork(WarehouseLayout warehouse, int plateSize) {
     public void placeOutput(CreateSceneBuilder scene, int branch, int x, int level, Side side) {
         scene.world().setBlock(rack(branch, x, level, side), WareworksBlocks.WAREHOUSE_OUTPUT.getDefaultState()
                 .setValue(WarehouseOutputBlock.FACING, outward(branch, x, level, side).getOpposite()), false);
+    }
+
+    /** An input station: like every station, its opening faces the aisle it belongs to. */
+    public void placeInput(CreateSceneBuilder scene, int branch, int x, int level, Side side) {
+        scene.world().setBlock(rack(branch, x, level, side), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
+                .setValue(WarehouseInputBlock.FACING, outward(branch, x, level, side).getOpposite()), false);
+    }
+
+    /** A warehouse home point, the label that says where a crane waits; it faces the aisle it belongs to. */
+    public void placeHomePoint(CreateSceneBuilder scene, int branch, int x, int level, Side side) {
+        scene.world().setBlock(rack(branch, x, level, side), WareworksBlocks.WAREHOUSE_HOME_POINT.getDefaultState()
+                .setValue(WarehouseHomePointBlock.FACING, outward(branch, x, level, side).getOpposite()), false);
     }
 }

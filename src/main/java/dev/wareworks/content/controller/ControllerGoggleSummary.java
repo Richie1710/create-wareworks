@@ -82,6 +82,10 @@ import net.minecraft.nbt.Tag;
  *                          already carries the crane, so the measurement cost no new component in a 25-component
  *                          record whose own note below explains why that matters
  * @param lastPlanReason    why the last planning run created no job (empty if it created one or never ran)
+ * @param cranes            the cranes of a warehouse with several (issue #14, ADR-075 §15.1): how many there are, what
+ *                          they do and one line per crane, bounded by {@link CraneRoster#MAX_LISTED}. Empty — and absent
+ *                          from the synced tag — for a warehouse of one crane, which is every warehouse built up to
+ *                          0.17.1, so its packet does not grow by a byte
  */
 public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, int mastHeight, int storageLocations,
                                       int filteredLocations, int prioritisedLocations, int inputs, int outputs,
@@ -94,7 +98,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                                       Optional<String> aisleName,
                                       Optional<NetworkGoggleInfo> network,
                                       Optional<CraneGoggleInfo> crane,
-                                      Optional<NoJobReason> lastPlanReason) {
+                                      Optional<NoJobReason> lastPlanReason,
+                                      Optional<CraneRoster> cranes) {
     public static final ControllerGoggleSummary NONE =
             counts(ControllerStatus.NO_DOCK, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0, 0, 0, 0, 0, 0);
 
@@ -126,6 +131,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
     private static final String NETWORK = "Network";
     private static final String CRANE = "Crane";
     private static final String LAST_PLAN = "LastPlan";
+    /** Key of the crane list, as {@link CraneRoster#pack()}; written only for a warehouse with several cranes. */
+    private static final String CRANES = "Cranes";
 
     public ControllerGoggleSummary {
         if (status == null)
@@ -164,6 +171,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
             crane = Optional.empty();
         if (lastPlanReason == null)
             lastPlanReason = Optional.empty();
+        // A list of one crane says nothing the crane line does not, so it never exists (issue #14).
+        cranes = cranes == null ? Optional.empty() : cranes.filter(roster -> roster.counts().several());
     }
 
     /**
@@ -191,7 +200,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes,
                 totalItems, 0, 0L, openRequests, productionOrders, stockRules, rulesBelowMinimum,
-                rulesAtMaximum, rulesPaused, ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
+                rulesAtMaximum, rulesPaused, ChunkKeepReason.NONE, 0, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.empty());
     }
 
     /**
@@ -204,7 +214,7 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes, totalItems, types, millibuckets, openRequests, productionOrders, stockRules,
                 rulesBelowMinimum, rulesAtMaximum, rulesPaused, chunkKeepReason, chunkKeepChunks, aisleName, network,
-                crane, lastPlanReason);
+                crane, lastPlanReason, cranes);
     }
 
     /**
@@ -218,7 +228,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
         return new ControllerGoggleSummary(status, aisleLength, mastHeight, storageLocations, filteredLocations,
                 prioritisedLocations, inputs, outputs, acceptingPorts, collectingPorts, productionStations, misaligned,
                 itemTypes, totalItems, fluidTypes, fluidMillibuckets, openRequests, productionOrders, stockRules,
-                rulesBelowMinimum, rulesAtMaximum, rulesPaused, chunkKeepReason, chunkKeepChunks, aisleName, network, Optional.empty(), Optional.empty());
+                rulesBelowMinimum, rulesAtMaximum, rulesPaused, chunkKeepReason, chunkKeepChunks, aisleName, network, Optional.empty(), Optional.empty(),
+                Optional.empty());
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -292,6 +303,8 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
             tag.put(CRANE, craneTag);
         });
         lastPlanReason.ifPresent(reason -> tag.putString(LAST_PLAN, reason.name()));
+        // Left out for a warehouse of one crane, which is every warehouse built up to 0.17.1 (issue #14).
+        cranes.ifPresent(roster -> tag.putIntArray(CRANES, roster.pack()));
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid values read as 0 / NO_DOCK / empty. */
@@ -311,7 +324,9 @@ public record ControllerGoggleSummary(ControllerStatus status, int aisleLength, 
                 tag.getInt(STOCK_RULES), tag.getInt(RULES_BELOW_MINIMUM), tag.getInt(RULES_AT_MAXIMUM),
                 tag.getInt(RULES_PAUSED), ChunkKeepReason.byName(tag.getString(CHUNK_KEEP)),
                 tag.getInt(CHUNK_KEEP_CHUNKS), Optional.of(tag.getString(AISLE_NAME)), network, crane,
-                reasonByName(tag.getString(LAST_PLAN)));
+                reasonByName(tag.getString(LAST_PLAN)),
+                tag.contains(CRANES, Tag.TAG_INT_ARRAY) ? CraneRoster.unpack(tag.getIntArray(CRANES))
+                        : Optional.empty());
     }
 
     private static Optional<NoJobReason> reasonByName(String name) {

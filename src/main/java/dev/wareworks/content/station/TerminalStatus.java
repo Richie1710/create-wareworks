@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.CraneCounts;
 import dev.wareworks.content.crane.CraneGoggleInfo;
 import dev.wareworks.core.address.StorageAddress;
 
@@ -24,19 +25,24 @@ import dev.wareworks.core.address.StorageAddress;
  * @param requestsHere     open retrieval requests whose destination is this terminal
  * @param requestedHere    items those requests still wait for
  * @param deliveredHere    items of those requests that already arrived in this terminal's buffer
- * @param crane            the crane's phase, pause reason and job (empty without a loaded, linked dock)
+ * @param crane            the crane's phase, pause reason and job (empty without a loaded, linked dock) — the crane
+ *                         at the warehouse's own dock, for a warehouse with several
+ * @param cranes           how many cranes the warehouse has and how many of them work, wait and are paused (issue #14,
+ *                         ADR-075); the screen names them only for more than one
  */
 public record TerminalStatus(boolean hasController, ControllerStatus controllerStatus, char aisleLetter, int itemTypes,
                              long totalItems, int openRequests, int requestsHere, long requestedHere,
-                             long deliveredHere, Optional<CraneGoggleInfo> crane) {
+                             long deliveredHere, Optional<CraneGoggleInfo> crane, CraneCounts cranes) {
     /** No aisle: the terminal stands outside one, is misaligned, or its controller is not loaded. */
     public static final TerminalStatus NONE = new TerminalStatus(false, ControllerStatus.NO_DOCK,
-            StorageAddress.FIRST_AISLE, 0, 0L, 0, 0, 0L, 0L, Optional.empty());
+            StorageAddress.FIRST_AISLE, 0, 0L, 0, 0, 0L, 0L, Optional.empty(), CraneCounts.NONE);
 
     public TerminalStatus {
         if (controllerStatus == null)
             controllerStatus = ControllerStatus.NO_DOCK;
         Objects.requireNonNull(crane, "crane");
+        if (cranes == null)
+            cranes = CraneCounts.NONE;
         if (!StorageAddress.isValidAisle(aisleLetter))
             aisleLetter = StorageAddress.FIRST_AISLE;
         itemTypes = Math.max(0, itemTypes);

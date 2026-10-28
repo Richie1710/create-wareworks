@@ -18,7 +18,11 @@ public enum NetworkStop {
     UNLOADED,
     /** The next rail is closed with a wrench, which is exactly what a closed rail is for. */
     CLOSED,
-    /** Another stacker crane dock stands there. It is a wall, so both warehouses keep working. */
+    /**
+     * Another stacker crane dock stands there. It is a wall, so both warehouses keep working: a dock with a controller
+     * of its own, a dock that does not face into these rails, or — with {@code aisle.maxCranesPerNetwork = 1} — any
+     * other dock at all, exactly as up to 0.17.1.
+     */
     SECOND_DOCK,
     /** The network reached the configured maximum number of aisle blocks ({@code aisle.maxNetworkRails}). */
     MAX_RAILS,
@@ -30,7 +34,12 @@ public enum NetworkStop {
      */
     MAX_JUNCTIONS,
     /** A branch reached the configured maximum aisle length ({@code aisle.maxAisleLength}). */
-    MAX_LENGTH;
+    MAX_LENGTH,
+    /**
+     * A dock without a controller of its own faces into the rails, but the warehouse already has as many stacker cranes
+     * as the server allows ({@code aisle.maxCranesPerNetwork}, issue #14, ADR-075), so that dock is a wall.
+     */
+    MAX_CRANES;
 
     /**
      * Whether the rails really end here: nothing a player wanted in the warehouse was cut off. A rail closed with a

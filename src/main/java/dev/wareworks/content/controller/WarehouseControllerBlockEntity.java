@@ -32,6 +32,8 @@ import com.simibubi.create.foundation.blockEntity.behaviour.CenteredSideValueBox
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.crane.CraneGoggleInfo;
+import dev.wareworks.content.crane.CraneMembership;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.fluid.FluidContainers;
@@ -120,15 +122,19 @@ import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
+import dev.wareworks.core.traffic.DockSite;
+import dev.wareworks.core.traffic.HomeAssignment;
 import dev.wareworks.core.warehouse.AisleMembership;
 import dev.wareworks.core.warehouse.AisleName;
 import dev.wareworks.core.warehouse.AisleNames;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
 import dev.wareworks.core.warehouse.MembershipChanges;
+import dev.wareworks.core.warehouse.NetworkStop;
 import dev.wareworks.core.warehouse.RackProbe;
 import dev.wareworks.core.warehouse.RailNetwork;
 import dev.wareworks.core.warehouse.SnapshotCadence;
+import dev.wareworks.util.CraneTrafficLang;
 import dev.wareworks.util.GoggleObservers;
 import dev.wareworks.util.Headings;
 import dev.wareworks.util.LogThrottle;
@@ -354,6 +360,25 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             new ProductionOrders<>(configuredMaxProductionOrders());
     /** Job planning and reservations; derived from the crane's job, not saved. */
     private final CraneDispatch dispatch = new CraneDispatch(this);
+    /**
+     * The cranes of this warehouse and, while it has more than one, the traffic between them (issue #14, ADR-075). The
+     * list of cranes and their last known claims are saved ({@link ControllerPersistence#CRANES_TAG}) only while there
+     * are several; a warehouse of one crane never runs any of it.
+     */
+    private final CraneTraffic traffic = new CraneTraffic(this);
+    /**
+     * The docks of cranes the warehouse has no room for any more but keeps until they are parked on their own docks
+     * (issue #14, ADR-075 §2.5). Worked out on every relink, never saved: the first relink after a load finds them
+     * again.
+     */
+    private Set<BlockPos> leavingDocks = Set.of();
+    /**
+     * Docks the rails reach but the cap left out after the scan: places that stranded members keep, and parked cranes
+     * the warehouse has no room for any more. Added to the scan's own refused docks on the controller's goggles.
+     */
+    private int docksLeftOut;
+    /** Whether the docks left out now were already scanned away once ({@link #relinkCranes}). */
+    private boolean rescannedForLeftOut;
     /**
      * The whole warehouse — every straight aisle of the connected rail network, with their letters; {@code null}
      * without dock. Saved (ADR-033).
@@ -686,9 +711,85 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return Optional.ofNullable(layout);
     }
 
-    /** Server: whether this controller has an aisle and is linked to the dock at {@code dock}. */
+    /**
+     * Server: whether this controller has an aisle and is linked to the dock at {@code dock} — its own, or the dock of
+     * another crane of its warehouse (issue #14).
+     */
     public boolean isLinkedTo(BlockPos dock) {
-        return layout != null && dock.equals(linkedDock);
+        return layout != null && (dock.equals(linkedDock) || isMemberDock(dock));
+    }
+
+    /**
+     * Server: whether this controller lists the dock at {@code dock} as one of its cranes — also before its first
+     * relink after a load, when the list comes from the save and {@link #isLinkedTo} does not know its own dock yet.
+     */
+    public boolean listsCrane(BlockPos dock) {
+        for (CraneMember member : traffic.members()) {
+            if (member.dock().equals(dock))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether the crane at {@code dock} is kept only until it is parked on its own dock: the warehouse has no room for
+     * it any more (issue #14, ADR-075 §2.5). It takes no new job.
+     */
+    public boolean isLeaving(BlockPos dock) {
+        return leavingDocks.contains(dock);
+    }
+
+    /** Whether the dock at {@code dock} is crane 2 or later of this warehouse. */
+    private boolean isMemberDock(BlockPos dock) {
+        for (CraneMember member : traffic.members()) {
+            if (member.number() > 1 && member.dock().equals(dock))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * The traffic between this warehouse's cranes while it has more than one (issue #14, ADR-075); empty for a
+     * warehouse of one crane, which never runs any of it.
+     */
+    public Optional<CraneTraffic> traffic() {
+        return traffic.active() ? Optional.of(traffic) : Optional.empty();
+    }
+
+    /** The cranes of this warehouse in crane order, crane 1 at its own dock first; empty without a warehouse. */
+    public List<CraneMember> craneMembers() {
+        return traffic.members();
+    }
+
+    /** How many cranes this warehouse has: 1 for every warehouse with one dock, 0 without a warehouse. */
+    public int craneCount() {
+        return layout == null ? 0 : Math.max(1, traffic.members().size());
+    }
+
+    /**
+     * Server: every loaded crane of this warehouse, crane 1 first — the one at its own dock
+     * ({@link #linkedDockEntity()}) and every member whose chunk is loaded. For a warehouse of one crane this is
+     * exactly the linked dock.
+     */
+    public List<StackerCraneBlockEntity> cranes() {
+        if (!traffic.active())
+            return linkedDockEntity().map(List::of).orElse(List.of());
+        List<StackerCraneBlockEntity> cranes = new ArrayList<>(traffic.members().size());
+        for (CraneMember member : traffic.members())
+            craneOf(member).ifPresent(cranes::add);
+        return cranes;
+    }
+
+    /** Server: the loaded crane of {@code member}, if its dock still is that crane of this warehouse. */
+    public Optional<StackerCraneBlockEntity> craneOf(CraneMember member) {
+        if (member.number() == 1)
+            return linkedDockEntity();
+        if (level == null || level.isClientSide || layout == null || !level.isLoaded(member.dock()))
+            return Optional.empty();
+        if (!(level.getBlockEntity(member.dock()) instanceof StackerCraneBlockEntity crane) || crane.isRemoved())
+            return Optional.empty();
+        return crane.membership().filter(frame -> frame.number() == member.number()
+                && frame.controller().equals(worldPosition)).map(frame -> crane);
     }
 
     /** Server: the linked dock, if its chunk is loaded and it still stands there with the controller's facing. */
@@ -3916,6 +4017,25 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * The number of the crane that waits at the home point at {@code pos}, for a warehouse with several cranes (issue
+     * #14, ADR-075 §8.4): "Crane 2 waits here". 0 when no crane is paired with it, and for every warehouse of one
+     * crane. Pairs the home points again, which is cheap and asked only while a player looks at one.
+     */
+    public int homePointCraneAt(BlockPos pos) {
+        WarehouseLayout current = layout;
+        if (current == null || level == null || level.isClientSide || !traffic.active())
+            return 0;
+        Optional<RackPosition> rack = rackAt(pos);
+        if (rack.isEmpty())
+            return 0;
+        for (Map.Entry<Integer, RackPosition> paired : homePointsOfCranes(current).serving().entrySet()) {
+            if (paired.getValue().equals(rack.get()))
+                return paired.getKey();
+        }
+        return 0;
+    }
+
+    /**
      * What this warehouse does with the home point at {@code pos} — the sentence its goggles show
      * ({@link HomePointStatus}). {@link HomePointStatus#NO_WAREHOUSE} when this controller has no aligned home point
      * there at all, which is also what a controller without a warehouse answers.
@@ -3927,6 +4047,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Optional<RackPosition> rack = rackAt(pos);
         if (rack.isEmpty() || membership.kindAt(rack.get()).orElse(null) != LocationKind.HOME)
             return HomePointStatus.NO_WAREHOUSE;
+        if (traffic.active())
+            return homePointsOfCranes(current).statusOf(rack.get());
         List<LocationRecord> homes = membership.records(LocationKind.HOME);
         RackPosition first = homes.isEmpty() ? null : homes.getFirst().position();
         return statusOfHomePoint(current, rack.get(), first, first != null && craneCanDriveTo(current, first));
@@ -3947,6 +4069,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (level == null || level.isClientSide)
             return;
         WarehouseLayout current = layout;
+        if (current != null && traffic.active()) {
+            refreshHomePointsOfCranes(current);
+            return;
+        }
         List<LocationRecord> homes = current == null || membership.homePointCount() == 0 ? List.<LocationRecord>of()
                 : membership.records(LocationKind.HOME);
         RackPosition first = homes.isEmpty() ? null : homes.getFirst().position();
@@ -3971,6 +4097,83 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 homePointAt(pos.get()).ifPresent(home -> home.applyStatus(
                         statusOfHomePoint(current, record.position(), first, reachable)));
             }
+        }
+        for (BlockPos pos : writtenHomePoints) {
+            if (!written.contains(pos))
+                homePointAt(pos).ifPresent(WarehouseHomePointBlockEntity::clearStatus);
+        }
+        writtenHomePoints.clear();
+        writtenHomePoints.addAll(written);
+    }
+
+    /**
+     * Which home point each crane of a warehouse with several parks at, and what every home point is doing
+     * ({@link HomeAssignment}, issue #14, ADR-075 §8.4).
+     */
+    private record CraneHomes(Map<Integer, RackPosition> serving, Map<RackPosition, HomePointStatus> statuses) {
+        HomePointStatus statusOf(RackPosition rack) {
+            return statuses.getOrDefault(rack, HomePointStatus.SECOND);
+        }
+    }
+
+    /**
+     * Pairs the home points of a warehouse with several cranes with its cranes: every (crane, home point) pair the
+     * rails join, nearest first by route blocks from the crane's dock, then by crane number and
+     * {@link RackPosition#ORDER}, each crane and each home point at most once. A home point no crane can drive to is
+     * unreachable; one left over is a second home point, which here means the warehouse has more home points than
+     * cranes. Event driven like the one-crane rule, never per tick.
+     */
+    private CraneHomes homePointsOfCranes(WarehouseLayout current) {
+        List<RackPosition> points = new ArrayList<>();
+        if (membership.homePointCount() > 0) {
+            for (LocationRecord record : membership.records(LocationKind.HOME))
+                points.add(record.position());
+        }
+        List<HomeAssignment.Dock> docks = new ArrayList<>();
+        for (CraneMember member : traffic.members()) {
+            if (!member.stranded() && !leavingDocks.contains(member.dock()))
+                docks.add(new HomeAssignment.Dock(member.number(), member.siteBranch(), member.siteX()));
+        }
+        double penalty = WareworksConfig.turnPenaltyBlocks();
+        HomeAssignment.Result result = HomeAssignment.assign(docks, points, current.routes(), penalty);
+        boolean switchedOff = WareworksConfig.returnHomeIdleTicks() <= HomeReturn.OFF;
+        Map<RackPosition, HomePointStatus> statuses = new HashMap<>();
+        for (RackPosition point : points) {
+            boolean reachable = false;
+            for (HomeAssignment.Dock dock : docks)
+                reachable |= current.routes().canDrive(dock.branch(), dock.x(), point.branch(), point.x());
+            HomePointStatus status;
+            if (!result.homes().containsValue(point))
+                status = reachable ? HomePointStatus.SECOND : HomePointStatus.UNREACHABLE;
+            else
+                status = switchedOff ? HomePointStatus.SWITCHED_OFF : HomePointStatus.SERVING;
+            statuses.put(point, status);
+        }
+        return new CraneHomes(switchedOff ? Map.of() : result.homes(), statuses);
+    }
+
+    /**
+     * {@link #refreshHomePoints} for a warehouse with several cranes: each crane is handed the home point paired with
+     * it (none: its dock is home), the ledger learns where each one parks first when it moves aside, and every home
+     * point shows what it is doing.
+     */
+    private void refreshHomePointsOfCranes(WarehouseLayout current) {
+        CraneHomes homes = homePointsOfCranes(current);
+        servingHomePoint = Optional.ofNullable(homes.serving().get(1));
+        for (CraneMember member : traffic.members())
+            craneOf(member).ifPresent(crane -> crane.setHomePoint(homes.serving().get(member.number())));
+        traffic.setHomes(homes.serving());
+        Set<BlockPos> written = new HashSet<>();
+        Map<RackPosition, Integer> craneAt = new HashMap<>();
+        homes.serving().forEach((number, point) -> craneAt.put(point, number));
+        for (Map.Entry<RackPosition, HomePointStatus> entry : homes.statuses().entrySet()) {
+            Optional<BlockPos> pos = current.worldPosOf(entry.getKey());
+            if (pos.isEmpty())
+                continue;
+            written.add(pos.get().immutable());
+            // "Crane 2 waits here" (issue #14): the home point names the crane it is paired with.
+            homePointAt(pos.get()).ifPresent(home -> home.applyStatus(entry.getValue(),
+                    craneAt.getOrDefault(entry.getKey(), 0)));
         }
         for (BlockPos pos : writtenHomePoints) {
             if (!written.contains(pos))
@@ -4022,6 +4225,18 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * warehouse no longer has, which is the {@code pose.branch() < current.branchCount()} guard below.
      */
     private boolean craneCanDriveTo(WarehouseLayout current, RackPosition rack) {
+        if (traffic.active()) {
+            // A warehouse with several cranes can reach what any of its cranes can (issue #14).
+            for (CraneMember member : traffic.members()) {
+                Optional<StackerCraneBlockEntity> crane = craneOf(member);
+                CranePose pose = crane.map(found -> found.craneState().pose()).orElse(null);
+                boolean onIt = pose != null && pose.branch() < current.branchCount();
+                if (current.routes().canDrive(onIt ? pose.branch() : member.siteBranch(),
+                        onIt ? pose.x() : member.siteX(), rack.branch(), rack.x()))
+                    return true;
+            }
+            return false;
+        }
         int from = RackPosition.FIRST_BRANCH;
         double fromX = 0.0;
         Optional<StackerCraneBlockEntity> dock = linkedDockEntity();
@@ -4789,9 +5004,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     // --- crane reports (M3) --------------------------------------------------------------------------------------
 
-    /** Reports are accepted from the linked dock only. */
+    /** Reports are accepted from the linked dock and from every other crane of this warehouse (issue #14). */
     private boolean acceptsReportsFrom(StackerCraneBlockEntity crane) {
-        return level != null && !level.isClientSide && layout != null && crane.getBlockPos().equals(linkedDock);
+        return level != null && !level.isClientSide && layout != null
+                && (crane.getBlockPos().equals(linkedDock) || isMemberDock(crane.getBlockPos()));
     }
 
     /**
@@ -4803,6 +5019,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         markChunkKeepDirty(); // M19: the crane is carrying items, so the aisle has work whatever else changed
         dispatch.track(job);
+        dispatch.rememberJob(crane, job);
         if (job.sourceKind() == LocationKind.STORAGE)
             refreshLocation(job.source());
         // A collect job's pick is the moment the items crossed the port's threshold, so that is where the port's counter
@@ -4854,6 +5071,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                         .isPresent())
             setChanged();
         dispatch.track(job);
+        dispatch.rememberJob(crane, job);
         if (job.targetKind() == LocationKind.STORAGE)
             refreshLocation(target);
         // Items that came into the warehouse and were really stored: the one arrival a production order may count as its
@@ -4898,19 +5116,23 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (!acceptsReportsFrom(crane))
             return;
         dispatch.track(job);
+        dispatch.rememberJob(crane, job);
         refreshLocation(target);
     }
 
     /** The crane's leftovers have a new target: the reservations move with them. */
     public void onCraneRerouted(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
-        if (acceptsReportsFrom(crane))
+        if (acceptsReportsFrom(crane)) {
             dispatch.track(job);
+            dispatch.rememberJob(crane, job);
+        }
     }
 
     /** Everything picked was delivered: release the job's reservations. */
     public void onCraneJobFinished(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
         if (acceptsReportsFrom(crane)) {
             dispatch.release(job.id());
+            dispatch.forgetJob(crane);
             markChunkKeepDirty(); // M19: the job is done, so the aisle may be idle now
         }
     }
@@ -4920,6 +5142,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             AbortReason reason) {
         if (acceptsReportsFrom(crane)) {
             dispatch.release(job.id());
+            dispatch.forgetJob(crane);
             markChunkKeepDirty(); // M19
         }
     }
@@ -4931,6 +5154,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public void onCraneJobLost(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
         if (acceptsReportsFrom(crane)) {
             dispatch.release(job.id());
+            dispatch.forgetJob(crane);
             markChunkKeepDirty(); // M19
         }
     }
@@ -4956,6 +5180,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         long now = level.getGameTime();
         if (relinkRequested || now >= nextRelinkTick)
             relink(now);
+        // The traffic pass of this tick, if no crane of the warehouse has run it yet (issue #14): before the dispatch,
+        // so a crane that is given a job here is judged with everybody else in the next one.
+        if (traffic.active())
+            traffic.ensurePass(now);
         // Before the layout guard on purpose: an aisle that just lost its dock (or came back from a save without one)
         // still has to let its chunks go.
         if (chunkKeepDirty || now >= chunkKeepRecheckTick
@@ -5123,7 +5351,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * because the flag and its fingerprint are saved (M19 review).
      */
     void giveUpChunkKeep() {
-        setChunkKeepGaveUp(true, chunkWorkFingerprint(linkedDockEntity()));
+        setChunkKeepGaveUp(true, chunkWorkFingerprint(cranes()));
         chunkKeepDirty = true;
     }
 
@@ -5220,8 +5448,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // for a collect count either.
         boolean collectHoldEnabled = WareworksConfig.chunkLoadingEnabled()
                 && WareworksConfig.maxCollectHoldAislesPerLevel() > 0;
-        Optional<StackerCraneBlockEntity> dock = linkedDockEntity();
-        ChunkKeepDecision.Work work = chunkKeepWork(dock, collectHoldEnabled);
+        List<StackerCraneBlockEntity> cranes = cranes();
+        ChunkKeepDecision.Work work = chunkKeepWork(cranes, collectHoldEnabled);
         // A hold reinstated from the save cannot be judged while the dock's chunk is still away: a crane job is the one
         // kind of work only the dock knows about. Extending the hold loads it, and the next evaluation decides for real -
         // at worst one extra round for an aisle whose work is gone.
@@ -5243,8 +5471,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
         // The re-arm needs the whole work to be visible. While the dock's chunk is away the crane job is not, and the
         // fingerprint would differ for that reason alone - which would re-arm a hold that gave up on that very job.
-        if (chunkKeepGaveUp && (layout == null || dock.isPresent())
-                && chunkWorkFingerprint(dock) != chunkKeepFingerprint)
+        // With several cranes every one of them has to be loaded (issue #14).
+        if (chunkKeepGaveUp && (layout == null || cranes.size() == Math.max(1, traffic.members().size()))
+                && chunkWorkFingerprint(cranes) != chunkKeepFingerprint)
             setChunkKeepGaveUp(false, 0L); // real progress, so it may hold again
         ChunkKeepDecision.Limits limits = new ChunkKeepDecision.Limits(WareworksConfig.chunkLoadingEnabled(),
                 collectHoldEnabled, AisleChunkTickets.levelCapAllows(serverLevel, worldPosition), collectCapAllows,
@@ -5254,7 +5483,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 AisleChunkTickets.heldChunkCount(serverLevel, worldPosition) > 0,
                 AisleChunkTickets.heldSince(serverLevel, worldPosition), chunkKeepIdleSince, chunkKeepGaveUp);
         ChunkKeepDecision.Decision decision = ChunkKeepDecision.decide(work, limits, state, now);
-        applyChunkKeep(serverLevel, decision, work, footprint, dock, now);
+        applyChunkKeep(serverLevel, decision, work, footprint, cranes, now);
     }
 
     /**
@@ -5264,8 +5493,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * <p>
      * The collect count is read only with the opt-in, so the default path never touches the world for it.
      */
-    private ChunkKeepDecision.Work chunkKeepWork(Optional<StackerCraneBlockEntity> dock, boolean collectHoldEnabled) {
-        boolean craneJob = dock.map(crane -> crane.currentJob().isPresent()).orElse(false);
+    private ChunkKeepDecision.Work chunkKeepWork(List<StackerCraneBlockEntity> cranes, boolean collectHoldEnabled) {
+        // Any crane of the warehouse with a job is work (issue #14); with one crane that is its job, as it always was.
+        boolean craneJob = false;
+        for (StackerCraneBlockEntity crane : cranes)
+            craneJob |= crane.currentJob().isPresent();
         int collectPending = collectHoldEnabled && layout != null ? collectSources().size() : 0;
         return new ChunkKeepDecision.Work(craneJob, requests.openCount(), productionOrders.openCount(), collectPending);
     }
@@ -5275,7 +5507,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * changed fingerprint is what re-arms a hold that gave up, so "gave up" ends on real progress and not on a timer.
      * Saved together with the flag, so the bound survives a reload and a restart.
      */
-    private long chunkWorkFingerprint(Optional<StackerCraneBlockEntity> dock) {
+    private long chunkWorkFingerprint(List<StackerCraneBlockEntity> cranes) {
         // Order-independent inside each collection (a sum plus its count, not a positional hash), because this value is
         // saved and compared after a reload, where the queues are rebuilt from NBT: an equal set of work has to give an
         // equal fingerprint (M19 review). The ids are UUIDs, whose hashCode is stable across restarts by contract.
@@ -5291,8 +5523,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             orderIds += order.id().hashCode() & 0xFFFF_FFFFL;
             orderCount++;
         }
+        // Every crane's job, as a sum so the order the cranes are listed in cannot matter (issue #14). A warehouse of
+        // one crane sums one job, so its saved fingerprint is the one it always was.
+        int jobIds = 0;
+        for (StackerCraneBlockEntity crane : cranes)
+            jobIds += crane.currentJob().map(job -> job.id().hashCode()).orElse(0);
         long hash = 1125899906842597L;
-        hash = 31 * hash + dock.flatMap(StackerCraneBlockEntity::currentJob).map(job -> job.id().hashCode()).orElse(0);
+        hash = 31 * hash + jobIds;
         hash = 31 * hash + requestIds;
         hash = 31 * hash + requestCount;
         hash = 31 * hash + orderIds;
@@ -5301,7 +5538,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     private void applyChunkKeep(ServerLevel serverLevel, ChunkKeepDecision.Decision decision,
-            ChunkKeepDecision.Work work, int[] footprint, Optional<StackerCraneBlockEntity> dock, long now) {
+            ChunkKeepDecision.Work work, int[] footprint, List<StackerCraneBlockEntity> dock, long now) {
         switch (decision.action()) {
             case TAKE, KEEP -> {
                 // collectOnly: this hold exists only because a collecting port has something pending, which is what the
@@ -5413,12 +5650,256 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // Idempotent, and it keeps a dock that was just linked (or relinked after a save) in step at once rather than
         // one tick later: without a home point this hands over nothing, which means "the dock is home" (M21, ADR-034).
         dock.setHomePoint(layout == null ? null : servingHomePoint.orElse(null));
+        // Every other crane of the warehouse: who joins, who leaves, and their numbers (issue #14).
+        relinkCranes(dock, dockPos, facing);
         if (layout == null)
             return;
         if (pruneRequests(layout))
             setChanged();
         // A controller placed or loaded behind a busy crane adopts its job and rebuilds the reservations.
-        dispatch.adopt(dock.currentJob());
+        dispatch.adoptAll();
+    }
+
+    /**
+     * Lists this warehouse's cranes after a relink and tells each one what it is (issue #14, ADR-075 §2.5): the crane
+     * at the own dock is crane 1 of {@code n}, every member dock the scan found joins as crane 2, 3, ... in discovery
+     * order, and a member that is no longer reached leaves — unless its machine still stands on the warehouse's rails
+     * while a closed rail cut its dock off, which makes it a stranded member, or it is still at work although the
+     * warehouse has no room for it any more, which keeps it until it is parked on its own dock. A warehouse of one crane
+     * gives its crane no role at all, which is what keeps its saves and its behaviour exactly those of 0.17.1.
+     * <p>
+     * No world search: the member docks are the primary dock's own discovery, and every other read is one block entity
+     * lookup per crane this warehouse has or had.
+     */
+    private void relinkCranes(StackerCraneBlockEntity primary, BlockPos dockPos, Direction facing) {
+        WarehouseLayout current = layout;
+        List<CraneMember> previous = traffic.members();
+        Set<BlockPos> leaving = new HashSet<>();
+        List<CraneMember> next = current == null ? List.of() : resolveCranes(primary, current, previous, leaving);
+        for (CraneMember old : previous) {
+            if (old.number() > 1 && !containsDock(next, old.dock()))
+                loadedDock(old.dock()).filter(crane -> crane.membership()
+                        .filter(frame -> frame.controller().equals(worldPosition)).isPresent())
+                        .ifPresent(StackerCraneBlockEntity::leaveWarehouse);
+        }
+        if (!leaving.equals(leavingDocks))
+            homePointsRefreshPending = true; // a crane that is leaving parks on its own dock, not on a home point
+        leavingDocks = Set.copyOf(leaving);
+        // A dock the scan took but the list leaves out (a parked crane the warehouse had no room for, or a new dock
+        // whose place a crane stranded meanwhile keeps) must not stay an aisle block. Once the list is up to date, the
+        // scan is taken again at once, and the next relink drops the dock from the rails. Once per stretch of such
+        // docks, so a scan that disagrees cannot rescan on every tick.
+        boolean rescan = docksLeftOut > 0 && !rescannedForLeftOut;
+        rescannedForLeftOut = docksLeftOut > 0;
+        if (next.size() < 2) {
+            primary.setPrimaryRole(null);
+            traffic.configure(current, current == null ? List.of() : List.of(CraneMember.primary(dockPos)));
+            if (rescan)
+                rescanWithoutLeftCranes(primary);
+            return;
+        }
+        int count = next.size();
+        if (!next.equals(previous))
+            homePointsRefreshPending = true; // home points are paired with cranes, so new cranes are paired anew
+        // Listed before the cranes are told, so a crane that joins finds itself linked at once.
+        traffic.configure(current, next);
+        primary.setPrimaryRole(CraneMembership.primary(worldPosition, dockPos, facing, count));
+        for (CraneMember member : next) {
+            if (member.number() == 1)
+                continue;
+            CraneMembership joined = new CraneMembership(worldPosition, dockPos, facing, member.siteBranch(),
+                    member.siteX(), member.number(), count);
+            loadedDock(member.dock()).ifPresent(crane -> {
+                crane.joinWarehouse(joined, current.network());
+                crane.setLeavingWarehouse(leavingDocks.contains(member.dock()));
+            });
+        }
+        if (rescan)
+            rescanWithoutLeftCranes(primary);
+    }
+
+    private void rescanWithoutLeftCranes(StackerCraneBlockEntity primary) {
+        primary.refreshGeometry();
+        relinkRequested = true;
+    }
+
+    /**
+     * The cranes of {@code current}: the primary, then the member docks of the primary's discovery, then the stranded
+     * ones. A scan that ran into an unloaded chunk may have missed a member, so the known members are kept then, as the
+     * known aisles are ({@link #warehouseOf}). A dock another loaded controller already counts as its crane is left to
+     * that one, so two warehouses whose rails touch never take turns stealing it.
+     * <p>
+     * <b>The cap counts every crane on the rails</b> ({@code aisle.maxCranesPerNetwork}): stranded members keep their
+     * places, because their machines still stand on the warehouse's rails, and only the room left is given to the docks
+     * the scan found. A crane the warehouse has no room for any more — the cap was lowered — is never dropped while its
+     * machine is out on the rails: it stays listed, takes no new job and drives home ({@link #leavingDocks}), and leaves
+     * once it is parked on its own dock. Its dock is still an aisle block of the warehouse (the scan keeps listed docks,
+     * {@code RailGraph.CellProbe#listedDock}), so it can get there under the gate. A crane whose dock the scan no longer
+     * takes at all (the off switch) stays as a stranded member, an obstacle with its claim, until it stands on its dock.
+     *
+     * @param leaving filled with the docks of cranes that are kept only until they are parked
+     */
+    private List<CraneMember> resolveCranes(StackerCraneBlockEntity primary, WarehouseLayout current,
+            List<CraneMember> previous, Set<BlockPos> leaving) {
+        List<CraneMember> next = new ArrayList<>();
+        next.add(CraneMember.primary(current.dock()));
+        docksLeftOut = 0;
+        int maxCranes = WareworksConfig.maxCranesPerNetwork();
+        if (maxCranes <= 1 && !anyAtWork(previous))
+            return next; // the off switch: one crane per warehouse, every other dock a wall
+        Heading heading = Headings.of(current.facing());
+        Optional<RailNetwork> scan = primary.discoveredNetwork()
+                .filter(found -> !found.reachedUnloadedChunk())
+                .filter(found -> found.geometry().firstBranch().heading() == heading);
+        List<BlockPos> found = new ArrayList<>();
+        if (scan.isPresent()) {
+            for (DockSite site : scan.get().memberDocks())
+                found.add(current.dock().offset(site.dx(), 0, site.dz()));
+        } else {
+            for (CraneMember old : previous) {
+                if (old.number() > 1 && !old.stranded())
+                    found.add(old.dock());
+            }
+        }
+        // Stranded members first: their places are taken whatever the scan found.
+        List<CraneMember> stranded = new ArrayList<>();
+        for (CraneMember old : previous) {
+            if (old.number() > 1 && !found.contains(old.dock()) && stillStranded(current, old))
+                stranded.add(old);
+        }
+        Map<BlockPos, int[]> sites = new LinkedHashMap<>();
+        for (BlockPos dock : found) {
+            // A dock broken since the last scan is gone at once, not one scan later.
+            if (level.isLoaded(dock) && loadedDock(dock).isEmpty())
+                continue;
+            Optional<int[]> site = current.aislePositionOf(dock, Direction.Axis.X);
+            if (site.isPresent() && !ownedElsewhere(dock))
+                sites.put(dock, site.get());
+        }
+        // The room left goes to the cranes the warehouse already has first, then to new docks, each in scan order.
+        int room = Math.max(0, maxCranes - 1 - stranded.size());
+        Set<BlockPos> placed = new HashSet<>();
+        for (boolean listed : new boolean[] {true, false}) {
+            for (BlockPos dock : sites.keySet()) {
+                if (room > 0 && containsDock(previous, dock) == listed) {
+                    placed.add(dock);
+                    room--;
+                }
+            }
+        }
+        for (Map.Entry<BlockPos, int[]> entry : sites.entrySet()) {
+            BlockPos dock = entry.getKey();
+            if (!placed.contains(dock)) {
+                if (!containsDock(previous, dock) || parkedNow(dock)) {
+                    docksLeftOut++;
+                    continue;
+                }
+                leaving.add(dock); // no room any more, but still at work: it goes home first
+            }
+            next.add(new CraneMember(next.size() + 1, dock, entry.getValue()[0], entry.getValue()[1], false));
+        }
+        for (CraneMember old : stranded)
+            next.add(new CraneMember(next.size() + 1, old.dock(), old.siteBranch(), old.siteX(), true));
+        for (CraneMember old : previous) {
+            if (old.number() > 1 && !containsDock(next, old.dock()) && atWorkOnTheRails(current, old)) {
+                next.add(new CraneMember(next.size() + 1, old.dock(), old.siteBranch(), old.siteX(), true));
+                leaving.add(old.dock());
+            }
+        }
+        return next;
+    }
+
+    /** Whether the loaded crane at {@code dock} is parked on its own dock; a dock whose chunk is away counts as busy. */
+    private boolean parkedNow(BlockPos dock) {
+        return level.isLoaded(dock) && loadedDock(dock).map(StackerCraneBlockEntity::parkedOnOwnDock).orElse(true);
+    }
+
+    /**
+     * Whether any crane of this warehouse but the first may still be out on the rails: a loaded one not parked on its
+     * dock, or one whose chunk is away, which nobody can see.
+     */
+    private boolean anyAtWork(List<CraneMember> members) {
+        for (CraneMember member : members) {
+            if (member.number() < 2)
+                continue;
+            if (!level.isLoaded(member.dock()))
+                return true;
+            if (loadedDock(member.dock()).filter(crane -> crane.membership()
+                    .filter(frame -> frame.controller().equals(worldPosition)).isPresent())
+                    .filter(crane -> !crane.parkedOnOwnDock()).isPresent())
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether a member the scan no longer takes, and that is not stranded, still has its machine out on this
+     * warehouse's rails: then it is kept, as an obstacle that gets no job, until it is parked on its own dock (ADR-075
+     * §2.5). A dock another warehouse took over, a machine that is not on these rails and a parked one let it go.
+     */
+    private boolean atWorkOnTheRails(WarehouseLayout current, CraneMember old) {
+        Optional<StackerCraneBlockEntity> loaded = loadedDock(old.dock());
+        if (loaded.isEmpty() || ownedElsewhere(old.dock()))
+            return false;
+        StackerCraneBlockEntity crane = loaded.get();
+        if (crane.membership().filter(frame -> frame.controller().equals(worldPosition)).isEmpty()
+                || crane.parkedOnOwnDock())
+            return false;
+        return machineOnTheRails(current, crane);
+    }
+
+    /**
+     * Whether a member this warehouse no longer reaches stays linked as a stranded crane (ADR-075 §2.5): its machine
+     * still stands on the warehouse's rails while the block its dock faces is no aisle block of the warehouse any more
+     * — a rail closed or broken between them. A member whose chunk is not loaded stays as it was, as an obstacle; a
+     * dock that still faces an aisle block was left out by the cap ({@link #atWorkOnTheRails} keeps it while it works).
+     */
+    private boolean stillStranded(WarehouseLayout current, CraneMember old) {
+        if (!level.isLoaded(old.dock()))
+            return true; // its chunk is away: it stays what it was, an obstacle with its last known claim
+        Optional<StackerCraneBlockEntity> loaded = loadedDock(old.dock());
+        if (loaded.isEmpty())
+            return false; // the dock was broken
+        StackerCraneBlockEntity crane = loaded.get();
+        if (crane.membership().filter(frame -> frame.controller().equals(worldPosition)).isEmpty())
+            return false;
+        if (current.aislePositionOf(old.dock().relative(crane.facing()), Direction.Axis.X).isPresent())
+            return false;
+        return machineOnTheRails(current, crane);
+    }
+
+    /** Whether the block {@code crane}'s machine stands on is an aisle block of {@code current}. */
+    private static boolean machineOnTheRails(WarehouseLayout current, StackerCraneBlockEntity crane) {
+        WarehouseLayout frame = crane.warehouse();
+        CranePose pose = crane.craneState().pose();
+        net.minecraft.world.phys.Vec3 offset = frame.railOffset(pose.branch(), Math.round(pose.x()));
+        BlockPos machine = frame.dock().offset((int) Math.round(offset.x), 0, (int) Math.round(offset.z));
+        return current.aislePositionOf(machine, Direction.Axis.X).isPresent();
+    }
+
+    /** Whether a loaded dock at {@code dock} is a crane of another loaded controller that lists it. */
+    private boolean ownedElsewhere(BlockPos dock) {
+        Optional<CraneMembership> frame = loadedDock(dock).flatMap(StackerCraneBlockEntity::membership);
+        if (frame.isEmpty() || frame.get().controller().equals(worldPosition))
+            return false;
+        BlockPos other = frame.get().controller();
+        return level.isLoaded(other) && level.getBlockEntity(other) instanceof WarehouseControllerBlockEntity controller
+                && !controller.isRemoved() && controller.isLinkedTo(dock);
+    }
+
+    private Optional<StackerCraneBlockEntity> loadedDock(BlockPos pos) {
+        if (level == null || level.isClientSide || !level.isLoaded(pos))
+            return Optional.empty();
+        return level.getBlockEntity(pos) instanceof StackerCraneBlockEntity crane && !crane.isRemoved()
+                ? Optional.of(crane) : Optional.empty();
+    }
+
+    private static boolean containsDock(List<CraneMember> members, BlockPos dock) {
+        for (CraneMember member : members) {
+            if (member.dock().equals(dock))
+                return true;
+        }
+        return false;
     }
 
     /**
@@ -5679,6 +6160,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         linkedDockEntity().ifPresent(dock -> dock.remapOnto(
                 pose -> next.renamedFrom(previous, pose).orElseGet(() -> next.parkedAtDock(pose)),
                 rack -> moved.getOrDefault(rack, rack)));
+        // Every other crane of the warehouse goes through the same rename; one whose block is no aisle block any more
+        // goes back onto its own dock (issue #14). Its dock's new site follows with the relink that comes next.
+        for (CraneMember member : traffic.members()) {
+            if (member.number() == 1)
+                continue;
+            craneOf(member).ifPresent(crane -> {
+                Optional<int[]> site = next.aislePositionOf(member.dock(), Direction.Axis.X);
+                crane.remapOnto(pose -> next.renamedFrom(previous, pose).orElseGet(() -> site
+                        .map(at -> pose.handedOver(at[0], at[1]).withArm(CranePose.RETRACTED)
+                                .withYaw(CranePose.yawOf(Headings.of(next.branch(at[0]).heading()))))
+                        .orElse(pose)), rack -> moved.getOrDefault(rack, rack));
+            });
+        }
     }
 
     /** Every rack position this controller holds anything for, in {@link RackPosition#ORDER} and without duplicates. */
@@ -5735,6 +6229,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** The linked dock (if loaded) loses this controller as its owner; another controller's link is left alone. */
     private void unlinkDock() {
         markChunkKeepDirty(); // M19: without a dock there is no crane job to hold chunks for
+        // Every other crane leaves with the warehouse (issue #14): without the own dock there is no frame to drive in. A
+        // crane still out on the rails holds where it stands until it is parked on its own dock, because the cranes it
+        // shared the rails with are still on them and nobody gates them any more.
+        for (CraneMember member : traffic.members()) {
+            if (member.number() > 1)
+                craneOf(member).ifPresent(StackerCraneBlockEntity::warehouseDissolved);
+        }
+        traffic.clear();
+        leavingDocks = Set.of();
+        docksLeftOut = 0;
         BlockPos dockPos = linkedDock;
         linkedDock = null;
         if (dockPos != null && level != null && level.isLoaded(dockPos)
@@ -6096,7 +6600,32 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // method runs in exactly two places, neither of them a tick: an observation (throttled to one packet a
                 // second) and a naming click.
                 linkedDockEntity().map(dock -> dock.goggleInfo().withThroughput(dock.throughput())),
-                dispatch.lastReason());
+                dispatch.lastReason(), craneRoster());
+    }
+
+    /**
+     * Server: the cranes of a warehouse with several, as the controller's goggles list them (issue #14, ADR-075 §15.1),
+     * with how long each job still takes; empty for a warehouse of one crane. One block entity lookup per crane, asked
+     * while somebody looks at the controller.
+     */
+    public Optional<CraneRoster> craneRoster() {
+        if (craneCount() < 2)
+            return Optional.empty();
+        int refused = linkedDockEntity().flatMap(StackerCraneBlockEntity::discoveredNetwork)
+                .map(RailNetwork::refusedDocks).orElse(0) + docksLeftOut;
+        return Optional.of(CraneRoster.of(CraneRosters.entries(this, true), refused,
+                WareworksConfig.maxCranesPerNetwork()));
+    }
+
+    /**
+     * Server: how many cranes this warehouse has and how many of them work, wait and are paused (issue #14, ADR-075
+     * §15.2), for the terminal's crane line. {@link CraneCounts#NONE} without a warehouse; one crane for every
+     * warehouse built up to 0.17.1. One block entity lookup per crane and no route question.
+     */
+    public CraneCounts craneCounts() {
+        if (layout == null)
+            return CraneCounts.NONE;
+        return CraneRoster.of(CraneRosters.entries(this, false), 0, 0).counts();
     }
 
     /**
@@ -6231,7 +6760,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // which is every aisle on a server that has chunk loading switched off - the default.
         if (shown.chunkKeepReason() != ChunkKeepReason.NONE)
             chunkKeepLine(shown).forGoggles(tooltip, 1);
-        shown.crane().ifPresent(crane -> {
+        // A warehouse with several cranes lists them instead of the one crane at its own dock (issue #14, ADR-075):
+        // one crane's status, job and minute would be a third of the story told as if it were all of it.
+        Optional<CraneRoster> roster = shown.cranes();
+        roster.ifPresent(cranes -> addRosterLines(tooltip, cranes, shown));
+        shown.crane().filter(crane -> roster.isEmpty()).ifPresent(crane -> {
             WareworksLang.translate(WareworksLang.GOGGLES_STACKER_CRANE).style(ChatFormatting.GRAY).forGoggles(tooltip, 1);
             // The short form, which is what the throughput adds here: the busy headline and, above zero, the blocked
             // share — the two numbers a player came to this block for ("is the crane my bottleneck, and is anything
@@ -6247,6 +6780,65 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             WareworksLang.translate(WareworksLang.GOGGLES_AISLE_NAME_HINT).style(ChatFormatting.DARK_GRAY)
                     .forGoggles(tooltip, 1);
         return true;
+    }
+
+    /**
+     * The crane list of a warehouse with several cranes (client, goggles, issue #14): "Cranes: 3 (2 working, 1
+     * waiting)", one line per listed crane, "...and N more" for the rest, and — while the maximum kept docks out and
+     * the stop line above does not already say so — how many.
+     */
+    private static void addRosterLines(List<Component> tooltip, CraneRoster roster, ControllerGoggleSummary shown) {
+        CraneTrafficLang.cranesHead(roster.counts()).forGoggles(tooltip, 1);
+        for (CraneRoster.Entry entry : roster.entries())
+            rosterLine(entry, shown).forGoggles(tooltip, 2);
+        if (roster.unlisted() > 0)
+            WareworksLang.translate(WareworksLang.GOGGLES_MORE_ENTRIES, WareworksLang.number(roster.unlisted()))
+                    .style(ChatFormatting.DARK_GRAY).forGoggles(tooltip, 2);
+        boolean stopSaysIt = shown.network().map(NetworkGoggleInfo::stop).orElse(NetworkStop.END)
+                == NetworkStop.MAX_CRANES;
+        if (roster.refusedDocks() > 0 && !stopSaysIt)
+            WareworksLang.translate(CraneTrafficLang.GOGGLES_CRANES_REFUSED,
+                    WareworksLang.number(roster.refusedDocks()), WareworksLang.number(roster.maxCranes()))
+                    .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
+    }
+
+    /** One crane's line: "1: Storing to A-03-07R, about 12 s", "2: waiting for crane 1", "3: idle". */
+    private static net.createmod.catnip.lang.LangBuilder rosterLine(CraneRoster.Entry entry,
+            ControllerGoggleSummary shown) {
+        net.createmod.catnip.lang.LangBuilder number = WareworksLang.number(entry.number()).style(ChatFormatting.GOLD);
+        if (entry.activity().isJob() && entry.target().isPresent()) {
+            String target = shown.crane().map(crane -> crane.address(entry.target().get()))
+                    .orElseGet(() -> CraneGoggleInfo.NONE.address(entry.target().get()));
+            net.createmod.catnip.lang.LangBuilder activity = WareworksLang.translate(displayKeyOf(entry.activity()))
+                    .style(ChatFormatting.WHITE);
+            net.createmod.catnip.lang.LangBuilder where = WareworksLang.text(target).style(ChatFormatting.GOLD);
+            if (entry.hasSeconds())
+                return WareworksLang.translate(CraneTrafficLang.GOGGLES_ROSTER_JOB, number, activity, where,
+                        WareworksLang.number(entry.seconds()).style(ChatFormatting.GOLD)).style(ChatFormatting.GRAY);
+            return WareworksLang.translate(CraneTrafficLang.GOGGLES_ROSTER_JOB_NO_TIME, number, activity, where)
+                    .style(ChatFormatting.GRAY);
+        }
+        ChatFormatting colour = switch (entry.activity()) {
+            case WAITING, PAUSED, UNLOADED -> ChatFormatting.GOLD;
+            case STRANDED -> ChatFormatting.RED;
+            default -> ChatFormatting.GRAY;
+        };
+        return WareworksLang.translate(CraneTrafficLang.rosterKey(entry.activity()), number,
+                WareworksLang.number(entry.otherCrane()).style(ChatFormatting.WHITE)).style(colour);
+    }
+
+    /** The word "Crane Status" uses for a job, which the controller's crane list reuses. */
+    private static String displayKeyOf(CraneRoster.Activity activity) {
+        return switch (activity) {
+            case STORING -> WareworksLang.DISPLAY_CRANE_STORING;
+            case RETRIEVING -> WareworksLang.DISPLAY_CRANE_RETRIEVING;
+            case SUPPLYING -> WareworksLang.DISPLAY_CRANE_SUPPLYING;
+            case COLLECTING -> WareworksLang.DISPLAY_CRANE_COLLECTING;
+            case HANDING_OVER -> WareworksLang.DISPLAY_CRANE_HANDING_OVER;
+            case FILLING -> WareworksLang.DISPLAY_CRANE_FILLING;
+            case IDLE, WAITING, MOVING_ASIDE, UNLOADED, STRANDED -> WareworksLang.DISPLAY_CRANE_IDLE;
+            case PAUSED -> WareworksLang.DISPLAY_CRANE_PAUSED;
+        };
     }
 
     /**
@@ -6323,6 +6915,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // The one thing M19 saves, and only while it is set: the bound "this aisle may not hold its chunks again until
         // its work really changes" has to outlive this block entity instance, because the work it refuses does (§11.4).
         ControllerPersistence.writeChunkKeep(tag, chunkKeepGaveUp, chunkKeepFingerprint);
+        // Only a warehouse with several cranes writes anything here, so one crane saves what it did up to 0.17.1
+        // (issue #14).
+        ControllerPersistence.writeCranes(tag, traffic.members(), traffic.known(), dispatch.memberJobs(),
+                worldPosition, registries);
     }
 
     /**
@@ -6427,6 +7023,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             stockPauses.putAll(ControllerPersistence.readStockPauses(tag, registries));
             restockOutcomes = Map.of();
         }
+        // The cranes of a warehouse with several, with the last claim known of each, so a ledger built before every
+        // dock is loaded again keeps an unloaded crane's blocks as an obstacle (issue #14, ADR-075 §13).
+        ControllerPersistence.SavedCranes savedCranes = layout == null ? ControllerPersistence.SavedCranes.NONE
+                : ControllerPersistence.readCranes(tag, worldPosition, registries);
+        traffic.clear();
+        if (layout != null) {
+            traffic.configure(layout, savedCranes.members().isEmpty()
+                    ? List.of(CraneMember.primary(layout.dock())) : savedCranes.members());
+            traffic.restoreKnown(savedCranes.known());
+        }
+        dispatch.restoreMemberJobs(savedCranes.jobs());
         relinkRequested = true;
         stockRulesRefreshPending = true;
         homePointsRefreshPending = true;

@@ -88,6 +88,7 @@ import dev.wareworks.network.TerminalSortPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
 import dev.wareworks.network.TerminalUsagePayload;
+import dev.wareworks.util.CraneTrafficLang;
 import dev.wareworks.util.WareworksLang;
 import net.createmod.catnip.gui.UIRenderHelper;
 import net.createmod.catnip.gui.element.GuiGameElement;
@@ -3418,6 +3419,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                     LangNumberFormat.format(status.requestedHere()), LangNumberFormat.format(status.deliveredHere()));
         if (!status.hasAisle())
             return WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE);
+        // A warehouse with several cranes counts them: "3 cranes: 2 working, 1 waiting" (issue #14, ADR-075). One
+        // crane reads exactly as it always did.
+        if (status.severalCranes())
+            return CraneTrafficLang.terminalCranes(status.cranes());
         if (!status.craneLinked())
             return WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_CRANE);
         Component state = status.isPaused() ? WareworksLang.translateDirect(status.cranePause().langKey())

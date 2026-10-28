@@ -105,6 +105,15 @@ public class WarehouseHomePointBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * Server: the same for a warehouse with several cranes (issue #14, ADR-075 §8.4), with the crane that waits here
+     * (0 for none), so the goggles say "Crane 2 waits here".
+     */
+    public void applyStatus(HomePointStatus status, int crane) {
+        Objects.requireNonNull(status, "status");
+        apply(summary.withStatus(status, crane, true));
+    }
+
+    /**
      * Server: nothing uses this home point any more — its warehouse lost the aisle it stands on, its controller was
      * broken, or it was turned away from the rails — so both lamps go out.
      * <p>
@@ -144,7 +153,10 @@ public class WarehouseHomePointBlockEntity extends SmartBlockEntity
         HomePointStatus status = controller()
                 .map(controller -> controller.homePointStatusAt(worldPosition))
                 .orElse(HomePointStatus.NO_WAREHOUSE);
-        HomePointGoggleSummary next = new HomePointGoggleSummary(assignment, status);
+        // Which crane waits here, for a warehouse with several (issue #14); nothing for one crane.
+        boolean several = controller().map(controller -> controller.craneCount() > 1).orElse(false);
+        int crane = several ? controller().map(controller -> controller.homePointCraneAt(worldPosition)).orElse(0) : 0;
+        HomePointGoggleSummary next = new HomePointGoggleSummary(assignment, status, crane, several);
         if (!next.equals(summary)) {
             summary = next;
             summarySync.markPending();
@@ -158,7 +170,8 @@ public class WarehouseHomePointBlockEntity extends SmartBlockEntity
         HomePointGoggleSummary shown = summary;
         WareworksLang.translate(WareworksLang.GOGGLES_WAREHOUSE_HOME_POINT).forGoggles(tooltip);
         shown.assignment().addGoggleLines(tooltip, WareworksLang.GOGGLES_STATION_MISALIGNED_HINT, 1);
-        WareworksLang.translate(shown.status().langKey()).style(colourOf(shown.status())).forGoggles(tooltip, 1);
+        WareworksLang.translate(shown.statusKey(), WareworksLang.number(shown.crane()))
+                .style(colourOf(shown.status())).forGoggles(tooltip, 1);
         return true;
     }
 

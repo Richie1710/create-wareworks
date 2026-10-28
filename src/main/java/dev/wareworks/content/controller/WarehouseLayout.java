@@ -424,9 +424,21 @@ public final class WarehouseLayout {
         Objects.requireNonNull(pose, "pose");
         if (!previous.dock.equals(dock))
             return Optional.empty();
+        return relabelledFrom(previous, pose);
+    }
+
+    /**
+     * The same machine named the way <b>this</b> warehouse names it, coming from a warehouse with <b>another dock</b>
+     * (issue #14, ADR-075): a member crane joining a warehouse from the frame of its own dock, or leaving it again. The
+     * world block the pose stood for is looked up on these branches exactly as {@link #renamedFrom} does for a rebuild
+     * at the same dock; nothing moves. Empty when that block is no aisle block of this warehouse.
+     */
+    public Optional<CranePose> relabelledFrom(WarehouseLayout previous, CranePose pose) {
+        Objects.requireNonNull(previous, "previous");
+        Objects.requireNonNull(pose, "pose");
         Vec3 offset = previous.railOffset(pose.branch(), pose.x());
-        double worldX = dock.getX() + offset.x;
-        double worldZ = dock.getZ() + offset.z;
+        double worldX = previous.dock.getX() + offset.x;
+        double worldZ = previous.dock.getZ() + offset.z;
         Direction.Axis was = previous.branchAt(pose.branch()).map(branch -> branch.heading().getAxis()).orElse(null);
         Optional<CranePose> anywhere = Optional.empty();
         for (BranchLayout branch : branches) {
@@ -454,6 +466,76 @@ public final class WarehouseLayout {
                 anywhere = Optional.of(renamed);
         }
         return anywhere;
+    }
+
+    /**
+     * The rack position of this warehouse that names the same block <b>from the same aisle block</b> as {@code rack}
+     * does in {@code previous}, whose dock may be another one (issue #14, ADR-075): what a member crane's job locations
+     * are relabelled through when it joins or leaves. A rack position is an aisle block plus a side, and of the one or
+     * two branches through an aisle block exactly one runs across the side's direction, so the answer is unique. Empty
+     * when that aisle block is not part of this warehouse, or no level of this warehouse is that high.
+     */
+    public Optional<RackPosition> rackFrom(WarehouseLayout previous, RackPosition rack) {
+        Objects.requireNonNull(previous, "previous");
+        Objects.requireNonNull(rack, "rack");
+        Optional<BranchLayout> from = previous.branchOf(rack);
+        if (from.isEmpty() || rack.y() >= height())
+            return Optional.empty();
+        BlockPos aisleBlock = from.get().aislePos(rack.x());
+        Direction away = from.get().sideDirection(rack.side());
+        for (BranchLayout branch : branches) {
+            if (branch.heading().getAxis() == away.getAxis())
+                continue;
+            Optional<Integer> x = positionOn(branch, aisleBlock);
+            if (x.isEmpty())
+                continue;
+            for (Side side : Side.values()) {
+                if (branch.sideDirection(side) == away)
+                    return Optional.of(new RackPosition(branch.branch(), x.get(), rack.y(), side));
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The branch and position of the aisle block at {@code pos} — on the branch that runs along {@code axis} when a
+     * link block lies on two — or empty when it is no aisle block of this warehouse. Used to name a member dock in the
+     * controller's own numbering (issue #14).
+     */
+    public Optional<int[]> aislePositionOf(BlockPos pos, Direction.Axis axis) {
+        Objects.requireNonNull(pos, "pos");
+        if (pos.getY() != dock.getY())
+            return Optional.empty();
+        Optional<int[]> anywhere = Optional.empty();
+        for (BranchLayout branch : branches) {
+            Optional<Integer> x = positionOn(branch, pos);
+            if (x.isEmpty())
+                continue;
+            int[] found = {branch.branch(), x.get()};
+            if (branch.heading().getAxis() == axis)
+                return Optional.of(found);
+            if (anywhere.isEmpty())
+                anywhere = Optional.of(found);
+        }
+        return anywhere;
+    }
+
+    /** Where the aisle block at {@code pos} lies along {@code branch}; empty when it is not on that branch's line. */
+    private static Optional<Integer> positionOn(BranchLayout branch, BlockPos pos) {
+        Direction heading = branch.heading();
+        int dx = pos.getX() - branch.origin().getX();
+        int dz = pos.getZ() - branch.origin().getZ();
+        int along;
+        if (heading.getAxis() == Direction.Axis.X) {
+            if (dz != 0)
+                return Optional.empty();
+            along = dx * heading.getStepX();
+        } else {
+            if (dx != 0)
+                return Optional.empty();
+            along = dz * heading.getStepZ();
+        }
+        return along >= 0 && along <= branch.geometry().length() ? Optional.of(along) : Optional.empty();
     }
 
     /**

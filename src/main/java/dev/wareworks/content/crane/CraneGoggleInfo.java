@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -13,7 +14,9 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CraneThroughput;
+import dev.wareworks.core.crane.RemainingTrip;
 import dev.wareworks.core.inventory.KeyCount;
+import dev.wareworks.util.CraneTrafficLang;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.ChatFormatting;
 import net.minecraft.nbt.CompoundTag;
@@ -48,16 +51,19 @@ import net.minecraft.world.item.Item;
  *                     when nothing has been measured, nothing worked and nothing was delivered — a measurement with
  *                     nothing in it is normalised away here, so a parked crane's tooltip and its update tag are
  *                     byte-for-byte what they were before this feature
+ * @param traffic      what this crane's goggles say about the other cranes of its warehouse (issue #14, ADR-075):
+ *                     its number, why it waits and for whom, the rails it has reserved. Empty for a warehouse of one
+ *                     crane, which therefore syncs exactly what it did up to 0.17.1 ({@link CraneTrafficInfo})
  */
 public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Optional<CraneJobSummary> job,
                               List<KeyCount<Item>> held, String aisleLetters,
-                              Optional<CraneThroughput> throughput) {
+                              Optional<CraneThroughput> throughput, Optional<CraneTrafficInfo> traffic) {
     /** Most held entries synced. */
     public static final int MAX_HELD_ENTRIES = 4;
     /** Stands for a branch that carries no aisle letter, so the letters of the branches behind it stay readable. */
     public static final char NO_LETTER = '?';
     public static final CraneGoggleInfo NONE = new CraneGoggleInfo(CranePhase.IDLE, CranePauseReason.NONE,
-            Optional.empty(), List.of(), "", Optional.empty());
+            Optional.empty(), List.of(), "", Optional.empty(), Optional.empty());
 
     private static final String PHASE = "Phase";
     private static final String PAUSE = "Pause";
@@ -72,6 +78,11 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
     private static final String LETTER = "Letter";
     /** Save and packet key of the throughput, as {@link CraneThroughput#pack()} (M25, issue #16). */
     private static final String THROUGHPUT = "Throughput";
+    /**
+     * Packet key of the traffic info, as {@link CraneTrafficInfo#pack()} (issue #14). Written only for a crane of a
+     * warehouse with several cranes.
+     */
+    private static final String TRAFFIC = "Traffic";
 
     public CraneGoggleInfo {
         if (phase == null)
@@ -85,6 +96,14 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
         // A window that holds nothing worth showing is no window: the status and pause lines already say that the
         // machine is standing still, and the mod's rule is to leave a zero out entirely rather than print it.
         throughput = throughput == null ? Optional.empty() : throughput.filter(measured -> !measured.isEmpty());
+        if (traffic == null)
+            traffic = Optional.empty();
+    }
+
+    /** The summary of a crane of a warehouse with one crane, which has nothing to say about other cranes. */
+    public CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Optional<CraneJobSummary> job,
+                           List<KeyCount<Item>> held, String aisleLetters, Optional<CraneThroughput> throughput) {
+        this(phase, pauseReason, job, held, aisleLetters, throughput, Optional.empty());
     }
 
     /**
@@ -95,7 +114,7 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
         Optional<CraneThroughput> wanted = measured == null || measured.isEmpty() ? Optional.empty()
                 : Optional.of(measured);
         return wanted.equals(throughput) ? this
-                : new CraneGoggleInfo(phase, pauseReason, job, held, aisleLetters, wanted);
+                : new CraneGoggleInfo(phase, pauseReason, job, held, aisleLetters, wanted, traffic);
     }
 
     /**
@@ -128,6 +147,15 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
     /** The aisle letter of the branch at the dock — the whole warehouse of every build that never bends. */
     public Optional<Character> aisleLetter() {
         return letterOf(RackPosition.FIRST_BRANCH);
+    }
+
+    /**
+     * The text of one rail of the warehouse, {@code A-07} with the letter of its branch, otherwise the letter-less
+     * {@code 07}: where another crane holds the rails, and where a reserved stretch starts and ends (issue #14).
+     */
+    public String railAddress(int branch, int x) {
+        String position = String.format(Locale.ROOT, "%02d", Math.max(0, x));
+        return letterOf(branch).map(letter -> letter + "-" + position).orElse(position);
     }
 
     /** Held items by item type (in pick order), capped at {@value #MAX_HELD_ENTRIES} entries. */
@@ -183,17 +211,42 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
      */
     public void addGoggleLines(List<Component> tooltip, int indent, boolean withHeld, boolean detailed,
             boolean bending) {
+        addGoggleLines(tooltip, indent, withHeld, detailed, bending, OptionalLong.empty());
+    }
+
+    /**
+     * Adds the crane lines for goggles (client only), with what a crane of a warehouse with several says about the
+     * others in the detailed form (issue #14, ADR-075 §15.1): why it waits and for whom right under its status, the
+     * time its job still takes and the rails it has reserved under the job, and a mast note under the held items. A
+     * crane without {@link #traffic} draws exactly the lines it always drew.
+     *
+     * @param remainingTicks what the current job still takes ({@code core.crane.RemainingTrip}), worked out by the
+     *                       caller from the pose it has; shown for a crane of a warehouse with several
+     */
+    public void addGoggleLines(List<Component> tooltip, int indent, boolean withHeld, boolean detailed,
+            boolean bending, OptionalLong remainingTicks) {
+        Optional<CraneTrafficInfo> shownTraffic = detailed ? traffic : Optional.empty();
         WareworksLang.craneStatus(phase).forGoggles(tooltip, indent);
         if (pauseReason != CranePauseReason.NONE)
             WareworksLang.cranePaused(pauseReason.langKey()).forGoggles(tooltip, indent);
+        shownTraffic.flatMap(info -> CraneTrafficLang.trafficLine(info, railAddress(info.heldBranch(), info.heldX())))
+                .ifPresent(line -> line.forGoggles(tooltip, indent));
         job.ifPresent(summary -> {
             WareworksLang.craneJob(summary.type(), summary.targetKind(), summary.item(), summary.amount())
                     .forGoggles(tooltip, indent);
             WareworksLang.craneRoute(address(summary.source()), address(summary.target())).forGoggles(tooltip,
                     indent + 1);
+            if (shownTraffic.isPresent() && remainingTicks.isPresent())
+                CraneTrafficLang.tripLeft(RemainingTrip.seconds(remainingTicks.getAsLong()),
+                        shownTraffic.get().line().isWaiting()).forGoggles(tooltip, indent + 1);
         });
+        shownTraffic.filter(CraneTrafficInfo::hasReservation)
+                .ifPresent(info -> CraneTrafficLang.reserved(railAddress(info.fromBranch(), info.fromX()),
+                        railAddress(info.toBranch(), info.toX())).forGoggles(tooltip, indent + 1));
         if (withHeld)
             addHeldLines(tooltip, indent);
+        shownTraffic.filter(info -> info.servedLevels() > 0)
+                .ifPresent(info -> CraneTrafficLang.mastServed(info.servedLevels()).forGoggles(tooltip, indent));
         // Last, and only when something was really measured: the numbers answer "is the machine my bottleneck", which
         // is the question a player asks after reading what it is doing right now, not before.
         throughput.ifPresent(measured -> CraneThroughputLines.addGoggleLines(tooltip, indent, measured, detailed,
@@ -234,6 +287,8 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
         // Omitted entirely while nothing was measured, which is every dock nobody has looked at through goggles and
         // every crane that has stood still for a minute (M25, issue #16).
         throughput.ifPresent(measured -> tag.putIntArray(THROUGHPUT, measured.pack()));
+        // Only a crane of a warehouse with several cranes has one (issue #14), so one crane's tag is unchanged.
+        traffic.ifPresent(info -> tag.putIntArray(TRAFFIC, info.pack()));
     }
 
     /** Reads a summary written by {@link #write}. Never throws; invalid data reads as empty values. */
@@ -251,6 +306,8 @@ public record CraneGoggleInfo(CranePhase phase, CranePauseReason pauseReason, Op
                 tag.contains(JOB, Tag.TAG_COMPOUND) ? CraneJobSummary.read(tag.getCompound(JOB)) : Optional.empty(), held,
                 tag.getString(LETTER),
                 tag.contains(THROUGHPUT, Tag.TAG_INT_ARRAY) ? CraneThroughput.unpack(tag.getIntArray(THROUGHPUT))
+                        : Optional.empty(),
+                tag.contains(TRAFFIC, Tag.TAG_INT_ARRAY) ? CraneTrafficInfo.unpack(tag.getIntArray(TRAFFIC))
                         : Optional.empty());
     }
 }

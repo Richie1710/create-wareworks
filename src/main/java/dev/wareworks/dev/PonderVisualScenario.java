@@ -74,9 +74,10 @@ public final class PonderVisualScenario implements VisualScenario {
 
     private static final List<Subject> SUBJECTS = List.of(
             // M21 (issue #1) adds the corner and M22 (issue #2) the junction, which both of these blocks show: the
-            // rails decide where the warehouse goes, the machine is what bends and turns on them.
-            new Subject("crane", WareworksBlocks.STACKER_CRANE, 3),
-            new Subject("rail", WareworksBlocks.WAREHOUSE_RAIL, 3),
+            // rails decide where the warehouse goes, the machine is what bends and turns on them. M33 (issue #14) adds
+            // the two cranes that share one warehouse.
+            new Subject("crane", WareworksBlocks.STACKER_CRANE, 4),
+            new Subject("rail", WareworksBlocks.WAREHOUSE_RAIL, 4),
             new Subject("controller", WareworksBlocks.WAREHOUSE_CONTROLLER, 2),
             new Subject("interface", WareworksBlocks.WAREHOUSE_INTERFACE, 3),
             // M26 (issue #18) adds the package door, which both stations show: it is the same Packager on either side

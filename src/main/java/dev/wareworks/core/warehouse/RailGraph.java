@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 import dev.wareworks.core.address.AisleGeometry;
@@ -17,6 +18,7 @@ import dev.wareworks.core.address.Heading;
 import dev.wareworks.core.address.NetworkGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
+import dev.wareworks.core.traffic.DockSite;
 
 /**
  * Discovery of a warehouse rail network, as pure integer maths ({@code docs/warehouse-system.md} §4, ADR-033,
@@ -60,6 +62,13 @@ import dev.wareworks.core.address.StorageAddress;
  * yields the same aisle numbers, whatever order the chunks loaded in. A branch's origin — its position 0 — is the end
  * nearer the dock, so every outbound leg drives forward and extending an aisle at its far end renumbers nothing.
  * <p>
+ * <b>Several cranes (issue #14, ADR-075).</b> A dock without a controller of its own ({@link Cell#FREE_DOCK}) that faces
+ * the aisle block the flood reaches it from joins the warehouse as a <b>member dock</b>: it is taken as an aisle block,
+ * never expanded, and like the warehouse's own dock it connects only towards its facing — so every dock is a dead end
+ * of the rails, which is what the traffic of several cranes rests on. Collinear at the far end of an aisle it extends
+ * that aisle by one block; beside an aisle it forms a stub aisle of one block. {@link Limits#maxCranes()} caps how many
+ * join, and a cap of one reproduces 0.17.1 exactly: every other dock is then a {@link NetworkStop#SECOND_DOCK} wall.
+ * <p>
  * <b>Bounded, and every maximum names a number to raise.</b> {@code aisle.maxNetworkRails} stops the flood itself,
  * {@code aisle.maxAisleLength} truncates a branch at its far end, and {@code aisle.maxBranches} and
  * {@code aisle.maxJunctions} keep a <b>prefix</b> of the branch order — which is still a connected warehouse, because
@@ -78,18 +87,56 @@ public final class RailGraph {
         CLOSED_RAIL,
         /** This network's own dock: connects only towards its facing, i.e. only to position 1 of the first branch. */
         DOCK,
-        /** Another stacker crane dock: a wall, so both warehouses keep working. */
+        /**
+         * A stacker crane dock with a warehouse controller of its own behind it: the primary of another warehouse, and
+         * a wall, so both warehouses keep working.
+         */
         OTHER_DOCK,
         /** Anything else, including air. */
         NONE,
         /** Not loaded — the scan must never load a chunk, so it treats this as a wall and says the scan is partial. */
-        UNLOADED
+        UNLOADED,
+        /**
+         * A stacker crane dock <b>without</b> a controller of its own (issue #14, ADR-075). If it faces the aisle block
+         * the flood reaches it from and {@link Limits#maxCranes()} leaves room, it is taken as an aisle block of this
+         * warehouse — a <b>member dock</b>, whose crane becomes another crane of it — and like the warehouse's own dock
+         * it connects only towards its facing. Otherwise it is a wall exactly like {@link #OTHER_DOCK}.
+         */
+        FREE_DOCK
     }
 
     /** Reads one dock-relative position. {@code (0, 0)} is the dock itself. */
     @FunctionalInterface
     public interface CellProbe {
         Cell at(int dx, int dz);
+
+        /**
+         * The facing of the {@link Cell#FREE_DOCK} at {@code (dx, dz)}, asked only for such a cell. {@code null} reads as
+         * "faces nowhere useful", which keeps the dock a wall.
+         */
+        default Heading dockFacing(int dx, int dz) {
+            return null;
+        }
+
+        /**
+         * Whether the {@link Cell#FREE_DOCK} at {@code (dx, dz)} is a crane the warehouse already has (issue #14,
+         * ADR-075 §2.5). Such a dock keeps its place: it is counted against {@link Limits#maxCranes()} before any dock
+         * the warehouse does not have yet, whatever order the flood meets them in, and it is taken even beyond the cap,
+         * so that a crane a lowered cap leaves out can still drive home to its dock before it leaves. A scan that has no
+         * warehouse behind it lists none.
+         */
+        default boolean listedDock(int dx, int dz) {
+            return false;
+        }
+
+        /**
+         * How many places of {@link Limits#maxCranes()} cranes take whose docks the walk cannot reach: stranded members,
+         * whose machines still stand on the rails while a closed rail cuts their docks off (issue #14, ADR-075 §2.5).
+         * A dock the warehouse does not have yet only gets a place that is left after them.
+         */
+        default int reservedPlaces() {
+            return 0;
+        }
     }
 
     /**
@@ -104,8 +151,19 @@ public final class RailGraph {
      * @param maxBranchLength rails of one branch ({@code aisle.maxAisleLength}); a longer branch is truncated at its
      *                        <b>far</b> end, which renumbers nothing because its origin is the near end
      * @param height          mast height of the crane
+     * @param maxCranes       stacker cranes the warehouse may have, the one at its own dock included
+     *                        ({@code aisle.maxCranesPerNetwork}, issue #14, ADR-075), clamped to
+     *                        {@value #MIN_CRANES}..{@value #MAX_CRANES}. <b>1 is the off switch</b>: every
+     *                        {@link Cell#FREE_DOCK} is then a wall reported as {@link NetworkStop#SECOND_DOCK}, which is
+     *                        the discovery of 0.17.1 exactly
      */
-    public record Limits(int maxRails, int maxBranches, int maxJunctions, int maxBranchLength, int height) {
+    public record Limits(int maxRails, int maxBranches, int maxJunctions, int maxBranchLength, int height,
+                         int maxCranes) {
+        /** The fewest cranes a warehouse may be limited to: its own. */
+        public static final int MIN_CRANES = 1;
+        /** The most cranes the config can allow on one warehouse. */
+        public static final int MAX_CRANES = 16;
+
         public Limits {
             if (maxRails < 0)
                 throw new IllegalArgumentException("maxRails must not be negative: " + maxRails);
@@ -113,6 +171,15 @@ public final class RailGraph {
             maxJunctions = Math.max(0, maxJunctions);
             maxBranchLength = Math.clamp(maxBranchLength, 0, AisleGeometry.MAX_LENGTH);
             height = Math.clamp(height, AisleGeometry.MIN_HEIGHT, AisleGeometry.MAX_HEIGHT);
+            maxCranes = Math.clamp(maxCranes, MIN_CRANES, MAX_CRANES);
+        }
+
+        /**
+         * The bounds of a warehouse of <b>one</b> crane: every free dock is a wall, as it was up to 0.17.1. Every caller
+         * from before issue #14 keeps exactly its meaning through this constructor.
+         */
+        public Limits(int maxRails, int maxBranches, int maxJunctions, int maxBranchLength, int height) {
+            this(maxRails, maxBranches, maxJunctions, maxBranchLength, height, MIN_CRANES);
         }
     }
 
@@ -219,6 +286,18 @@ public final class RailGraph {
         /** The first rail of the first aisle {@code aisle.maxBranches} left out, or {@code -1} if none was. */
         private long overflowRail = NO_OVERFLOW;
         private int rails;
+        /** Member docks taken as aisle blocks, in flood order: crane 2, 3, ... (issue #14). */
+        private final List<Long> memberDocks = new ArrayList<>();
+        /** The facing of every member dock taken, which is the one way it connects. */
+        private final Map<Long, Heading> memberFacings = new HashMap<>();
+        /** Free docks that faced into the warehouse but found {@link Limits#maxCranes()} reached. */
+        private final Set<Long> refusedDocks = new HashSet<>();
+        /**
+         * Every wall the flood ran into, in the order it met them. The reported stop is resolved from this list at the
+         * end, so a free dock first seen from its side and later taken from the block it faces is never named as the
+         * place the warehouse stops.
+         */
+        private final List<Wall> walls = new ArrayList<>();
 
         Walk(CellProbe probe, Heading dockHeading, Limits limits) {
             this.probe = probe;
@@ -247,8 +326,6 @@ public final class RailGraph {
         private void flood(long dock) {
             Deque<Long> queue = new ArrayDeque<>();
             queue.addLast(dock);
-            NetworkStop blocked = NetworkStop.END;
-            long blockedCell = dock;
             while (!queue.isEmpty()) {
                 long current = queue.removeFirst();
                 int distance = distances.get(current) + 1;
@@ -262,12 +339,10 @@ public final class RailGraph {
                     if (distances.containsKey(next))
                         continue; // already part of the warehouse: a ring closes here, which is ordinary since M22
                     Cell what = read(dx, dz);
+                    if (what == Cell.FREE_DOCK && facesBack(dx, dz, step) && joinsAsMember(next, distance))
+                        continue; // a member dock: taken, and never expanded, because it connects only back here
                     if (what != Cell.RAIL) {
-                        NetworkStop reason = reasonFor(what);
-                        if (rank(reason) > rank(blocked)) {
-                            blocked = reason;
-                            blockedCell = next;
-                        }
+                        walls.add(new Wall(reasonFor(what), next));
                         continue;
                     }
                     if (rails >= limits.maxRails()) {
@@ -277,6 +352,77 @@ public final class RailGraph {
                     take(next, distance);
                     rails++;
                     queue.addLast(next);
+                }
+            }
+            stopAtWall();
+        }
+
+        /**
+         * Whether the free dock at {@code (dx, dz)}, entered by {@code step}, faces the block it was entered from - the
+         * only way a dock offers a connection.
+         */
+        private boolean facesBack(int dx, int dz, Heading step) {
+            return probe.dockFacing(dx, dz) == step.opposite();
+        }
+
+        /**
+         * Takes a free dock that faces into the warehouse as a member, if {@link Limits#maxCranes()} leaves room. At the
+         * cap it is a wall: with a cap of one exactly the {@link NetworkStop#SECOND_DOCK} wall every dock was up to
+         * 0.17.1 (so the caller falls through to the wall branch), above one the maximum is named with its key.
+         *
+         * @return whether the caller is done with this block
+         */
+        private boolean joinsAsMember(long next, int distance) {
+            if (limits.maxCranes() == Limits.MIN_CRANES)
+                return false;
+            boolean listed = probe.listedDock(cellDx(next), cellDz(next));
+            int room = limits.maxCranes() - 1 - Math.max(0, probe.reservedPlaces());
+            if (listed && memberDocks.size() >= room)
+                leaveOutNewest();
+            if (listed || memberDocks.size() < room) {
+                take(next, distance);
+                memberDocks.add(next);
+                memberFacings.put(next, probe.dockFacing(cellDx(next), cellDz(next)));
+                return true;
+            }
+            refusedDocks.add(next);
+            nameLimit(NetworkStop.MAX_CRANES, next);
+            return true;
+        }
+
+        /**
+         * Makes room for a dock the warehouse already has: the member taken last that the warehouse does <b>not</b> have
+         * yet is left out again and becomes the refused dock. A member dock is never expanded, so nothing else was
+         * taken through it. Nothing happens when every member taken so far is listed.
+         */
+        private void leaveOutNewest() {
+            for (int i = memberDocks.size() - 1; i >= 0; i--) {
+                long dock = memberDocks.get(i);
+                if (probe.listedDock(cellDx(dock), cellDz(dock)))
+                    continue;
+                memberDocks.remove(i);
+                memberFacings.remove(dock);
+                taken.remove(Long.valueOf(dock));
+                distances.remove(dock);
+                refusedDocks.add(dock);
+                nameLimit(NetworkStop.MAX_CRANES, dock);
+                return;
+            }
+        }
+
+        /**
+         * The most worth naming of the walls the flood ran into ({@link #rank}), the first of them on a tie, leaving out
+         * a wall that was taken after all. A plain end at the dock when none is worth naming.
+         */
+        private void stopAtWall() {
+            NetworkStop blocked = NetworkStop.END;
+            long blockedCell = cell(0, 0);
+            for (Wall wall : walls) {
+                if (distances.containsKey(wall.cell()))
+                    continue; // a free dock seen from its side first and then taken as a member
+                if (rank(wall.reason()) > rank(blocked)) {
+                    blocked = wall.reason();
+                    blockedCell = wall.cell();
                 }
             }
             stopAt(blocked, blockedCell);
@@ -298,6 +444,20 @@ public final class RailGraph {
                 int dz = cellDz(current) + dockHeading.stepZ();
                 long next = cell(dx, dz);
                 Cell what = read(dx, dz);
+                if (what == Cell.FREE_DOCK && limits.maxCranes() > Limits.MIN_CRANES
+                        && facesBack(dx, dz, dockHeading)) {
+                    // A second dock at the far end of the line, facing back: the second crane of a straight aisle,
+                    // which works with branching switched off too (issue #14). Nothing beyond it is read.
+                    if (placed >= limits.maxBranchLength()) {
+                        nameLimit(NetworkStop.MAX_LENGTH, next);
+                        return;
+                    }
+                    take(next, ++placed);
+                    memberDocks.add(next);
+                    memberFacings.put(next, dockHeading.opposite());
+                    stopAt(NetworkStop.END, cell(dx + dockHeading.stepX(), dz + dockHeading.stepZ()));
+                    return;
+                }
                 if (what != Cell.RAIL) {
                     stopAt(reasonFor(what), next);
                     return;
@@ -329,7 +489,28 @@ public final class RailGraph {
             // warehouse's length for ever as soon as its rack plane fell outside the loaded area (M21 review fix).
             boolean firstBranchIncomplete = unloaded.contains(cell(first.cellDx(ahead), first.cellDz(ahead)));
             return new RailNetwork(geometry, stop, cellDx(stopCell), cellDz(stopCell), railsOf(kept),
-                    firstBranchIncomplete, networkIncomplete);
+                    firstBranchIncomplete, networkIncomplete, dockSites(geometry), refusedDocks.size());
+        }
+
+        /**
+         * Every member dock the kept network still contains, in flood order, with the name it has in that network. A
+         * member a configured maximum cut away afterwards ({@code aisle.maxAisleLength} at the far end of its branch,
+         * {@code aisle.maxBranches} on its stub) is no aisle block any more and so no member either.
+         */
+        private List<DockSite> dockSites(NetworkGeometry geometry) {
+            List<DockSite> sites = new ArrayList<>(memberDocks.size());
+            for (long dock : memberDocks) {
+                int dx = cellDx(dock);
+                int dz = cellDz(dock);
+                for (BranchGeometry branch : geometry.branches()) {
+                    Optional<Integer> x = branch.positionAt(dx, dz);
+                    if (x.isPresent()) {
+                        sites.add(new DockSite(dx, dz, memberFacings.get(dock), branch.index(), x.get()));
+                        break;
+                    }
+                }
+            }
+            return sites;
         }
 
         /** Branch {@value RackPosition#FIRST_BRANCH} and then every other maximal run, in branch order. */
@@ -368,8 +549,14 @@ public final class RailGraph {
         /** The run that contains the dock along its facing, which may be the dock alone. */
         private BranchGeometry firstBranch() {
             int length = 0;
-            while (distances.containsKey(cell(dockHeading.stepX() * (length + 1), dockHeading.stepZ() * (length + 1))))
+            while (true) {
+                long here = cell(dockHeading.stepX() * length, dockHeading.stepZ() * length);
+                long next = cell(dockHeading.stepX() * (length + 1), dockHeading.stepZ() * (length + 1));
+                // A member dock at the far end of the line ends it: it connects only back the way it faces.
+                if (!distances.containsKey(next) || !connects(here, next))
+                    break;
                 length++;
+            }
             return BranchGeometry.first(dockHeading, clampBranchLength(length));
         }
 
@@ -486,7 +673,8 @@ public final class RailGraph {
 
         /**
          * Aisle blocks beyond the dock the warehouse really contains. A block two aisles share is counted once, which
-         * for a chain is literally the sum of the branch lengths the previous version reported.
+         * for a chain is literally the sum of the branch lengths the previous version reported. A member dock is an
+         * aisle block but no rail, so it is not counted (issue #14).
          */
         private int railsOf(List<BranchGeometry> branches) {
             Set<Long> blocks = new HashSet<>();
@@ -494,23 +682,31 @@ public final class RailGraph {
                 for (int x = 0; x <= branch.length(); x++)
                     blocks.add(cell(branch.cellDx(x), branch.cellDz(x)));
             }
+            memberDocks.forEach(blocks::remove);
             return Math.max(0, blocks.size() - 1);
         }
 
         // --- reading ------------------------------------------------------------------------------------------------
 
         /**
-         * Whether two orthogonally adjacent aisle blocks of this network offer each other a connection. Only the dock
+         * Whether two orthogonally adjacent aisle blocks of this network offer each other a connection. Only a dock
          * ever refuses: it offers one towards its facing and nowhere else, which is what keeps a rail beside it a rack
-         * position and a run that passes the dock from behind a separate aisle.
+         * position and a run that passes the dock from behind a separate aisle. Since issue #14 that holds for every
+         * dock of the warehouse, its members included, so every dock is a dead end of the rails (ADR-075).
          */
         private boolean connects(long a, long b) {
-            long dock = cell(0, 0);
-            if (a == dock)
-                return stepBetween(a, b) == dockHeading;
-            if (b == dock)
-                return stepBetween(b, a) == dockHeading;
-            return true;
+            Heading facingA = dockFacingOf(a);
+            if (facingA != null && stepBetween(a, b) != facingA)
+                return false;
+            Heading facingB = dockFacingOf(b);
+            return facingB == null || stepBetween(b, a) == facingB;
+        }
+
+        /** The facing of the dock at {@code block}, the warehouse's own or a member, or {@code null} for a rail. */
+        private Heading dockFacingOf(long block) {
+            if (block == cell(0, 0))
+                return dockHeading;
+            return memberFacings.get(block);
         }
 
         private void take(long block, int distance) {
@@ -532,7 +728,7 @@ public final class RailGraph {
         private static NetworkStop reasonFor(Cell what) {
             return switch (what) {
                 case UNLOADED -> NetworkStop.UNLOADED;
-                case OTHER_DOCK -> NetworkStop.SECOND_DOCK;
+                case OTHER_DOCK, FREE_DOCK -> NetworkStop.SECOND_DOCK;
                 case CLOSED_RAIL -> NetworkStop.CLOSED;
                 default -> NetworkStop.END;
             };
@@ -575,6 +771,10 @@ public final class RailGraph {
 
         private static int step(Heading heading, Heading.Axis axis) {
             return axis == Heading.Axis.X ? heading.stepX() : heading.stepZ();
+        }
+
+        /** A block the flood could not take, and why. */
+        private record Wall(NetworkStop reason, long cell) {
         }
 
         private static Heading stepBetween(long from, long to) {

@@ -161,8 +161,8 @@ which is where a crane has always started. It parks with the arm retracted, faci
 
 **Three rules, in this order** (`core.crane.HomeReturn`, pure, `HomeReturnTest`):
 
-1. **A warehouse of one straight aisle never returns.** The machine stands where its last job left it, which is what
-   every version up to 0.5.0 did and what a GameTest pins by comparing the pose against a recorded one on **every** tick
+1. **A warehouse of one straight aisle with one crane never returns.** The machine stands where its last job left it,
+   which is what every version up to 0.5.0 did and what a GameTest pins by comparing the pose against a recorded one on **every** tick
    of three idle delays. A home point on such a warehouse is reported as having no effect
    (`HomePointStatus.SINGLE_AISLE`) rather than obeyed.
 2. **A delay of 0 switches returning home off** everywhere — the server owner's off switch, and the same behaviour as
@@ -214,6 +214,121 @@ real work and the fallback to the dock. It overrides `crane.returnHomeIdleTicks`
 for its run so the trip is slow enough to photograph; there is deliberately **no** mid-turn shot of a trip home, because
 no sampled poll ever landed inside the return's quarter turn and a frozen world has no rotation to step forward — the
 `corner` scenario owns M21's mid-turn photography, and here the crossing is asserted in numbers on the server.
+
+**With several cranes** (M33, issue #14, ADR-075). `HomeReturn` also takes the crane count, and returning home is on
+whenever the warehouse has **more than one aisle or more than one crane** — two cranes on one straight aisle must be able
+to make room for each other, so rule 1 holds for a warehouse of one crane only (`HomeReturnTest`). Each crane has at most
+one home point, paired by the controller (`warehouse-system.md` §3.7); a crane without one parks on its **own dock**. A
+drive home is a `REST` want with the lowest priority of the traffic (§4.8): it is granted only if nobody is cut off from
+their dock with the crane parked there, and otherwise the crane waits where it is ("Way to its parking spot blocked by
+crane 1"). A crane that moves aside for another rests at its park for `crane.returnHomeIdleTicks` before it drives back,
+because the move-aside order resets its idle counter.
+
+### 4.8 Traffic: several cranes on one warehouse (M33, issue #14)
+
+> Decision, the proof and the deviations: **ADR-075**. Which docks join, dispatch with several cranes, the ledger and
+> the failure cases: `warehouse-system.md` §1.2, §7.8 and §8.2. Everything here runs **only** while a warehouse has two
+> or more cranes; a crane of a warehouse with one never asks anybody before it moves, exactly as before.
+
+**The frame.** A member crane (crane 2 and later) names its poses, routes and racks in the frame of the **warehouse's
+own dock**, the anchor: branch 0 starts there and every dock-relative offset is measured from it
+(`content.crane.CraneMembership`). A member therefore renders and plays its sounds with the offset between its own block
+and the anchor, and its home pose is its own dock site — the last position of the aisle it ends, for the recommended
+build. The controller hands frame, network, number and crane count over on every relink; a member skips its own rail
+scan. When the controller is merely unloaded the member keeps its frame and its claim. A crane asks the ledger under the
+number the controller **lists** for its dock, never the one it saved: until a relink names it again, a crane whose
+number is out of date is gated as if it had no controller. When the warehouse is gone (its controller broken, its own
+dock gone), a crane that is not parked on its own dock keeps its role and its claim and holds inside its own blocks;
+only a parked crane becomes a crane by itself (ADR-075, deviations 24 and 25).
+
+**Cells and claims** (`core.traffic.TrackGraph`, `TrafficLedger`). One cell per aisle block, link blocks merged, edges
+along the branches; every dock cell is a dead end. A crane's **standing cells** are `floor(x)` and `ceil(x)` of its pose
+on its branch. Its **claim** is its standing cells plus, while it holds a grant, every cell of the granted route. Claims
+are pairwise disjoint (I1) and a crane moves only inside its own (I2): two cranes never share a block. A crane turns
+inside its own cell — the chamfered chassis keeps the swept corners inside the block (`CraneModelLayoutTest`) — so no
+extra cell is claimed for a quarter turn.
+
+**What a crane wants** (`TrafficWant`, a pure function of its state):
+
+| Phase | The stop it asks for |
+|---|---|
+| `IDLE` | its resting target if that is another cell — its home point, its dock or a move-aside order (kind `REST`) |
+| `TRAVEL_TO_SOURCE`, `EXTEND_SOURCE` | the source (kind `JOB`) |
+| `PICK`, `RETRACT_SOURCE` | **the target, asked for ahead**, so the grant is there when the arm is in (kind `JOB`) |
+| `TRAVEL_TO_TARGET`, `EXTEND_TARGET` | the target (kind `JOB`) |
+| `DROP`, `RETRACT_TARGET`, `COMPLETE`, `REROUTE`, `HOLDING`, `WAITING_FOR_TARGET` | its current target if that is another cell (a reroute target), else nothing |
+
+**Grants are atomic and committed.** A crane gets the **whole route to its next stop or none of it**, and keeps a granted
+route until it stands on its stop, even when its target changes meanwhile (an idle crane on its way home gets a job, a
+job is cancelled, a reroute): the new target is a new want, and until that is granted the crane drives its committed
+route on. A healthy mover therefore always ends where it was granted to end, which is what lets the others plan around
+its stop rather than its whole route. When the new want is granted, the claim is swapped in one step.
+
+**The gate** (`CraneExecution`, once per tick of a crane in traffic):
+
+1. the motion target is in the crane's own cell, or every cell of its route is in its claim — a **normal tick**;
+2. it holds a committed route whose stop it has not reached, with its arm retracted — a **detour tick**: the pure
+   `CraneEvent.Detour` moves the pose one tick along that route and changes nothing else (phase, timers, job, held
+   items and the phase's own target stay as they are);
+3. otherwise a **hold tick**: the tick event with `CraneSpeeds.STOPPED`, so nothing changes at all — no motion, no
+   timer, no effect. A hold is not a pause: the pause reason stays `NONE` and the goggles show the traffic line instead.
+
+An extended arm is always a normal tick, so a held crane still retracts. Extending, transferring, retracting, lifting
+at a stop, turning in its cell and waiting at a full output never need a grant.
+
+**The pass** runs at most once per game tick per warehouse, at the **first access** from the controller or any of its
+cranes, before any of them changes its state: so whichever block entity ticks first, the pass of a tick reads every crane
+as it stood at the end of the previous one, and nothing it decides depends on the order block entities tick in. A pass
+in which no crane's standing cells, want, health or yieldability changed does nothing.
+
+**One pass, in order** (`TrafficLedger`):
+
+* a crane standing on its committed stop gives up the rest of its route;
+* the requests are served in priority order — move-aside orders with the priority of the request they serve, then `JOB`
+  wants oldest first (lower crane number on a tie), then `REST` wants. Each is refused with `NO_PATH` without a route,
+  `PATH_HELD` (naming the first crane along the route that holds a cell of it), `GIVING_WAY` if it is below the **top**
+  request (the oldest waiting job) and would touch that request's route or its way back to its dock, or would put its
+  crane in that request's way, and `WOULD_CUT_OFF` if granting it would leave another crane without a way to its own
+  dock; otherwise it is granted;
+* if the top request still waits, every crane standing in its way, or that would be cut off by it, that is healthy, has
+  its arm in and is not driving a grant, is ordered **aside**: to its home point the first time, if that is not in the
+  way itself and nobody is cut off with it there; to its **dock** otherwise and every further time. A crane on its own
+  dock is on nobody's way, which is what makes moving aside always sufficient (ADR-075 has the proof);
+* every crane is told its verdict — granted, detour, hold (with the reason and the other crane) or move aside (with
+  the route and the crane it makes room for).
+
+A move-aside order resets the crane's idle counter, so it rests at its park for `crane.returnHomeIdleTicks` before it
+drives back to its home point — no ping-pong.
+
+**A crane that cannot move keeps its blocks.** Unpowered, overstressed, unloaded or stranded, it stays an obstacle and
+nobody is granted through it; the cranes that need its blocks hold and say why ("Waiting for crane 2: it is stopped").
+Safety holds in every one of these cases, progress resumes when the crane can move again (`TrafficFailureTest`).
+
+**Clients.** The client animates a crane between packets with `CraneMotion`. A held crane would be animated forward and
+snapped back, and a detour would be animated along the cheapest route instead of the granted one, so the dock's client
+packet carries, inside its `Traffic` compound and only for a crane of a warehouse with several, `Hold` (the client
+keeps the pose) or `Route` (the legs the client steps along). One-crane packets are unchanged.
+
+**Saves.** The `Traffic` compound also carries the frame, the number, the crane count and the claim (standing pose and
+committed route); the controller saves its crane list with the last pose, claim and job it saw of each crane. Each crane
+tells the controller where it stopped at the **end** of its tick, so a crane whose chunk unloads is never remembered one
+motion step behind. After a load the ledger is rebuilt from exactly what the cranes saved: first the blocks every crane
+stands on, then the committed routes, so no restored route crosses another crane's blocks. A crane that turns up on
+blocks another crane had reserved keeps them, and the other crane's route is dropped (ADR-075, deviations 26 and 27). A
+crane of a warehouse with one writes no `Traffic` compound at all.
+
+**What the goggles say** (the dock; `CraneTrafficInfo`, synced inside the goggle compound, absent for one crane):
+"Crane 2 of 3", the activity line as before, then the traffic line when one applies — "Waiting for crane 1: it holds the
+rails at A-07", "Giving way to crane 1", "Moving aside for crane 3", "Waiting: stopping there would cut crane 1 off from
+its dock", "Waiting for crane 2: it is stopped", "Way to its parking spot blocked by crane 1", "Cut off from its dock:
+the rails between them are closed or gone" — under the job "About 14 s left" ("…, not counting the wait" while it is
+held, `core.crane.RemainingTrip`), the reserved stretch "Reserved: A-03 to B-02", and for a member with a lower mast
+"Levels from 5 up are served by the other cranes".
+
+**Tests**: JUnit `core.traffic` (ADR-075 lists them: one per rule, seeded simulations on six shapes, an exhaustive check
+of every reachable state of small graphs, a failure-injection test and a worst-case cost bound), `CraneStateMachineTest`
+for the `Detour` event; GameTests `MultiCraneGameTests`; visual scenario `cranes` and the `robustness` phase "two cranes
+in flight"; Ponder `warehouse/two_cranes`.
 
 ## 5. Motion
 
@@ -486,7 +601,7 @@ A crane that looks busy and a crane that *is* busy are hard to tell apart by wat
 | `TURNING` | the tick swung (the swing measured along the route, §9.2) | a tick that both turned and drove counts **wholly** as turning, the same approximation `CraneSoundCues` already makes when it suppresses the rail clack during a swing (§8). The turning share is therefore an upper bound, at most ~3 ticks per corner at the default speed and penalty (0.25 % of a minute), and it errs on the side that makes corners look expensive |
 | `TRAVELLING` | the tick moved along the rails or lifted | the arm is **not** motion: extending and retracting happen while the machine stands at a rack |
 | `AT_A_STOP` | phase in `EXTEND_SOURCE, PICK, RETRACT_SOURCE, EXTEND_TARGET, DROP, RETRACT_TARGET, COMPLETE` | deliberately the **planner's own** definition of a stop (`core.job.TravelTimeModel#stopTicks`: extend to the stop's stroke, transfer, retract), so the measured share is comparable with what the planner predicted instead of being a second, private definition |
-| `BLOCKED` | a job, but nothing moved and no stop: `WAITING_FOR_TARGET`, `HOLDING`, `REROUTE`, **and a `TRAVEL_*` tick that covered no ground** | the stranded case. A crane standing still in `TRAVEL_TO_TARGET` because a rail was broken is *not* paused, so without this bucket the machine would read "travelling 100 %" while doing nothing |
+| `BLOCKED` | a job, but nothing moved and no stop: `WAITING_FOR_TARGET`, `HOLDING`, `REROUTE`, **and a `TRAVEL_*` tick that covered no ground** — which since M33 includes a tick **held for another crane's rails** (§4.8) | the stranded case. A crane standing still in `TRAVEL_TO_TARGET` because a rail was broken is *not* paused, so without this bucket the machine would read "travelling 100 %" while doing nothing |
 
 The last step is an exhaustive `switch` over `CranePhase` with **no `default`**, so a phase added later is a compile error instead of a tick that quietly counts as blocked.
 

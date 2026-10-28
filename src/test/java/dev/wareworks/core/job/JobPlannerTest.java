@@ -933,8 +933,10 @@ class JobPlannerTest {
         RackPosition chest = rack(1, 0, Side.LEFT);
         stock.update(chest, slots(27));
         live.insertable.put(chest, 256);
+        // Two stacks buffered: the first trip's stack is reserved in the buffer (issue #14), so the second trip is
+        // planned from the other one.
         PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
-                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, STACK))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, STACK, IRON, STACK))
                 .storeHeadroom(key -> 100 - stock.count(key) - ledger.reservedCapacityFor(key));
 
         TransportJob<String, RackPosition> first = planner.plan(base.build()).job().orElseThrow().job();
@@ -2794,5 +2796,98 @@ class JobPlannerTest {
                 JobType.RETRIEVE, null).map(RerouteTarget::location),
                 "a retrieve reroute still finds the port as its last resort");
         assertEquals(List.of(), asked, "neither a store nor a reroute asks it");
+    }
+
+    // --- several cranes, one ledger (issue #14, ADR-075 section 9) ---------------------------------------------------
+
+    /** A second crane's plan never takes the stock a first crane's job is already promised. */
+    @Test
+    void twoJobsNeverPromiseTheSameStock() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition far = rack(5, 0, Side.LEFT);
+        stock.update(near, slots(0, DIAMOND, 40));
+        stock.update(far, slots(0, DIAMOND, 40));
+        live.extractable.put(near, 40);
+        live.extractable.put(far, 40);
+        live.insertable.put(OUT_A, STACK);
+        TransportJob<String, RackPosition> first = planner.plan(input()
+                .requests(List.of(request(id(1), DIAMOND, 40, OUT_A))).build()).job().orElseThrow().job();
+        assertEquals(near, first.source());
+        ledger.track(first);
+        TransportJob<String, RackPosition> second = planner.plan(input().requests(List.of(
+                request(id(1), DIAMOND, 40, OUT_A), request(id(2), DIAMOND, 30, OUT_A))).build())
+                .job().orElseThrow().job();
+        assertEquals(id(2), second.requestId().orElseThrow(), "the first request is covered by the first job");
+        assertEquals(far, second.source(), "and the near chest's diamonds are promised to it");
+        assertEquals(30, second.plannedAmount());
+    }
+
+    /** A second crane's plan never stores into the room a first crane's job is already promised. */
+    @Test
+    void twoJobsNeverPromiseTheSameRoom() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        RackPosition other = rack(6, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        stock.update(other, slots(27));
+        live.insertable.put(chest, STACK);
+        live.insertable.put(other, STACK);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A, IN_B))
+                .storageLocations(List.of(chest, other)).inputBuffers(location -> slots(0, IRON, STACK));
+        PlanResult<String, RackPosition> firstPlan = planner.plan(base.build());
+        TransportJob<String, RackPosition> first = firstPlan.job().orElseThrow().job();
+        assertEquals(chest, first.target());
+        ledger.track(first);
+        TransportJob<String, RackPosition> second = planner.plan(base.inputCursor(firstPlan.nextArrivalCursor())
+                .build()).job().orElseThrow().job();
+        assertEquals(IN_B, second.source());
+        assertEquals(other, second.target(), "the near chest's room is the first trip's");
+    }
+
+    /** Two cranes never plan the same buffered items, out of an input station or out of a collecting port. */
+    @Test
+    void twoJobsNeverPromiseTheSameBufferedItems() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, 4 * STACK);
+        PlannerInput.Builder<String, RackPosition> stores = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, IRON, STACK, IRON, 16));
+        TransportJob<String, RackPosition> first = planner.plan(stores.build()).job().orElseThrow().job();
+        assertEquals(STACK, first.plannedAmount());
+        ledger.track(first);
+        TransportJob<String, RackPosition> second = planner.plan(stores.build()).job().orElseThrow().job();
+        assertEquals(16, second.plannedAmount(), "only what the first trip leaves in the buffer");
+        ledger.track(second);
+        assertFalse(planner.plan(stores.build()).hasJob(), "and nothing once every item is spoken for");
+
+        ledger.clear();
+        live.extractable.put(PORT_A, 100);
+        PlannerInput.Builder<String, RackPosition> collects = collecting(input().storageLocations(List.of(chest)),
+                PORT_A).collectBuffers(location -> slots(0, IRON, STACK, IRON, 36));
+        TransportJob<String, RackPosition> fetch = planner.plan(collects.build()).job().orElseThrow().job();
+        assertEquals(STACK, fetch.plannedAmount());
+        ledger.track(fetch);
+        TransportJob<String, RackPosition> again = planner.plan(collects.build()).job().orElseThrow().job();
+        assertEquals(36, again.plannedAmount(), "the machine still hands out 100, of which 64 are the first trip's");
+    }
+
+    /** A second trip to a requesting port counts the room the first one is about to fill. */
+    @Test
+    void twoJobsNeverPromiseTheSamePortRoom() {
+        diamondsInStock(2 * STACK);
+        live.insertable.put(DOOR, 100);
+        TransportJob<String, RackPosition> first = planner.plan(doorInput()
+                .requests(List.of(request(id(1), DIAMOND, STACK, DOOR))).build()).job().orElseThrow().job();
+        assertEquals(STACK, first.plannedAmount());
+        ledger.track(first.withPicked(STACK));
+        insertAsked.clear();
+        PlanResult<String, RackPosition> crowded = planner.plan(doorInput().requests(List.of(
+                request(id(1), DIAMOND, STACK, DOOR), request(id(2), DIAMOND, STACK, DOOR))).build());
+        assertFalse(crowded.hasJob(), "100 of room, 64 of it already on its way: no full trip fits");
+        assertEquals(Set.of(NoJobReason.OUTPUT_FULL), crowded.reasons());
+        assertEquals(List.of(2 * STACK), insertAsked, "asked for the trip on top of what is arriving");
+
+        live.insertable.put(DOOR, 2 * STACK);
+        assertEquals(STACK, planner.plan(doorInput().requests(List.of(request(id(2), DIAMOND, STACK, DOOR))).build())
+                .job().orElseThrow().job().plannedAmount(), "with room for both trips the second one goes");
     }
 }

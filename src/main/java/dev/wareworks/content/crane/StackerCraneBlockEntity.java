@@ -1,9 +1,12 @@
 package dev.wareworks.content.crane;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
 
@@ -17,8 +20,10 @@ import com.simibubi.create.foundation.blockEntity.behaviour.scrollValue.ScrollVa
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.BranchLayout;
+import dev.wareworks.content.controller.CraneMember;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseLayout;
+import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.crane.head.HandlingHead;
 import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.crane.head.InventoryGrabber;
@@ -36,6 +41,7 @@ import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneResync;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.crane.CraneThroughput;
+import dev.wareworks.core.crane.RemainingTrip;
 import dev.wareworks.core.job.CraneKinematics;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.TransportJob;
@@ -45,6 +51,7 @@ import dev.wareworks.core.warehouse.CraneRoute;
 import dev.wareworks.core.warehouse.NetworkStop;
 import dev.wareworks.core.warehouse.RailGraph;
 import dev.wareworks.core.warehouse.RailNetwork;
+import dev.wareworks.util.CraneTrafficLang;
 import dev.wareworks.util.GoggleObservers;
 import dev.wareworks.util.Headings;
 import dev.wareworks.util.LogThrottle;
@@ -107,6 +114,15 @@ import net.minecraft.world.phys.Vec3;
  * synced target every tick (previous poses for partial-tick rendering, M4) and snaps only when its own pose has really
  * drifted ({@link CraneResync#diverges}).
  * <p>
+ * <b>Several cranes (issue #14, ADR-075).</b> A dock without a controller of its own that faces into a warehouse's
+ * rails joins that warehouse as another crane ({@link #joinWarehouse}): its poses, routes and job are then named in the
+ * warehouse's frame, measured from the warehouse's own dock (the <b>anchor</b>, {@link CraneMembership}), so it renders
+ * and plays its sounds with the offset between the two blocks, skips its own rail scan and parks at its own dock. Every
+ * crane of such a warehouse asks the controller's traffic ledger before it leaves the blocks it stands on
+ * ({@link CraneExecution}), saves what it holds of the rails ({@link CraneTrafficClaim}) and tells clients when it is
+ * held or drives a route other than the cheapest one. A crane of a warehouse with one crane has no membership and
+ * writes exactly what it wrote up to 0.17.1.
+ * <p>
  * <b>Item conservation.</b> {@link #destroy()} (real break) drops the head at the dock and tells the controller to release
  * the job; {@link #clearContent()} (commands, structures) empties the head without drops, so {@code /clone ... move}
  * cannot duplicate held items. Saving never throws, loading is bounded ({@link InventoryGrabber#load}).
@@ -131,6 +147,15 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     public static final String CONTROLLER_LINKED_TAG = "ControllerLinked";
     /** NBT key of the crane goggle data (client packets only). */
     public static final String GOGGLE_TAG = "CraneGoggles";
+    /** Key inside the client packet's {@link CraneMembership#TAG}: the crane stands still for traffic (issue #14). */
+    private static final String HOLD_TAG = "Hold";
+    /**
+     * Key inside the client packet's {@link CraneMembership#TAG}: the route a detour drives instead of the cheapest. A
+     * client packet never carries the claim, whose committed route the save keeps under the same name.
+     */
+    private static final String DETOUR_TAG = "Route";
+    /** Key inside the client packet's {@link #GOGGLE_TAG}: why the dock is no crane of the warehouse it faces. */
+    private static final String JOIN_TAG = "Join";
 
     /**
      * "Mast Height" value box. Assigned in {@link #addBehaviours}, which {@code SmartBlockEntity} calls from its
@@ -175,8 +200,59 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      */
     @Nullable
     private RackPosition homePoint;
+    /**
+     * Whether the last rail scan was taken as the dock of a warehouse, i.e. with a controller of its own behind it.
+     * Only such a scan lets other docks join (issue #14): a dock nobody serves keeps discovering exactly what it
+     * discovered up to 0.17.1, and a controller placed behind it rescans it before it links ({@link #linkController}).
+     */
+    private boolean scannedAsPrimary;
+    /**
+     * What this crane holds of the rails beyond the blocks it stands on, as the traffic ledger last told it (issue #14,
+     * ADR-075 §13). Saved inside {@link CraneMembership#TAG}, only while there is a membership.
+     */
+    private CraneTrafficClaim trafficClaim = CraneTrafficClaim.NONE;
+    /**
+     * What this crane's goggles say about the other cranes of its warehouse, as its last traffic tick worked it out
+     * (issue #14, ADR-075 §15.1); {@code null} for a crane of a warehouse with one crane, which never has any. Never
+     * saved: the next tick works it out again.
+     */
+    @Nullable
+    private CraneTrafficInfo trafficInfo;
+    /**
+     * Why this dock, facing into another warehouse's rails, is no crane of it — as of the last time a player looked at
+     * it through goggles (issue #14, ADR-075 §15.1); {@code null} when there is nothing to say, which is every dock
+     * nobody looks at. Synced inside the goggle data, never saved.
+     */
+    @Nullable
+    private DockJoinStatus observedJoin;
+    /**
+     * Whether the controller has no room for this crane any more ({@code aisle.maxCranesPerNetwork} lowered, issue #14,
+     * ADR-075 §2.5): it takes no new job and drives home to its own dock as soon as it is idle, and the controller lets
+     * it go once it stands there. Told on every relink, never saved.
+     */
+    private boolean leavingWarehouse;
+    /**
+     * Whether the warehouse of several cranes this crane belonged to is gone (its controller broken or no longer listing
+     * it, its own dock gone) while the machine was not parked on its own dock (issue #14, ADR-075 §2.5). The crane then
+     * keeps its role and its claim, so its traffic tick finds no controller and holds it inside its own blocks, and it
+     * only becomes a crane by itself once it stands on its own dock or a controller takes it in again. Never saved: a
+     * crane that loads finds its controller gone again and comes back to the same state.
+     */
+    private boolean dissolvePending;
 
     // --- both sides ---
+    /**
+     * Which warehouse of several cranes this one belongs to, its frame and its number (issue #14, ADR-075);
+     * {@code null} for a crane of a warehouse with one crane, which is every crane up to 0.17.1. Saved and synced
+     * ({@link CraneMembership#TAG}).
+     */
+    @Nullable
+    private CraneMembership membership;
+    /** Whether the traffic ledger holds the crane where it stands (synced, so a client does not animate it on). */
+    private boolean trafficHold;
+    /** The route a traffic detour drives instead of the cheapest one (synced), or {@code null}. */
+    @Nullable
+    private CraneRoute trafficDetour;
     /**
      * The warehouse's rail network as the controller names it — the branch order, headings, origins and lengths every
      * rack position of a job is measured in. Saved and synced (packed, {@link #NETWORK_TAG}), {@code null} while the
@@ -327,13 +403,25 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      */
     public WarehouseLayout warehouse() {
         NetworkGeometry network = networkGeometry();
+        // A member crane's warehouse is measured from the warehouse's own dock, not from this one (issue #14).
+        boolean anchored = anchoredElsewhere();
+        BlockPos anchor = anchored ? membership.anchor() : worldPosition;
+        Direction anchorFacing = anchored ? membership.anchorFacing() : facing();
         WarehouseLayout cached = cachedWarehouse;
-        if (cached != null && cached.dock().equals(worldPosition) && cached.facing() == facing()
+        if (cached != null && cached.dock().equals(anchor) && cached.facing() == anchorFacing
                 && cached.network().equals(network))
             return cached;
-        cached = WarehouseLayout.of(worldPosition, facing(), network, Optional.empty());
+        cached = WarehouseLayout.of(anchor, anchorFacing, network, Optional.empty());
         cachedWarehouse = cached;
         return cached;
+    }
+
+    /**
+     * Whether this crane's poses are named in the frame of <b>another</b> dock: a member of a warehouse with several
+     * cranes that knows that warehouse's rails (issue #14, ADR-075).
+     */
+    private boolean anchoredElsewhere() {
+        return membership != null && membership.isMember() && warehouseNetwork != null;
     }
 
     /**
@@ -343,6 +431,10 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     public NetworkGeometry networkGeometry() {
         NetworkGeometry network = warehouseNetwork;
         int height = mastHeight();
+        // A member keeps the warehouse's network however few aisles it has: a straight line is still measured from the
+        // other dock, which its own facing and aisle length cannot describe (issue #14).
+        if (network != null && anchoredElsewhere())
+            return network.height() == height ? network : network.withHeight(height);
         if (network == null || network.branchCount() < 2)
             return NetworkGeometry.of(geometry(), Headings.of(facing()));
         return network.height() == height ? network : network.withHeight(height);
@@ -381,7 +473,8 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      * @return whether it changed
      */
     public boolean setWarehouseNetwork(@Nullable NetworkGeometry network) {
-        NetworkGeometry next = network == null || network.branchCount() < 2 ? null : network;
+        boolean member = membership != null && membership.isMember();
+        NetworkGeometry next = network == null || (network.branchCount() < 2 && !member) ? null : network;
         if (Objects.equals(warehouseNetwork, next))
             return false;
         warehouseNetwork = next;
@@ -429,7 +522,337 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     public HomeReturn homeReturn() {
         NetworkGeometry network = networkGeometry();
         Optional<RackPosition> home = Optional.ofNullable(homePoint).filter(network::contains);
-        return HomeReturn.of(WareworksConfig.returnHomeIdleTicks(), network.branchCount(), home);
+        return HomeReturn.of(WareworksConfig.returnHomeIdleTicks(), network.branchCount(), craneCount(), home);
+    }
+
+    // --- several cranes (issue #14, ADR-075) ---------------------------------------------------------------------
+
+    /** Which warehouse of several cranes this crane belongs to, or empty for a crane of a warehouse with one. */
+    public Optional<CraneMembership> membership() {
+        return Optional.ofNullable(membership);
+    }
+
+    /** Whether this crane is a member: crane 2 or later, its dock not the warehouse's own. */
+    public boolean isMember() {
+        return membership != null && membership.isMember();
+    }
+
+    /** This crane's number: 1 at the warehouse's own dock and for every crane of a warehouse with one. */
+    public int craneNumber() {
+        return membership == null ? 1 : membership.number();
+    }
+
+    /** How many cranes this crane's warehouse has: 1 without a membership. */
+    public int craneCount() {
+        return membership == null ? 1 : membership.craneCount();
+    }
+
+    /** Whether this crane asks the traffic ledger before it moves: a crane of a warehouse with several. */
+    public boolean inTraffic() {
+        return membership != null && membership.craneCount() > 1;
+    }
+
+    /**
+     * Server: whether the machine stands parked on its own dock block: idle, without a job, its arm in and not on its
+     * way anywhere. The one place a crane of a warehouse with several may leave that warehouse from, because a dock is a
+     * dead end no other crane's route crosses (issue #14, ADR-075 §2.5).
+     */
+    public boolean parkedOnOwnDock() {
+        CraneState<ItemKey, RackPosition> state = craneState;
+        CranePose pose = state.pose();
+        if (state.phase() != CranePhase.IDLE || state.job().isPresent() || pose.arm() > CranePose.RETRACTED
+                || state.isMoving())
+            return false;
+        double x = pose.x();
+        if (Math.abs(x - Math.rint(x)) > 1.0e-3 || pose.branch() >= networkGeometry().branchCount())
+            return false;
+        WarehouseLayout frame = warehouse();
+        Vec3 offset = frame.railOffset(pose.branch(), (int) Math.rint(x));
+        return frame.dock().offset((int) Math.round(offset.x), 0, (int) Math.round(offset.z)).equals(worldPosition);
+    }
+
+    /**
+     * Server: the controller tells this crane on every relink whether it still has room for it (issue #14, ADR-075
+     * §2.5). A crane it has no room for any more takes no new job and drives home to its own dock as soon as it is idle.
+     */
+    public void setLeavingWarehouse(boolean leaving) {
+        leavingWarehouse = leaving;
+    }
+
+    /** Server: whether the controller has no room for this crane any more and lets it go once it is parked. */
+    public boolean isLeavingWarehouse() {
+        return leavingWarehouse && isMember();
+    }
+
+    /**
+     * Server: the warehouse of several cranes this crane belongs to is gone: its controller was broken or no longer
+     * lists it, or the warehouse's own dock is gone (issue #14, ADR-075 §2.5). A crane parked on its own dock becomes a
+     * crane by itself at once. Any other keeps its role and its claim and holds inside its own blocks (no controller,
+     * no grant), because the cranes it shared the rails with are still on them, until it stands on its own dock or a
+     * controller takes it in again. Without this, several cranes on shared rails would drive on ungated and into each
+     * other.
+     */
+    public void warehouseDissolved() {
+        if (level == null || level.isClientSide || membership == null)
+            return;
+        if (membership.craneCount() > 1 && !parkedOnOwnDock()) {
+            dissolvePending = true;
+            if (linkedController != null && linkedController.equals(membership.controller())) {
+                linkedController = null;
+                updateLinkFlag();
+            }
+            return;
+        }
+        finishDissolve();
+    }
+
+    /** The crane by itself again: a member leaves, the crane at the warehouse's own dock drops its role and link. */
+    private void finishDissolve() {
+        dissolvePending = false;
+        if (membership == null)
+            return;
+        if (membership.isMember()) {
+            leaveWarehouse();
+            return;
+        }
+        setPrimaryRole(null);
+        if (linkedController == null) {
+            // Nobody names its aisles any more, exactly as when its controller unlinks it (ADR-033, ADR-034).
+            setWarehouseNetwork(null);
+            setHomePoint(null);
+        }
+    }
+
+    /** What this crane holds of the rails beyond its blocks, as the ledger last told it (server). */
+    public CraneTrafficClaim trafficClaim() {
+        return trafficClaim;
+    }
+
+    /**
+     * Server: what the goggles of this crane say about the other cranes, as its traffic tick worked it out
+     * ({@link CraneExecution}).
+     *
+     * @return whether it changed, so clients should be told
+     */
+    boolean setTrafficInfo(@Nullable CraneTrafficInfo info) {
+        if (Objects.equals(info, trafficInfo))
+            return false;
+        trafficInfo = info;
+        return true;
+    }
+
+    /**
+     * Server: what the goggles of this crane say about the other cranes of its warehouse right now; empty for a crane of
+     * a warehouse with one crane. The controller's crane list reads it (issue #14).
+     */
+    public Optional<CraneTrafficInfo> trafficInfo() {
+        return inTraffic() ? Optional.ofNullable(trafficInfo) : Optional.empty();
+    }
+
+    /**
+     * About how many ticks the job this crane carries out still takes, if nothing holds it up (issue #14, ADR-075
+     * §8.3); empty without a job, in a phase that is no part of a trip and while it cannot move. Both sides: the client
+     * works it out from the pose and the job it was sent, so it never costs a packet ({@link RemainingTrip}).
+     */
+    public OptionalLong remainingTripTicks() {
+        Optional<CraneJobSummary> job = goggleInfo.job();
+        if (job.isEmpty())
+            return OptionalLong.empty();
+        CraneSpeeds speeds = currentSpeeds();
+        if (speeds.isStopped())
+            return OptionalLong.empty();
+        return RemainingTrip.ticks(craneState.phase(), craneState.pose(), job.get().source(), job.get().target(),
+                speeds, Math.max(0, WareworksConfig.transferTicks()),
+                RemainingTrip.over(warehouse().routes(), speeds, WareworksConfig.turnPenaltyBlocks()));
+    }
+
+    /**
+     * Client levels only: what a shown crane's goggles say about the other cranes (issue #14), for a Ponder scene or a
+     * visual scenario that pictures a warehouse with several; {@code null} for none. Pairs with
+     * {@link #showClientPose(CraneMembership, NetworkGeometry, CranePose, CranePose, CranePhase, List)}.
+     */
+    public boolean showClientTraffic(@Nullable CraneTrafficInfo info) {
+        if (level == null || !level.isClientSide)
+            return false;
+        goggleInfo = new CraneGoggleInfo(goggleInfo.phase(), goggleInfo.pauseReason(), goggleInfo.job(),
+                goggleInfo.held(), goggleInfo.aisleLetters(), goggleInfo.throughput(), Optional.ofNullable(info));
+        return true;
+    }
+
+    /** Whether the traffic ledger holds this crane where it stands (both sides). */
+    public boolean isTrafficHeld() {
+        return trafficHold;
+    }
+
+    /**
+     * Server: what the ledger told the crane this tick ({@link CraneExecution}): the claim it saves, whether it is held
+     * and the route a detour drives.
+     *
+     * @return whether a client should be told (held, released, or another detour)
+     */
+    boolean setTrafficState(CraneTrafficClaim claim, boolean hold, @Nullable CraneRoute detour) {
+        Objects.requireNonNull(claim, "claim");
+        if (!claim.equals(trafficClaim)) {
+            trafficClaim = claim;
+            setChanged();
+        }
+        if (hold == trafficHold && Objects.equals(detour, trafficDetour))
+            return false;
+        trafficHold = hold;
+        trafficDetour = detour;
+        return true;
+    }
+
+    /**
+     * Server: the controller of a warehouse with several cranes names the crane at its own dock crane 1 of
+     * {@code craneCount}, or — with {@code null} — makes it the one crane of its warehouse again, which writes nothing
+     * of this feature any more (issue #14). Nothing moves: the primary's frame is its own dock.
+     */
+    public void setPrimaryRole(@Nullable CraneMembership primary) {
+        if (level == null || level.isClientSide)
+            return;
+        if (primary != null && primary.isMember())
+            throw new IllegalArgumentException("the crane at the warehouse's own dock is crane 1: " + primary);
+        if (primary != null)
+            dissolvePending = false; // a controller takes it in again
+        if (Objects.equals(membership, primary))
+            return;
+        membership = primary;
+        if (primary == null) {
+            setTrafficState(CraneTrafficClaim.NONE, false, null);
+            trafficInfo = null;
+        }
+        cachedWarehouse = null;
+        refreshGoggleInfo();
+        setChanged();
+        notifyUpdate();
+    }
+
+    /**
+     * Server: this dock joins the warehouse of {@code joined} as one of its cranes, or takes in what changed about it
+     * (issue #14, ADR-075 §2.5). The controller calls it on every relink with the warehouse's own network.
+     * <p>
+     * A crane that comes from another frame — its own dock's, which every dock without a controller has — has its pose,
+     * its motion target and its job's locations <b>relabelled through the world blocks they stand for</b>, the same
+     * rename a rebuild does at one dock, generalised to two anchors. Nothing moves and no item is touched. A pose whose
+     * block is no aisle block of the warehouse is put on this crane's own dock; a job location that is no rack position
+     * of it keeps its label and reaches the existing source- or target-missing ladder.
+     */
+    public void joinWarehouse(CraneMembership joined, NetworkGeometry network) {
+        Objects.requireNonNull(joined, "joined");
+        Objects.requireNonNull(network, "network");
+        if (level == null || level.isClientSide || isRemoved())
+            return;
+        if (!joined.isMember())
+            throw new IllegalArgumentException("a member is crane 2 or later: " + joined);
+        CraneMembership before = membership;
+        boolean sameFrame = before != null && before.isMember() && before.anchor().equals(joined.anchor())
+                && before.anchorFacing() == joined.anchorFacing() && warehouseNetwork != null;
+        WarehouseLayout from = warehouse();
+        membership = joined;
+        if (!sameFrame) {
+            warehouseNetwork = network;
+            cachedWarehouse = null;
+            WarehouseLayout to = warehouse();
+            double dockYaw = joined.siteBranch() < network.branchCount()
+                    ? CranePose.yawOf(network.branch(joined.siteBranch()).heading()) : restingYaw();
+            relabel(from, to, pose -> joined.dockPose(dockYaw));
+            setTrafficState(CraneTrafficClaim.NONE, false, null);
+            // An idle crane faces the aisle it now stands on at once, not on its next refresh: its first trip in the
+            // warehouse is then the trip every other crane of it would make from the same block.
+            alignRestingCrane();
+        } else {
+            setWarehouseNetwork(network);
+        }
+        if (!Objects.equals(before, joined)) {
+            cachedWarehouse = null;
+            setChanged();
+            notifyUpdate();
+        }
+        linkController(joined.controller());
+    }
+
+    /**
+     * Server: this member leaves its warehouse for good (issue #14, ADR-075 §2.5): its dock is no longer reached by the
+     * warehouse's rails, its controller is gone, or the warehouse has no room for it any more. Its pose, target and job
+     * are relabelled back into its own dock's frame through the world blocks they stand for; a machine that does not
+     * stand on its own rails is put back at its dock by the existing lost-aisle recovery
+     * ({@link WarehouseLayout#parkedAtDock}). The crane at a warehouse's own dock only drops its role.
+     */
+    public void leaveWarehouse() {
+        if (level == null || level.isClientSide || membership == null)
+            return;
+        CraneMembership left = membership;
+        if (!left.isMember()) {
+            setPrimaryRole(null);
+            return;
+        }
+        WarehouseLayout from = warehouse();
+        membership = null;
+        warehouseNetwork = null;
+        homePoint = null;
+        cachedWarehouse = null;
+        WarehouseLayout to = warehouse();
+        relabel(from, to, to::parkedAtDock);
+        setTrafficState(CraneTrafficClaim.NONE, false, null);
+        trafficInfo = null;
+        refreshGoggleInfo();
+        if (left.controller().equals(linkedController)) {
+            linkedController = null;
+            updateLinkFlag();
+        }
+        leavingWarehouse = false;
+        dissolvePending = false;
+        geometryRefreshRequested = true;
+        setChanged();
+        notifyUpdate();
+    }
+
+    /**
+     * Renames the crane's pose, motion target and job locations from {@code from} to {@code to} through the world
+     * blocks they stand for. A rack side keeps its <b>world</b> direction, so an arm that is out still points at the
+     * rack it points at.
+     *
+     * @param lost where a pose goes whose block is no aisle block of {@code to}
+     */
+    private void relabel(WarehouseLayout from, WarehouseLayout to, UnaryOperator<CranePose> lost) {
+        CraneState<ItemKey, RackPosition> state = craneState;
+        CranePose pose = relabelPose(from, to, state.pose()).orElseGet(() -> lost.apply(state.pose()));
+        CranePose target = relabelPose(from, to, state.target()).orElse(pose.withArm(CranePose.RETRACTED));
+        CraneState<ItemKey, RackPosition> next = state.withPoses(pose, pose).withTarget(target);
+        Optional<TransportJob<ItemKey, RackPosition>> job = state.job();
+        if (job.isPresent()) {
+            RackPosition source = to.rackFrom(from, job.get().source()).orElse(job.get().source());
+            RackPosition destination = to.rackFrom(from, job.get().target()).orElse(job.get().target());
+            next = next.withJob(job.get().relabelled(source, destination));
+        }
+        craneState = next;
+        execution.onGeometryChanged();
+    }
+
+    /** One pose renamed between two frames, its arm's side keeping its world direction. */
+    private static Optional<CranePose> relabelPose(WarehouseLayout from, WarehouseLayout to, CranePose pose) {
+        return to.relabelledFrom(from, pose).map(renamed -> {
+            Direction away = from.sideDirection(pose.branch(), pose.side());
+            return to.sideDirection(renamed.branch(), renamed.side()) == away ? renamed
+                    : renamed.withSide(renamed.side().opposite());
+        });
+    }
+
+    /**
+     * Where a crane of this dock goes back to when its aisle left the warehouse: position 0 of the aisle at the dock,
+     * or — for a member — its own dock block in the warehouse's frame (issue #14).
+     */
+    CranePose parkedAtOwnDock(CranePose pose) {
+        if (anchoredElsewhere()) {
+            NetworkGeometry network = networkGeometry();
+            CraneMembership frame = membership;
+            if (frame.siteBranch() < network.branchCount())
+                return frame.dockPose(CranePose.yawOf(network.branch(frame.siteBranch()).heading()))
+                        .withXY(frame.siteX(), Math.min(Math.max(pose.y(), 0.0), network.height() - 1.0))
+                        .withSide(pose.side());
+        }
+        return warehouse().parkedAtDock(pose);
     }
 
     /**
@@ -506,10 +929,26 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         // Only the range of the value box follows the config; the stored value stays as the player set it.
         mastHeight.between(MIN_MAST_HEIGHT, maxMastHeight());
 
+        if (isMember()) {
+            // A member's rails are the warehouse's, as its controller names them, so it walks none of its own; the
+            // warehouse's own dock finds this one (issue #14, ADR-075). Only its mast is its own.
+            AisleGeometry kept = geometry();
+            publishedGeometry = kept;
+            if (kept.equals(before))
+                return false;
+            onGeometryChanged(before, kept);
+            notifyUpdate();
+            return true;
+        }
         int maxLength = Math.min(WareworksConfig.maxAisleLength(), AisleGeometry.MAX_LENGTH);
+        // Only the dock of a warehouse lets other docks join, so a dock nobody serves discovers exactly what it did up
+        // to 0.17.1 (issue #14). One block read.
+        scannedAsPrimary = RailNetworkScan.hasOwnController(level, worldPosition, facing());
         RailNetwork network = RailNetworkScan.scan(level, worldPosition, facing(), new RailGraph.Limits(
                 WareworksConfig.maxNetworkRails(), WareworksConfig.maxBranches(), WareworksConfig.maxJunctions(),
-                maxLength, mastHeight()));
+                maxLength, mastHeight(),
+                scannedAsPrimary ? WareworksConfig.maxCranesPerNetwork() : RailGraph.Limits.MIN_CRANES),
+                scannedAsPrimary ? listedMemberDocks() : Set.of(), scannedAsPrimary ? strandedMembers() : 0);
         discoveredNetwork = network;
         reportNetworkStop(network);
         aisleLength = network.resolveFirstBranchLength(aisleLength, maxLength);
@@ -521,6 +960,54 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         onGeometryChanged(before, after);
         notifyUpdate();
         return true;
+    }
+
+    /**
+     * A crane job in the form the dock saves it, for a controller that keeps the last job of a crane whose chunk is away
+     * (issue #14, ADR-075 §13); empty for a job whose item cannot be written.
+     */
+    public static Optional<CompoundTag> saveJob(TransportJob<ItemKey, RackPosition> job,
+            HolderLookup.Provider registries) {
+        return CranePersistence.writeJob(job, registries);
+    }
+
+    /** Reads what {@link #saveJob} wrote; empty for anything that does not describe a job. Untrusted data. */
+    public static Optional<TransportJob<ItemKey, RackPosition>> loadJob(CompoundTag tag,
+            HolderLookup.Provider registries) {
+        return CranePersistence.readJob(tag, registries);
+    }
+
+    /**
+     * The member docks the controller behind this dock already lists as its cranes, stranded ones included, which keep
+     * their places in the next scan whatever new dock it meets first (issue #14, ADR-075 §2.5). Empty without a linked
+     * controller; one list read.
+     */
+    private Set<BlockPos> listedMemberDocks() {
+        Optional<WarehouseControllerBlockEntity> controller = linkedControllerEntity();
+        if (controller.isEmpty())
+            return Set.of();
+        Set<BlockPos> docks = new HashSet<>();
+        for (CraneMember member : controller.get().craneMembers()) {
+            if (member.number() > 1)
+                docks.add(member.dock());
+        }
+        return docks;
+    }
+
+    /**
+     * How many cranes the controller behind this dock lists as stranded: their places of the cap are taken although
+     * the scan cannot reach their docks (issue #14, ADR-075 §2.5).
+     */
+    private int strandedMembers() {
+        Optional<WarehouseControllerBlockEntity> controller = linkedControllerEntity();
+        if (controller.isEmpty())
+            return 0;
+        int stranded = 0;
+        for (CraneMember member : controller.get().craneMembers()) {
+            if (member.stranded())
+                stranded++;
+        }
+        return stranded;
     }
 
     /**
@@ -588,7 +1075,21 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      */
     protected void onGeometryChanged(AisleGeometry previous, AisleGeometry current) {
         notifyControllerBehind(facing());
+        notifyFrameController();
         execution.onGeometryChanged();
+    }
+
+    /**
+     * Server: asks the controller of this crane's warehouse to re-link on its next tick, when that is not the one
+     * behind the dock: a member's (issue #14). Never loads a chunk.
+     */
+    private void notifyFrameController() {
+        CraneMembership frame = membership;
+        if (!(level instanceof ServerLevel) || frame == null || !frame.isMember())
+            return;
+        if (level.isLoaded(frame.controller())
+                && level.getBlockEntity(frame.controller()) instanceof WarehouseControllerBlockEntity controller)
+            controller.requestRelink();
     }
 
     /**
@@ -611,6 +1112,15 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     void linkControllerBehind() {
         if (!(level instanceof ServerLevel) || isRemoved())
             return;
+        CraneMembership frame = membership;
+        if (frame != null && frame.isMember()) {
+            // A member's controller does not stand behind it: it is the one its frame names (issue #14).
+            if (level.isLoaded(frame.controller())
+                    && level.getBlockEntity(frame.controller()) instanceof WarehouseControllerBlockEntity controller
+                    && !controller.isRemoved())
+                controller.relinkNow();
+            return;
+        }
         Direction aisleFacing = facing();
         BlockPos behind = worldPosition.relative(aisleFacing.getOpposite());
         if (level.isLoaded(behind) && level.getBlockEntity(behind) instanceof WarehouseControllerBlockEntity controller
@@ -697,8 +1207,52 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
             observedThroughput = next;
             throughputSync.markPending();
         }
+        // Why a dock facing into a warehouse's rails is no crane of it (issue #14): asked here, while somebody is
+        // looking, and never on a tick. It rides the same throttled packet as the throughput.
+        DockJoinStatus join = joinStatusNow();
+        if (!Objects.equals(join, observedJoin)) {
+            observedJoin = join;
+            throughputSync.markPending();
+        }
         if (throughputSync.tryConsume(level.getGameTime()))
             sendData(); // otherwise throttled: a later observation sends it
+    }
+
+    /**
+     * Why this dock is no crane of the warehouse whose rails it faces, as of the last time a player looked at it through
+     * goggles (server) or as synced (client); empty when there is nothing to say (issue #14).
+     */
+    public Optional<DockJoinStatus> joinStatus() {
+        return Optional.ofNullable(observedJoin);
+    }
+
+    /**
+     * Server: why this dock is no crane of the warehouse whose rails it faces, or {@code null} when it is one, faces no
+     * other warehouse's rails, or there is nothing to say (issue #14, ADR-075 §15.1). A dock with a controller of its
+     * own gets the foreign-dock hint: it is a warehouse by itself and a wall to the other one. One containment test per
+     * registered controller ({@link WarehouseRegistry#findByAisleBlock}) and one block entity lookup, only while a player
+     * looks at the dock.
+     */
+    @Nullable
+    private DockJoinStatus joinStatusNow() {
+        if (isMember())
+            return null;
+        Optional<WarehouseControllerBlockEntity> faced = WarehouseRegistry.findByAisleBlock(level,
+                worldPosition.relative(facing()), linkedController);
+        if (faced.isEmpty() || faced.get().listsCrane(worldPosition))
+            return null;
+        WarehouseControllerBlockEntity other = faced.get();
+        int maxCranes = WareworksConfig.maxCranesPerNetwork();
+        DockJoinStatus.Reason reason;
+        if (linkedController != null || RailNetworkScan.hasOwnController(level, worldPosition, facing()))
+            reason = DockJoinStatus.Reason.OWN_CONTROLLER;
+        else if (maxCranes <= RailGraph.Limits.MIN_CRANES)
+            reason = DockJoinStatus.Reason.ONE_CRANE;
+        else if (other.craneCount() >= maxCranes)
+            reason = DockJoinStatus.Reason.MAX_CRANES;
+        else
+            reason = DockJoinStatus.Reason.PENDING;
+        return new DockJoinStatus(reason, other.aisleLetter(), maxCranes);
     }
 
     /** The crane pose for rendering at {@code partialTicks} between the previous and the current tick (M4). */
@@ -717,7 +1271,14 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      */
     public Vec3 renderOffset(float partialTicks) {
         CraneState<ItemKey, RackPosition> state = craneState;
-        return warehouse().railOffset(state.previousPose(), state.pose(), partialTicks);
+        WarehouseLayout warehouse = warehouse();
+        Vec3 offset = warehouse.railOffset(state.previousPose(), state.pose(), partialTicks);
+        // A member's warehouse is measured from the warehouse's own dock, and this block draws it (issue #14).
+        BlockPos anchor = warehouse.dock();
+        if (anchor.equals(worldPosition))
+            return offset;
+        return offset.add(anchor.getX() - worldPosition.getX(), anchor.getY() - worldPosition.getY(),
+                anchor.getZ() - worldPosition.getZ());
     }
 
     /**
@@ -754,6 +1315,11 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      * retracted and the machine facing the way that aisle runs.
      */
     public CranePose homePose() {
+        if (anchoredElsewhere()) {
+            NetworkGeometry network = networkGeometry();
+            if (membership.siteBranch() < network.branchCount())
+                return membership.dockPose(CranePose.yawOf(network.branch(membership.siteBranch()).heading()));
+        }
         return HOME_POSE.withYaw(restingYaw());
     }
 
@@ -773,7 +1339,7 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         Objects.requireNonNull(phase, "phase");
         if (level == null || !level.isClientSide)
             return false;
-        warehouseNetwork = network == null || network.branchCount() < 2 ? null : network;
+        warehouseNetwork = network == null || (network.branchCount() < 2 && !isMember()) ? null : network;
         cachedWarehouse = null;
         craneState = CraneState.displayed(pose, target, phase);
         // No throughput: a shown pose is a picture, and a Ponder scene or a visual scenario measures nothing.
@@ -781,6 +1347,27 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
                 goggleInfo.aisleLetters(), Optional.empty());
         clientSynced = true;
         return true;
+    }
+
+    /**
+     * Client levels only: the same as {@link #showClientPose(NetworkGeometry, CranePose, CranePose, CranePhase, List)}
+     * for a crane of a warehouse with several (issue #14, ADR-075): {@code frame} says which dock the poses are
+     * measured from, so a member dock draws its machine on the warehouse's rails. A Ponder scene and the visual
+     * scenarios have no controller to hand a frame over, so they name it here. {@code null} is a crane of a warehouse
+     * with one crane.
+     */
+    public boolean showClientPose(@Nullable CraneMembership frame, @Nullable NetworkGeometry network, CranePose pose,
+            CranePose target, CranePhase phase, List<KeyCount<Item>> held) {
+        if (level == null || !level.isClientSide)
+            return false;
+        if (!Objects.equals(membership, frame)) {
+            membership = frame;
+            cachedWarehouse = null;
+            invalidateRenderBoundingBox();
+        }
+        trafficHold = false;
+        trafficDetour = null;
+        return showClientPose(network, pose, target, phase, held);
     }
 
     /**
@@ -869,9 +1456,11 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      * write time instead ({@link #goggleInfo}), so this stays what it always was: a cheap rebuild of what changed.
      */
     private void refreshGoggleInfo() {
+        // The traffic info only while the warehouse has several cranes, so one crane publishes what it always did.
         goggleInfo = new CraneGoggleInfo(craneState.phase(), execution.pauseReason(),
                 craneState.job().map(CraneJobSummary::of), CraneGoggleInfo.heldByType(head.held()),
-                linkedControllerEntity().map(StackerCraneBlockEntity::aisleLettersOf).orElse(""), Optional.empty());
+                linkedControllerEntity().map(StackerCraneBlockEntity::aisleLettersOf).orElse(""), Optional.empty(),
+                trafficInfo());
     }
 
     /**
@@ -927,17 +1516,39 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     private void tickClientMotion() {
         CraneState<ItemKey, RackPosition> state = craneState;
         CraneSpeeds speeds = currentSpeeds();
-        if (state.paused() || speeds.isStopped()) {
+        // A crane the traffic ledger holds stands still on the server, so the client must not animate it on and snap
+        // it back with the next packet (issue #14).
+        if (state.paused() || speeds.isStopped() || trafficHold) {
             craneState = state.withPreviousPose(state.pose());
             return;
         }
         CraneNetwork network = craneNetwork();
         CranePose pose = state.pose();
+        CraneRoute detour = trafficDetour;
+        if (detour != null && pose.arm() <= CranePose.RETRACTED && detour.legIndexAt(pose.branch(), pose.x()) >= 0) {
+            // A detour drives a route the ledger granted rather than the cheapest one, exactly as the server does.
+            CranePose moved = CraneMotion.step(pose, detourTarget(pose, detour), speeds, detour,
+                    network.turnPenaltyBlocks());
+            craneState = state.withPoses(pose, moved);
+            wheelOdometer += CraneMotion.blocksDriven(pose, moved, detour);
+            return;
+        }
         CranePose target = state.target();
         CraneRoute route = pose.branch() == target.branch() ? null
                 : network.route(pose.branch(), pose.x(), target.branch(), target.x()).orElse(null);
         craneState = CraneMotion.step(state, speeds, route, network.turnPenaltyBlocks());
         wheelOdometer += CraneMotion.blocksDriven(pose, craneState.pose(), route);
+    }
+
+    /**
+     * Where a traffic detour along {@code route} ends for a crane at {@code pose}: the route's last block, arm in, at
+     * the level the crane is at, facing the way that last leg runs (issue #14). The server's detour tick and a client's
+     * animation of it use this one rule.
+     */
+    static CranePose detourTarget(CranePose pose, CraneRoute route) {
+        CraneRoute.Leg last = route.lastLeg();
+        return new CranePose(last.branch(), last.toX(), pose.y(), CranePose.RETRACTED, pose.side(),
+                CranePose.yawOf(last.heading()));
     }
 
     /**
@@ -950,6 +1561,7 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         if (level instanceof ServerLevel) {
             refreshGeometry();
             notifyControllerBehind(facing());
+            notifyFrameController();
         }
     }
 
@@ -969,11 +1581,12 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         notifyControllerBehind(facing());
     }
 
-    /** Real removal: the controller behind the dock re-links and finds no dock. */
+    /** Real removal: the controller behind the dock re-links and finds no dock, and a member's controller loses it. */
     @Override
     public void remove() {
         super.remove();
         notifyControllerBehind(facing());
+        notifyFrameController();
     }
 
     /**
@@ -1036,6 +1649,13 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      */
     public void linkController(BlockPos controller) {
         linkedController = controller.immutable();
+        dissolvePending = false;
+        // A dock that was scanned while nobody served it saw every other dock as a wall. The controller behind it is
+        // about to read that scan, so it is taken again now, as the dock of a warehouse (issue #14).
+        if (!scannedAsPrimary && !isMember() && level != null && !level.isClientSide
+                && WareworksConfig.maxCranesPerNetwork() > RailGraph.Limits.MIN_CRANES
+                && controller.equals(worldPosition.relative(facing().getOpposite())))
+            refreshGeometry();
         updateLinkFlag();
     }
 
@@ -1043,6 +1663,17 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     public void unlinkController(BlockPos controller) {
         if (!controller.equals(linkedController))
             return;
+        if (inTraffic() && !parkedOnOwnDock()) {
+            // Its warehouse of several cranes is gone; it holds until it is parked on its own dock (issue #14).
+            warehouseDissolved();
+            return;
+        }
+        if (isMember()) {
+            leaveWarehouse();
+            return;
+        }
+        // The one crane of its warehouse again, which writes nothing of several cranes any more (issue #14).
+        setPrimaryRole(null);
         linkedController = null;
         // Nobody names its aisles any more, so it is the one straight aisle its own rails and facing describe. A
         // kept network would otherwise outlive the warehouse that defined it and let the crane drive on rails the
@@ -1059,15 +1690,67 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
      * unloaded with its chunk, which does not notify). One block entity lookup; called at the geometry refresh cadence.
      */
     public void validateControllerLink() {
-        if (linkedController == null || level == null || level.isClientSide)
+        if (level == null || level.isClientSide)
             return;
+        if (dissolvePending) {
+            // Its warehouse is gone: it becomes a crane by itself the moment it stands parked on its own dock.
+            if (parkedOnOwnDock())
+                finishDissolve();
+            return;
+        }
+        if (isMember()) {
+            validateMembership();
+            return;
+        }
+        if (linkedController == null) {
+            if (membership != null)
+                dropRoleIfControllerLost(membership.controller());
+            return;
+        }
         boolean valid = level.isLoaded(linkedController)
                 && level.getBlockEntity(linkedController) instanceof WarehouseControllerBlockEntity controller
                 && !controller.isRemoved() && controller.isLinkedTo(worldPosition);
         if (valid)
             return;
+        BlockPos lost = linkedController;
         linkedController = null;
         updateLinkFlag();
+        if (membership != null)
+            dropRoleIfControllerLost(lost);
+    }
+
+    /**
+     * A member keeps its frame and its claim while its controller is merely not loaded — moving inside a claim is safe
+     * without anybody watching, and it asks for nothing new until the controller is back — and leaves the warehouse for
+     * good once a loaded block says the controller is gone or no longer lists it (issue #14, ADR-075 §2.5).
+     */
+    private void validateMembership() {
+        BlockPos controllerPos = membership.controller();
+        if (!level.isLoaded(controllerPos))
+            return; // transient: its frame, its claim and its number stay
+        if (level.getBlockEntity(controllerPos) instanceof WarehouseControllerBlockEntity controller
+                && !controller.isRemoved() && controller.isLinkedTo(worldPosition)) {
+            if (!controllerPos.equals(linkedController)) {
+                linkedController = controllerPos;
+                updateLinkFlag();
+            }
+            return;
+        }
+        warehouseDissolved();
+    }
+
+    /**
+     * The crane at a warehouse's own dock drops its role once a loaded block says its controller is gone. A controller
+     * that has just loaded and not relinked yet still lists it from its save, and that keeps the role and its claim.
+     */
+    private void dropRoleIfControllerLost(BlockPos controllerPos) {
+        if (!level.isLoaded(controllerPos))
+            return;
+        if (level.getBlockEntity(controllerPos) instanceof WarehouseControllerBlockEntity controller
+                && !controller.isRemoved()
+                && (controller.isLinkedTo(worldPosition) || controller.listsCrane(worldPosition)))
+            return;
+        warehouseDissolved();
     }
 
     private void updateLinkFlag() {
@@ -1086,9 +1769,24 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         super.write(tag, registries, clientPacket);
         tag.putInt(AISLE_LENGTH_TAG, aisleLength);
         // Only a warehouse that really bends writes a network; a straight aisle saves and syncs exactly what it did
-        // before M21 (ADR-033).
+        // before M21 (ADR-033). A member writes its warehouse's network whatever its shape (issue #14).
         if (warehouseNetwork != null)
             tag.putIntArray(NETWORK_TAG, warehouseNetwork.pack());
+        // Only a crane of a warehouse with several writes this, so one crane saves and syncs what it did up to 0.17.1.
+        CraneMembership frame = membership;
+        if (frame != null) {
+            CompoundTag traffic = new CompoundTag();
+            frame.write(traffic);
+            if (clientPacket) {
+                if (trafficHold)
+                    traffic.putBoolean(HOLD_TAG, true);
+                if (trafficDetour != null)
+                    traffic.put(DETOUR_TAG, CraneTrafficClaim.writeRoute(trafficDetour));
+            } else {
+                trafficClaim.write(traffic);
+            }
+            tag.put(CraneMembership.TAG, traffic);
+        }
         if (clientPacket) {
             tag.putBoolean(CONTROLLER_LINKED_TAG, controllerLinked);
             tag.put(CranePersistence.SYNC_TAG, CranePersistence.writeSync(craneState, restingYaw()));
@@ -1098,6 +1796,12 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
             // observedThroughput is null and withThroughput returns this very record, so nothing is allocated and
             // nothing is written (M25, issue #16).
             goggleInfo.withThroughput(observedThroughput).write(goggles);
+            // Only while a player looks at a dock that has something to say about joining (issue #14).
+            if (observedJoin != null) {
+                CompoundTag join = new CompoundTag();
+                observedJoin.write(join);
+                goggles.put(JOIN_TAG, join);
+            }
             tag.put(GOGGLE_TAG, goggles);
             return;
         }
@@ -1109,14 +1813,31 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
     protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         AisleGeometry before = geometry();
         NetworkGeometry networkBefore = warehouseNetwork;
+        CraneMembership membershipBefore = membership;
         super.read(tag, registries, clientPacket);
         aisleLength = Mth.clamp(tag.getInt(AISLE_LENGTH_TAG), 0, AisleGeometry.MAX_LENGTH);
+        // The frame first, because it decides what the network means. A schematic print carries neither the crane nor
+        // its head and leaves the frame alone, like everything else it does not describe (issue #25, ADR-061).
+        if (clientPacket || tag.contains(CranePersistence.STATE_TAG) || tag.contains(CranePersistence.HEAD_TAG)) {
+            CompoundTag traffic = tag.getCompound(CraneMembership.TAG);
+            membership = tag.contains(CraneMembership.TAG, Tag.TAG_COMPOUND)
+                    ? CraneMembership.read(traffic, worldPosition, facing()).orElse(null) : null;
+            if (clientPacket) {
+                trafficHold = membership != null && traffic.getBoolean(HOLD_TAG);
+                trafficDetour = membership != null && traffic.contains(DETOUR_TAG, Tag.TAG_LIST)
+                        ? CraneTrafficClaim.readRoute(traffic.getList(DETOUR_TAG, Tag.TAG_COMPOUND)).orElse(null)
+                        : null;
+            } else {
+                trafficClaim = membership == null ? CraneTrafficClaim.NONE : CraneTrafficClaim.read(traffic);
+            }
+        }
+        boolean member = membership != null && membership.isMember();
         // Never throws: an unreadable network is simply none, and the warehouse is the straight aisle it was.
         warehouseNetwork = tag.contains(NETWORK_TAG, Tag.TAG_INT_ARRAY)
-                ? NetworkGeometry.unpack(tag.getIntArray(NETWORK_TAG)).filter(read -> read.branchCount() > 1)
-                        .orElse(null)
+                ? NetworkGeometry.unpack(tag.getIntArray(NETWORK_TAG))
+                        .filter(read -> read.branchCount() > 1 || member).orElse(null)
                 : null;
-        if (!Objects.equals(networkBefore, warehouseNetwork))
+        if (!Objects.equals(networkBefore, warehouseNetwork) || !Objects.equals(membershipBefore, membership))
             cachedWarehouse = null;
         // Keep the value box range in step with the (possibly reloaded or synced) config on both sides.
         mastHeight.between(MIN_MAST_HEIGHT, maxMastHeight());
@@ -1142,7 +1863,9 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         controllerLinked = tag.getBoolean(CONTROLLER_LINKED_TAG);
         readClientCrane(tag.getCompound(CranePersistence.SYNC_TAG));
         goggleInfo = CraneGoggleInfo.read(tag.getCompound(GOGGLE_TAG));
-        if (!geometry().equals(before) || !Objects.equals(networkBefore, warehouseNetwork))
+        observedJoin = DockJoinStatus.read(tag.getCompound(GOGGLE_TAG).getCompound(JOIN_TAG)).orElse(null);
+        if (!geometry().equals(before) || !Objects.equals(networkBefore, warehouseNetwork)
+                || !Objects.equals(membershipBefore, membership))
             invalidateRenderBoundingBox();
     }
 
@@ -1224,9 +1947,23 @@ public class StackerCraneBlockEntity extends KineticBlockEntity implements Clear
         else
             WareworksLang.translate(WareworksLang.GOGGLES_NO_CONTROLLER).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
+        // Several cranes on one warehouse (issue #14): which one this is, and — for a dock that faces into a
+        // warehouse's rails without being one of its cranes — why not. Neither line exists for one crane.
+        goggleInfo.traffic().ifPresent(info -> CraneTrafficLang.craneNumber(info.number(), info.craneCount())
+                .forGoggles(tooltip, 1));
+        DockJoinStatus join = observedJoin;
+        if (join != null)
+            WareworksLang.translate(CraneTrafficLang.dockJoinKey(join.reason()),
+                    WareworksLang.text(String.valueOf(join.letter())).style(ChatFormatting.WHITE),
+                    WareworksLang.number(join.maxCranes()).style(ChatFormatting.WHITE))
+                    .style(join.reason() == DockJoinStatus.Reason.PENDING
+                            || join.reason() == DockJoinStatus.Reason.OWN_CONTROLLER ? ChatFormatting.GRAY
+                                    : ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 1);
         // The dock is the surface that shows the whole throughput block: it is the machine itself, its tooltip is the
         // shorter of the two, and a number a player has to crouch for is a number nobody finds (M25, issue #16).
-        goggleInfo.addGoggleLines(tooltip, 1, true, true, network.branchCount() > 1);
+        goggleInfo.addGoggleLines(tooltip, 1, true, true, network.branchCount() > 1,
+                goggleInfo.traffic().isPresent() ? remainingTripTicks() : OptionalLong.empty());
 
         List<Component> kineticStats = new ArrayList<>();
         if (super.addToGoggleTooltip(kineticStats, isPlayerSneaking)) {

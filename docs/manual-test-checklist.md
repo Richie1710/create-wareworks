@@ -3672,3 +3672,60 @@ you get tired of waiting, and put it back before judging check 160.
      "Asking the Warehouse for Fluid" in English and in German. Does every caption stay up long enough to read, and
      does each one point at the right block (the terminal, the rack bay with the empty buckets, the fluid bay, the pipe
      at the bay's back)?
+
+## BM. Several cranes on one warehouse ([issue #14](https://github.com/Richie1710/create-wareworks/issues/14))
+
+> A dock without a controller of its own that faces into a warehouse's rails is another crane of it (ADR-075,
+> `docs/warehouse-system.md` §1.2, §7.8, §8.2, `docs/stacker-crane.md` §4.8). The JUnit tests of `core.traffic` check the
+> rules and the deadlock proof on every reachable state of small warehouses, `MultiCraneGameTests` checks them in a world,
+> and the `cranes` visual scenario and the "two cranes in flight" phase of `robustness` check the shots, the goggle lines
+> in both languages and a real save and chunk round trip. What is left is what only a player can judge.
+
+389. **Two cranes on one line.** Build a straight aisle with the controller at one end and a second dock at the other,
+     facing back, each dock with its own rotation. Goggles on the controller: "Cranes: 2 (2 idle)" and one line per
+     crane. On the second dock: "Crane 2 of 2". Order something stored near each end: both cranes move at once and never
+     share a rail.
+390. **The maximum.** Put a fifth dock on a warehouse that has four cranes (default `aisle.maxCranesPerNetwork = 4`): it
+     is refused, the controller's stop line names the block and says the warehouse has as many stacker cranes as the
+     server allows, and the refused dock's goggles say why. Put it nearer the controller than crane 4: it is still the
+     one refused, and crane 4 keeps working.
+391. **The off switch.** Set `aisle.maxCranesPerNetwork = 1` and restart: the second dock is a wall again (the stop line
+     says "another stacker crane dock stands here"), the warehouse works exactly as 0.17, and its dock and controller save nothing
+     new. Set it back.
+392. **A dock with its own controller.** Put a controller behind the second dock: two separate warehouses as before; the
+     second dock's goggles say it faces the other warehouse but has a controller of its own.
+393. **A comb.** Docks at both ends of a main run with side aisles: order things whose stops cross. One crane waits in a
+     side aisle while the other passes. Note how long the slowest order took; nothing waits for ever.
+394. **Moving aside.** Place a home point for crane 2 in the middle of the main run, and order something crane 1 must
+     fetch beyond it: crane 2 moves aside — to its dock, because its home point is in the way — and drives back to its
+     home point about ten seconds after crane 1 is gone.
+395. **Why a crane waits.** Look at a waiting crane's dock through goggles: the line names the other crane and the rail it
+     holds, "About N s left, not counting the wait" stands under the job, and "Reserved: … to …" names the stretch.
+     Read it in German as well.
+396. **A crane without rotation.** Stop one crane's motor while the other works: the other keeps working; a job that
+     needs the stopped crane's rails waits with "Waiting for crane 2: it is stopped". Motor on: everything finishes.
+397. **A rail closed between them.** Close a rail between the two cranes with a wrench while the far one carries: it is
+     "Cut off from its dock", finishes on the warehouse's side, and rejoins when the rail is open again. Nothing is lost.
+398. **Save while both carry.** Save and quit while both cranes carry; rejoin: both finish, no item is missing or
+     duplicated.
+399. **Break a working second dock.** Its items drop at the dock; the first crane keeps going; the controller lists one
+     crane again.
+400. **The terminal and the displays.** The terminal's crane line reads "2 cranes: …". A Display Link on the controller
+     offers Crane Status and Crane Throughput after its four sources (Warehouse Summary is still preselected): one row
+     per crane, and the whole warehouse's throughput. On a dock, Crane Status reads "Retrieving, waiting for crane 2"
+     while it waits.
+401. **Ponder.** "Two Cranes, One Warehouse" on the stacker crane and on the warehouse rail, in English and German: the
+     second dock joins, both work at once, crane 1 waits for the rails crane 2 stands on, crane 2 moves aside to its
+     dock, and crane 2 drives past crane 1 standing in a side aisle. Does the scene read well, and are the captions
+     readable at the scene's pace?
+402. **Two docks at the same end.** A second dock beside the first position of the aisle, facing into it: it joins as a
+     stub aisle, but the two cranes can never work the main run at the same time. Is that understandable from the
+     goggles, or does it need the hint the design mentioned ("put docks at opposite ends")?
+403. **The tooltips.** Shift on the stacker crane and on the warehouse home point (both reworded) in English and German, as in
+     item 3: everything fits.
+404. **Breaking the controller of a working warehouse.** Break the controller while crane 2 carries: crane 1, parked on its
+     dock, is a crane by itself; crane 2 stops where it stands with its items and its goggles say the controller is
+     missing. Place the controller again: crane 2 drives on and nothing is lost.
+405. **Lowering the cap.** With three cranes, change `aisle.maxCranesPerNetwork` to 2 in the server config while crane 3
+     carries: it delivers, drives home to its dock and only then leaves; until then the controller still
+     lists three cranes and crane 3 takes no new job. Set it back.

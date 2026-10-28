@@ -4,6 +4,8 @@ import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -13,6 +15,7 @@ import java.util.UUID;
 
 import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
+import com.simibubi.create.AllItems;
 import com.simibubi.create.content.kinetics.base.DirectionalAxisKineticBlock;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
@@ -23,8 +26,11 @@ import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.CraneMember;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseLayout;
+import dev.wareworks.content.crane.CraneMembership;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.controller.RequestResult;
@@ -61,6 +67,7 @@ import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.RackBayBlock;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
+import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
@@ -88,18 +95,24 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.CrafterBlockEntity;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.fluids.FluidType;
 import net.neoforged.neoforge.items.IItemHandler;
@@ -129,6 +142,13 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *       Crafter Feeder crafts torches for an order, and the batch lying in the Crafter with its unused slots locked
  *       rides a chunk unload and a save, quit and rejoin; the order then completes with the Crafter's slots restored
  *       and the census on the craft ledger;</li>
+ *   <li><b>two cranes in flight</b> (issue #14, ADR-075) — a second dock at the far end of the aisle facing back, with an
+ *       input of its own beside it, makes the warehouse one of two cranes; with both carrying, the world is saved, quit
+ *       and rejoined and the chunks round-trip, and both claims come back with no block shared; the second dock is
+ *       broken mid job (its head drops and is counted, the warehouse is one crane again and the first dock's save
+ *       carries nothing of several cranes), placed again, and a rail closed between its machine and its dock while it
+ *       carries (it is stranded, finishes on the warehouse's side and rejoins once the rail is open); then the phase
+ *       takes the second dock and its input down again, so the phases after it see the warehouse they always saw;</li>
  *   <li><b>blocks broken at defined moments</b> — the controller is broken while the crane carries items, and later the
  *       dock itself, which drops the handling head at the dock.</li>
  * </ol>
@@ -431,6 +451,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         doorOrder(script);
         feederOrder(script);
         chunkHold(script);
+        twoCranesInFlight(script);
         brokenBlocks(script);
 
         script.client("robustness: every step passed",
@@ -988,6 +1009,395 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> refill(server, context, bayTailFill()))
                 .serverUntil("robustness: wait until the crane carries items again", this::craneCarries,
                         JOB_TIMEOUT_TICKS);
+    }
+
+    // --- two cranes in flight (issue #14, ADR-075) --------------------------------------------------------------------
+
+    /** Where the second dock stands: one block beyond the last rail, facing back along the aisle. */
+    private static final int MEMBER_X = RAILS + 1;
+    /** The second dock's own input, beside its dock block: only that dock's crane serves it. */
+    private static final Side MEMBER_INPUT_SIDE = Side.RIGHT;
+    /** The rack the stranded leg stores into, dedicated to its item so the trip runs far enough from the dock. */
+    private static final RackPosition STRANDED_RACK = RackPosition.of(3, 0, Side.LEFT);
+    /** How far from its dock crane 2 must be, carrying, before the rail behind it is closed. */
+    private static final double WEST_OF_THE_CUT = RAILS - 1.5;
+    /** The block the second dock's motor replaced, put back when the phase takes its scaffolding down. */
+    private volatile BlockState groundBelowMember = Blocks.AIR.defaultBlockState();
+    private volatile StackerCraneBlockEntity memberBeforeUnload;
+
+    private static List<ItemStack> firstCraneFill() {
+        return List.of(new ItemStack(Items.FLINT, STACK), new ItemStack(Items.FLINT, STACK));
+    }
+
+    private static List<ItemStack> secondCraneFill() {
+        return List.of(new ItemStack(Items.PRISMARINE_SHARD, STACK), new ItemStack(Items.PRISMARINE_SHARD, STACK));
+    }
+
+    private static List<ItemStack> strandedFill() {
+        return List.of(new ItemStack(Items.PRISMARINE_CRYSTALS, STACK));
+    }
+
+    /**
+     * <b>Two cranes in flight</b> (issue #14, ADR-075 §13, §18): the persistence and the failure cases of a warehouse with
+     * two cranes, each of them with both machines carrying, counted by the census before and after.
+     * <ol>
+     *   <li>A second dock at the far end of the aisle, facing back, with its own motor and its own input beside it;
+     *       the controller lists two cranes.</li>
+     *   <li>Both inputs filled: crane 1 stores from the input beside its dock, crane 2 from the one beside its own, and
+     *       the world is saved while <b>both</b> carry, quit and rejoined. Both claims come back, no block is shared,
+     *       both finish.</li>
+     *   <li>The same with a chunk round trip: both docks unload with both carrying, and come back as new block
+     *       entities read from the save.</li>
+     *   <li>The second dock is broken while its crane carries: the head drops at the dock and is counted; the warehouse
+     *       is one crane again and the first dock's save carries no traffic tag. The dropped items are put into crane
+     *       1's input, as a player would, and stored.</li>
+     *   <li>The dock is placed again; its crane carries a stack towards a rack dedicated to it, far from the dock, and
+     *       the last rail before its dock is closed behind it: it is stranded, finishes on the warehouse's side, and
+     *       rejoins once the rail is open again.</li>
+     *   <li>The second dock, its motor and its input are taken down again, so the phases after this one see the
+     *       warehouse they were written for.</li>
+     * </ol>
+     * Every poll that reads both machines asserts that they never cover one block.
+     */
+    private void twoCranesInFlight(VisualScript script) {
+        script.server("robustness: place a second dock with its own input at the far end of the aisle",
+                        this::placeMemberDock)
+                .serverUntil("robustness: wait until the warehouse has two cranes", this::twoCranesReady,
+                        SCENE_READY_TIMEOUT_TICKS)
+                .server("robustness: census with two cranes",
+                        (server, context) -> census(server, "a second dock joined the warehouse"))
+                // Save, quit and rejoin with both in flight.
+                .server("robustness: fill both inputs", this::fillBothInputs)
+                .serverUntil("robustness: wait until both cranes carry", this::bothCarry, JOB_TIMEOUT_TICKS)
+                .server("robustness: save the world with both cranes in flight",
+                        (server, context) -> server.saveEverything(true, true, true));
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until both cranes are loaded after the reload", this::twoCranesLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: census after save, quit and rejoin with two cranes",
+                        (server, context) -> census(server, "save, quit and rejoin with both cranes in flight"))
+                .serverUntil("robustness: wait until both resumed jobs finished", this::bothIdleAndInputsEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census after both resumed jobs finished",
+                        (server, context) -> census(server, "both jobs finished after the rejoin"))
+                // A chunk round trip with both in flight.
+                .server("robustness: fill both inputs again", this::fillBothInputs)
+                .serverUntil("robustness: wait until both cranes carry again", this::bothCarry, JOB_TIMEOUT_TICKS)
+                .server("robustness: remember both docks and move the camera far away", (server, context) -> {
+                    dockBeforeUnload = crane(server, context);
+                    memberBeforeUnload = member(server, context);
+                    moveAway(server, context);
+                })
+                .serverUntil("robustness: wait until both docks really unload", this::bothDocksUnloaded,
+                        UNLOAD_TIMEOUT_TICKS)
+                .waitTicks(UNLOADED_TICKS)
+                .server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until both cranes are loaded again", this::twoCranesLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that both docks were read from the save again", this::assertBothReloaded)
+                .server("robustness: census after the chunk round trip with two cranes",
+                        (server, context) -> census(server, "chunk unload and reload with both cranes in flight"))
+                .serverUntil("robustness: wait until both interrupted jobs finished", this::bothIdleAndInputsEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census after both interrupted jobs finished",
+                        (server, context) -> census(server, "both jobs finished after the chunk round trip"))
+                // The second dock broken mid job.
+                .server("robustness: fill the second dock's input",
+                        (server, context) -> refillMember(server, context, secondCraneFill()))
+                .serverUntil("robustness: wait until crane 2 carries", this::memberCarries, JOB_TIMEOUT_TICKS)
+                .server("robustness: break the second dock while its crane carries", this::breakMemberDock)
+                .waitTicks(DROP_SETTLE_TICKS)
+                .server("robustness: census after the second dock was broken mid job",
+                        (server, context) -> census(server, "the second dock broken while its crane carried"))
+                .serverUntil("robustness: wait until the warehouse is one crane again", this::oneCraneAgain,
+                        SCENE_READY_TIMEOUT_TICKS)
+                .server("robustness: check that the first dock saves nothing of several cranes",
+                        this::assertOneCraneSave)
+                .server("robustness: put the dropped items into crane 1's input", this::gatherDropped)
+                .serverUntil("robustness: wait until crane 1 stored them", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census after crane 1 stored what the broken dock dropped",
+                        (server, context) -> census(server, "the first crane stored what the broken dock dropped"))
+                // Placed again, and a rail closed between its machine and its dock.
+                .server("robustness: place the second dock again", this::placeMemberDockAgain)
+                .serverUntil("robustness: wait until the warehouse has two cranes again", this::twoCranesReady,
+                        SCENE_READY_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until what the second input still held is stored",
+                        this::bothIdleAndInputsEmpty, JOB_TIMEOUT_TICKS)
+                .server("robustness: dedicate a rack to the stranded leg and fill the second input",
+                        this::startStrandedLeg)
+                .serverUntil("robustness: wait until crane 2 carries away from its dock", this::memberCarriesWest,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: close the last rail before the second dock",
+                        (server, context) -> wrenchLastRail(server, context, true))
+                .serverUntil("robustness: wait until crane 2 is stranded", this::memberStranded,
+                        SCENE_READY_TIMEOUT_TICKS)
+                .server("robustness: census with a stranded crane",
+                        (server, context) -> census(server, "a rail closed between crane 2 and its dock"))
+                .serverUntil("robustness: wait until the stranded crane finished on the warehouse's side",
+                        this::memberIdleAndEmpty, JOB_TIMEOUT_TICKS)
+                .server("robustness: census after the stranded crane finished",
+                        (server, context) -> census(server, "the stranded crane finished its job"))
+                .server("robustness: open the rail again", (server, context) -> wrenchLastRail(server, context, false))
+                .serverUntil("robustness: wait until crane 2 reaches its dock again", this::memberRejoined,
+                        SCENE_READY_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until both cranes are idle with the rail open",
+                        this::bothIdleAndInputsEmpty, JOB_TIMEOUT_TICKS)
+                .server("robustness: census after the stranded crane rejoined",
+                        (server, context) -> census(server, "the stranded crane rejoined"))
+                // The scaffolding comes down again.
+                .server("robustness: take the second dock, its motor and its input down", this::removeMemberDock)
+                .serverUntil("robustness: wait until the warehouse is the one it was", this::sceneReady,
+                        SCENE_READY_TIMEOUT_TICKS)
+                .server("robustness: census after the two-crane phase",
+                        (server, context) -> census(server, "the warehouse is one crane again after the two-crane "
+                                + "phase"));
+    }
+
+    private void placeMemberDock(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos member = memberDockPos(context);
+        groundBelowMember = level.getBlockState(member.below());
+        level.setBlockAndUpdate(member.below(),
+                AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.UP));
+        motor(level, member).generatedSpeed.setValue(MOTOR_RPM);
+        level.setBlockAndUpdate(memberInputPos(context), WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
+                .setValue(WarehouseInputBlock.FACING, layout(context.origin()).sideDirection(MEMBER_INPUT_SIDE)
+                        .getOpposite()));
+        placeMemberDockAgain(server, context);
+    }
+
+    private void placeMemberDockAgain(MinecraftServer server, VisualContext context) {
+        server.overworld().setBlockAndUpdate(memberDockPos(context), WareworksBlocks.STACKER_CRANE.getDefaultState()
+                .setValue(HorizontalKineticBlock.HORIZONTAL_FACING, AISLE.getOpposite()));
+    }
+
+    /** Both cranes linked, the second one a member, and every member of the warehouse read. */
+    private boolean twoCranesReady(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        WarehouseControllerBlockEntity controller = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER.getNullable(level,
+                controllerPos(context));
+        StackerCraneBlockEntity one = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, context.origin());
+        StackerCraneBlockEntity two = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level,
+                memberDockPos(context));
+        if (controller == null || one == null || two == null)
+            return false;
+        assertApart(one, two);
+        return controller.status() == ControllerStatus.READY && !controller.isMembershipDirty()
+                && controller.pendingSnapshotCount() == 0 && controller.craneCount() == 2 && two.isMember()
+                && two.isControllerLinked() && one.isControllerLinked()
+                // The input, the one the feeder's Crafter outputs into, and crane 2's own.
+                && controller.inputStations().size() == 3;
+    }
+
+    private boolean twoCranesLoaded(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        return level.isLoaded(context.origin()) && level.isLoaded(memberDockPos(context))
+                && SceneItemCensus.isFullyLoaded(level, censusBox) && twoCranesReady(server, context);
+    }
+
+    private void fillBothInputs(MinecraftServer server, VisualContext context) {
+        refill(server, context, firstCraneFill());
+        refillMember(server, context, secondCraneFill());
+    }
+
+    /** Like {@link #refill}, into the second dock's own input. */
+    private void refillMember(MinecraftServer server, VisualContext context, List<ItemStack> stacks) {
+        expected = SceneItemCensus.plusAll(expected, stacks);
+        insertInto(server.overworld(), memberInputPos(context), stacks.stream().map(ItemStack::copy).toList());
+    }
+
+    private static void insertInto(ServerLevel level, BlockPos pos, List<ItemStack> stacks) {
+        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
+        if (handler == null)
+            throw new VisualTestException("no item handler at " + pos);
+        for (ItemStack stack : stacks) {
+            ItemStack rest = ItemHandlerHelper.insertItem(handler, stack, false);
+            if (!rest.isEmpty())
+                throw new VisualTestException("the inventory at " + pos + " refused " + rest);
+        }
+    }
+
+    private boolean bothCarry(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity one = crane(server, context);
+        StackerCraneBlockEntity two = member(server, context);
+        assertApart(one, two);
+        return !one.heldItems().isEmpty() && !two.heldItems().isEmpty();
+    }
+
+    private boolean memberCarries(MinecraftServer server, VisualContext context) {
+        return !member(server, context).heldItems().isEmpty();
+    }
+
+    /** Crane 2 carries and has driven far enough from its dock that the rail behind it can be closed. */
+    private boolean memberCarriesWest(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity two = member(server, context);
+        assertApart(crane(server, context), two);
+        CraneState<?, ?> state = two.craneState();
+        return !two.heldItems().isEmpty() && state.phase() == CranePhase.TRAVEL_TO_TARGET
+                && state.pose().x() < WEST_OF_THE_CUT;
+    }
+
+    private boolean bothIdleAndInputsEmpty(MinecraftServer server, VisualContext context) {
+        if (!craneIdleAndInputEmpty(server, context) || !memberIdleAndEmpty(server, context))
+            return false;
+        WarehouseInputBlockEntity input = WareworksBlockEntityTypes.WAREHOUSE_INPUT.getNullable(server.overworld(),
+                memberInputPos(context));
+        return input != null && input.bufferedItems().isEmpty();
+    }
+
+    private boolean memberIdleAndEmpty(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity two = member(server, context);
+        assertApart(crane(server, context), two);
+        return two.craneState().phase() == CranePhase.IDLE && two.currentJob().isEmpty() && two.heldItems().isEmpty();
+    }
+
+    private boolean bothDocksUnloaded(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity one = dockBeforeUnload;
+        StackerCraneBlockEntity two = memberBeforeUnload;
+        return one != null && two != null && one.isRemoved() && two.isRemoved()
+                && !server.overworld().isLoaded(context.origin()) && !server.overworld().isLoaded(memberDockPos(context));
+    }
+
+    private void assertBothReloaded(MinecraftServer server, VisualContext context) {
+        if (crane(server, context) == dockBeforeUnload || member(server, context) == memberBeforeUnload)
+            throw new VisualTestException("a dock block entity was never unloaded and read again");
+        LOGGER.info(PREFIX + "robustness: both docks were unloaded and read from the save again (crane 1 {} holding "
+                        + "{}, crane 2 {} holding {})", crane(server, context).craneState().phase(),
+                crane(server, context).heldItems().totalCount(), member(server, context).craneState().phase(),
+                member(server, context).heldItems().totalCount());
+    }
+
+    private void breakMemberDock(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity two = member(server, context);
+        if (two.heldItems().isEmpty())
+            throw new VisualTestException("crane 2 must carry items when its dock is broken, but its head is empty");
+        LOGGER.info(PREFIX + "robustness: breaking the second dock while its crane holds {}",
+                two.heldItems().totalCount());
+        // dropBlock = false: the dock block itself must not become an item entity in the census; its head drops.
+        server.overworld().destroyBlock(memberDockPos(context), false);
+    }
+
+    private boolean oneCraneAgain(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        return controller.craneCount() == 1 && crane(server, context).membership().isEmpty()
+                && !controller.isMembershipDirty();
+    }
+
+    private void assertOneCraneSave(MinecraftServer server, VisualContext context) {
+        if (crane(server, context).saveWithoutMetadata(server.registryAccess()).contains(CraneMembership.TAG))
+            throw new VisualTestException("the first dock still saves a traffic tag after the second dock was broken");
+        LOGGER.info(PREFIX + "robustness: PASS the first dock saves what a one-crane dock always saved");
+    }
+
+    /**
+     * What the broken dock's head dropped, put into crane 1's input the way a player would carry it there. Only item
+     * entities near the second dock are touched, and each moves whole or not at all, so the census is unchanged.
+     */
+    private void gatherDropped(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        IItemHandler input = level.getCapability(Capabilities.ItemHandler.BLOCK, layout(context.origin()).rackPos(INPUT),
+                null);
+        if (input == null)
+            throw new VisualTestException("the warehouse input has no item handler");
+        int gathered = 0;
+        for (ItemEntity dropped : level.getEntitiesOfClass(ItemEntity.class,
+                new AABB(memberDockPos(context)).inflate(CENSUS_MARGIN))) {
+            ItemStack stack = dropped.getItem();
+            if (!ItemHandlerHelper.insertItem(input, stack.copy(), true).isEmpty())
+                continue;
+            ItemHandlerHelper.insertItem(input, stack.copy(), false);
+            gathered += stack.getCount();
+            dropped.discard();
+        }
+        LOGGER.info(PREFIX + "robustness: put {} dropped items into crane 1's input", gathered);
+        census(server, "the dropped items were put into crane 1's input");
+    }
+
+    private void startStrandedLeg(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos rack = layout(context.origin()).rackPos(STRANDED_RACK);
+        WarehouseInterfaceBlockEntity storage = WareworksBlockEntityTypes.WAREHOUSE_INTERFACE.getNullable(level, rack);
+        if (storage == null || !storage.setStoreFilter(strandedFill().getFirst().copyWithCount(1)))
+            throw new VisualTestException("the rack at " + rack + " refused the stranded leg's filter");
+        refillMember(server, context, strandedFill());
+    }
+
+    /** The rail right in front of the second dock, closed or opened with a wrench like a player would. */
+    private void wrenchLastRail(MinecraftServer server, VisualContext context, boolean close) {
+        ServerLevel level = server.overworld();
+        BlockPos pos = context.origin().relative(AISLE, RAILS);
+        BlockState state = level.getBlockState(pos);
+        if (!(state.getBlock() instanceof WarehouseRailBlock rail))
+            throw new VisualTestException("no warehouse rail at " + pos + ", found " + state);
+        if (state.getValue(WarehouseRailBlock.CLOSED) == close)
+            throw new VisualTestException("the rail at " + pos + " is already " + (close ? "closed" : "open"));
+        rail.onWrenched(state, new UseOnContext(level, context.serverPlayer(server), InteractionHand.MAIN_HAND,
+                AllItems.WRENCH.asStack(), new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false)));
+        if (level.getBlockState(pos).getValue(WarehouseRailBlock.CLOSED) != close)
+            throw new VisualTestException("the wrench did not " + (close ? "close" : "open") + " the rail at " + pos);
+        LOGGER.info(PREFIX + "robustness: the rail at {} is now {}, crane 2 at {}", pos, close ? "closed" : "open",
+                member(server, context).craneState().pose());
+    }
+
+    private boolean memberStranded(MinecraftServer server, VisualContext context) {
+        assertApart(crane(server, context), member(server, context));
+        return controller(server, context).craneMembers().stream().anyMatch(CraneMember::stranded);
+    }
+
+    private boolean memberRejoined(MinecraftServer server, VisualContext context) {
+        List<CraneMember> members = controller(server, context).craneMembers();
+        return members.size() == 2 && members.stream().noneMatch(CraneMember::stranded)
+                && twoCranesReady(server, context);
+    }
+
+    private void removeMemberDock(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        StackerCraneBlockEntity two = member(server, context);
+        WarehouseInputBlockEntity input = WareworksBlockEntityTypes.WAREHOUSE_INPUT.getNullable(level,
+                memberInputPos(context));
+        if (!two.heldItems().isEmpty() || input == null || !input.bufferedItems().isEmpty())
+            throw new VisualTestException("the second dock and its input must be empty before they are taken down");
+        // dropBlock = false: neither block may become an item entity in the census.
+        level.destroyBlock(memberDockPos(context), false);
+        level.destroyBlock(memberInputPos(context), false);
+        level.setBlockAndUpdate(memberDockPos(context).below(), groundBelowMember);
+    }
+
+    /** No two cranes cover one block (ADR-075 I1/I2, as the world sees it). */
+    private static void assertApart(StackerCraneBlockEntity one, StackerCraneBlockEntity two) {
+        Set<BlockPos> first = standingBlocks(one);
+        Set<BlockPos> second = standingBlocks(two);
+        if (!Collections.disjoint(first, second))
+            throw new VisualTestException("two cranes share a block: " + first + " and " + second);
+    }
+
+    private static Set<BlockPos> standingBlocks(StackerCraneBlockEntity crane) {
+        WarehouseLayout frame = crane.warehouse();
+        CranePose pose = crane.craneState().pose();
+        Set<BlockPos> blocks = new HashSet<>();
+        for (double x : new double[] {Math.floor(pose.x()), Math.ceil(pose.x())}) {
+            Vec3 offset = frame.railOffset(pose.branch(), x);
+            blocks.add(frame.dock().offset((int) Math.round(offset.x), 0, (int) Math.round(offset.z)));
+        }
+        return blocks;
+    }
+
+    private static BlockPos memberDockPos(VisualContext context) {
+        return context.origin().relative(AISLE, MEMBER_X);
+    }
+
+    private static BlockPos memberInputPos(VisualContext context) {
+        return memberDockPos(context).relative(layout(context.origin()).sideDirection(MEMBER_INPUT_SIDE));
+    }
+
+    private static StackerCraneBlockEntity member(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity crane = WareworksBlockEntityTypes.STACKER_CRANE.getNullable(server.overworld(),
+                memberDockPos(context));
+        if (crane == null)
+            throw new VisualTestException("the second stacker crane dock at " + memberDockPos(context) + " is gone");
+        return crane;
     }
 
     /** The controller and then the dock are broken while the crane carries items. */

@@ -497,7 +497,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         return new TerminalStatus(true, controller.status(), controller.aisleLetter(), stock.distinctKeys(),
                 stock.totalItems(), controller.openRequestCount(), controller.requestsFor(worldPosition).size(),
                 controller.requestedFor(worldPosition), controller.deliveredFor(worldPosition),
-                controller.linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo));
+                controller.linkedDockEntity().map(StackerCraneBlockEntity::goggleInfo), controller.craneCounts());
     }
 
     /**

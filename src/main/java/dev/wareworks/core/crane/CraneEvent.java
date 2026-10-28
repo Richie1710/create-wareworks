@@ -3,8 +3,11 @@ package dev.wareworks.core.crane;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.jetbrains.annotations.Nullable;
+
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.warehouse.CraneRoute;
 import dev.wareworks.core.warehouse.LocationKind;
 
 /**
@@ -20,6 +23,27 @@ public sealed interface CraneEvent<K, L> {
     record Tick<K, L>(CraneSpeeds speeds) implements CraneEvent<K, L> {
         public Tick {
             Objects.requireNonNull(speeds, "speeds");
+        }
+    }
+
+    /**
+     * One motion tick along a route the crane already holds, <b>towards a pose that is not its phase's own target</b>
+     * (issue #14, ADR-075 §4.1): a crane of a warehouse with several cranes that is committed to a route keeps driving
+     * it while what its phase wants is not granted yet, or moves aside for another crane.
+     * <p>
+     * Only the pose moves: phase, timers, job, held items and the phase's own target are unchanged, so nothing about
+     * the job can happen on a detour. It is a no-op while the arm is out — the normal tick retracts it first — and while
+     * the crane is paused or the speeds are stopped, like a {@link Tick}.
+     *
+     * @param speeds the axis speeds of this tick
+     * @param target where the route ends: the committed stop, arm retracted
+     * @param route  the route the crane holds, from where it stands; {@code null} only for a target on its own branch
+     */
+    record Detour<K, L>(CraneSpeeds speeds, CranePose target, @Nullable CraneRoute route)
+            implements CraneEvent<K, L> {
+        public Detour {
+            Objects.requireNonNull(speeds, "speeds");
+            Objects.requireNonNull(target, "target");
         }
     }
 
@@ -127,6 +151,10 @@ public sealed interface CraneEvent<K, L> {
 
     static <K, L> CraneEvent<K, L> tick(CraneSpeeds speeds) {
         return new Tick<>(speeds);
+    }
+
+    static <K, L> CraneEvent<K, L> detour(CraneSpeeds speeds, CranePose target, @Nullable CraneRoute route) {
+        return new Detour<>(speeds, target, route);
     }
 
     static <K, L> CraneEvent<K, L> jobAssigned(TransportJob<K, L> job) {

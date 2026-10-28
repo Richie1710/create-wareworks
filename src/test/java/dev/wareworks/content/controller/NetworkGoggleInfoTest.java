@@ -67,6 +67,16 @@ class NetworkGoggleInfoTest {
         assertEquals(1, info.get().aisleCount());
     }
 
+    /** A dock left out because the warehouse has as many cranes as the server allows is a maximum like the others. */
+    @Test
+    void aWarehouseAtItsCraneMaximumSaysWhereItStops() {
+        Optional<NetworkGoggleInfo> info = NetworkGoggleInfo.of(straight(16, NetworkStop.MAX_CRANES), "A",
+                new AisleNames());
+        assertTrue(info.isPresent());
+        assertEquals(NetworkStop.MAX_CRANES, info.get().stop());
+        assertTrue(info.get().stopsShort(), "the summary display marks the warehouse as cut short");
+    }
+
     @Test
     void aWarehouseThatBendsNamesEveryAisleWithItsLetterAndLength() {
         NetworkGoggleInfo info = NetworkGoggleInfo.of(bent(16, 12, NetworkStop.END), "AB", new AisleNames()).orElseThrow();

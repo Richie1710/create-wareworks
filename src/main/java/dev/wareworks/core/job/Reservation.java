@@ -11,11 +11,13 @@ import java.util.UUID;
  * @param kind      what is promised
  * @param location  for {@link Kind#CAPACITY} the target, for {@link Kind#STOCK} the source, for {@link Kind#TRANSIT} the
  *                  output station the held items travel to, for {@link Kind#FILLING} the current target of the fill
- *                  trip (the bay before the fill, the station after it)
+ *                  trip (the bay before the fill, the station after it), for
+ *                  {@link Kind#BUFFER} the input station or collecting port the items will be picked from
  * @param key       item key
  * @param amount    promised amount, at least 1 (the ledger never stores empty reservations)
  * @param requestId who the promised items are for: a retrieval request, or the ingredient line of a production order
- *                  ({@code core.production.SupplyLine}). Never present for {@link Kind#CAPACITY}
+ *                  ({@code core.production.SupplyLine}). Never present for {@link Kind#CAPACITY} and
+ *                  {@link Kind#BUFFER}
  * @param <K>       item key type
  * @param <L>       location type
  */
@@ -40,7 +42,15 @@ public record Reservation<K, L>(UUID jobId, Kind kind, L location, K key, int am
          * are not stock anybody's item request is owed from. Counting them as {@link #TRANSIT} of their key would make
          * an item click on "Bucket" or "Lava Bucket" more or less available by the trip in flight.
          */
-        FILLING
+        FILLING,
+        /**
+         * Items in a station's buffer - an input station's or a collecting port's - that a job will pick (issue #14,
+         * ADR-075 section 9). One crane could only ever carry one trip out of a buffer at a time, so nothing was
+         * reserved there; with several cranes two of them must not plan the same buffered items. It is its own
+         * aggregate and <b>never</b> counted as stock: buffered items are no indexed stock, so the stock index
+         * arithmetic is untouched. Released at the pick like a stock reservation.
+         */
+        BUFFER
     }
 
     public Reservation {
@@ -51,8 +61,8 @@ public record Reservation<K, L>(UUID jobId, Kind kind, L location, K key, int am
         Objects.requireNonNull(requestId, "requestId");
         if (amount < 1)
             throw new IllegalArgumentException("amount must be at least 1: " + amount);
-        if (requestId.isPresent() && kind == Kind.CAPACITY)
-            throw new IllegalArgumentException("capacity reservations do not back requests");
+        if (requestId.isPresent() && (kind == Kind.CAPACITY || kind == Kind.BUFFER))
+            throw new IllegalArgumentException(kind + " reservations do not back requests");
     }
 
     /** Whether the reserved items back an open retrieval request's or production ingredient line's remaining amount. */

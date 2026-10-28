@@ -212,7 +212,9 @@ class ReservationLedgerTest {
     void trackFollowsTheStoreLifecycleAndReroutes() {
         TransportJob<String, String> job = TransportJob.store(JOB2, IN, A, IRON, 64);
         ledger.track(job);
-        assertEquals(List.of(reservation(JOB2, Reservation.Kind.CAPACITY, A, IRON, 64, null)), ledger.reservationsOf(JOB2));
+        // Since issue #14 the buffered items it will pick are reserved too, so a second crane never plans them.
+        assertEquals(List.of(reservation(JOB2, Reservation.Kind.CAPACITY, A, IRON, 64, null),
+                reservation(JOB2, Reservation.Kind.BUFFER, IN, IRON, 64, null)), ledger.reservationsOf(JOB2));
         assertEquals(64, ledger.reservedCapacityFor(IRON), "on its way into the warehouse, wherever it is going");
         job = job.withPicked(40);
         ledger.track(job);
@@ -244,8 +246,8 @@ class ReservationLedgerTest {
     void storeIntoAnAcceptingPortReservesCapacityAtThePort() {
         TransportJob<String, String> job = TransportJob.storeToPort(JOB2, IN, OUT, IRON, 20);
         ledger.track(job);
-        assertEquals(List.of(reservation(JOB2, Reservation.Kind.CAPACITY, OUT, IRON, 20, null)),
-                ledger.reservationsOf(JOB2));
+        assertEquals(List.of(reservation(JOB2, Reservation.Kind.CAPACITY, OUT, IRON, 20, null),
+                reservation(JOB2, Reservation.Kind.BUFFER, IN, IRON, 20, null)), ledger.reservationsOf(JOB2));
         assertEquals(20, ledger.reservedCapacity(OUT), "room promised at the port bounds the next plan");
         assertEquals(0, ledger.inTransit(IRON), "nothing is owed to anybody");
 
@@ -308,14 +310,15 @@ class ReservationLedgerTest {
      * <p>
      * It never reserves {@code STOCK}, because the inventory behind the port is not indexed stock and nothing may reserve
      * a player's machine, and it never reserves {@code TRANSIT}, because transit means "left the indexed stock and owed to
-     * whoever asked" and nobody asked for collected items.
+     * whoever asked" and nobody asked for collected items. Since issue #14 it does hold a {@code BUFFER} entry at the port
+     * until the pick, which is no stock either: it only keeps a second crane from planning the same items.
      */
     @Test
     void aCollectJobReservesCapacityAtItsTargetAndNothingElse() {
         TransportJob<String, String> planned = TransportJob.collect(JOB1, OUT, B, IRON, 24);
         ledger.track(planned);
-        assertEquals(List.of(reservation(JOB1, Reservation.Kind.CAPACITY, B, IRON, 24, null)),
-                ledger.reservationsOf(JOB1));
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.CAPACITY, B, IRON, 24, null),
+                reservation(JOB1, Reservation.Kind.BUFFER, OUT, IRON, 24, null)), ledger.reservationsOf(JOB1));
         assertEquals(24, ledger.reservedCapacity(B));
         assertEquals(0, ledger.reservedStock(OUT, IRON), "a machine's inventory is never reserved");
         assertEquals(0, ledger.inTransit(IRON));
@@ -498,6 +501,7 @@ class ReservationLedgerTest {
         assertEquals(2, ledger.committedToRequest(REQ1));
         assertEquals(0, ledger.inTransit("lava_bucket"), "a filled container on its way is no item transit");
         assertEquals(0, ledger.inTransitBackingRequests("lava_bucket"));
+        assertEquals(2, ledger.reservedInbound(OUT), "another crane sees the filled containers coming (issue #14)");
 
         ledger.track(filled.plusDelivered(1));
         assertEquals(1, ledger.committedToRequest(REQ1));
@@ -515,5 +519,50 @@ class ReservationLedgerTest {
         ledger.track(TransportJob.fill(JOB2, A, "bay", "bucket", 1, REQ2).withPicked(1));
         assertEquals(1, ledger.detachRequest(REQ2));
         assertEquals(0, ledger.committedToRequest(REQ2), "a detached FILLING entry counts towards nothing");
+    }
+
+    // --- several cranes (issue #14, ADR-075 section 9) ---------------------------------------------------------------
+
+    /**
+     * Buffered items a store or collect job will pick are their own aggregate and never stock: the stock index
+     * arithmetic and every availability answer are exactly what they were, and the entry ends at the pick.
+     */
+    @Test
+    void bufferedItemsAreReservedButNeverCountedAsStock() {
+        TransportJob<String, String> store = TransportJob.store(JOB1, IN, A, IRON, 40);
+        TransportJob<String, String> collect = TransportJob.collect(JOB2, OUT, B, IRON, 8);
+        ledger.track(store);
+        ledger.track(collect);
+        assertEquals(40, ledger.reservedBuffer(IN, IRON));
+        assertEquals(8, ledger.reservedBuffer(OUT, IRON));
+        assertEquals(0, ledger.reservedBuffer(IN, DIAMOND));
+        assertEquals(0, ledger.reservedStock(IRON));
+        assertEquals(0, ledger.totalReservedStock());
+        assertEquals(50, ledger.availableStock(IRON, 50, 0), "availability is untouched");
+        assertEquals(40, ledger.readOnlyView().reservedBuffer(IN, IRON));
+
+        ledger.track(store.withPicked(40));
+        assertEquals(0, ledger.reservedBuffer(IN, IRON), "released at the pick, like a stock reservation");
+        ledger.releaseJob(JOB2);
+        assertEquals(0, ledger.reservedBuffer(OUT, IRON));
+        assertThrows(IllegalArgumentException.class,
+                () -> reservation(JOB1, Reservation.Kind.BUFFER, IN, IRON, 1, REQ1), "nobody asked for buffered items");
+    }
+
+    /** What other jobs are already bringing to a target: capacity reserved there plus items in transit to it. */
+    @Test
+    void inboundIsTheRoomOtherJobsAlreadyHoldAtATarget() {
+        assertEquals(0, ledger.reservedInbound(OUT));
+        ledger.track(TransportJob.retrieve(JOB1, A, OUT, DIAMOND, 16, REQ1).withPicked(16));
+        ledger.track(TransportJob.storeToPort(JOB2, IN, OUT, IRON, 20));
+        ledger.track(TransportJob.store(JOB3, IN, B, IRON, 5));
+        assertEquals(36, ledger.reservedInbound(OUT), "sixteen in transit and twenty of room promised");
+        assertEquals(5, ledger.reservedInbound(B));
+        assertEquals(36, ledger.readOnlyView().reservedInbound(OUT));
+        ledger.releaseJob(JOB1);
+        assertEquals(20, ledger.reservedInbound(OUT));
+        ledger.clear();
+        assertEquals(0, ledger.reservedInbound(OUT));
+        assertEquals(0, ledger.reservedBuffer(IN, IRON));
     }
 }

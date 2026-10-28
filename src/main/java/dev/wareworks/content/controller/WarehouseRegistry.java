@@ -14,6 +14,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
 import net.createmod.catnip.data.WorldAttached;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 
@@ -181,6 +182,40 @@ public final class WarehouseRegistry {
             best = controller;
             bestLayout = layout;
             bestAligned = aligned;
+        }
+        return Optional.ofNullable(best);
+    }
+
+    /**
+     * The loaded controller whose warehouse has an <b>aisle block</b> at {@code pos}, other than the one at
+     * {@code except}: the warehouse a stacker crane dock facing {@code pos} would be a crane of (issue #14, ADR-075
+     * §15.1). Two warehouses can share the rails between their docks, so the answer is picked by the fixed rule of
+     * {@link #ownsMemberState}: the dock closest to {@code pos}, then the controller position.
+     * <p>
+     * A query over the controllers already registered here, not a new index: one containment test per branch of every
+     * registered controller and one block entity lookup per hit. Asked only while a player looks at a dock through
+     * goggles, never on a tick. Server thread only.
+     */
+    public static Optional<WarehouseControllerBlockEntity> findByAisleBlock(Level level, BlockPos pos,
+            @Nullable BlockPos except) {
+        Objects.requireNonNull(pos, "pos");
+        if (!(level instanceof ServerLevel))
+            return Optional.empty();
+        WarehouseControllerBlockEntity best = null;
+        WarehouseLayout bestLayout = null;
+        for (Map.Entry<BlockPos, WarehouseLayout> entry : CONTROLLERS.get(level).entrySet()) {
+            if (entry.getKey().equals(except))
+                continue;
+            WarehouseLayout layout = entry.getValue();
+            if (layout.aislePositionOf(pos, Direction.Axis.X).isEmpty())
+                continue;
+            WarehouseControllerBlockEntity controller = loadedController(level, entry.getKey());
+            if (controller == null)
+                continue;
+            if (best != null && !isNearerDock(pos, layout, entry.getKey(), bestLayout, best.getBlockPos()))
+                continue;
+            best = controller;
+            bestLayout = layout;
         }
         return Optional.ofNullable(best);
     }

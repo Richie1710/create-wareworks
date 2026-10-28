@@ -124,6 +124,16 @@ public final class WareworksConfig {
         return get(SERVER.maxJunctions);
     }
 
+    /**
+     * Stacker cranes one connected warehouse may have, the one at the controller's own dock included (issue #14,
+     * ADR-075). A dock without a controller of its own that faces into a warehouse's rails becomes another crane of it,
+     * up to this many; a dock beyond it is a wall and is reported where it stands. <b>1 is the off switch</b>: every
+     * such dock is then a wall, exactly as up to 0.17.1, and no traffic code runs at all.
+     */
+    public static int maxCranesPerNetwork() {
+        return get(SERVER.maxCranesPerNetwork);
+    }
+
     // --- crane ---------------------------------------------------------------------------------------------------
 
     public static double stressImpact() {
@@ -561,6 +571,7 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue maxNetworkRails;
         public final ModConfigSpec.IntValue maxBranches;
         public final ModConfigSpec.IntValue maxJunctions;
+        public final ModConfigSpec.IntValue maxCranesPerNetwork;
 
         public final ModConfigSpec.DoubleValue stressImpact;
         public final ModConfigSpec.DoubleValue travelBlocksPerTickPerRpm;
@@ -668,6 +679,19 @@ public final class WareworksConfig {
                                     + "where it stopped. Set it to 0 to keep every warehouse the single aisle at its "
                                     + "dock without switching the rest of this version off.")
                     .defineInRange("maxJunctions", 32, 0, 128);
+            maxCranesPerNetwork = builder
+                    .comment("Maximum number of stacker cranes in one connected warehouse, the one at the controller "
+                            + "included.",
+                            "A dock without a controller of its own that faces into a warehouse's rails becomes "
+                                    + "another crane of that warehouse. The warehouse gives each job to the nearest "
+                                    + "free crane, and a crane reserves every rail up to its next stop before it "
+                                    + "moves, so two cranes never meet on a rail.",
+                            "A dock beyond the maximum is not part of the warehouse; the controller reports where "
+                                    + "it stands. A crane the warehouse already has keeps its place, and lowering the "
+                                    + "maximum drops no crane mid trip: it finishes, parks on its dock and then leaves.",
+                            "Set it to 1 to keep every warehouse one crane, as up to 0.17: such a dock is then a "
+                                    + "wall, as before.")
+                    .defineInRange("maxCranesPerNetwork", 4, 1, 16);
             builder.pop();
 
             builder.comment("Stacker crane").push("crane");

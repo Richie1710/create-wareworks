@@ -651,6 +651,55 @@ class CraneStateMachineTest {
         assertEquals(1, picking.count(CraneEffect.PerformPick.class));
     }
 
+    // --- detour (issue #14, ADR-075) ------------------------------------------------------------------------------
+
+    /**
+     * A crane of a warehouse with several cranes drives a route it holds towards a pose that is not its phase's own
+     * target: only the pose moves, and phase, timers, job and the phase's target stay exactly as they were.
+     */
+    @Test
+    void aDetourMovesThePoseAndNothingElse() {
+        Harness h = new Harness();
+        h.send(CraneEvent.jobAssigned(retrieveJob()));
+        CraneState<String, RackPosition> before = h.state;
+        CranePose aside = CranePose.at(6, 0, Side.LEFT);
+        CraneStateMachine.Transition<String, RackPosition> moved = MACHINE.apply(before,
+                CraneEvent.detour(SPEEDS, aside, null));
+        CraneState<String, RackPosition> after = moved.state();
+        assertTrue(moved.changed());
+        assertEquals(List.of(), moved.effects());
+        assertEquals(before.pose().x() + SPEEDS.vx(), after.pose().x(), "one tick of travel along X");
+        assertEquals(before.pose(), after.previousPose(), "with the previous pose stored like every tick");
+        assertEquals(before.phase(), after.phase());
+        assertEquals(before.target(), after.target(), "the phase still wants its own target");
+        assertEquals(before.job(), after.job());
+        assertEquals(before.phaseTicks(), after.phaseTicks());
+        assertEquals(before.retryTicks(), after.retryTicks());
+        assertEquals(0.0, moved.quarterTurnsSwung());
+    }
+
+    @Test
+    void aDetourNeverMovesAnExtendedArmOrAPausedCrane() {
+        Harness h = new Harness();
+        h.send(CraneEvent.jobAssigned(storeJob()));
+        h.tickUntil(() -> h.state.phase() == CranePhase.PICK);
+        assertTrue(h.state.pose().arm() > 0);
+        CraneState<String, RackPosition> picking = h.state;
+        CraneState<String, RackPosition> detoured = MACHINE.apply(picking,
+                CraneEvent.detour(SPEEDS, CranePose.at(6, 0, Side.LEFT), null)).state();
+        assertEquals(picking.pose(), detoured.pose(), "the arm is out: the normal tick retracts it first");
+        assertEquals(picking.withPreviousPose(picking.pose()), detoured);
+
+        Harness paused = new Harness();
+        paused.send(CraneEvent.jobAssigned(retrieveJob()));
+        paused.send(CraneEvent.paused());
+        CraneState<String, RackPosition> still = paused.state;
+        assertEquals(still.pose(), MACHINE.apply(still, CraneEvent.detour(SPEEDS, CranePose.at(6, 0, Side.LEFT),
+                null)).state().pose());
+        assertEquals(still.pose(), MACHINE.apply(still, CraneEvent.detour(CraneSpeeds.STOPPED,
+                CranePose.at(6, 0, Side.LEFT), null)).state().pose(), "and stopped speeds move nothing either");
+    }
+
     // --- interruptions -------------------------------------------------------------------------------------------
 
     @Test

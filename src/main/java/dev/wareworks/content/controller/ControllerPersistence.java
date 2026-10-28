@@ -12,6 +12,8 @@ import java.util.UUID;
 import org.jetbrains.annotations.Nullable;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.crane.CraneTrafficClaim;
+import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.KeeperRule;
 import dev.wareworks.core.address.AisleGeometry;
@@ -23,6 +25,7 @@ import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
@@ -60,6 +63,9 @@ import net.minecraft.util.Mth;
  *                 Rules: [ { Item: &lt;ItemKey&gt;, Min: long, Max: long, Reserve: long,
  *                            Unit?: "fluid" } ] } ]                 (keeper order; Unit absent = items, M31)
  * ChunkKeep:  { GaveUp: true, Work: long }                              (absent unless the aisle gave up, M19)
+ * Cranes:     [ { N: int, D: int[3] dock offset from the controller, B: int, X: int, S?: true,
+ *                 PB: int, PX: double, Traffic: { Route?, StopB?, StopX?, For?, Since? } } ]
+ *                                                  (absent while the warehouse has one crane, issue #14)
  * </pre>
  * The stock rules are the controller's own copy of what the aisle's warehouse stock keepers hold. They are saved
  * <b>here</b> rather than only in the keepers, because a rule gates item movement in both directions and a keeper's
@@ -103,6 +109,18 @@ final class ControllerPersistence {
     static final String STOCK_RULES_TAG = "StockRules";
     static final String STOCK_PAUSES_TAG = "StockPauses";
     static final String CHUNK_KEEP_TAG = "ChunkKeep";
+    /** The cranes of a warehouse with several and the last claim this controller knew of each (issue #14, ADR-075). */
+    static final String CRANES_TAG = "Cranes";
+    private static final String CRANE_NUMBER = "N";
+    private static final String CRANE_DOCK = "D";
+    private static final String CRANE_SITE_BRANCH = "B";
+    private static final String CRANE_SITE_X = "X";
+    private static final String CRANE_STRANDED = "S";
+    private static final String CRANE_POSE_BRANCH = "PB";
+    private static final String CRANE_POSE_X = "PX";
+    private static final String CRANE_CLAIM = "Traffic";
+    private static final String CRANE_JOB = "Job";
+    private static final int DOCK_OFFSET_INTS = 3;
     private static final String GAVE_UP = "GaveUp";
     private static final String WORK = "Work";
     private static final String CAUSE = "Cause";
@@ -229,6 +247,18 @@ final class ControllerPersistence {
      */
     record SavedChunkKeep(boolean gaveUp, long workFingerprint) {
         static final SavedChunkKeep NONE = new SavedChunkKeep(false, 0L);
+    }
+
+    /** The saved cranes of a warehouse with several, in crane order, and the last thing known of each dock's crane. */
+    record SavedCranes(List<CraneMember> members, Map<BlockPos, CraneTraffic.Known> known,
+                       Map<BlockPos, TransportJob<ItemKey, RackPosition>> jobs) {
+        static final SavedCranes NONE = new SavedCranes(List.of(), Map.of(), Map.of());
+
+        SavedCranes {
+            members = List.copyOf(Objects.requireNonNull(members, "members"));
+            known = Map.copyOf(Objects.requireNonNull(known, "known"));
+            jobs = Map.copyOf(Objects.requireNonNull(jobs, "jobs"));
+        }
     }
 
     private ControllerPersistence() {
@@ -806,6 +836,86 @@ final class ControllerPersistence {
         chunkKeep.putBoolean(GAVE_UP, true);
         chunkKeep.putLong(WORK, workFingerprint);
         tag.put(CHUNK_KEEP_TAG, chunkKeep);
+    }
+
+    /**
+     * Writes the cranes of a warehouse with several (issue #14, ADR-075 §13): per crane its dock (relative to the
+     * controller), its number and dock site, the last pose and claim this controller knew of it, and the last job it
+     * saw it carry. A ledger built after a load restores a crane whose chunk is not loaded from exactly this, as an
+     * obstacle, and the reservations keep that crane's job, so no other crane is promised its stock or its request.
+     * <b>Nothing at all</b> for a warehouse of one crane, which is every save up to 0.17.1.
+     */
+    static void writeCranes(CompoundTag tag, List<CraneMember> members, Map<BlockPos, CraneTraffic.Known> known,
+            Map<BlockPos, TransportJob<ItemKey, RackPosition>> jobs, BlockPos controller,
+            HolderLookup.Provider registries) {
+        if (members.size() < 2)
+            return;
+        ListTag list = new ListTag();
+        for (CraneMember member : members) {
+            CompoundTag entry = new CompoundTag();
+            entry.putInt(CRANE_NUMBER, member.number());
+            entry.putIntArray(CRANE_DOCK, new int[] {member.dock().getX() - controller.getX(),
+                    member.dock().getY() - controller.getY(), member.dock().getZ() - controller.getZ()});
+            entry.putInt(CRANE_SITE_BRANCH, member.siteBranch());
+            entry.putInt(CRANE_SITE_X, member.siteX());
+            if (member.stranded())
+                entry.putBoolean(CRANE_STRANDED, true);
+            CraneTraffic.Known last = known.get(member.dock());
+            if (last != null) {
+                entry.putInt(CRANE_POSE_BRANCH, last.branch());
+                entry.putDouble(CRANE_POSE_X, last.x());
+                CompoundTag claim = new CompoundTag();
+                last.claim().write(claim);
+                if (!claim.isEmpty())
+                    entry.put(CRANE_CLAIM, claim);
+            }
+            TransportJob<ItemKey, RackPosition> job = jobs.get(member.dock());
+            if (job != null)
+                StackerCraneBlockEntity.saveJob(job, registries).ifPresent(jobTag -> entry.put(CRANE_JOB, jobTag));
+            list.add(entry);
+        }
+        tag.put(CRANES_TAG, list);
+    }
+
+    /**
+     * Reads what {@link #writeCranes} wrote; {@link SavedCranes#NONE} when the tag is absent or does not describe a
+     * warehouse of several cranes. Untrusted data: an entry that does not read is skipped, and the cranes are numbered
+     * again in the order they were saved, so a hole can never become a crane number nobody has.
+     */
+    static SavedCranes readCranes(CompoundTag tag, BlockPos controller, HolderLookup.Provider registries) {
+        if (!tag.contains(CRANES_TAG, Tag.TAG_LIST))
+            return SavedCranes.NONE;
+        ListTag list = tag.getList(CRANES_TAG, Tag.TAG_COMPOUND);
+        List<CraneMember> members = new ArrayList<>();
+        Map<BlockPos, CraneTraffic.Known> known = new HashMap<>();
+        Map<BlockPos, TransportJob<ItemKey, RackPosition>> jobs = new HashMap<>();
+        for (int i = 0; i < list.size(); i++) {
+            CompoundTag entry = list.getCompound(i);
+            int[] offset = entry.getIntArray(CRANE_DOCK);
+            if (offset.length != DOCK_OFFSET_INTS)
+                continue;
+            BlockPos dock = controller.offset(offset[0], offset[1], offset[2]);
+            int branch = entry.getInt(CRANE_SITE_BRANCH);
+            int x = entry.getInt(CRANE_SITE_X);
+            if (branch < RackPosition.FIRST_BRANCH || branch > RackPosition.MAX_BRANCH || x < 0
+                    || x > AisleGeometry.MAX_LENGTH)
+                continue;
+            members.add(new CraneMember(members.size() + 1, dock, branch, x, entry.getBoolean(CRANE_STRANDED)));
+            if (entry.contains(CRANE_POSE_X, Tag.TAG_DOUBLE)) {
+                double poseX = entry.getDouble(CRANE_POSE_X);
+                int poseBranch = entry.getInt(CRANE_POSE_BRANCH);
+                if (Double.isFinite(poseX) && poseX >= 0.0 && poseX <= AisleGeometry.MAX_LENGTH
+                        && poseBranch >= RackPosition.FIRST_BRANCH && poseBranch <= RackPosition.MAX_BRANCH)
+                    known.put(dock, new CraneTraffic.Known(poseBranch, poseX,
+                            CraneTrafficClaim.read(entry.getCompound(CRANE_CLAIM))));
+            }
+            if (entry.contains(CRANE_JOB, Tag.TAG_COMPOUND))
+                StackerCraneBlockEntity.loadJob(entry.getCompound(CRANE_JOB), registries)
+                        .ifPresent(job -> jobs.put(dock, job));
+        }
+        if (members.size() < 2)
+            return SavedCranes.NONE;
+        return new SavedCranes(members, known, jobs);
     }
 
     /** Reads what {@link #writeChunkKeep} wrote; {@link SavedChunkKeep#NONE} when the tag is absent. */

@@ -45,6 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into the bays, its reserve holds fluid back from warehouse ports, and its minimum is shown. Rows from older
   worlds stay item rules
 - **Ponder scene "Asking the Warehouse for Fluid"** on both fluid bays and the terminal
+- **Several stacker cranes can share one warehouse** ([#14](https://github.com/Richie1710/create-wareworks/issues/14)).
+  A Stacker Crane dock without a controller of its own that faces into a warehouse's rails becomes another crane of
+  that warehouse, up to `aisle.maxCranesPerNetwork` (default 4). All cranes share the controller, the stock list and
+  every terminal, and the warehouse gives each job to the nearest free crane. Before it moves, a crane reserves every
+  rail up to its next stop and otherwise waits, it never cuts another crane off from its dock, and a crane standing in
+  the way moves aside to its home point or its dock, so two cranes never meet on a rail and never lock each other up.
+  On a comb one crane waits in a side aisle while the other drives past; on one straight run the cranes keep their
+  order, so docks belong at opposite ends. Each crane uses one Warehouse Home Point. Engineer's Goggles say which crane
+  does what, why one waits and how long its trip still takes, the controller lists every crane, the terminal counts
+  them, and Crane Status and Crane Throughput can now also be read off the controller for the whole warehouse. A Ponder
+  scene "Two Cranes, One Warehouse" on the Stacker Crane and the Warehouse Rail shows it. A crane at work is never
+  pushed out of its warehouse: a new dock never takes its place, one the warehouse has no room for any more (the cap
+  was lowered) finishes, parks on its dock and only then leaves, and when the controller is broken a crane out on the
+  rails stops where it stands with its items until a controller takes it in again.
 
 ### Changed
 
@@ -52,9 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warehouse in millibuckets. This applies to item rules as well
 - **Server and players have to update together.** A client with this version cannot join a server with an older one,
   and the other way round, because the terminal now carries fluid rows and fluid requests
-  ([#21](https://github.com/Richie1710/create-wareworks/issues/21)). Worlds from older versions load unchanged. Opening
+  ([#21](https://github.com/Richie1710/create-wareworks/issues/21)) and counts the cranes
+  ([#14](https://github.com/Richie1710/create-wareworks/issues/14)). Worlds from older versions load unchanged. Opening
   a world in an older version of the mod again turns open fluid requests into requests for filled buckets from the
   shelves, and a crane on a fill trip drops what it carries at its dock, so back up the world before downgrading
+- **A Stacker Crane dock without a controller that faces into a warehouse's rails is now another crane of that
+  warehouse**; up to 0.17.1 it was a wall between two warehouses
+  ([#14](https://github.com/Richie1710/create-wareworks/issues/14)). A dock with a controller of its own still is its
+  own warehouse. Set `aisle.maxCranesPerNetwork = 1` to keep the old behaviour. With two or more cranes a crane also
+  drives back to its home point or dock on a single straight aisle. The Shift description of the Stacker Crane says
+  that such a dock becomes another crane, and the Warehouse Home Point's that each crane uses one.
 
 ## [0.17.1-beta] - 2026-10-27
 

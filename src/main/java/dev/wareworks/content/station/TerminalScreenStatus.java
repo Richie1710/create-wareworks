@@ -3,6 +3,7 @@ package dev.wareworks.content.station;
 import java.util.Objects;
 
 import dev.wareworks.content.controller.ControllerStatus;
+import dev.wareworks.content.controller.CraneCounts;
 import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.CranePhase;
@@ -10,7 +11,8 @@ import net.minecraft.network.FriendlyByteBuf;
 
 /**
  * The bounded form of {@link TerminalStatus} a terminal sends to an open screen ({@code docs/warehouse-system.md}
- * §3.4.2, ADR-019): numbers, one character and three enum ordinals — never an item, a stack or a component.
+ * §3.4.2, ADR-019): numbers, one character and three enum ordinals — never an item, a stack or a component. Since
+ * issue #14 it also carries four crane counts ({@link CraneCounts}).
  * <p>
  * The screen shows the aisle's totals, this terminal's open requests and the crane's line ("working", "paused: no
  * rotation"), so only the crane's phase and pause reason are taken from {@code CraneGoggleInfo}; its job and held items
@@ -28,19 +30,25 @@ import net.minecraft.network.FriendlyByteBuf;
  * @param craneLinked      whether a loaded, linked stacker crane reported its state
  * @param cranePhase       the crane's phase
  * @param cranePause       why the crane is paused ({@link CranePauseReason#NONE} if it is not)
+ * @param cranes           how many cranes the warehouse has and how many of them work, wait for another crane's rails
+ *                         and are paused (issue #14, ADR-075 §15.2). The screen's crane line names them for more than
+ *                         one crane and reads exactly as before for one. Written after the pause reason, which is why
+ *                         {@code WareworksNetwork.VERSION} is 18
  */
 public record TerminalScreenStatus(boolean hasAisle, ControllerStatus controllerStatus, char aisleLetter, int itemTypes,
                                    long totalItems, int openRequests, int requestsHere, long requestedHere,
                                    long deliveredHere, boolean craneLinked, CranePhase cranePhase,
-                                   CranePauseReason cranePause) {
+                                   CranePauseReason cranePause, CraneCounts cranes) {
     /** No aisle: the terminal stands outside one, is misaligned, or its controller is not loaded. */
     public static final TerminalScreenStatus NONE = new TerminalScreenStatus(false, ControllerStatus.NO_DOCK,
-            StorageAddress.FIRST_AISLE, 0, 0L, 0, 0, 0L, 0L, false, CranePhase.IDLE, CranePauseReason.NONE);
+            StorageAddress.FIRST_AISLE, 0, 0L, 0, 0, 0L, 0L, false, CranePhase.IDLE, CranePauseReason.NONE,
+            CraneCounts.NONE);
 
     public TerminalScreenStatus {
         controllerStatus = controllerStatus == null ? ControllerStatus.NO_DOCK : controllerStatus;
         cranePhase = cranePhase == null ? CranePhase.IDLE : cranePhase;
         cranePause = cranePause == null ? CranePauseReason.NONE : cranePause;
+        cranes = cranes == null ? CraneCounts.NONE : cranes;
         if (!StorageAddress.isValidAisle(aisleLetter))
             aisleLetter = StorageAddress.FIRST_AISLE;
         itemTypes = Math.max(0, itemTypes);
@@ -58,7 +66,7 @@ public record TerminalScreenStatus(boolean hasAisle, ControllerStatus controller
                 status.itemTypes(), status.totalItems(), status.openRequests(), status.requestsHere(),
                 status.requestedHere(), status.deliveredHere(), status.crane().isPresent(),
                 status.crane().map(crane -> crane.phase()).orElse(CranePhase.IDLE),
-                status.crane().map(crane -> crane.pauseReason()).orElse(CranePauseReason.NONE));
+                status.crane().map(crane -> crane.pauseReason()).orElse(CranePauseReason.NONE), status.cranes());
     }
 
     /** Whether the aisle is complete enough to serve requests. */
@@ -69,6 +77,11 @@ public record TerminalScreenStatus(boolean hasAisle, ControllerStatus controller
     /** Whether the crane is paused for a reason the screen should name. */
     public boolean isPaused() {
         return craneLinked && cranePause != CranePauseReason.NONE;
+    }
+
+    /** Whether the warehouse has more than one crane, so the crane line counts them instead of naming one. */
+    public boolean severalCranes() {
+        return cranes.several();
     }
 
     /** Whether the crane is carrying out a job right now. */
@@ -89,6 +102,9 @@ public record TerminalScreenStatus(boolean hasAisle, ControllerStatus controller
         buffer.writeBoolean(craneLinked);
         buffer.writeVarInt(cranePhase.ordinal());
         buffer.writeVarInt(cranePause.ordinal());
+        // Issue #14: appended after the pause reason, so a reader of the old shape stops before it (VERSION 18).
+        for (int count : cranes.pack())
+            buffer.writeVarInt(count);
     }
 
     /** Reads a status written by {@link #write}; unknown ordinals and out-of-range values fall back to defaults. */
@@ -106,8 +122,11 @@ public record TerminalScreenStatus(boolean hasAisle, ControllerStatus controller
         boolean craneLinked = buffer.readBoolean();
         CranePhase phase = byOrdinal(CranePhase.values(), buffer.readVarInt(), CranePhase.IDLE);
         CranePauseReason pause = byOrdinal(CranePauseReason.values(), buffer.readVarInt(), CranePauseReason.NONE);
+        int[] counts = new int[CraneCounts.PACKED_LENGTH];
+        for (int i = 0; i < counts.length; i++)
+            counts[i] = buffer.readVarInt();
         return new TerminalScreenStatus(hasAisle, controllerStatus, aisleLetter, itemTypes, totalItems, openRequests,
-                requestsHere, requestedHere, deliveredHere, craneLinked, phase, pause);
+                requestsHere, requestedHere, deliveredHere, craneLinked, phase, pause, CraneCounts.unpack(counts));
     }
 
     private static <E> E byOrdinal(E[] values, int ordinal, E fallback) {

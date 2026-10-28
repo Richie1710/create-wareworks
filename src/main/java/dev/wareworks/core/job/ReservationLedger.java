@@ -32,7 +32,9 @@ import dev.wareworks.core.warehouse.LocationKind;
  * {@link #track} applies it. {@link #restoreFrom} rebuilds the whole ledger from persisted jobs, so the ledger itself
  * does not need to be saved (a controller adopting a crane's job rebuilds its reservations, §8):
  * <ul>
- *   <li>not picked, store: {@link Reservation.Kind#CAPACITY} of the planned amount at the target;</li>
+ *   <li>not picked, store or collect: {@link Reservation.Kind#CAPACITY} of the planned amount at the target, and
+ *       {@link Reservation.Kind#BUFFER} of it at the source, the input station or collecting port it picks from
+ *       (issue #14: several cranes must not plan the same buffered items);</li>
  *   <li>not picked, retrieve or supply: {@link Reservation.Kind#STOCK} of the planned amount at the source, with the
  *       request or production ingredient line it serves ({@link JobType#reservesSourceStock()});</li>
  *   <li>picked, items held, target is a delivery station (output or production,
@@ -66,6 +68,10 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
     private final Map<K, Long> stockByKey = new HashMap<>();
     private final Map<K, Long> stockNotBackingByKey = new HashMap<>();
     private final Map<K, Long> transitByKey = new HashMap<>();
+    private final Map<L, Long> transitTotalAt = new HashMap<>();
+    /** Containers of fill trips per current target; only {@link #reservedInbound} reads it (issue #14 with M31). */
+    private final Map<L, Long> fillingTotalAt = new HashMap<>();
+    private final Map<L, Map<K, Long>> bufferAt = new HashMap<>();
     private final Map<K, Long> transitBackingByKey = new HashMap<>();
     private final Map<UUID, Long> committedByRequest = new HashMap<>();
     private long totalCapacity;
@@ -210,8 +216,14 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
             if (job.type().reservesSourceStock())
                 return List.of(new Reservation<>(job.id(), Reservation.Kind.STOCK, job.source(), job.key(),
                         job.plannedAmount(), job.requestId()));
-            return List.of(new Reservation<>(job.id(), Reservation.Kind.CAPACITY, job.target(), job.key(),
-                    job.plannedAmount(), Optional.empty()));
+            Reservation<K, L> room = new Reservation<>(job.id(), Reservation.Kind.CAPACITY, job.target(), job.key(),
+                    job.plannedAmount(), Optional.empty());
+            // The buffered items it will pick (issue #14): a store from an input station and a collect from a port
+            // reserve them, so a second crane never plans the same items. Never stock, so no index figure changes.
+            if (job.type().bringsItemsIn())
+                return List.of(room, new Reservation<>(job.id(), Reservation.Kind.BUFFER, job.source(), job.key(),
+                        job.plannedAmount(), Optional.empty()));
+            return List.of(room);
         }
         int held = job.heldAmount();
         if (held == 0)
@@ -263,6 +275,9 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
         stockByKey.clear();
         stockNotBackingByKey.clear();
         transitByKey.clear();
+        transitTotalAt.clear();
+        fillingTotalAt.clear();
+        bufferAt.clear();
         transitBackingByKey.clear();
         committedByRequest.clear();
         totalCapacity = 0;
@@ -300,6 +315,18 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
     @Override
     public long reservedStock(K key) {
         return stockByKey.getOrDefault(Objects.requireNonNull(key, "key"), 0L);
+    }
+
+    @Override
+    public long reservedBuffer(L location, K key) {
+        return nested(bufferAt, location, key);
+    }
+
+    @Override
+    public long reservedInbound(L location) {
+        Objects.requireNonNull(location, "location");
+        return capacityTotalAt.getOrDefault(location, 0L) + transitTotalAt.getOrDefault(location, 0L)
+                + fillingTotalAt.getOrDefault(location, 0L);
     }
 
     @Override
@@ -441,6 +468,7 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
             }
             case TRANSIT -> {
                 add(transitByKey, key, delta);
+                add(transitTotalAt, reservation.location(), delta);
                 if (reservation.backsRequest()) {
                     add(transitBackingByKey, key, delta);
                     add(committedByRequest, reservation.requestId().get(), delta);
@@ -448,11 +476,14 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
                 totalTransit += delta;
             }
             // Only the request counts a fill trip's containers (M31): no per-key aggregate and no total, so neither an
-            // item's availability nor a location's room changes by the trip in flight.
+            // item's availability nor a location's room changes by the trip in flight. What a second crane may still
+            // bring to the same station does (issue #14): the containers count towards the target's inbound.
             case FILLING -> {
+                add(fillingTotalAt, reservation.location(), delta);
                 if (reservation.backsRequest())
                     add(committedByRequest, reservation.requestId().get(), delta);
             }
+            case BUFFER -> addNested(bufferAt, reservation.location(), key, delta);
         }
     }
 
@@ -499,6 +530,16 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
         @Override
         public long reservedStock(L location, K key) {
             return ledger.reservedStock(location, key);
+        }
+
+        @Override
+        public long reservedBuffer(L location, K key) {
+            return ledger.reservedBuffer(location, key);
+        }
+
+        @Override
+        public long reservedInbound(L location) {
+            return ledger.reservedInbound(location);
         }
 
         @Override

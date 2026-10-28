@@ -175,11 +175,12 @@ final class CraneSounds {
      * <p>
      * Measured through the warehouse's own rails, not along the dock's aisle: once the crane has turned a corner its
      * position runs down another line entirely, and a sound played at the dock's aisle would come from the wrong side
-     * of the room (ADR-033).
+     * of the room (ADR-033). The rails are measured from the warehouse's own dock, which for a member crane of a
+     * warehouse with several is another block than its own (issue #14).
      */
     private static Vec3 position(StackerCraneBlockEntity crane, CranePose pose, Anchor anchor) {
         WarehouseLayout warehouse = crane.warehouse();
-        Vec3 floor = Vec3.atBottomCenterOf(crane.getBlockPos()).add(warehouse.railOffset(pose.branch(), pose.x()));
+        Vec3 floor = Vec3.atBottomCenterOf(warehouse.dock()).add(warehouse.railOffset(pose.branch(), pose.x()));
         return switch (anchor) {
             case BASE -> floor.add(0.0, BASE_HEIGHT, 0.0);
             case CARRIAGE -> floor.add(0.0, pose.y() + CARRIAGE_HEIGHT, 0.0);
