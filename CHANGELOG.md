@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0-beta] - 2026-10-28
+
 ### Added
 
 - **Computers can use a warehouse terminal (CC: Tweaked)** ([#9](https://github.com/Richie1710/create-wareworks/issues/9)).
@@ -33,18 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bay. Before anything is promised the terminal asks: it names the containers it will use, the number of crane
   trips and, when it cannot serve the whole amount, the largest whole amount it can. Open fill requests are listed
   in the terminal's order panel and can be cancelled there. One click asks for at most 64 buckets
-  (`maxTerminalFluidRequestBuckets`)
+  (`maxTerminalFluidRequestBuckets`).
 - **No empty containers in stock: the fluid row turns red** and says so, with a hint to the pipe at the back of the
   bay. When one of your production stations has a pattern that makes buckets, the question offers to have them
-  made first, and the fluid is delivered once they arrive. The crane's goggles say "no empty containers in stock"
+  made first, and the fluid is delivered once they arrive. The crane's goggles say "no empty containers in stock".
 - **A warehouse port with a filled bucket in its filter is filled from the fluid bays** once the shelves have no
   filled buckets for it; while they do, it asks for them as before. "Stock of the Filtered Item" on such a port
-  shows the fluid in the bays
+  shows the fluid in the bays.
 - **Stock rules for fluid.** A stock keeper row with a filled container can count the fluid in the fluid bays
   instead of the containers (switch "B" / "x" at the end of the row). Its maximum caps what the crane stores
   into the bays, its reserve holds fluid back from warehouse ports, and its minimum is shown. Rows from older
-  worlds stay item rules
-- **Ponder scene "Asking the Warehouse for Fluid"** on both fluid bays and the terminal
+  worlds stay item rules.
+- **Ponder scene "Asking the Warehouse for Fluid"** on both fluid bays and the terminal.
 - **Several stacker cranes can share one warehouse** ([#14](https://github.com/Richie1710/create-wareworks/issues/14)).
   A Stacker Crane dock without a controller of its own that faces into a warehouse's rails becomes another crane of
   that warehouse, up to `aisle.maxCranesPerNetwork` (default 4). All cranes share the controller, the stock list and
@@ -63,13 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A stock rule's numbers now go up to 1 000 000 000** (was 1 000 000), so a rule can count the fluid of a large
-  warehouse in millibuckets. This applies to item rules as well
+  warehouse in millibuckets. This applies to item rules as well.
 - **Server and players have to update together.** A client with this version cannot join a server with an older one,
   and the other way round, because the terminal now carries fluid rows and fluid requests
   ([#21](https://github.com/Richie1710/create-wareworks/issues/21)) and counts the cranes
   ([#14](https://github.com/Richie1710/create-wareworks/issues/14)). Worlds from older versions load unchanged. Opening
   a world in an older version of the mod again turns open fluid requests into requests for filled buckets from the
-  shelves, and a crane on a fill trip drops what it carries at its dock, so back up the world before downgrading
+  shelves, and a crane on a fill trip drops what it carries at its dock, so back up the world before downgrading.
 - **A Stacker Crane dock without a controller that faces into a warehouse's rails is now another crane of that
   warehouse**; up to 0.17.1 it was a wall between two warehouses
   ([#14](https://github.com/Richie1710/create-wareworks/issues/14)). A dock with a controller of its own still is its
@@ -1434,7 +1436,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.17.1-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.18.0-beta...HEAD
+[0.18.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.1-beta...v0.18.0-beta
 [0.17.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.0-beta...v0.17.1-beta
 [0.17.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.16.0-beta...v0.17.0-beta
 [0.16.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.15.0-beta...v0.16.0-beta
