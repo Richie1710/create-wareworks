@@ -19,6 +19,13 @@ package dev.wareworks.core.terminal;
  * number the <b>server</b> computed from the ingredients its patterns need ({@code StockCount#producibleAmount()}).
  * The screen knows neither the patterns nor what the ingredients are already promised to, so it must never derive that
  * number itself — it only uses the one it was last told.
+ * <p>
+ * <b>That number is one step deep, so it does not bound a chosen amount of a makeable item</b> (issue #42). It counts
+ * what the ingredients in the racks make right now, while the server plans whole chains (M20, ADR-032): stairs out of
+ * tiles it first has to make out of bricks. Clamping a click to it cut 274 stairs down to the 40 the tiles in stock
+ * gave, before the server could plan the rest. A plain or Shift click on an item a pattern makes therefore keeps its
+ * amount, and the server clamps it to what its plan can really make and says why it stopped there. Only Ctrl, which
+ * asks for "everything", still takes the number it was told.
  */
 public final class TerminalAmounts {
     /** The smallest amount a request can ask for. */
@@ -55,6 +62,20 @@ public final class TerminalAmounts {
     /** {@link #amountFor(Click, int, int, long, long, int)} for an item no production pattern makes. */
     public static int amountFor(Click click, int selected, int stackSize, long available, int max) {
         return amountFor(click, selected, stackSize, available, 0L, max);
+    }
+
+    /**
+     * {@link #amountFor(Click, int, int, long, long, int)} that knows whether a pattern of the aisle makes the item at
+     * all: then a plain or Shift click keeps its amount (bounded by {@code max} only), because the server may make more
+     * through a chain than {@code producible} says (issue #42).
+     *
+     * @param makeable whether a production pattern of the aisle makes the item, whatever its ingredients
+     */
+    public static int amountFor(Click click, int selected, int stackSize, long available, long producible,
+            boolean makeable, int max) {
+        if (makeable && click != Click.ALL)
+            return amountFor(click, selected, stackSize, 0L, 0L, max);
+        return amountFor(click, selected, stackSize, available, producible, max);
     }
 
     /**

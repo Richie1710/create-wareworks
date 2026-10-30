@@ -1226,8 +1226,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private void request(StockLine<ItemKey> line, TerminalAmounts.Click click, boolean skipQuestion) {
         // "Everything" is what is available plus what the aisle could still make of it, both numbers computed on the
         // server and only reported here (M11, ADR-024): the screen knows neither the patterns nor their promises.
+        // A plain click on an item a pattern makes keeps its amount: the server may make it through a chain the one-step
+        // producible number knows nothing of, and clamps it itself (issue #42).
         int amount = TerminalAmounts.amountFor(click, selectedAmount, line.key().getMaxStackSize(), line.available(),
-                line.producibleAmount(), maxRequestAmount());
+                line.producibleAmount(), line.producible(), maxRequestAmount());
         // To the door the button shows, or here (M27): the click carries the choice, and nothing else ever does.
         send(line.key(), amount, skipQuestion ? RequestAcknowledgement.ANY : RequestAcknowledgement.NONE,
                 doorSelection.selected());
@@ -4240,7 +4242,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             // as deep. They are hints, not decisions: what a click really costs is measured on the server when it is
             // made, and named in the confirmation panel (M15 part 2, §3.6.6).
             int clicked = TerminalAmounts.amountFor(TerminalAmounts.Click.SELECTED, selectedAmount,
-                    line.key().getMaxStackSize(), line.available(), line.producibleAmount(), maxRequestAmount());
+                    line.key().getMaxStackSize(), line.available(), line.producibleAmount(), line.producible(),
+                    maxRequestAmount());
             if (line.fromReserve(clicked) > 0)
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_BELOW_RESERVE).copy()
                         .withStyle(ChatFormatting.GOLD));

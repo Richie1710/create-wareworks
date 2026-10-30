@@ -2872,10 +2872,15 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // A click the racks served only part of keeps the plan refusal that says why the rest could not be made (M20
         // review fix): "Oak Log is missing" takes the status row from "Requested Chest x2" then, because that is the half
         // a player can act on, and it would otherwise be computed and thrown away in the same tick.
+        // A plan the planner made smaller than the click says the same about the part it cut off (issue #42): "Cobbled
+        // Deepslate is missing", or the item budget it ran into, instead of a silent "producing 40".
         ProductionPlanResult<ItemKey, RackPosition> shortfall = granted < amount ? planned.orElse(null) : null;
+        Optional<PlanRefusal> shortReason = shortfall == null ? Optional.empty()
+                : shortfall.refusal().or(shortfall::limit);
+        Optional<ItemKey> shortAbout = shortfall == null ? Optional.empty()
+                : shortfall.refusal().isPresent() ? shortfall.about() : shortfall.limitAbout();
         return TerminalRequestOutcome.of(RequestResult.accepted(requests.get(accepted.id()).orElse(accepted), granted,
-                added.merged(), producing, shortfall == null ? Optional.empty() : shortfall.refusal(),
-                shortfall == null ? Optional.empty() : shortfall.about()), measured);
+                added.merged(), producing, shortReason, shortAbout), measured);
     }
 
     /**

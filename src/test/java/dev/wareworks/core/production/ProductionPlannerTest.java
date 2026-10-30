@@ -436,6 +436,32 @@ class ProductionPlannerTest {
         assertEquals(Map.of(LOG, 4L), plan.leafDemand());
     }
 
+    /**
+     * A plan made smaller keeps what stopped the whole order, so the terminal can name it (issue #42): the ingredient
+     * the racks ran out of, or the item budget, and the item each is about. A plan that makes everything has none.
+     */
+    @Test
+    void aSmallerPlanSaysWhatStoppedTheWholeOrder() {
+        stocked(LOG, 3);
+        ProductionPlanResult<String, String> short1 = ProductionPlanner.plan(input(aisle(SAW, PLANKS)), PLANK, 40);
+        assertEquals(12L, planned(short1).rootPromise());
+        assertEquals(Optional.of(PlanRefusal.MISSING_INGREDIENT), short1.limit());
+        assertEquals(Optional.of(LOG), short1.limitAbout());
+        assertTrue(short1.refusal().isEmpty(), "it is still an accepted plan");
+
+        stocked(LOG, 64);
+        ProductionPlanInput<String, String> budget = input(aisle(SAW, PLANKS, CRAFTER, CHESTS),
+                new PlanLimits(PlanLimits.MAX_STEPS, 20L), 16);
+        ProductionPlanResult<String, String> short2 = ProductionPlanner.plan(budget, CHEST, 4);
+        assertEquals(2L, planned(short2).rootPromise());
+        assertEquals(Optional.of(PlanRefusal.TOO_MANY_INGREDIENT_ITEMS), short2.limit());
+        assertTrue(short2.limitAbout().isPresent(), "the limit names an item");
+
+        ProductionPlanResult<String, String> whole = ProductionPlanner.plan(input(aisle(SAW, PLANKS)), PLANK, 8);
+        assertEquals(8L, planned(whole).rootPromise());
+        assertTrue(whole.limit().isEmpty(), "nothing was cut, so nothing stopped it");
+    }
+
     /** …and refused, naming the step that went over, when not even one run of the ordered item fits. */
     @Test
     void notEvenOneRunFitsTheItemBudget() {

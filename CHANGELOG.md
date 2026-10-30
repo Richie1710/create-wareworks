@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An order at the Warehouse Terminal for something the warehouse makes is no longer cut down to what one step of
+  stock makes** ([#42](https://github.com/Richie1710/create-wareworks/issues/42)). The terminal limited a click to
+  what the ingredients lying in the racks make directly, so 274 Deepslate Tile Stairs became the 40 that the tiles in
+  stock made, although production stations could make the tiles too. The terminal now sends the amount you chose and
+  the warehouse plans the whole chain. When it can make less than you asked for, the status row says why, for example
+  "Cobbled Deepslate is missing" or "Too many items to make Deepslate Tile Stairs"; the second is the server config
+  value `maxPlanIngredientItems` (section `controller`, default 256), which bounds what one order may hand to machines.
+
 ## [0.18.0-beta] - 2026-10-28
 
 ### Added

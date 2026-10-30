@@ -75,6 +75,23 @@ class TerminalAmountsTest {
                 "clamped to what is there plus what can be made, not to one of them");
     }
 
+    /**
+     * The producible number is one step deep, so it must not cut a chosen amount of a makeable item: the server plans
+     * chains and clamps the click itself (issue #42). Ctrl still asks for what the screen was told.
+     */
+    @Test
+    void aClickOnAMakeableItemKeepsItsAmountForTheServerToPlan() {
+        assertEquals(274, TerminalAmounts.amountFor(Click.SELECTED, 274, STACK, 0, 40, true, MAX));
+        assertEquals(274, TerminalAmounts.amountFor(Click.SELECTED, 274, STACK, 12, 0, true, MAX),
+                "nothing makeable one step deep, but a chain may make it");
+        assertEquals(STACK, TerminalAmounts.amountFor(Click.STACK, 1, STACK, 5, 0, true, MAX));
+        assertEquals(MAX, TerminalAmounts.amountFor(Click.SELECTED, MAX + 500, STACK, 0, 40, true, MAX),
+                "never above the config cap");
+        assertEquals(52, TerminalAmounts.amountFor(Click.ALL, 1, STACK, 12, 40, true, MAX));
+        assertEquals(5, TerminalAmounts.amountFor(Click.SELECTED, 64, STACK, 2, 3, false, MAX),
+                "an item no pattern makes is still clamped as before");
+    }
+
     @Test
     void nothingAvailableAndNothingProducibleStillKeepsTheRawAmount() {
         assertEquals(10, TerminalAmounts.amountFor(Click.SELECTED, 10, STACK, 0, 0, MAX));

@@ -137,7 +137,8 @@ public final class ProductionPlanner {
         Reported<K> reported = new Reported<>();
         for (StationPattern<K, L> root : roots) {
             int wanted = root.pattern().runsFor(amount);
-            Attempt<K, L> best = attempt(input, ranked, root, key, amount, wanted);
+            Attempt<K, L> whole = attempt(input, ranked, root, key, amount, wanted);
+            Attempt<K, L> best = whole;
             if (best.failed() && wanted > 1) {
                 // The whole order did not fit. One run of the ordered item is the smallest thing a pattern can make, so
                 // it decides whether anything at all is possible — and its refusal is the one the player is told about,
@@ -146,8 +147,10 @@ public final class ProductionPlanner {
                 best = smallest.failed() ? smallest
                         : largestThatFits(input, ranked, root, key, amount, smallest, wanted - 1);
             }
+            // A plan smaller than the click keeps what stopped the whole of it, so the player is told why (issue #42).
             if (!best.failed())
-                return ProductionPlanResult.accepted(best.plan());
+                return whole.failed() ? ProductionPlanResult.shortened(best.plan(), whole.refusal(), whole.about())
+                        : ProductionPlanResult.accepted(best.plan());
             reported.record(best.refusal(), best.about());
         }
         return ProductionPlanResult.refused(reported.reason(), reported.about());

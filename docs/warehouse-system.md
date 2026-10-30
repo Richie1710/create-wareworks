@@ -2190,7 +2190,12 @@ Networking decision and reasons: **ADR-019**.
     patterns): the screen knows neither the patterns nor what their ingredients are already promised to, so it may
     never derive it. It travels in the stock payload next to `available` and is what a **ctrl-click** asks for
     (`TerminalAmounts`: `available + producible`, clamped to `maxTerminalRequestAmount`). A plain click and a
-    shift-click are clamped to the same total, so a player can order a stack of something that is only producible.
+    shift-click on an item a pattern makes keep their amount (bounded by `maxTerminalRequestAmount` only), because
+    `producible` is one step deep and the server plans whole chains (§3.5.6): clamping them to it cut an order for 274
+    stairs down to the 40 the tiles in stock made, before the server could plan the tiles (issue #42). The server
+    clamps such a click to what its plan really makes, and when it made the plan smaller the answer names what stopped
+    the whole order (`ProductionPlanResult#limit`, shown like a refused chain: "Cobbled Deepslate is missing", "Too
+    many items to make …"). A click on an item no pattern makes is clamped to what is available, as before.
   * An item whose pattern exists but whose ingredients are missing is still *offered* (the `+` and the first tooltip
     line) and reports 0 as the amount — "can be produced here" and "can be made now" are different statements, and the
     refusal a player then gets names the missing item (§3.5.2).
@@ -4409,7 +4414,8 @@ refreshes — never per tick and never per planner candidate).
 
 Ordering a producible item that is not (fully) in stock creates a **production order**.
 
-* **Partial stock is allowed and is the normal case**: the request is clamped to `available + producible`, the part
+* **Partial stock is allowed and is the normal case**: the request is clamped to what is available plus what the
+  plan for the rest makes (§3.5.6), the part
   that is in stock is served by ordinary `RETRIEVE` jobs at once, and only the remainder starts an order. A pattern
   makes whole runs, so an order may yield *more* than was asked for; the surplus simply lands in stock, and the
   request is never told it waits for more than it asked for.

@@ -426,6 +426,40 @@ public final class TerminalChainGameTests {
      * terminal and {@value #LOGS_IN_STOCK} logs in the racks. No motor: the crane never moves, so a test sees the orders
      * exactly as the click created them.
      */
+    /**
+     * <b>A click the chain can only make part of says why it stopped</b> (issue #42). Twenty chests are ordered with
+     * sixteen logs in the racks: the planner clamps the chain to sixteen chests and the click is accepted for sixteen,
+     * and the answer names the log the whole order ran out of, as a refused chain already does, instead of a silent
+     * "producing 16". It is the screen's answer through the real codec.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void terminalShortenedChainNamesWhatStoppedIt(GameTestHelper helper) {
+        AisleFixture aisle = chainAisle(helper);
+        int ordered = LOGS_IN_STOCK + 4;
+        helper.startSequence().thenWaitUntil(() -> {
+            assertChainReady(helper, aisle);
+            helper.assertValueEqual(aisle.controller().countOf(LOG), (long) LOGS_IN_STOCK, "the logs are in the index");
+        }).thenExecute(() -> {
+            WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
+            Player player = playerAt(helper, aisle.rackPos(TERMINAL_RACK));
+            WarehouseTerminalMenu menu = openMenu(player, terminal);
+
+            RequestResult result = WarehouseTerminalMenu.submitRequest(player, menu.containerId, CHEST, ordered)
+                    .orElseThrow(() -> new AssertionError("the click was answered"));
+            helper.assertTrue(result.isAccepted(), "what the logs can make is ordered: " + result);
+            helper.assertValueEqual(result.granted(), LOGS_IN_STOCK, "one chest per log, sixteen of twenty");
+            helper.assertValueEqual(result.producing(), LOGS_IN_STOCK, "all of them made by the chain");
+            helper.assertValueEqual(result.refusal(), Optional.of(PlanRefusal.MISSING_INGREDIENT),
+                    "why the other four are not made");
+            helper.assertValueEqual(result.about(), Optional.of(LOG), "and the item the whole order ran out of");
+
+            TerminalResultPayload seen = roundTrip(helper, TerminalResultPayload.of(menu.containerId, CHEST, result));
+            helper.assertTrue(seen.isAccepted(), "the screen is told it was ordered");
+            helper.assertValueEqual(seen.refusal(), Optional.of(PlanRefusal.MISSING_INGREDIENT), "and why not all");
+            helper.assertValueEqual(seen.about(), Optional.of(LOG), "naming the log");
+        }).thenSucceed();
+    }
+
     private static AisleFixture chainAisle(GameTestHelper helper) {
         return chainAisle(helper, LOGS_IN_STOCK);
     }
