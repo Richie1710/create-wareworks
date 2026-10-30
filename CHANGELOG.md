@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1-beta] - 2026-10-30
+
 ### Fixed
 
 - **An order at the Warehouse Terminal for something the warehouse makes is no longer cut down to what one step of
@@ -1446,7 +1448,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.18.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.18.1-beta...HEAD
+[0.18.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.0-beta...v0.18.1-beta
 [0.18.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.1-beta...v0.18.0-beta
 [0.17.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.0-beta...v0.17.1-beta
 [0.17.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.16.0-beta...v0.17.0-beta
