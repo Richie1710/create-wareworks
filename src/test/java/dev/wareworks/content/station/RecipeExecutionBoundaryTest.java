@@ -50,6 +50,8 @@ class RecipeExecutionBoundaryTest {
     private static final Path TERMINAL_CRAFTING = Path.of("dev/wareworks/content/station/TerminalCrafting.java");
     /** The one class allowed to evaluate a recipe without running it (ADR-067), relative to {@link #MAIN_SOURCES}. */
     private static final Path CRAFTER_RECIPE_CHECK = Path.of("dev/wareworks/content/station/CrafterRecipeCheck.java");
+    /** JEI's own recipe manager for the visual harness, which shares a method name with the game's and runs nothing. */
+    private static final Path JEI_RUNTIME_ACCESS = Path.of("dev/wareworks/client/compat/jei/JeiRuntimeAccess.java");
     /** The GameTests, relative to {@link #MAIN_SOURCES}: they check recipes, they do not craft in game. */
     private static final Path GAME_TESTS = Path.of("dev/wareworks/gametest");
     /** The links of the one way in, relative to {@link #MAIN_SOURCES}. */
@@ -105,7 +107,7 @@ class RecipeExecutionBoundaryTest {
         for (Path file : mainSources()) {
             Path relative = MAIN_SOURCES.relativize(file);
             if (relative.equals(TERMINAL_CRAFTING) || relative.equals(CRAFTER_RECIPE_CHECK)
-                    || relative.startsWith(GAME_TESTS))
+                    || relative.equals(JEI_RUNTIME_ACCESS) || relative.startsWith(GAME_TESTS))
                 continue;
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
             for (int line = 0; line < lines.size(); line++) {

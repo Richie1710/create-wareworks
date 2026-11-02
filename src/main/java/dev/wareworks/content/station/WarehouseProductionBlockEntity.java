@@ -24,7 +24,9 @@ import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.production.CrafterGrid;
 import dev.wareworks.core.production.CrafterPatternCheck;
+import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
@@ -282,6 +284,67 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         patternsChanged();
         setChanged();
         return true;
+    }
+
+    /**
+     * Server: a player's edit of one pattern entry (ADR-076). It writes the entry like {@link #setPatternEntry}, and
+     * while the result is empty or is what the crafting grid made before the edit, the result <b>follows the grid</b>
+     * when a cell's item changes: it becomes what the grid makes now, or empty when that is no crafting recipe. A plank
+     * alone makes a button, and a player on the way to a chest must not end up with a chest grid that says "button". A
+     * result the grid does not make was chosen by the player, for another machine, and is left alone, and so is every
+     * result while only a cell's amount changes. A cell holding more than one item is no crafting grid.
+     */
+    public boolean editPatternEntry(int pattern, int entry, ItemKey key, int count) {
+        if (level == null || level.isClientSide || isRemoved())
+            return false;
+        Optional<ItemKey> result = patterns.keyAt(pattern, ProductionPatterns.RESULT_ENTRY);
+        boolean follows = pattern >= 0 && pattern < patterns.size() && entry >= 0
+                && entry < ProductionPatterns.GRID_CELLS
+                && !patterns.keyAt(pattern, entry).equals(Optional.ofNullable(key))
+                && (result.isEmpty() || isWhatTheGridMakes(pattern, result.get()));
+        if (!follows)
+            return setPatternEntry(pattern, entry, key, count);
+        if (result.isPresent())
+            patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY, null, ProductionEntry.MIN_COUNT);
+        patterns.setEntry(pattern, entry, key, count);
+        recipeOfGrid(pattern).ifPresent(made -> patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY,
+                ItemKey.of(made), made.getCount()));
+        patternsChanged();
+        setChanged();
+        return true;
+    }
+
+    private boolean isWhatTheGridMakes(int pattern, ItemKey result) {
+        return recipeOfGrid(pattern).filter(result::matches)
+                .filter(made -> made.getCount() == patterns.countAt(pattern, ProductionPatterns.RESULT_ENTRY))
+                .isPresent();
+    }
+
+    /** What pattern slot {@code pattern}'s grid makes in a Crafter; nothing if a cell holds more than one item. */
+    private Optional<ItemStack> recipeOfGrid(int pattern) {
+        CrafterGrid<ItemKey> grid = CrafterRecipeCheck.layoutOf(patterns, pattern);
+        int[] counts = new int[CrafterGrid.SLOTS];
+        for (int cell = 0; cell < CrafterGrid.SLOTS; cell++)
+            counts[cell] = patterns.countAt(pattern, cell);
+        return grid.allCellsSingle(counts) ? CrafterRecipeCheck.makes(level, grid) : Optional.empty();
+    }
+
+    /**
+     * Server: overwrites one pattern slot with a recipe a player laid from a recipe viewer (ADR-076). The caller has
+     * checked that {@code result} is none of {@code cells}.
+     */
+    public void writePattern(int pattern, CrafterGrid<ItemKey> cells, List<Integer> counts, ItemKey result,
+            int resultCount) {
+        if (level == null || level.isClientSide || isRemoved())
+            return;
+        patterns.clearPattern(pattern);
+        for (int cell = 0; cell < CrafterGrid.SLOTS; cell++) {
+            int index = cell;
+            cells.at(cell).ifPresent(key -> patterns.setEntry(pattern, index, key, counts.get(index)));
+        }
+        patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY, result, resultCount);
+        patternsChanged();
+        setChanged();
     }
 
     /** Server: clears one pattern slot completely. */

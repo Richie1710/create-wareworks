@@ -1,6 +1,7 @@
 package dev.wareworks.content.station;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -14,7 +15,12 @@ import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.crafting.IngredientPicker;
+import dev.wareworks.core.production.CrafterGrid;
+import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
+import dev.wareworks.network.ProductionPatternLayPayload;
 import dev.wareworks.network.ProductionScreenPayload;
 import dev.wareworks.registry.WareworksMenuTypes;
 import net.minecraft.core.BlockPos;
@@ -28,6 +34,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import net.neoforged.neoforge.common.util.FakePlayer;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.items.SlotItemHandler;
@@ -75,6 +82,7 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
     private boolean pushPending;
     private long editBudgetGameTime;
     private int editsThisTick;
+    private long layBudgetGameTime;
     @Nullable
     private ProductionScreenState lastState;
 
@@ -124,6 +132,7 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         pushPending = true;
         editBudgetGameTime = NEVER;
         editsThisTick = 0;
+        layBudgetGameTime = NEVER;
         lastState = null;
     }
 
@@ -224,10 +233,77 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             return false;
         boolean changed = entry == CLEAR_WHOLE_PATTERN
                 ? contentHolder.clearPattern(pattern)
-                : contentHolder.setPatternEntry(pattern, entry, key, count);
+                : contentHolder.editPatternEntry(pattern, entry, key, count);
         if (changed)
             markDirty();
         return changed;
+    }
+
+    /**
+     * Server: the lay of a {@code ProductionPatternLayPayload}, resolved like every edit, and at most one per tick: it
+     * reads the buffer and asks the aisle about the candidates it compares, as a lay at a terminal does.
+     *
+     * @return what became of it; empty for everything dropped
+     */
+    public static Optional<LayResult> submitLay(@Nullable Player player, ProductionPatternLayPayload payload) {
+        if (player == null || payload == null || !payload.wellFormed() || player instanceof FakePlayer)
+            return Optional.empty();
+        ProductionMenu menu = resolve(player, payload.containerId());
+        if (menu == null || !menu.takeLayBudget())
+            return Optional.empty();
+        return Optional.of(menu.lay(player, payload));
+    }
+
+    /**
+     * Server: overwrites a pattern slot with a recipe from a recipe viewer (ADR-076). {@link IngredientPicker} picks one
+     * item per cell by what the buffer and the aisle hold. A crafting recipe must then be a recipe of the server's,
+     * which also says the result; anything else keeps the client's result and counts. With any refusal the slot stays as
+     * it was. Nothing moves and nothing is ordered: a pattern is ghost items.
+     */
+    public LayResult lay(Player player, ProductionPatternLayPayload payload) {
+        if (!mayEdit(player) || payload.pattern() < 0 || payload.pattern() >= contentHolder.patterns().size())
+            return LayResult.NOT_A_RECIPE;
+        CraftGrid<ItemKey> picked = IngredientPicker.pick(payload.cells(), TerminalCraftLay.supply(bufferHandler,
+                bufferSlots, WarehouseRegistry.findController(contentHolder.getLevel(), contentHolder.getBlockPos())));
+        List<ItemKey> cells = new ArrayList<>(CraftGrid.SIZE);
+        for (int cell = 0; cell < CraftGrid.SIZE; cell++)
+            cells.add(picked.cell(cell).orElse(null));
+        CrafterGrid<ItemKey> grid = CrafterGrid.ofNullable(cells);
+        if (grid.isEmpty())
+            return LayResult.NOT_A_RECIPE;
+        ItemKey result;
+        int resultCount;
+        List<Integer> counts;
+        if (payload.crafting()) {
+            Optional<ItemStack> made = CrafterRecipeCheck.makes(contentHolder.getLevel(), grid);
+            if (made.isEmpty())
+                return LayResult.NOT_A_RECIPE;
+            result = ItemKey.of(made.get());
+            resultCount = made.get().getCount();
+            counts = Collections.nCopies(CraftGrid.SIZE, ProductionEntry.MIN_COUNT);
+        } else {
+            result = payload.result().orElseThrow().key();
+            resultCount = payload.result().orElseThrow().count();
+            counts = payload.counts();
+        }
+        if (cells.contains(result))
+            return LayResult.MAKES_ITS_INGREDIENT;
+        contentHolder.writePattern(payload.pattern(), grid, counts, result, resultCount);
+        markDirty();
+        return LayResult.LAID;
+    }
+
+    private boolean takeLayBudget() {
+        long now = gameTime();
+        if (now == layBudgetGameTime)
+            return false;
+        layBudgetGameTime = now;
+        return true;
+    }
+
+    /** What became of a recipe viewer's lay. */
+    public enum LayResult {
+        LAID, NOT_A_RECIPE, MAKES_ITS_INGREDIENT
     }
 
     /**

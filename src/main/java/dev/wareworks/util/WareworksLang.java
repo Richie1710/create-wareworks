@@ -1368,6 +1368,14 @@ public final class WareworksLang {
      * a Warehouse Crafter Feeder is attached to its back (issue #34, ADR-067). It says why some patterns may be red.
      */
     public static final String PRODUCTION_FEEDER = "gui.production.feeder";
+    /** A recipe viewer's "+" at a production station is greyed out: the recipe needs a fluid (ADR-076). */
+    public static final String PRODUCTION_LAY_NOT_ONLY_ITEMS = "gui.production.lay.not_only_items";
+    /** The same: the recipe needs more than the pattern's nine cells. */
+    public static final String PRODUCTION_LAY_TOO_MANY_INPUTS = "gui.production.lay.too_many_inputs";
+    /** The same, and said over the hotbar if the server finds it: the recipe makes one of its own ingredients. */
+    public static final String PRODUCTION_LAY_MAKES_INGREDIENT = "gui.production.lay.makes_ingredient";
+    /** Said over the hotbar: the server has no crafting recipe for the grid the viewer's recipe was laid as. */
+    public static final String PRODUCTION_LAY_NOT_A_RECIPE = "gui.production.lay.not_a_recipe";
     /**
      * {@code "The Crafter Feeder skips this pattern"}: the line under the reason of a refused pattern, in its tab's and
      * its arrow's tooltip. It is the consequence the red says: the warehouse never orders it, so nothing is wasted.

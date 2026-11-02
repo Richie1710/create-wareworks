@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **JEI's + lays a recipe into a Warehouse Production pattern.** With JEI and a production station's screen open, the
+  **+** on a recipe writes it into the selected pattern tab, result and amounts included, so a pattern no longer needs
+  the finished item in hand. It overwrites what that tab held and moves no items. It works for every JEI category: a
+  crafting recipe keeps its grid, so it fits a Crafter Feeder and its Crafter, and a machine's recipe such as Create's
+  saw fills the cells in order. Of several results the pattern takes the first certain one, never a by-product with a
+  chance; in Create's Block Cutting category that is simply the first listed, and the result cell can still be changed
+  by hand. A recipe that needs a fluid, needs more than the 9 cells or makes one of its own ingredients has a greyed-out
+  **+** that says why.
+- **A production pattern finds its crafting result by itself.** While a pattern's result is empty, or is what its grid
+  made so far, it follows the grid as you lay items into it: it becomes what the grid crafts, or empty when the grid is
+  no crafting recipe. A result you set to something else, for example for another machine, stays, and so does any result
+  while you only change an amount. For a pattern meant for another machine, set the result yourself: a grid that also
+  happens to be a crafting recipe gets that recipe's result first.
+
 ## [0.18.1-beta] - 2026-10-30
 
 ### Fixed

@@ -1,5 +1,6 @@
 package dev.wareworks.client.gui;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -26,6 +27,7 @@ import net.createmod.catnip.gui.UIRenderHelper;
 import net.createmod.catnip.gui.element.GuiGameElement;
 import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
@@ -74,6 +76,9 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * every (re)opening of the window; the wheel itself may scroll the selected tab out of view again, so that a player can
  * browse. A hidden row that holds a stopped or refused pattern is marked with a red tick on the scroll bar, so those
  * can still be found without scrolling.
+ * <p>
+ * <b>A recipe viewer writes into the selected tab</b> (ADR-076). JEI's recipe screen opens over this one without closing
+ * the menu and hands it back, so {@link #forMenu} finds the screen, and with it the selection, while it is covered.
  */
 public class WarehouseProductionScreen extends AbstractSimiContainerScreen<ProductionMenu> {
     private static final int TITLE_Y = 2;
@@ -117,6 +122,9 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
      */
     public static final int MIN_ITEM_WIDTH = 54;
 
+    /** The screen laid out last, which {@link #forMenu} finds while a recipe viewer's screen covers it. */
+    private static WeakReference<WarehouseProductionScreen> laidOut = new WeakReference<>(null);
+
     private ProductionScreenState state = ProductionScreenState.NONE;
     private ProductionMenuLayout layout;
     private int selectedPattern;
@@ -132,10 +140,26 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         layout = menu.layout();
         setWindowSize(ProductionMenuLayout.WIDTH, layout.height());
         super.init();
+        laidOut = new WeakReference<>(this);
         // A (re)opened or resized window always starts with the selected tab in view.
         select(selectedPattern);
         if (menu.station() == null && minecraft != null && minecraft.player != null)
             minecraft.player.closeContainer(); // the block entity is gone: nothing to edit
+    }
+
+    /**
+     * The screen of menu {@code containerId}, shown or covered by a recipe viewer's screen, which opens over this one
+     * without closing the menu and hands it back when it closes.
+     */
+    public static Optional<WarehouseProductionScreen> forMenu(int containerId) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.screen instanceof WarehouseProductionScreen shown)
+            return shown.getMenu().containerId == containerId ? Optional.of(shown) : Optional.empty();
+        WarehouseProductionScreen covered = laidOut.get();
+        if (covered == null || minecraft.player == null || minecraft.player.containerMenu != covered.getMenu()
+                || covered.getMenu().containerId != containerId)
+            return Optional.empty();
+        return Optional.of(covered);
     }
 
     /** The server sent the station's patterns and orders. */

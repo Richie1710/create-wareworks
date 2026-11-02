@@ -3,6 +3,7 @@ package dev.wareworks.gametest;
 import static dev.wareworks.gametest.WareworksGameTests.AISLE_16X10X7;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -22,6 +23,8 @@ import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
+import dev.wareworks.network.ProductionPatternLayPayload;
+import dev.wareworks.content.station.CrafterRecipeCheck;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
@@ -1218,6 +1221,125 @@ public final class ProductionGameTests {
     }
 
     /** The menu a player has open, as {@code openScreen} would build it on the server. */
+    /**
+     * A player's edits at the screen (ADR-076): the empty result follows the crafting grid, also on the way to a larger
+     * recipe, and a result the grid does not make, or a mere change of amount, is left alone.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void productionPatternResultFollowsTheGrid(GameTestHelper helper) {
+        AisleFixture aisle = build(helper);
+        helper.startSequence().thenExecute(() -> {
+            WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+            Player player = playerAt(helper, aisle.rackPos(PRODUCTION_RACK));
+            ProductionMenu menu = openMenu(player, station);
+            int slot = station.patterns().size() - 1;
+            ItemKey plank = ItemKey.of(Items.OAK_PLANKS);
+            int result = ProductionPatterns.RESULT_ENTRY;
+
+            ProductionMenu.submitPattern(player, menu.containerId, slot, 0, Optional.of(plank), 1);
+            assertResult(helper, station, slot, Items.OAK_BUTTON, 1, "one plank is a button");
+            ProductionMenu.submitPattern(player, menu.containerId, slot, 3, Optional.of(plank), 1);
+            assertResult(helper, station, slot, Items.STICK, 4, "two planks in a column are sticks");
+            ProductionMenu.submitPattern(player, menu.containerId, slot, 8, Optional.of(ItemKey.of(Items.DIRT)), 1);
+            helper.assertTrue(station.patterns().keyAt(slot, result).isEmpty(),
+                    "a grid that is no recipe has no result left");
+            ProductionMenu.submitPattern(player, menu.containerId, slot, 8, Optional.empty(), 1);
+            assertResult(helper, station, slot, Items.STICK, 4, "the sticks are back");
+
+            ProductionMenu.submitPattern(player, menu.containerId, slot, 0, Optional.of(plank), 2);
+            assertResult(helper, station, slot, Items.STICK, 4, "a change of amount leaves the result alone");
+            ProductionMenu.submitPattern(player, menu.containerId, slot, 0, Optional.of(plank), 1);
+
+            ProductionMenu.submitPattern(player, menu.containerId, slot, result,
+                    Optional.of(ItemKey.of(Items.DIAMOND)), 1);
+            ProductionMenu.submitPattern(player, menu.containerId, slot, 3, Optional.of(ItemKey.of(Items.DIRT)), 1);
+            assertResult(helper, station, slot, Items.DIAMOND, 1, "a result the player chose stays");
+        }).thenSucceed();
+    }
+
+    /**
+     * The "+" of a recipe viewer (ADR-076): a crafting recipe takes its result from the server's recipes and is a grid a
+     * Crafter Feeder accepts, a machine's recipe keeps the amounts it came with, both overwrite what the slot held, and
+     * what cannot be a pattern changes nothing.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void productionPatternLaidFromAViewer(GameTestHelper helper) {
+        AisleFixture aisle = build(helper);
+        helper.startSequence().thenExecute(() -> {
+            WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+            Player player = playerAt(helper, aisle.rackPos(PRODUCTION_RACK));
+            ProductionMenu menu = openMenu(player, station);
+            int slot = station.patterns().size() - 1;
+            station.setPatternEntry(slot, 4, ItemKey.of(Items.DIRT), 7);
+
+            List<ItemKey> planks = List.of(ItemKey.of(Items.OAK_PLANKS), ItemKey.of(Items.SPRUCE_PLANKS));
+            List<List<ItemKey>> chest = List.of(planks, planks, planks, planks, List.of(), planks, planks, planks,
+                    planks);
+            List<Integer> ones = Collections.nCopies(chest.size(), 1);
+            helper.assertValueEqual(menu.lay(player, new ProductionPatternLayPayload(menu.containerId, slot, true, chest,
+                    ones, Optional.empty())), ProductionMenu.LayResult.LAID, "the chest is laid");
+            assertResult(helper, station, slot, Items.CHEST, 1, "the server names the chest");
+            helper.assertTrue(station.patterns().keyAt(slot, 4).isEmpty(), "the dirt is gone");
+            helper.assertValueEqual(station.patterns().filledCells(slot), 8, "eight cells");
+            helper.assertValueEqual(station.patterns().keyAt(slot, 0), Optional.of(ItemKey.of(Items.OAK_PLANKS)),
+                    "the first candidate, with nothing to tell them apart");
+            helper.assertValueEqual(CrafterRecipeCheck.check(helper.getLevel(), station.patterns(), slot).check(),
+                    CrafterPatternCheck.VALID, "a Crafter Feeder accepts the laid grid");
+
+            List<List<ItemKey>> dirtGrid = new ArrayList<>(Collections.nCopies(9, List.<ItemKey>of()));
+            dirtGrid.set(0, List.of(ItemKey.of(Items.DIRT)));
+            helper.assertValueEqual(menu.lay(player, new ProductionPatternLayPayload(menu.containerId, slot, true,
+                    dirtGrid, ones, Optional.empty())), ProductionMenu.LayResult.NOT_A_RECIPE, "dirt makes nothing");
+            assertResult(helper, station, slot, Items.CHEST, 1, "a refusal leaves the slot alone");
+
+            List<List<ItemKey>> sawed = new ArrayList<>(Collections.nCopies(9, List.<ItemKey>of()));
+            sawed.set(0, List.of(ItemKey.of(Items.STRIPPED_OAK_LOG)));
+            List<Integer> counts = new ArrayList<>(ones);
+            counts.set(0, 2);
+            ProductionEntry<ItemKey> planksOut = new ProductionEntry<>(ItemKey.of(Items.OAK_PLANKS), 6);
+            helper.assertValueEqual(menu.lay(player, new ProductionPatternLayPayload(menu.containerId, slot, false, sawed,
+                    counts, Optional.of(planksOut))), ProductionMenu.LayResult.LAID, "a saw's recipe is laid");
+            assertResult(helper, station, slot, Items.OAK_PLANKS, 6, "the viewer's result");
+            helper.assertValueEqual(station.patterns().countAt(slot, 0), 2, "the viewer's amount");
+
+            List<List<ItemKey>> own = new ArrayList<>(Collections.nCopies(9, List.<ItemKey>of()));
+            own.set(0, List.of(ItemKey.of(Items.OAK_PLANKS)));
+            helper.assertValueEqual(menu.lay(player, new ProductionPatternLayPayload(menu.containerId, slot, false, own,
+                    ones, Optional.of(planksOut))), ProductionMenu.LayResult.MAKES_ITS_INGREDIENT, "its own ingredient");
+            helper.assertValueEqual(menu.lay(player, new ProductionPatternLayPayload(menu.containerId,
+                    station.patterns().size(), false, sawed, ones, Optional.of(planksOut))),
+                    ProductionMenu.LayResult.NOT_A_RECIPE, "no such slot");
+            helper.assertValueEqual(station.patterns().countAt(slot, 0), 2, "still the saw's pattern");
+        }).thenSucceed();
+    }
+
+    /** One lay per tick, and only through the menu the player really has open. */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void productionPatternLayHasABudget(GameTestHelper helper) {
+        AisleFixture aisle = build(helper);
+        helper.startSequence().thenExecute(() -> {
+            WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+            Player player = playerAt(helper, aisle.rackPos(PRODUCTION_RACK));
+            ProductionMenu menu = openMenu(player, station);
+            List<List<ItemKey>> sawed = new ArrayList<>(Collections.nCopies(9, List.<ItemKey>of()));
+            sawed.set(0, List.of(ItemKey.of(Items.STRIPPED_OAK_LOG)));
+            ProductionPatternLayPayload payload = new ProductionPatternLayPayload(menu.containerId, 0, false, sawed,
+                    Collections.nCopies(9, 1), Optional.of(new ProductionEntry<>(ItemKey.of(Items.OAK_PLANKS), 6)));
+            helper.assertValueEqual(ProductionMenu.submitLay(player, payload), Optional.of(ProductionMenu.LayResult.LAID),
+                    "the first lay of the tick");
+            helper.assertTrue(ProductionMenu.submitLay(player, payload).isEmpty(), "the second lay of the tick");
+            player.containerMenu = player.inventoryMenu;
+            helper.assertTrue(ProductionMenu.submitLay(player, payload).isEmpty(), "without the menu");
+        }).thenSucceed();
+    }
+
+    private static void assertResult(GameTestHelper helper, WarehouseProductionBlockEntity station, int slot,
+            net.minecraft.world.item.Item item, int count, String what) {
+        helper.assertValueEqual(station.patterns().keyAt(slot, ProductionPatterns.RESULT_ENTRY),
+                Optional.of(ItemKey.of(item)), what);
+        helper.assertValueEqual(station.patterns().countAt(slot, ProductionPatterns.RESULT_ENTRY), count, what);
+    }
+
     private static ProductionMenu openMenu(Player player, WarehouseProductionBlockEntity station) {
         ProductionMenu menu = ProductionMenu.create(player.containerMenu.containerId + 1, player.getInventory(),
                 station);

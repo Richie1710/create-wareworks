@@ -4383,6 +4383,16 @@ most 36 since issue #35, ADR-068).
   the player carries or clicks. A pattern is a description, not an inventory.
 * **A slot is a draft.** A half-written slot (cells but no result) is simply not a pattern yet: `patterns()` returns
   only the complete ones, so the strict, pure `ProductionPattern` never has to represent a draft.
+* **The result follows a crafting grid** (ADR-076). A player's edit of a cell's item
+  (`WarehouseProductionBlockEntity#editPatternEntry`) rewrites the result while it is empty or is what the grid made
+  before the edit: to what the grid makes now, or to empty. A result the grid does not make stays, and an edit of an
+  amount changes no result. Only a player's edit does this; `setPatternEntry` writes what it is told.
+* **A recipe viewer's "+" writes a whole slot** (ADR-076). `client.compat.jei.ProductionRecipeTransferHandler` is
+  JEI's universal handler for the station's menu and sends `ProductionPatternLayPayload`, for the tab the screen has
+  selected. `IngredientPicker` picks one item per cell as at the terminal. A crafting recipe keeps its cells and takes
+  its result from the server's recipes (`CrafterRecipeCheck#makes`); any other recipe is laid out by `PatternLay`, with
+  the client's counts and result, which trust nothing a click could not set. A refusal leaves the slot as it was and is
+  said over the hotbar. Nothing moves, and an open order keeps the lines it was created with.
 
 #### 3.5.2 Producible items (`ProduciblePlanner` is single level; the chain is §3.5.6)
 

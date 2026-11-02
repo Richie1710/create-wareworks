@@ -9,6 +9,7 @@ import dev.wareworks.content.station.TerminalFluidOutcome;
 import dev.wareworks.content.station.TerminalListOutcome;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
+import dev.wareworks.util.WareworksLang;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.neoforged.fml.loading.FMLEnvironment;
@@ -167,8 +168,12 @@ public final class WareworksNetwork {
      * {@link TerminalStatusPayload} carries the number of cranes and how many of them work, wait for another crane's
      * rails and are paused, appended after the crane's pause reason, which a reader of the old shape would stop before
      * and leave in the buffer. No new payload type.
+     * <p>
+     * <b>{@code "20"} is ADR-076</b> (a recipe viewer's transfer button at a production station): the new
+     * {@link ProductionPatternLayPayload} (client → server), which an older server would not understand. Nothing else
+     * changed.
      */
-    public static final String VERSION = "19";
+    public static final String VERSION = "20";
 
     private WareworksNetwork() {
     }
@@ -220,6 +225,8 @@ public final class WareworksNetwork {
                 WareworksNetwork::onProductionScreen);
         registrar.playToServer(ProductionPatternPayload.TYPE, ProductionPatternPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionPattern);
+        registrar.playToServer(ProductionPatternLayPayload.TYPE, ProductionPatternLayPayload.STREAM_CODEC,
+                WareworksNetwork::onProductionPatternLay);
         registrar.playToServer(ProductionCancelPayload.TYPE, ProductionCancelPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionCancel);
         registrar.playToServer(ProductionResumePayload.TYPE, ProductionResumePayload.STREAM_CODEC,
@@ -363,6 +370,24 @@ public final class WareworksNetwork {
     private static void onProductionPattern(ProductionPatternPayload payload, IPayloadContext context) {
         ProductionMenu.submitPattern(context.player(), payload.containerId(), payload.pattern(), payload.entry(),
                 payload.key(), payload.count());
+    }
+
+    /**
+     * A recipe viewer's "+" at a production station (ADR-076). The new pattern arrives with the next push of the screen,
+     * and a refusal is said over the hotbar, since the screen has no status row.
+     */
+    private static void onProductionPatternLay(ProductionPatternLayPayload payload, IPayloadContext context) {
+        Player player = context.player();
+        ProductionMenu.submitLay(player, payload).ifPresent(result -> {
+            switch (result) {
+                case LAID -> {
+                }
+                case NOT_A_RECIPE -> player.displayClientMessage(
+                        WareworksLang.translateDirect(WareworksLang.PRODUCTION_LAY_NOT_A_RECIPE), true);
+                case MAKES_ITS_INGREDIENT -> player.displayClientMessage(
+                        WareworksLang.translateDirect(WareworksLang.PRODUCTION_LAY_MAKES_INGREDIENT), true);
+            }
+        });
     }
 
     /**

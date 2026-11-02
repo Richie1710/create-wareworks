@@ -19,7 +19,9 @@ import net.minecraft.resources.ResourceLocation;
  * {@code mezz.jei.library}, {@code mezz.jei.gui}).
  * <p>
  * What it adds: JEI's "+" on a crafting recipe lays that recipe into the crafting panel of an open warehouse terminal
- * ({@link TerminalCraftTransferHandler}, issue #24, slice 4, ADR-063). It also keeps JEI's runtime while JEI has one
+ * ({@link TerminalCraftTransferHandler}, issue #24, slice 4, ADR-063), and JEI's "+" on a recipe of any category lays
+ * it into the selected pattern of an open production station ({@link ProductionRecipeTransferHandler}, ADR-076). It
+ * also keeps JEI's runtime while JEI has one
  * ({@link JeiRuntimeAccess}), which the visual harness opens JEI's recipe screen through.
  */
 @JeiPlugin
@@ -31,11 +33,16 @@ public final class WareworksJeiPlugin implements IModPlugin {
         return UID;
     }
 
-    /** The terminal's crafting panel takes JEI's crafting recipes ({@link TerminalCraftTransferHandler}). */
+    /**
+     * The terminal's crafting panel takes JEI's crafting recipes ({@link TerminalCraftTransferHandler}), a production
+     * station's pattern the recipes of every category ({@link ProductionRecipeTransferHandler}).
+     */
     @Override
     public void registerRecipeTransferHandlers(IRecipeTransferRegistration registration) {
         registration.addRecipeTransferHandler(new TerminalCraftTransferHandler(registration.getTransferHelper()),
                 RecipeTypes.CRAFTING);
+        registration.addUniversalRecipeTransferHandler(
+                new ProductionRecipeTransferHandler(registration.getTransferHelper()));
     }
 
     /** JEI has started in a world: its runtime is kept for {@link JeiRuntimeAccess}. */

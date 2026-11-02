@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
  * those, so a simple name cannot slip past.</li>
  * <li><b>The compat package</b> ({@link #onlyTheJeiScenarioReachesTheCompatPackage}): its package name, which every
  * import of one of its classes and every fully qualified use contains, only in the package itself and in the dev
- * harness's {@code jei} scenario, which reaches it after checking that JEI is loaded. JEI finds the plugin by its
+ * harness's {@code jei} and {@code patternjei} scenarios, which reach it after checking that JEI is loaded. JEI finds the plugin by its
  * annotation; nothing else in the mod may load the package.</li>
  * <li><b>The API only</b> ({@link #onlyJeisApiIsImported}): an import of {@code mezz.jei} below anything but
  * {@code api}, anywhere. The compile classpath holds only the API jars, so the compiler already refuses one; this says
@@ -44,9 +44,11 @@ class JeiBoundaryTest {
     private static final Path COMPAT = Path.of("dev/wareworks/client/compat/jei");
     /** The dev harness's scenario that drives the real JEI, the one class outside {@link #COMPAT} that reaches it. */
     private static final Path JEI_SCENARIO = Path.of("dev/wareworks/dev/JeiVisualScenario.java");
+    /** The same for the "+" at a production station (ADR-076). */
+    private static final Path PATTERN_JEI_SCENARIO = Path.of("dev/wareworks/dev/PatternJeiVisualScenario.java");
     /** The classes of {@link #COMPAT}, which must all still import JEI's API. */
     private static final List<String> COMPAT_CLASSES = List.of("WareworksJeiPlugin.java",
-            "TerminalCraftTransferHandler.java", "JeiRuntimeAccess.java");
+            "TerminalCraftTransferHandler.java", "ProductionRecipeTransferHandler.java", "JeiRuntimeAccess.java");
 
     /** A JEI package or type: every import, static import or fully qualified use of one contains it. */
     private static final Pattern NAMES_JEI = Pattern.compile("\\bmezz\\.jei\\b");
@@ -65,7 +67,7 @@ class JeiBoundaryTest {
 
     @Test
     void onlyTheJeiScenarioReachesTheCompatPackage() throws IOException {
-        List<String> offenders = offenders(NAMES_COMPAT, List.of(JEI_SCENARIO));
+        List<String> offenders = offenders(NAMES_COMPAT, List.of(JEI_SCENARIO, PATTERN_JEI_SCENARIO));
         assertTrue(offenders.isEmpty(), "Only JEI itself, through the plugin's annotation, and the dev harness's jei "
                 + "scenario may reach client.compat.jei (ADR-063); found " + offenders);
     }

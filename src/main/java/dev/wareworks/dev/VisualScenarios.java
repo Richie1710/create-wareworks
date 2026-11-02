@@ -45,6 +45,7 @@ final class VisualScenarios {
             Map.entry(TooltipsVisualScenario.NAME, TooltipsVisualScenario::new),
             Map.entry(CraftVisualScenario.NAME, CraftVisualScenario::new),
             Map.entry(JeiVisualScenario.NAME, JeiVisualScenario::new),
+            Map.entry(PatternJeiVisualScenario.NAME, PatternJeiVisualScenario::new),
             Map.entry(FeederVisualScenario.NAME, FeederVisualScenario::new),
             Map.entry(PatternStripVisualScenario.NAME, PatternStripVisualScenario::new),
             Map.entry(HandTruckVisualScenario.NAME, HandTruckVisualScenario::new),

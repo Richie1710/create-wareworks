@@ -3729,3 +3729,19 @@ you get tired of waiting, and put it back before judging check 160.
 405. **Lowering the cap.** With three cranes, change `aisle.maxCranesPerNetwork` to 2 in the server config while crane 3
      carries: it delivers, drives home to its dock and only then leaves; until then the controller still
      lists three cranes and crane 3 takes no new job. Set it back.
+
+## BN. Patterns from JEI, and the result that finds itself (ADR-076)
+
+> `ProductionGameTests` checks the server side, the visual scenario `patternjei` clicks the real "+" on the Chest, on the
+> saw and on a recipe with a fluid. What a person has to judge:
+
+406. **A Crafter Feeder from JEI.** Station with a Crafter Feeder and a Crafter: open the screen, select an empty tab, look
+     Torch up in JEI, press **+**. The tab shows it without red, and an order at the terminal makes torches.
+407. **Your saw.** With a saw behind a station, press **+** on a sawing recipe. Does the pattern read right, and does an order
+     run through the real saw?
+408. **Overwriting.** Press **+** on a tab that already holds a pattern: is replacing it without a question all right in play?
+409. **By hand.** Without JEI's help, lay one plank, then a second below it: the result goes from a button to sticks. Go on
+     to a chest: it ends on the chest. Does watching it change feel helpful or restless?
+410. **Block Cutting.** Press **+** in Create's Block Cutting category with many outputs: the first output lands in the
+     result, and you change it by hand. Good enough?
+

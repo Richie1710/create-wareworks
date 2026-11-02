@@ -7695,6 +7695,39 @@ is summarised here; where the build deviated, the deviation is listed at the end
     but cannot be told). With one crane this is the old rule. And the re-plan for the chosen crane starts the arrival
     round robin where the first run did, so the nearest crane is given the first run's work, not the next input's.
 
+### ADR-076 — A recipe viewer's "+" writes a whole production pattern, for every category; the result of a crafting grid follows the grid
+
+*Context:* writing a pattern took the finished item in hand for its result, so a player had to make one first, and JEI's
+"+" only served the terminal's crafting panel (ADR-063). A station serves any machine, and the owner's two cases are a
+Crafter Feeder and Create's saw.
+
+*Decision:*
+
+* **D1. One universal JEI handler for the station's menu** (`IUniversalRecipeTransferHandler`, in JEI since 19.8.1, below
+  our minimum of 19.8.4.110). It writes into the tab the screen has selected and overwrites what is there: choosing the
+  tab is the choice of what to replace, and a pattern is cheap to write again.
+* **D2. Crafting recipes keep their cells and the server names the result.** A recipe JEI draws with nine input slots
+  and that fits 3 x 3 is laid cell for cell, because cell `i` is Crafter slot `i` (ADR-067), and
+  `CrafterRecipeCheck#makes` says what it makes, so a laid grid is a grid the feeder accepts.
+* **D3. Other recipes are the client's word.** The server has no idea which machine stands behind a station, and a
+  pattern is ghost items that a client can already name item by item (`ProductionPatternPayload`). `core.production.PatternLay`
+  fills the cells in order and merges inputs of the same candidates up to a stack.
+* **D4. One result per pattern.** For one of Create's processing recipes the first certain output, otherwise the first
+  output JEI lists. Create's Block Cutting category lists many outputs on one recipe and JEI's API gives a handler no
+  focus, so it gets the first; the cell can be changed by hand.
+* **D5. What a pattern cannot say is greyed out with a reason:** a fluid input, more than nine cells, a recipe making its
+  own only ingredient. A recipe with no item on either side has no "+".
+* **D6. The result follows a crafting grid while it is empty or is what the grid made**, also back to empty, because a
+  plank alone is a button on the way to a chest. There is no stored "automatic" flag: comparing with the grid's recipe
+  before the edit needs no save data and treats a hand-set identical result the same. Only a change of a cell's item
+  does this, only through a player's edit, and a cell with more than one item is no crafting grid.
+
+*Consequences:* a hand-laid pattern for another machine can get a crafting result first (a log in the first cell makes
+planks); it is visible and a click changes it, and D6 leaves that click's result alone from then on. `CrafterRecipeCheck`
+still only evaluates. `WareworksNetwork.VERSION` is 20. `RecipeExecutionBoundaryTest` exempts `JeiRuntimeAccess`, whose
+`getRecipeManager` is JEI's and serves the visual harness. Checked by `PatternLayTest`, three `ProductionGameTests` and
+the visual scenario `patternjei` with the real JEI.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).

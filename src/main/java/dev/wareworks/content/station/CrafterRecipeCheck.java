@@ -121,6 +121,29 @@ public final class CrafterRecipeCheck {
     }
 
     /**
+     * What a vanilla Crafter holding one item per filled cell of {@code grid} would make, the result of a pattern the
+     * player only named the ingredients of (ADR-076). Empty for an empty grid, without a recipe, for a recipe that
+     * assembles nothing or when a recipe throws. Measured only, like {@link #output}.
+     */
+    public static Optional<ItemStack> makes(Level level, CrafterGrid<ItemKey> grid) {
+        Objects.requireNonNull(level, "level");
+        Objects.requireNonNull(grid, "grid");
+        if (grid.isEmpty())
+            return Optional.empty();
+        try {
+            CraftingInput input = inputOf(grid);
+            Optional<RecipeHolder<CraftingRecipe>> recipe = CrafterBlock.getPotentialResults(level, input);
+            if (recipe.isEmpty())
+                return Optional.empty();
+            ItemStack made = recipe.get().value().assemble(input, level.registryAccess());
+            return made.isEmpty() ? Optional.empty() : Optional.of(made.copy());
+        } catch (RuntimeException e) {
+            Wareworks.LOGGER.warn("Could not evaluate the recipe of a production pattern's grid", e);
+            return Optional.empty();
+        }
+    }
+
+    /**
      * The recipe set the answers of {@link #check} hold for: the level's recipe manager, which a {@code /reload} replaces.
      * A cache keyed by its identity notices new or removed recipes without listening for anything, the approach of the
      * vanilla Crafter's own recipe cache.

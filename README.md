@@ -782,6 +782,11 @@ not load; Wareworks' **+** works either way. Without JEI nothing changes. JEI is
 without it lays recipes by hand. Shift on the **+** does the same as a plain click, because laying a recipe moves no
 items; the amount field says how many items Fetch brings ingredients for.
 
+With a **Warehouse Production** screen open, the **+** on a recipe of any JEI category writes it into the selected
+pattern tab, with its result and amounts: a crafting recipe in its own grid, so it suits a Crafter Feeder, and a
+machine's recipe, such as Create's saw, in the cells in order. Recipes a pattern cannot hold, such as one with a fluid,
+have a greyed-out **+** that says why.
+
 **EMI** is not supported directly: Wareworks has no EMI plugin, so with EMI and no JEI, EMI's **+** does not work at
 the terminal, and the crafting grid works exactly as without a recipe viewer.
 

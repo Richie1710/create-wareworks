@@ -877,6 +877,14 @@ public final class WareworksLangGen {
         // A pattern a Crafter Feeder refuses (issue #34, ADR-067): the screen's label, one reason per refused check and
         // the consequence. They are tooltip lines of a 216 px window, measured by CrafterFeederTextWidthTest.
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FEEDER), "Crafter Feeder");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_NOT_ONLY_ITEMS),
+                "This recipe needs a fluid: a pattern holds items only");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_TOO_MANY_INPUTS),
+                "This recipe needs more than the pattern's 9 cells");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_MAKES_INGREDIENT),
+                "This recipe makes one of its own ingredients: a pattern cannot");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_NOT_A_RECIPE),
+                "This recipe cannot be laid into the pattern");
         for (CrafterPatternCheck check : CrafterPatternCheck.values()) {
             if (!check.refused())
                 continue;

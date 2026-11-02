@@ -9,9 +9,11 @@ import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.gui.handlers.IGuiProperties;
 import mezz.jei.api.recipe.IFocus;
 import mezz.jei.api.recipe.RecipeIngredientRole;
+import mezz.jei.api.recipe.RecipeType;
 import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.Rect2i;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
 /**
@@ -58,6 +60,32 @@ public final class JeiRuntimeAccess {
         IFocus<ItemStack> focus = current.getJeiHelpers().getFocusFactory().createFocus(RecipeIngredientRole.OUTPUT,
                 VanillaTypes.ITEM_STACK, output.copy());
         current.getRecipesGui().show(focus);
+        return true;
+    }
+
+    /**
+     * Opens JEI's recipe screen on the recipes of the one category {@code category} that make {@code output}, for a
+     * harness that has to reach a category JEI would not show first.
+     *
+     * @return whether JEI knows the category and has such a recipe
+     */
+    public static boolean showRecipesMaking(ItemStack output, ResourceLocation category) {
+        IJeiRuntime current = runtime;
+        if (current == null || output.isEmpty())
+            return false;
+        Optional<RecipeType<?>> type = current.getJeiHelpers().getRecipeType(category);
+        return type.isPresent() && showRecipes(current, type.get(), output);
+    }
+
+    private static <T> boolean showRecipes(IJeiRuntime current, RecipeType<T> type, ItemStack output) {
+        IFocus<ItemStack> focus = current.getJeiHelpers().getFocusFactory().createFocus(RecipeIngredientRole.OUTPUT,
+                VanillaTypes.ITEM_STACK, output.copy());
+        List<T> recipes = current.getRecipeManager().createRecipeLookup(type).limitFocus(List.of(focus)).get()
+                .toList();
+        if (recipes.isEmpty())
+            return false;
+        current.getRecipesGui().showRecipes(current.getRecipeManager().getRecipeCategory(type), recipes,
+                List.of(focus));
         return true;
     }
 
