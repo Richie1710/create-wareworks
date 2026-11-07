@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0-beta] - 2026-11-07
+
 ### Added
 
 - **JEI's + lays a recipe into a Warehouse Production pattern.** With JEI and a production station's screen open, the
@@ -40,13 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that holds the item, how many lie below it, and about how many could move now. Press **Optimise**, or a row's dot for
   that item alone, and the crane moves the free stock of those items to locations with a higher priority whose filter
   fits the item no worse, from the lowest priority first. It only does this while it has nothing else to do: requests,
-  production orders and arrivals always come first, and requested, reserved and stock rule items stay where they are.
-  Nothing goes into a fluid bay, and fluids are not moved. An order ends once nothing more fits anywhere better, after a
+  production orders and arrivals always come first, and what requests, production orders and a stock rule's reserve
+  need stays where it is. Nothing goes into a fluid bay, and fluids are not moved. An order ends once nothing more fits anywhere better, after a
   limited number of trips, or when you press the red mark; a trip under way is finished. The new server config section
   `optimizer` sets the trips one press may cost (`tripsPerRequest`, default 32). Nothing moves unless a player asks.
 
 ### Changed
 
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because of the Warehouse Remote, JEI's **+** for production patterns and the Warehouse
+  Optimizer's screen. Worlds from older versions load unchanged. Opening a world in an older version of the mod again
+  loses its Warehouse Optimizers and Warehouse Remotes, and a crane on an optimizer trip drops what it carries at its
+  dock, so back up the world before downgrading.
 - **A storage priority now also decides where items are taken from: the lowest priority is emptied first**
   ([#47](https://github.com/Richie1710/create-wareworks/issues/47)). What fills first now empties last, so overflow
   chests left at 0 behind prioritised racks are drained before the racks instead of staying full for ever. Among
@@ -1506,7 +1513,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.18.1-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.19.0-beta...HEAD
+[0.19.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.1-beta...v0.19.0-beta
 [0.18.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.0-beta...v0.18.1-beta
 [0.18.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.1-beta...v0.18.0-beta
 [0.17.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.0-beta...v0.17.1-beta
