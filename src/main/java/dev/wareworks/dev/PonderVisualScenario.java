@@ -111,7 +111,9 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("tank-copper", WareworksBlocks.FLUID_BAY_COPPER, 2),
             new Subject("tank-brass", WareworksBlocks.FLUID_BAY_BRASS, 2),
             // Issue #37: the hand truck is an item, not a block, and has its one scene of its own.
-            new Subject("hand-truck", WareworksItems.HAND_TRUCK, 1));
+            new Subject("hand-truck", WareworksItems.HAND_TRUCK, 1),
+            // Issue #45: the Schematicannon Requester has its one scene of its own, a cannon fed from the warehouse.
+            new Subject("requester", WareworksBlocks.SCHEMATICANNON_REQUESTER, 1));
 
     @Override
     public String name() {

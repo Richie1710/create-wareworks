@@ -53,7 +53,7 @@ import net.minecraft.world.level.block.state.BlockState;
  * is what such a print tests.
  */
 final class SchematicPrint {
-    /** The owner folder the test schematics are uploaded to (shared with {@link SchematicannonGameTests}). */
+    /** The owner folder the test schematics are uploaded to (shared with {@link CannonFixture}). */
     static final String OWNER = "wareworks_gametest";
 
     private SchematicPrint() {

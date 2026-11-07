@@ -15,6 +15,7 @@
     "wareworks:warehouse_crafter_feeder",
     "wareworks:warehouse_stock_keeper",
     "wareworks:warehouse_optimizer",
-    "wareworks:warehouse_home_point"
+    "wareworks:warehouse_home_point",
+    "wareworks:schematicannon_requester"
   ]
 }

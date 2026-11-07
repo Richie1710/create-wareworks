@@ -1,0 +1,109 @@
+package dev.wareworks.core.requester;
+
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * One order a Schematicannon Requester placed at its terminal (issue #45, ADR-080): which item, which request it went
+ * into, its own share of that request and where it stands. Immutable; {@link RequesterOrders} replaces it as it moves on.
+ *
+ * @param key        the item ordered
+ * @param strict     whether it was ordered for a strict requirement (exact components) rather than a plain one
+ * @param requestId  the terminal request the share went into; shared with every amount merged into that request
+ * @param share      the amount this order was granted, at least 1
+ * @param ahead      what was in the merged request before this share when it was granted ({@link OrderShare})
+ * @param aheadDelivered what of the merged request had already been delivered when this share was granted,
+ *                   {@code 0..ahead}: delivered items are never taken off a request, so these stay ahead of the share
+ *                   whatever is given back later ({@link OrderShare#returnable})
+ * @param phase      where the order stands
+ * @param liveAge    ticks the order has been running while the terminal and its controller were loaded
+ * @param graceUntil the game time the grace ends ({@link Phase#GRACE} only, 0 otherwise)
+ * @param <K>        item key type
+ */
+public record RequesterOrder<K>(K key, boolean strict, UUID requestId, int share, int ahead, int aheadDelivered,
+                                Phase phase, int liveAge, long graceUntil) {
+    /** Where an order stands. */
+    public enum Phase {
+        /** The request waits for the share. */
+        RUNNING,
+        /** The share was delivered (or the request is gone) and its item still lies in the terminal's buffer. */
+        IN_BUFFER,
+        /** The item left the buffer and is on its way to the cannon; the requester waits a moment. */
+        GRACE;
+
+        /** The name a phase is saved by, lower case. */
+        public String serializedName() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+
+        /** The phase of a {@link #serializedName()} (case is ignored), or empty for anything else. */
+        public static Optional<Phase> byName(String name) {
+            if (name == null || name.isEmpty())
+                return Optional.empty();
+            try {
+                return Optional.of(valueOf(name.toUpperCase(Locale.ROOT)));
+            } catch (IllegalArgumentException e) {
+                return Optional.empty();
+            }
+        }
+    }
+
+    public RequesterOrder {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(requestId, "requestId");
+        Objects.requireNonNull(phase, "phase");
+        if (share < 1)
+            throw new IllegalArgumentException("share must be at least 1: " + share);
+        if (ahead < 0)
+            throw new IllegalArgumentException("ahead must not be negative: " + ahead);
+        if (aheadDelivered < 0 || aheadDelivered > ahead)
+            throw new IllegalArgumentException("aheadDelivered must be within 0.." + ahead + ": " + aheadDelivered);
+        if (liveAge < 0)
+            throw new IllegalArgumentException("liveAge must not be negative: " + liveAge);
+    }
+
+    /** A fresh order: running, no live age yet, nothing of the request delivered when it was granted. */
+    public static <K> RequesterOrder<K> placed(K key, boolean strict, UUID requestId, int share, int ahead) {
+        return placed(key, strict, requestId, share, ahead, 0);
+    }
+
+    /** A fresh order: running, no live age yet; {@code aheadDelivered} is clamped to {@code 0..ahead}. */
+    public static <K> RequesterOrder<K> placed(K key, boolean strict, UUID requestId, int share, int ahead,
+            int aheadDelivered) {
+        return new RequesterOrder<>(key, strict, requestId, share, ahead,
+                Math.max(0, Math.min(aheadDelivered, ahead)), Phase.RUNNING, 0, 0L);
+    }
+
+    /** Whether the request still waits for this share. */
+    public boolean isRunning() {
+        return phase == Phase.RUNNING;
+    }
+
+    RequesterOrder<K> withAhead(int newAhead) {
+        // Never above what is ahead: a lower floor only ever gives back less (OrderShare#returnable).
+        return new RequesterOrder<>(key, strict, requestId, share, newAhead, Math.min(aheadDelivered, newAhead), phase,
+                liveAge, graceUntil);
+    }
+
+    RequesterOrder<K> withLiveAge(int newLiveAge) {
+        return new RequesterOrder<>(key, strict, requestId, share, ahead, aheadDelivered, phase, newLiveAge,
+                graceUntil);
+    }
+
+    RequesterOrder<K> inBuffer() {
+        return new RequesterOrder<>(key, strict, requestId, share, ahead, aheadDelivered, Phase.IN_BUFFER, liveAge,
+                0L);
+    }
+
+    RequesterOrder<K> withGraceUntilCleared() {
+        return graceUntil == 0L ? this
+                : new RequesterOrder<>(key, strict, requestId, share, ahead, aheadDelivered, phase, liveAge, 0L);
+    }
+
+    RequesterOrder<K> inGrace(long until) {
+        return new RequesterOrder<>(key, strict, requestId, share, ahead, aheadDelivered, Phase.GRACE, liveAge,
+                until);
+    }
+}

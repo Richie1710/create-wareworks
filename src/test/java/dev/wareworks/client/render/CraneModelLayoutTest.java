@@ -272,6 +272,10 @@ class CraneModelLayoutTest {
         // The pallet's deck is reached through a PartialModel from an entity renderer, which no blockstate names at
         // all, so this is the only place it is checked (M28 step 9, WareworksPartialModels#PALLET_DECK).
         assertValidBlockModel(BLOCK_MODELS.resolve("pallet").resolve("deck.json"), "pallet/deck");
+        // The Schematicannon Requester (issue #45): its base model is picked by its own six-facing blockstate, and its
+        // two lamp twins only swap the lamp texture of it.
+        assertValidBlockModel(BLOCK_MODELS.resolve("schematicannon_requester").resolve("block.json"),
+                "schematicannon_requester/block");
     }
 
     /** Vanilla block model rules: the shared parent, Create textures only, element extents, angles and UV ranges. */

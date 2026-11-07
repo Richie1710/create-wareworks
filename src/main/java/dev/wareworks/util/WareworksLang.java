@@ -1834,6 +1834,37 @@ public final class WareworksLang {
     /** The result cell's red line in a screen opened from afar: a craft needs the player at the terminal. */
     public static final String TERMINAL_CRAFT_REMOTE = "gui.terminal.craft.remote";
 
+    // --- schematicannon requester (issue #45, ADR-080) ---------------------------------------------------------------
+
+    /** Action bar: {@code "Ordering through the Warehouse Terminal at %1$s, %2$s, %3$s"}, the remote went in. */
+    public static final String REQUESTER_LINKED = "requester.linked";
+    /** Action bar: a second remote is refused rather than swapped, with how to take the first one out. */
+    public static final String REQUESTER_OCCUPIED = "requester.occupied";
+    /** Action bar: the remote was taken out and the open orders were given back. */
+    public static final String REQUESTER_REMOVED = "requester.removed";
+    /** Chat, once at insertion: the cannon skips missing blocks; {@code %1$s} is Create's own name of that option. */
+    public static final String REQUESTER_SKIP_MISSING_WARNING = "requester.skip_missing_warning";
+    /** Title of the grace value box. */
+    public static final String REQUESTER_GRACE = "requester.grace";
+    /** {@code "%1$s s"}: the grace value in seconds. */
+    public static final String REQUESTER_GRACE_SECONDS = "requester.grace_seconds";
+    /** Goggle header {@code "Schematicannon Requester:"}. */
+    public static final String GOGGLES_SCHEMATICANNON_REQUESTER = "gui.goggles.schematicannon_requester";
+    /** {@code "Terminal at %1$s, %2$s, %3$s"}: the terminal the remote in the slot is linked to. */
+    public static final String GOGGLES_REQUESTER_TERMINAL = "gui.goggles.requester.terminal";
+    /** {@code "Terminal at %1$s, %2$s, %3$s in %4$s"}: the same in another dimension. */
+    public static final String GOGGLES_REQUESTER_TERMINAL_IN = "gui.goggles.requester.terminal_in";
+    /** {@code "Orders as %1$s"}: the player who put the remote in. */
+    public static final String GOGGLES_REQUESTER_OWNER = "gui.goggles.requester.owner";
+    /** {@code "Cannon is missing: %1$s x%2$s"}. */
+    public static final String GOGGLES_REQUESTER_CANNON_MISSING = "gui.goggles.requester.cannon_missing";
+    /** {@code "Gave up an order of %1$s x%2$s after %3$s min and ordered again"}, shown for a minute. */
+    public static final String GOGGLES_REQUESTER_GAVE_UP = "gui.goggles.requester.gave_up";
+    /** {@code "Orders given up: %1$s"}, while above 0. */
+    public static final String GOGGLES_REQUESTER_TIMEOUTS = "gui.goggles.requester.timeouts";
+    /** Prefix of the one line of each requester status ({@link #requesterStatusKey}). */
+    public static final String GOGGLES_REQUESTER_STATUS_PREFIX = "gui.goggles.requester.";
+
     private WareworksLang() {
     }
 
@@ -2025,6 +2056,16 @@ public final class WareworksLang {
     public static LangBuilder lastPlan(NoJobReason reason) {
         return translate(GOGGLES_LAST_PLAN, translate(noJobReasonKey(reason)).style(ChatFormatting.WHITE))
                 .style(ChatFormatting.GRAY);
+    }
+
+    /**
+     * Relative lang key of the line a Schematicannon Requester shows for {@code status} (issue #45), e.g.
+     * {@code gui.goggles.requester.out_of_stock}. {@code GRACE} is {@code grace_wait}, because its line is a wait and
+     * not the name of the value box ({@link #REQUESTER_GRACE}).
+     */
+    public static String requesterStatusKey(dev.wareworks.core.requester.RequesterStatus status) {
+        return GOGGLES_REQUESTER_STATUS_PREFIX + (status == dev.wareworks.core.requester.RequesterStatus.GRACE
+                ? "grace_wait" : status.serializedName());
     }
 
     /** Full translation key for a key relative to the {@code wareworks} namespace. */

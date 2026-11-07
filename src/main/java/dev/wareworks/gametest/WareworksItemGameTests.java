@@ -92,6 +92,7 @@ public final class WareworksItemGameTests {
     private static final String COPPER_SHEET = "copper_sheet";
     private static final String CRAFTER = "crafter";
     private static final String ELECTRON_TUBE = "electron_tube";
+    private static final String EMPTY_SCHEMATIC = "empty_schematic";
     private static final String ENDER_PEARL = "ender_pearl";
     private static final String INDUSTRIAL_IRON_BLOCK = "industrial_iron_block";
     private static final String IRON_SHEET = "iron_sheet";
@@ -275,6 +276,11 @@ public final class WareworksItemGameTests {
         CraftingInput optimizer = grid(3, 3, none, stack(BRASS_HAND), none, tube, brass, tube, none, alloy, none);
         assertCrafts(helper, recipes, level, optimizer, WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(), ONE);
         assertCrafts(helper, recipes, level, homePoint, WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(), ONE);
+        // The Schematicannon Requester (issue #45) is the keeper's shape once more, with Create's empty schematic on
+        // top: the one Create item that says "a schematic", and no other Wareworks recipe uses it.
+        CraftingInput requester = grid(3, 3, none, stack(EMPTY_SCHEMATIC), none, tube, brass, tube, none, alloy,
+                none);
+        assertCrafts(helper, recipes, level, requester, WareworksBlocks.SCHEMATICANNON_REQUESTER.asItem(), ONE);
         // The hand truck (issue #37): a handle (shaft) on an andesite frame, an iron nose plate between two cogwheels
         // as wheels. Any iron sheet would do; Create's is the one a player has.
         ItemStack cog = stack(COGWHEEL);
@@ -357,6 +363,9 @@ public final class WareworksItemGameTests {
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(),
                 // The optimizer directly after the keeper (issue #46): both act on what the warehouse holds.
                 WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
+                // The Schematicannon Requester is the last block (issue #45): it reaches out of the warehouse to
+                // another machine.
+                WareworksBlocks.SCHEMATICANNON_REQUESTER.asItem(),
                 // The hand truck is no block, so it stands after every block (issue #37), and the Warehouse Remote
                 // after it (issue #44).
                 WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem()),
@@ -454,6 +463,12 @@ public final class WareworksItemGameTests {
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_HOME_POINT, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(ROSE_QUARTZ_LAMP), IngredientSpec.of(ANDESITE_ALLOY),
                                 IngredientSpec.of(ANDESITE_CASING), IngredientSpec.of(ANDESITE_ALLOY))),
+                // The Schematicannon Requester (issue #45): the keeper's tier, with an empty schematic in place of its
+                // comparator, because it serves a Schematicannon.
+                new ExpectedRecipe(WareworksBlocks.SCHEMATICANNON_REQUESTER, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(EMPTY_SCHEMATIC), IngredientSpec.of(ELECTRON_TUBE),
+                                IngredientSpec.of(BRASS_CASING), IngredientSpec.of(ELECTRON_TUBE),
+                                IngredientSpec.of(ANDESITE_ALLOY))),
                 // The hand truck (issue #37): andesite tier, cheaper than any warehouse block, because carrying a
                 // chest across a base is early-game work.
                 new ExpectedRecipe(WareworksItems.HAND_TRUCK, RecipeType.CRAFTING, ONE,

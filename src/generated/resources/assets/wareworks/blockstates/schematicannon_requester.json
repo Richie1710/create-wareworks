@@ -1,0 +1,96 @@
+{
+  "variants": {
+    "facing=down,lit=false,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block",
+      "x": 90
+    },
+    "facing=down,lit=false,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "x": 90
+    },
+    "facing=down,lit=true,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block_active",
+      "x": 90
+    },
+    "facing=down,lit=true,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "x": 90
+    },
+    "facing=east,lit=false,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block",
+      "y": 90
+    },
+    "facing=east,lit=false,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "y": 90
+    },
+    "facing=east,lit=true,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block_active",
+      "y": 90
+    },
+    "facing=east,lit=true,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "y": 90
+    },
+    "facing=north,lit=false,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block"
+    },
+    "facing=north,lit=false,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused"
+    },
+    "facing=north,lit=true,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block_active"
+    },
+    "facing=north,lit=true,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused"
+    },
+    "facing=south,lit=false,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block",
+      "y": 180
+    },
+    "facing=south,lit=false,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "y": 180
+    },
+    "facing=south,lit=true,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block_active",
+      "y": 180
+    },
+    "facing=south,lit=true,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "y": 180
+    },
+    "facing=up,lit=false,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block",
+      "x": 270
+    },
+    "facing=up,lit=false,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "x": 270
+    },
+    "facing=up,lit=true,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block_active",
+      "x": 270
+    },
+    "facing=up,lit=true,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "x": 270
+    },
+    "facing=west,lit=false,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block",
+      "y": 270
+    },
+    "facing=west,lit=false,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "y": 270
+    },
+    "facing=west,lit=true,refused=false": {
+      "model": "wareworks:block/schematicannon_requester/block_active",
+      "y": 270
+    },
+    "facing=west,lit=true,refused=true": {
+      "model": "wareworks:block/schematicannon_requester/block_refused",
+      "y": 270
+    }
+  }
+}

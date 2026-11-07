@@ -4426,6 +4426,16 @@ predicts nothing the server refuses:
 
 No rejection reason and no craft result was added: those values travel by ordinal or name and are pinned by tests.
 
+##### In a block: the Schematicannon Requester (issue #45)
+
+A linked remote can also be put into a **Schematicannon Requester** (§3.11, ADR-080), which then orders what the
+cannon in front of it is missing at the remote's terminal. The same rules apply, measured from the block's centre
+instead of a player's eyes: `RemoteAccess#checkFromBlock` checks the link, the dimension, the range, the terminal's
+loaded chunk, its identity and, for a player, `mayInteract`, in `#open`'s order and with its texts, and answers a
+`RemoteCheck` instead of telling anybody. Because a requester asks before every order, the terminal is read without a
+chunk ticket (`content.requester.NoTicket`: `getChunkNow`, then the chunk's own block entity lookup); `#open` now reads
+it through the same helper, so neither ever renews a ticket on the terminal's chunk.
+
 ##### The client
 
 The menu's extra data gained the terminal's dimension and whether the screen was opened from afar, after the block
@@ -7434,6 +7444,240 @@ order.
 * Visual scenario `optimizer`: real clicks in English and German; `blocks` and `tooltips` include the block.
 * `runRobustnessTest`, because the controller's and the crane's save data changed.
 
+### 3.11 Schematicannon Requester (`content.requester`, [issue #45](https://github.com/Richie1710/create-wareworks/issues/45))
+
+> Decision and reasons: **ADR-080**. The remote and its rules are §3.4.7; the terminal entry point beside the
+> computer's is §7.7; the config keys are §9.
+
+**What it is.** A block set against a Create **Schematicannon** that orders what the cannon is **missing** at a
+warehouse terminal, through a linked **Warehouse Remote** lying in its cradle. It moves no item: the crane delivers
+into the terminal's buffer, exactly as for a stock-list click, and the player's own **funnel and belt** take the items
+from the buffer to a chest beside the cannon (the buffer is extract-only already). It orders **from stock only**, a
+stack at a time at most, never more than the schematic still needs or the cannon's inventories hold, and **never
+twice** while an order is on its way or lies in the buffer. It never starts production and never offers to make
+anything. The clipboard order (§3.4.4) remains the way to have the whole material list delivered at once.
+
+**The block** (`SchematicannonRequesterBlock`, `wareworks:schematicannon_requester`) is a directional block that is no
+warehouse member: it stands beside the cannon, anywhere within the remote's range of the terminal. Its **front faces
+the cannon**, in any of the six directions; the cannon is `pos.relative(FACING)`.
+* Placed against a cannon, it faces it; otherwise it faces the first cannon among its six neighbours, the clicked side
+  first; with none it faces away from the click, and the goggles say "No Schematicannon in front". The wrench turns it.
+* **No item capability** on any face: the cannon takes every neighbour that answers `Capabilities.ItemHandler.BLOCK`
+  for one of its own inventories (`SchematicannonBlockEntity#findInventories`), so it would pull the remote out.
+* Two lamps (`LIT`, `REFUSED`), the home point's three rose quartz models (§3.7): dim, lit while an order is under
+  way, red while something needs the player; red wins. Written only when they change.
+* The back (player side) carries the cradle with the remote, drawn by `SchematicannonRequesterRenderer`, and the grace
+  value box. Recipe (`data/wareworks/recipe/schematicannon_requester.json`): the stock keeper's plus shape with Create's
+  **empty schematic** on top (empty schematic; electron tube, brass casing, electron tube; andesite alloy), unlocked by
+  the empty schematic. It stands after the home point in the creative tab, the last block before the hand truck.
+
+**The remote slot** (`RemoteSlot`, one Warehouse Remote, never a capability):
+
+| Click | What happens |
+|---|---|
+| a real player with a **linked** remote | the link check below runs with that player; on success one remote goes in (a copy in creative), the player becomes the **owner**, the action bar says "Ordering through the Warehouse Terminal at x, y, z" and Create's controller sound plays. A cannon that skips missing blocks adds one **chat** line naming Create's option "Skip missing Blocks" |
+| an unlinked remote, or any refused check | the remote's own action bar text (`remote.*`, §3.4.7); the remote stays in the hand |
+| a remote while one is in | "Take the remote out first: sneak and right-click with an empty hand". No swap |
+| sneaking, empty main hand | the open orders are given back, the remote goes into the hand (or the inventory), owner and orders are cleared: "Remote taken out: orders given up" (Create's Lectern Controller gesture) |
+| empty hand | the current status on the action bar |
+| a fake player (Deployer) | nothing, silently, in either direction |
+
+A wrench, goggles, a clipboard and the Mechanical Arm keep their own click (ADR-060). Breaking the block gives the
+orders back and then drops the remote (`destroy()`).
+
+**The link check** (`RemoteAccess#checkFromBlock`) is §3.4.7's opening rule measured from the block's centre, in the
+same order and with the same texts: a link, the dimension (`remote.crossDimension`), the dimension exists, the range
+(`remote.range`), the terminal's chunk loaded and ticking, the linked terminal identity, and `mayInteract` when there
+is a player to ask. It runs with the inserting player at insertion and before every new order; while the owner is
+online `mayInteract(owner, terminal)` runs again, while they are offline the insertion check stands. No fake player is
+ever built for an offline owner. `ServerLevel#mayInteract` is spawn protection and the world border; a claim mod
+counts as far as it hooks that call. A refusal at order time never removes the remote: it shows as a red `LINK_*`
+status and the next poll tries again. Orders already placed are followed whenever the terminal can be reached, with no
+player check, so a claim problem can never stall the dead-man switch.
+
+**Nothing is read with a ticket.** Every read away from the block's own position (the cannon, the terminal, a second
+requester) goes through `NoTicket`: `isLoaded`, then `ServerChunkCache#getChunkNow` and
+`LevelChunk#getBlockEntity(pos, CHECK)`. `Level#getBlockEntity` adds a `TicketType.UNKNOWN` chunk ticket on every
+miss of the server's small chunk cache. The ticket lives two ticks, so a read once a second would not hold the
+terminal's chunk for good (a read every tick does, which is what the remote's screen check had to avoid, issue #44),
+but it would keep re-ticketing a chunk the requester has no business keeping. `RemoteAccess#open` reads the terminal
+through the same helper. The `isLoaded` guard keeps a poll from loading an unloaded chunk
+(`requesterletstheterminalschunkunload`); `noticketreadsholdnochunk` measures that `NoTicket` adds no ticket against a
+`Level#getBlockEntity` read that does.
+
+**Reading the cannon** (`CannonView`, the only class that touches `SchematicannonBlockEntity`, public fields only). The
+cannon **misses an item** when it is `PAUSED` with the status `"missingBlock"`, `missingItem` is set, it neither skips
+missing blocks nor has a creative crate, and its printer is loaded and not errored; `missingItem` alone stays set after
+its pause has ended. Every other state is a phase the goggles name:
+
+| Phase | When | Lamp |
+|---|---|---|
+| no cannon | not loaded, or no cannon in front | red |
+| skips missing | Create's "Skip missing Blocks" is on (a cannon placed from its item starts that way) | red |
+| creative crate | the cannon has one: nothing is ever missing | dark |
+| no inventory | missing an item, with no inventory attached | red |
+| not printing | stopped, idle, finished, or no schematic loaded | dark |
+| blocked | paused for anything else (gunpowder, an unloaded target, …), with Create's own status text | dark |
+| printing | running, nothing missing | dark |
+| missing | the gate above: the order rule decides | — |
+
+The missing item's signature (the printer's target, the item key, the count) is compared by content. Only when it
+changes is `printer.getCurrentRequirement()` asked (it builds a block entity) whether the requirement is **strict**
+(`StrictNbtStackRequirement`: exact components) or a **damage** use (super glue); a requirement it cannot find counts
+as strict.
+
+**The order.** When the cannon misses an item and no lock below holds:
+* **Which key.** Strict: exactly the reported components. Plain: the variant `VariantPick` chooses among the stock
+  index's keys of that item, the one without components while automation may take some of it, otherwise the one with
+  the most available, ties by the stable order; kept for the current wait until it runs dry. Damage: amount 1.
+* **How many** (`OrderAmount`): the smallest of
+  * a stack of the item;
+  * what the schematic still needs: `required − gathered − ordered` from the cannon's material list and this
+    requester's counter while that is above 0, but at least what the cannon reports missing; one stack for an item not
+    on the list (below);
+  * the **room in the cannon's inventories**, a simulated `ItemHandlerHelper#insertItemStacked` into each attached
+    handler, summed;
+  * the **room in the terminal's buffer** (`roomFor`);
+  * the stock automation may take (`availableTo(AUTOMATION)`);
+  * `maxTerminalRequestAmount`.
+
+  The first factor that is 0 is the status and nothing is ordered: "The cannon's inventories are full", "The
+  terminal's buffer is full: empty it onto a belt", "… is held back by a Stock Keeper's reserve" or "The warehouse has
+  no …: trying again", all red. A full buffer is checked here because the controller would accept the order and skip
+  it (`OUTPUT_FULL`) until the dead-man switch fired.
+* **Placed** through `WarehouseTerminalBlockEntity#requestStockOnly` (§7.7): a click's request (same queue, merging,
+  caps, buffer and crane) with `StockAccess.AUTOMATION`, the amount clamped to that stock first, so the controller
+  never plans production for it. The request carries no player: nothing is remembered on the terminal. The
+  controller's own refusals (queue, output or request caps) read "The terminal's order slots are taken: waiting", dark,
+  because they pass by themselves.
+
+**What the schematic still needs** (`ChecklistNeed`). Create's `MaterialChecklist` knows `required` and `gathered` per
+item, and only `updateChecklist()` fills it: when the printer starts, after a reload and when the cannon prints a book
+or clipboard mid-run. Nothing counts what was placed. So the requester counts what it ordered per item since the list
+was made (at most 512 items; beyond that an item counts as unknown, one stack), adding a share when an order is placed
+and taking off what an order gave back. Every decision compares a **fingerprint** (Σ required, Σ gathered, the cannon's
+`blocksToPlace`); when it changed, the list is fresh, and the counter is set to the shares of the requester's own open
+orders, which a fresh `gathered` cannot contain yet (in the crane, the buffer or on the belt). The error is one share at
+most, towards ordering too little, never overflowing the chest. When the remainder is 0 or less while the cannon still
+misses the item and every lock is open (the player took items out of the chest, or the warehouse shortened a request),
+the requester calls `cannon.updateChecklist()` itself, at most once per `requester.checklistRefreshTicks` (a minute by
+default), and recomputes; in between, or when that still leaves nothing, it orders what the cannon reports missing. It
+never stalls. Strict items share one count per `Item`, an approximation bounded by one stack.
+
+**No duplicates: orders, phases, locks** (`RequesterOrders`, at most **4** orders, then "Four orders open: waiting"):
+* Each order keeps its key, strictness, request id, its **share**, what was **ahead** of it in the request when it
+  was granted and how much of that had already been delivered then. Merged requests share one id (§7.2), so the
+  requester credits **first in, first out** (`OrderShare`): its own delivered amount is the delivered amount minus what
+  was ahead, between 0 and the share; when the request asks for less than "ahead" and the share together, someone
+  ahead was reduced and "ahead" shrinks first. A player's earlier click in the same request is delivered first and
+  never calls the requester's share done. A reduction ahead masked by an amount merged in behind cannot be seen; it
+  only delays the credit until the request is gone.
+* **Running** until the request is gone from the terminal's open requests or its own share has arrived (a gone request
+  counts as done: delivered and cancelled cannot be told apart, and the next phases cover both); then **in the
+  buffer** while a matching stack lies there, with no timeout; then **grace** for the block's grace, while the items
+  travel the belt; then gone.
+* A new order for the missing item is placed only while no order of this requester matches it in any phase, no
+  matching stack lies in the buffer (whoever ordered it) and fewer than 4 are open. Two strict orders match only with
+  equal keys; a strict and a plain one of the same item match; a buffered stack holds back a strict item only with an
+  equal key, so an unrelated variant in the buffer never blocks for ever.
+* **The grace** (`GraceBehaviour`, a value box on the back): 0 to 60 seconds, 10 by default, 0 for a funnel straight
+  into the chest. Once the items reach the chest the cannon grabs them and asks for something else, so the grace only
+  has to cover the belt. It is the one setting a schematic or a clipboard copies, saved only while it differs from the
+  default; Create's `ValueSettingsPacket` sets it.
+* A change of the missing item cancels nothing: the earlier item is almost always needed again in the same print.
+
+**The dead-man switch.** A running order ages only on a poll that reached the terminal and found its controller loaded,
+by the time since the last such poll, at most two poll intervals; the age is saved. At `requester.orderTimeoutTicks`
+(12000, ten minutes of the warehouse being able to serve) the order gives back what of its share is **provably its
+own** and not delivered (`OrderShare#returnable`, `controller.reduceRequestShare(id, amount)`, never a cancel, which
+would cancel a merged player's items too), lowers the counter by that much, is dropped without a grace, and the
+goggles say "Gave up an order of <item> x<share> after … min and ordered again" for a minute; the same poll may order
+again under the locks. "Provably its own": a reduction takes off the merged request whatever it is given, and
+anything beyond the share's own undelivered part comes off somebody else's, for example a player's click merged in
+behind after a production shortfall ahead. So the amount is counted as if everything ahead of the share had been
+given back meanwhile, except what of the request was already delivered when the share was granted, which no
+reduction can take off. Where that is less than the credit above, the difference is delivered into the buffer rather
+than taken off a player. A crane that has already picked still delivers, so the overshoot is one crane load plus what
+arrived ahead of the share after it was placed. An order lying in the buffer has no timeout: the buffer lock holds,
+and the goggles point at the broken belt.
+
+**Give-back** of every running share (the provable part, as for the dead-man switch), then the orders are cleared:
+when the remote is taken out, when the block is broken, when a command or a structure replaces it (`/setblock`,
+`/fill`: `clearContent` gives back while the remote still names the terminal, before `destroy()` finds the slot
+empty), and when the cannon has been "not printing" or "no cannon" for two polls in a row, so a finished or stopped
+print strands nothing. A terminal that cannot be reached then is not waited for: the orders are forgotten and their
+requests complete normally, which conserves every item.
+
+**One requester per cannon.** When an order is due, the requester reads the block states of the cannon's other five
+sides (no ticket). Another requester there that faces the cannon, holds a remote and stands at a lower
+`BlockPos#asLong` **or still has orders open** serves the cannon; this one stays idle, red, "Another requester already
+serves this cannon". Two requesters linked to different terminals would otherwise both pass their own locks and order
+the same item twice, also when the one at the lower position gets its remote while the other one's order still runs.
+Then both wait, the running order is still followed, and once it is through the lower one takes over.
+**Several requesters on one terminal** are allowed: the first-in-first-out shares keep them apart, the buffer lock is
+per item, and the per-destination cap (`maxOpenRequestsPerOutput`) is shared with players and lists. Routing out of one
+buffer to several cannons is the player's job (filtered funnels); one terminal per printing cannon is simpler.
+
+**Statuses** (`core.requester.RequesterStatus`, in precedence order, each with its lamp, saved and synced by name):
+
+| Lamp | Statuses |
+|---|---|
+| red | no cannon, second requester, skips missing, no inventory, the link refusals (other dimension, out of range, not loaded, gone, not allowed), no controller, cannon full, buffer full, out of stock, reserved |
+| lit | ordered, in the buffer, grace, four orders open |
+| dark | no remote, creative crate, not printing, blocked, printing, terminal busy |
+
+**Goggles** (a summary built when a player looks, synced through `SyncThrottle`, the optimizer's pattern):
+"Schematicannon Requester:", the terminal ("Terminal at x, y, z", with the dimension's id behind it outside the
+Overworld) or "Put in a linked Warehouse Remote", "Orders as <owner>", the cannon line ("Cannon is missing: <item>
+xN" or the phase, Create's own status text for a blocked cannon), up to four order rows ("<item> xN ordered, M
+delivered (m:ss)", "<item> lies in the terminal's buffer", "Waiting n s for <item> on its way"), the current refusal,
+the last give-up for a minute and "Orders given up: n" once above 0. A stack in the buffer that the requester did not
+order (a player's, another requester's) holds its order back without a row, so the refusal line names it then ("<item>
+lies in the terminal's buffer"); the empty-hand click shows the same line.
+
+**Polling and cost.** No per-tick work: the block entity's tick returns at once until `requester.pollIntervalTicks`
+(20) have passed, and that interval is also the back-off after a refusal.
+
+| Poll | Cost |
+|---|---|
+| idle (no remote, or nothing missing and no orders) | one no-ticket read of the cannon and a few field reads |
+| orders open | + the link check (no ticket), the terminal's controller, one walk of that terminal's open requests (at most `maxOpenRequestsPerOutput`) and one buffer snapshot |
+| an order due | + 5 neighbour block states, the fingerprint (distinct items of the list), the insert simulation over the attached handlers, `roomFor`, `availableTo`, a walk of the stock index's keys (a plain item, once per signature) and `getCurrentRequirement()` (once per signature) |
+| stale counter | one `updateChecklist()` per `checklistRefreshTicks` per requester, at most |
+
+The requester never loads or tickets a chunk and never scans the world.
+
+**Persistence and sync.** The block entity saves the remote, the owner, the orders (with their live age), the counter
+and its fingerprint, the give-up count and a non-default grace (format in `architecture.md`, "Persistence & sync");
+each is read only from a full save, so a schematic print over a standing requester changes nothing but the grace, and
+`writeSafe` carries the grace alone. The status, the cannon's signature, the strictness, the variant picked and the
+poll times are rebuilt on the first poll. Request ids survive a restart, so tracking resumes by id; Create's printer
+reloads its material list after a rejoin, the fingerprint changes and the counter rebases. A requester that is not
+loaded does not poll; an unloaded terminal or controller shows "The terminal's area is not loaded" or "The terminal
+belongs to no warehouse" and its orders do not age; an unloaded cannon reads as no cannon and its orders are given back
+after two polls. Clients get the remote for the cradle and the goggle summary; the lamps are block state. No payload:
+`WareworksNetwork.VERSION` stays 22.
+
+**Not built:** a screen, swapping remotes, ordering ahead of the cannon (the clipboard order does that), delivering into
+the cannon or its chest (that would be item teleportation), production, and a retry interval of its own.
+
+**Classes and tests:**
+* `core.requester`: `RequesterOrders`, `RequesterOrder`, `OrderShare`, `OrderAmount`, `ChecklistNeed`, `VariantPick`,
+  `RequesterStatus`, `RequesterLimits`.
+* `content.requester`: `SchematicannonRequesterBlock` / `BlockEntity`, `CannonView`, `NoTicket`, `RemoteSlot`,
+  `GraceBehaviour`, `RequesterBackFace`, `RequesterSummary`, `RequesterLines`;
+  `content.remote.RemoteAccess#checkFromBlock` and `RemoteCheck`; `WarehouseTerminalBlockEntity#requestStockOnly`;
+  `client.render.SchematicannonRequesterRenderer`; `data.WareworksBlockStateGen#requesterBlockProvider`; the config
+  section `requester` (§9).
+* JUnit: `RequesterLimitsTest`, `OrderAmountTest`, `ChecklistNeedTest`, `OrderShareTest`, `VariantPickTest`,
+  `RequesterOrdersTest`; `ItemTooltipLengthTest` and `LangConsistencyTest` cover the description and the texts.
+* GameTests: `SchematicannonRequesterGameTests` (a real cannon printing through the requester, each with an item
+  census), plus `WareworksItemGameTests` (recipe, grid, tab order), `SchematicSafetyGameTests` (nothing in a print at
+  the defaults) and `RemoteGameTests` (the shared terminal read).
+* Visual scenario `requester` (real clicks, the orders, the buffer and the belt, a rejoin mid order, English and
+  German); `blocks`, `tooltips` and `ponder` (the scene `requester/ordering`) include the block.
+* `runRobustnessTest`, once, because the harness registrations changed.
+
 ## 4. Discovery and membership (no permanent world searches)
 
 * **`WarehouseRegistry`** (server-side, per `ServerLevel` via catnip `WorldAttached`, in-memory) maps controller position to `AisleBounds`. A controller registers in `onLoad()` (bounds become known after its first tick) and whenever its geometry changes. It unregisters in `invalidate()`/`remove()` (Create's `setRemoved` is final).
@@ -7834,6 +8078,13 @@ point for **ordinary requests**, and nothing else:
 * **No persistence of its own.** A computer request is saved as the controller request it is; the peripheral keeps no
   state, so there is no save, payload or network change.
 * The server config switch `computers.computerAccess` (§9) turns the peripheral's methods off on a server.
+* **A sibling for a block that must never produce.** A Schematicannon Requester (§3.11, ADR-080) orders through
+  `WarehouseTerminalBlockEntity#requestStockOnly`, the computer path's checks plus one rule: the amount is clamped to
+  what automation may take **before** the controller sees it, so the controller plans no production for it, and an item
+  that is only producible is refused as not in stock (`RESERVED` when only a reserve holds it back). Like a computer
+  request it is an `AUTOMATION` request to the terminal, carries no player and is not remembered at the terminal; it
+  merges like any request, which is why the requester credits its own share first in, first out and gives back only
+  that share (`reduceRequestShare`), never cancelling a merged id.
 
 ### 7.8 Several cranes (M33, issue #14, ADR-075)
 
@@ -8217,6 +8468,9 @@ the **two cranes in flight** phase of the `robustness` scenario (§8.1).
 | `range` (section `remote`, issue #44) | 256 | how far a Warehouse Remote reaches its linked terminal, in blocks, from the player's eyes to the terminal block's centre (§3.4.7, ADR-077). Only within one dimension; set it very high for no limit. Checked when the screen opens and every tick while it is open. The terminal's chunk must be loaded and ticking all the same: a remote never loads one |
 | `crossDimension` (`remote`) | false | whether a remote may open a terminal in another dimension. The range is not measured then, because the coordinates of two dimensions are not comparable |
 | `tripsPerRequest` (section `optimizer`, issue #46) | 32 | how many crane trips one press of a Warehouse Optimizer's Optimise may cost at most (§3.10, ADR-079). An order also ends earlier once nothing more fits anywhere better, and the crane only relocates while it has nothing else to do. Read when the order starts; range 1–512, clamped again in `core.optimizer.OptimizerLimits` |
+| `pollIntervalTicks` (section `requester`, issue #45) | 20 | how often a Schematicannon Requester looks at its cannon and its orders (§3.11, ADR-080). It is also the back-off after the warehouse could not serve an order: there is no retry interval of its own. An idle poll costs one look at the cannon; nothing runs between polls. Range 10–200 |
+| `orderTimeoutTicks` (`requester`) | 12000 | the **dead-man switch**: a requester's order that has not arrived after this long is given up, its own outstanding share given back (`reduceRequestShare`, never a cancel) and the order placed again. Only **live** time counts, polls on which the terminal was reached and its warehouse loaded, so an unloaded terminal or a stopped server never fires it. Range 600–72000 (30 s to 1 h) |
+| `checklistRefreshTicks` (`requester`) | 1200 | when a requester's count of what the schematic still needs has gone stale (items taken out of the cannon's chest, a request shortened), it asks the cannon for a fresh material list (`updateChecklist()`, the call Create makes for a book print mid-run) at most once in this many ticks, and orders what the cannon reports missing in between. Range 200–72000 |
 
 Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (`1/384 = 0.0026041666…`). The TOML file groups the keys into sections, so the full path of a key is `<section>.<key>`:
 
@@ -8232,6 +8486,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `computers` (issue #9) | `computerAccess` | boolean |
 | `remote` (issue #44) | `range`, `crossDimension` | 16–30000000, boolean |
 | `optimizer` (issue #46) | `tripsPerRequest` | 1–512 |
+| `requester` (issue #45) | `pollIntervalTicks`, `orderTimeoutTicks`, `checklistRefreshTicks` | 10–200, 600–72000, 200–72000 |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 

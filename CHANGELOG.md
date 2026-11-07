@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Schematicannon Requester: a Schematicannon orders what it is missing from the warehouse**
+  ([#45](https://github.com/Richie1710/create-wareworks/issues/45)). A new block, crafted like the Stock Keeper with
+  Create's empty schematic in place of its comparator. Set it against a Schematicannon and right-click it with a linked
+  Warehouse Remote: the remote stays in it, and whenever the cannon stops for a missing item, the requester orders it at
+  the remote's terminal. It orders **from stock only** and never starts production, at most a stack or exactly what the
+  schematic still needs if that is less, and never more than the cannon's chest has room for; it orders nothing while
+  that chest or the terminal is full. It **never orders an item twice** while an order for it is on its way, lies in the
+  terminal or travels the belt: a value box on the back sets how long it waits after the items have left the terminal
+  (10 seconds by default). An order that has not arrived after 10 minutes in which the warehouse could serve it is given
+  up and placed again. The crane delivers into the terminal's buffer as for a click, and your own funnel and belt take
+  the items on to a chest beside the cannon. Turn off the cannon's "Skip missing Blocks" option, which a cannon placed
+  by hand has on: the requester says so when the remote goes in. A Stock Keeper's reserve holds items back from it, as
+  from redstone and computers. A lamp lights while it works and turns red when it needs you, and goggles say why; sneak
+  and right-click with an empty hand to take the remote out. The remote's range, dimension and loaded-area rules apply,
+  and the requester never loads chunks. The new server config section `requester` sets how often it looks
+  (`pollIntervalTicks`, default 20), the give-up time (`orderTimeoutTicks`, default 12000) and how often it may ask the
+  cannon for a fresh material list (`checklistRefreshTicks`, default 1200). A Ponder scene shows the set-up.
+
 ## [0.19.0-beta] - 2026-11-07
 
 ### Added

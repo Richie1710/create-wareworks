@@ -75,6 +75,11 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 # The hand truck scene (issue #37) is an aisle-free square 5 plate: a chest at x = 1, z = 3, set down again at x = 3,
 #   with the armour stand that pushes the truck on the row z = 1 in front of them
 #   (dev.wareworks.client.ponder.scenes.HandTruckScenes).
+# The Schematicannon Requester scene (issue #45) uses the shared square 9 plate: the terminal on the rack plane LEFT at
+#   position 4, the player's belt sunk into the plate behind the rack wall (z = 2, x = 5..3, its motor at x = 5, z = 1),
+#   the chest at the belt's end (x = 2, z = 2) with the Schematicannon west of it and the requester north of that, the
+#   stone on the plane RIGHT and a 2 x 2 floor printed at x = 6..7, z = 0..1
+#   (dev.wareworks.client.ponder.scenes.RequesterScenes).
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
@@ -102,6 +107,7 @@ TEMPLATES = {
     "warehouse/fluid_request": (9, 7, 9),
     "warehouse/ordering_to_a_door": (9, 7, 9),
     "warehouse/crafter_feeder": (9, 7, 9),
+    "requester/ordering": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

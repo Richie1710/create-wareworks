@@ -10,34 +10,37 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly **nineteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   lists exactly **twenty** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
    interface, **wooden rack bay, andesite rack bay, brass rack bay**, **copper fluid bay, brass fluid bay**, warehouse
    input, warehouse output, warehouse terminal, warehouse production station, **warehouse crafter feeder**, warehouse
-   stock keeper, **warehouse optimizer**, warehouse home point, and the **hand truck** and the **warehouse remote**, the two items that are no blocks, last — the three rack bays stand directly after the interface, weakest first, the two
-   fluid bays directly after them, weakest first again, the crafter feeder directly after the station it serves and
-   the optimizer directly after the stock keeper.
+   stock keeper, **warehouse optimizer**, warehouse home point, **schematicannon requester**, and the **hand truck** and
+   the **warehouse remote**, the two items that are no blocks, last — the three rack bays stand directly after the
+   interface, weakest first, the two fluid bays directly after them, weakest first again, the crafter feeder directly
+   after the station it serves, the optimizer directly after the stock keeper and the requester, the one block that
+   serves a machine outside the warehouse, as the last block.
    (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **nineteen** items shows a short Create-style description (issue #22): one sentence what
+3. Holding Shift on each of the **twenty** items shows a short Create-style description (issue #22): one sentence what
    the block is, at most one note the Ponder scenes do not show; the stacker crane and the crafter feeder additionally
    show their stress impact. At **2560x1440 or 5120x1440 with the automatic GUI scale**, in English and in German, hover
    each bay, the terminal, the output, the crane and the crafter feeder (the tallest tooltip of all) in the **bottom row
    of your inventory**: the item name at the top of the Shift tooltip is on screen. **Does each one tell you what the
    block is for without reading like a telegram?**
-4. JEI/EMI shows **nineteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
+4. JEI/EMI shows **twenty** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
    terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass nuggets**
    the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an andesite casing between
    two andesite alloy, with no electron tube and no precision mechanism), the optimizer is the stock keeper's plus
    shape with a **brass hand** on top in place of the comparator (an electron tube either side of a brass casing,
-   andesite alloy below), and the crafter feeder is one column: a precision mechanism over a brass casing over a
-   vanilla Crafter, the hand truck is a shaft over andesite alloy over a cogwheel, an iron sheet and a cogwheel, and
-   the warehouse remote is a Create Transmitter over an ender pearl between two brass sheets, with a third brass sheet
-   below. In the **vanilla recipe book** the other **eighteen** appear once you hold one of their ingredients — the
-   terminal shows up with a precision mechanism, the output with a brass nugget, the optimizer with a brass hand and
-   the remote with an ender pearl — while the stacker crane never does, because mechanical crafting has no recipe-book
-   category (Create's own mechanical crafting recipes behave the same).
+   andesite alloy below), the schematicannon requester is the same plus shape with Create's **empty schematic** on top,
+   and the crafter feeder is one column: a precision mechanism over a brass casing over a vanilla Crafter, the hand
+   truck is a shaft over andesite alloy over a cogwheel, an iron sheet and a cogwheel, and the warehouse remote is a
+   Create Transmitter over an ender pearl between two brass sheets, with a third brass sheet below. In the **vanilla
+   recipe book** the other **nineteen** appear once you hold one of their ingredients — the terminal shows up with a
+   precision mechanism, the output with a brass nugget, the optimizer with a brass hand, the requester with an empty
+   schematic and the remote with an ender pearl — while the stacker crane never does, because mechanical crafting has
+   no recipe-book category (Create's own mechanical crafting recipes behave the same).
 4a. Lay out the **input** recipe (funnel over casing) and then the **output** recipe (casing over funnel with a brass
     nugget on each side of the funnel) in a crafting table: each gives exactly its own block, and neither turns into
     the warehouse interface (casing + funnel + brass nugget, shapeless).
@@ -3868,3 +3871,59 @@ you get tired of waiting, and put it back before judging check 160.
      order: the trip under way finishes, then nothing more moves.
 439. **German.** Block name, Shift tooltip, the three headers ("Oben", "Tiefer", "Umlag."), every status line, pip
      tooltip and goggle line: does everything read well and fit at the 320 x 240 GUI floor?
+
+## BR. The Schematicannon Requester ([issue #45](https://github.com/Richie1710/create-wareworks/issues/45))
+
+> A block set against a Create Schematicannon that orders what the cannon is missing at the terminal its Warehouse
+> Remote is linked to: from stock only, a stack at a time at most, never twice, with a dead-man switch (ADR-080,
+> `docs/warehouse-system.md` §3.11). `RequesterOrdersTest`, `OrderAmountTest`, `ChecklistNeedTest`, `OrderShareTest`,
+> `VariantPickTest` and `RequesterLimitsTest` check the rules, `SchematicannonRequesterGameTests` a real cannon printing
+> through it with an item census, and the `requester` visual scenario real clicks, the orders, the belt and a rejoin in
+> English and German. What is left is what only a player can judge, a dedicated server and a claim mod.
+> Setup: one aisle with a terminal holding about 200 stone and no glass, an andesite funnel on the terminal, a belt on
+> a motor and a funnel into a chest beside a **Schematicannon placed from its item**, a schematic of about 80 stone and
+> 4 glass loaded into it, gunpowder in the cannon, and a Warehouse Remote linked to the terminal.
+
+440. **Look.** The block against the cannon, in the hand, in an item frame and in the creative tab after the home
+     point: does the coupling plate read as "fits the cannon", and the cradle on the back as "the remote goes here"?
+     Place it against the cannon's top, bottom and each side: it faces the cannon each time.
+441. **Putting the remote in.** Right-click the requester with the remote: no screen opens, the action bar says
+     "Ordering through the Warehouse Terminal at x, y, z", Create's controller sound plays, the remote lies in the
+     cradle, and **one chat line** says the cannon skips missing blocks and names "Skip missing Blocks". The lamp is
+     red. Right-click again with a second linked remote: "Take the remote out first: ...", and nothing is swapped. An
+     unlinked remote: "Not linked: ...".
+442. **The hint.** Goggles on the requester: the terminal, "Orders as <you>", the red skip-missing line. Turn the option
+     off in the cannon's screen: the red line and the red lamp go. Is the hint clear enough for a player who never
+     noticed that option?
+443. **Printing.** Start the print. The cannon stops for stone, the lamp lights, the crane brings **64** stone into the
+     terminal, the belt carries it to the chest and the cannon goes on; the next order is the remaining **16** or so,
+     never a third stack. Goggles meanwhile: "Stone x64 ordered, n delivered (m:ss)", then "lies in the terminal's
+     buffer", then "Waiting n s for Stone on its way". Does it ever order stone twice while the first stack is still on
+     the belt?
+444. **Out of stock.** At the glass the lamp turns red: "The warehouse has no Glass: trying again". Put 4 glass into a
+     warehouse input: within a second or two the requester orders them and the print finishes. Nothing is ever produced,
+     even if a production station could make glass.
+445. **The grace value box.** Right-click the value box on the back and set it to 0, then to 60, as on any Create value
+     box: the board reads seconds, and a click with a remote on the box still goes to the cradle, not to the box.
+     With a long belt and the grace at 0, does it order again before the items arrive (expected), and at the default
+     10 s not?
+446. **Lamps by day and by night.** Dim, lit and red lamps from five blocks away, in daylight and at night: can you tell
+     the three apart at a glance?
+447. **All six facings, Flywheel on and off.** Place a requester on each side of a cannon in turn (wrench to turn it),
+     each with a remote in: the remote lies flat in the cradle on the back and turns with the block, the lamp stays above
+     it, the value box beside it, nothing floats or clips. Repeat with `/flywheel backend off`.
+448. **Taking it out and breaking it.** Mid order, sneak and right-click with an empty hand: the remote comes back,
+     "Remote taken out: orders given up", and the terminal's open request shrinks by the requester's share only (a stack
+     you clicked yourself for the same item stays). Put it back, order again and break the block: the remote drops, the
+     share is given back. A Deployer can neither put a remote in nor take one out.
+449. **Ponder.** Open the requester's Ponder scene: does it show the three things a player cannot guess (the remote,
+     "Skip missing Blocks", the funnel and belt out of the terminal) slowly enough to follow?
+450. **German at GUI scale 4.** With `de_de` and GUI scale 4, read the Shift tooltip, the action bar lines, the chat
+     line ("Fehlende Blöcke ignorieren"), the value box ("Warten nach dem Puffer") and every goggle line: do they read
+     well and fit?
+451. **Dedicated server, owner offline.** On a dedicated server, put the remote in, start a print and log out: the
+     requester goes on ordering for the cannon while the area stays loaded by something else (a chunk loader or a
+     second player). Log in again: the goggles still say "Orders as <you>".
+452. **A claim mod (only if one is installed).** Claim the terminal's area for another player, then put a remote linked
+     to that terminal into a requester as yourself: refused with "You cannot use that terminal" as far as the claim mod
+     hooks the "may use this block" check. Note which claim mod and whether it does.

@@ -11,6 +11,7 @@ import com.tterrag.registrate.providers.RegistrateBlockstateProvider;
 import com.tterrag.registrate.util.nullness.NonNullBiConsumer;
 
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.requester.SchematicannonRequesterBlock;
 import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
@@ -145,6 +146,41 @@ public final class WareworksBlockStateGen {
                 homePointPart(builder, active, rotation, facing, false, true);
                 homePointPart(builder, dark, rotation, facing, false, false);
             }
+        };
+    }
+
+    /**
+     * The Schematicannon Requester's blockstate (issue #45, ADR-080): the hand-made {@code block} model turned onto
+     * {@code FACING} — any of the six directions, the front towards the cannon — with {@code block_active} in its place
+     * while an order is on its way and {@code block_refused} while something needs the player. The three models differ
+     * in the lamp above the remote's cradle alone, in the home point's lamp language: dim, lit and powered rose quartz.
+     * Refused outranks lit.
+     * <p>
+     * The models are authored with the cannon side facing north, like every Wareworks model, so a horizontal facing is
+     * a turn about Y ({@link #rotationOnto}) and up and down tip the model the way an observer is tipped: the Crafter
+     * Feeder's rule ({@link #crafterFeederBlockProvider()}).
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            requesterBlockProvider() {
+        return (context, provider) -> {
+            String folder = "block/" + context.getName() + "/";
+            ModelFile dark = provider.models().getExistingFile(provider.modLoc(folder + "block"));
+            ModelFile active = provider.models().getExistingFile(provider.modLoc(folder + "block_active"));
+            ModelFile refused = provider.models().getExistingFile(provider.modLoc(folder + "block_refused"));
+            provider.getVariantBuilder(context.getEntry()).forAllStates(state -> {
+                Direction facing = state.getValue(SchematicannonRequesterBlock.FACING);
+                ModelFile model = state.getValue(SchematicannonRequesterBlock.REFUSED) ? refused
+                        : state.getValue(SchematicannonRequesterBlock.LIT) ? active : dark;
+                if (facing.getAxis().isVertical())
+                    return ConfiguredModel.builder()
+                            .modelFile(model)
+                            .rotationX(facing == Direction.UP ? 270 : 90)
+                            .build();
+                return ConfiguredModel.builder()
+                        .modelFile(model)
+                        .rotationY(rotationOnto(facing))
+                        .build();
+            });
         };
     }
 

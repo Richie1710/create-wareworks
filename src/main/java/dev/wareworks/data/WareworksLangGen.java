@@ -22,6 +22,7 @@ import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.FeederStatus;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.requester.RequesterStatus;
 import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.StockRuleAdjustment;
 import dev.wareworks.core.stock.StockRulePause;
@@ -1257,6 +1258,74 @@ public final class WareworksLangGen {
 
         severalCranes(lang);
         optimizer(lang);
+        requester(lang);
+    }
+
+    /**
+     * Issue #45 (ADR-080): the Schematicannon Requester — its description, its messages and its goggle lines. Every
+     * status has a line of its own ({@code WareworksLang#requesterStatusKey}), so a red lamp always says what to do. The
+     * "Skip missing Blocks" in two of them is Create's own option name, passed in as an argument, so it reads exactly
+     * as on the cannon's screen in every language.
+     */
+    private static void requester(BiConsumer<String, String> lang) {
+        tooltip(lang, "block.wareworks.schematicannon_requester",
+                "Orders what the _Schematicannon_ in front of it is _missing_ from a linked _Warehouse Terminal_. A "
+                        + "_funnel and belt_ take it from the terminal's buffer to a chest beside the cannon.",
+                "When clicked with a linked remote",
+                "Keeps it as its _link_. Sneak with an empty hand to take it out.",
+                "When the cannon is missing an item",
+                "Orders it _from stock only_: a stack at most, or what the schematic still needs, and _never twice_.",
+                "When the lamp is red",
+                "Look with _Goggles_. A cannon placed by hand _skips missing blocks_: turn that off.");
+
+        lang.accept(WareworksLang.key(WareworksLang.REQUESTER_LINKED),
+                "Ordering through the Warehouse Terminal at %1$s, %2$s, %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.REQUESTER_OCCUPIED),
+                "Take the remote out first: sneak and right-click with an empty hand");
+        lang.accept(WareworksLang.key(WareworksLang.REQUESTER_REMOVED), "Remote taken out: orders given up");
+        lang.accept(WareworksLang.key(WareworksLang.REQUESTER_SKIP_MISSING_WARNING),
+                "This Schematicannon skips missing blocks: turn off \"%1$s\" in its screen, or it never asks for "
+                        + "anything");
+        lang.accept(WareworksLang.key(WareworksLang.REQUESTER_GRACE), "Wait after the buffer");
+        lang.accept(WareworksLang.key(WareworksLang.REQUESTER_GRACE_SECONDS), "%1$s s");
+
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SCHEMATICANNON_REQUESTER), "Schematicannon Requester:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_REQUESTER_TERMINAL), "Terminal at %1$s, %2$s, %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_REQUESTER_TERMINAL_IN),
+                "Terminal at %1$s, %2$s, %3$s in %4$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_REQUESTER_OWNER), "Orders as %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_REQUESTER_CANNON_MISSING), "Cannon is missing: %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_REQUESTER_GAVE_UP),
+                "Gave up an order of %1$s x%2$s after %3$s min and ordered again");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_REQUESTER_TIMEOUTS), "Orders given up: %1$s");
+        for (RequesterStatus status : RequesterStatus.values()) {
+            lang.accept(WareworksLang.key(WareworksLang.requesterStatusKey(status)), switch (status) {
+                case NO_REMOTE -> "Put in a linked Warehouse Remote";
+                case NO_CANNON -> "No Schematicannon in front";
+                case SECOND_REQUESTER -> "Another requester already serves this cannon";
+                case SKIP_MISSING -> "The cannon skips missing blocks: turn off \"%1$s\"";
+                case CREATIVE -> "The cannon has a creative crate: nothing is missing";
+                case NO_INVENTORY -> "Put a chest next to the cannon";
+                case LINK_OTHER_DIMENSION -> "The terminal is in another dimension";
+                case LINK_OUT_OF_RANGE -> "The terminal is %1$s blocks away, the range is %2$s";
+                case LINK_NOT_LOADED -> "The terminal's area is not loaded";
+                case LINK_GONE -> "The linked terminal is gone";
+                case LINK_NOT_ALLOWED -> "%1$s may not use the terminal there";
+                case NO_CONTROLLER -> "The terminal belongs to no warehouse";
+                case NOT_PRINTING -> "The cannon is not printing";
+                case BLOCKED -> "Cannon: %1$s";
+                case PRINTING -> "The cannon has what it needs";
+                case ORDERED -> "%1$s x%2$s ordered, %3$s delivered (%4$s)";
+                case IN_BUFFER -> "%1$s lies in the terminal's buffer";
+                case GRACE -> "Waiting %1$s s for %2$s on its way";
+                case ORDERS_FULL -> "Four orders open: waiting";
+                case CANNON_FULL -> "The cannon's inventories are full";
+                case BUFFER_FULL -> "The terminal's buffer is full: empty it onto a belt";
+                case OUT_OF_STOCK -> "The warehouse has no %1$s: trying again";
+                case RESERVED -> "%1$s is held back by a Stock Keeper's reserve";
+                case TERMINAL_BUSY -> "The terminal's order slots are taken: waiting";
+            });
+        }
     }
 
     /**

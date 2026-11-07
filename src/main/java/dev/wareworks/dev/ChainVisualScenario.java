@@ -2572,8 +2572,8 @@ public final class ChainVisualScenario implements VisualScenario {
         }
     }
 
-    /** What the chat holds, newest first. */
-    private static List<String> chatLines(VisualContext context) {
+    /** What the chat holds, newest first; also read by {@link RequesterVisualScenario}. */
+    static List<String> chatLines(VisualContext context) {
         try {
             @SuppressWarnings("unchecked")
             List<GuiMessage> messages = (List<GuiMessage>) CHAT_MESSAGES.get(context.minecraft().gui.getChat());

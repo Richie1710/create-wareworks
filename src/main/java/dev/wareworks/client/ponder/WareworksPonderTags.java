@@ -85,6 +85,9 @@ public final class WareworksPonderTags {
                 // directly (§3.8, "Machines may fill it"), so it belongs beside them.
                 .add(WareworksBlocks.RACK_BAY_WOOD)
                 .add(WareworksBlocks.RACK_BAY_ANDESITE)
-                .add(WareworksBlocks.RACK_BAY_BRASS);
+                .add(WareworksBlocks.RACK_BAY_BRASS)
+                // The Schematicannon Requester (issue #45) moves nothing either, but it is how a Schematicannon gets its
+                // materials from the warehouse: it orders them, and the crane, a funnel and a belt bring them.
+                .add(WareworksBlocks.SCHEMATICANNON_REQUESTER);
     }
 }

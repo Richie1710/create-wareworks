@@ -15,6 +15,8 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.fluid.FluidKey;
+import dev.wareworks.content.requester.SchematicannonRequesterBlock;
+import dev.wareworks.content.requester.SchematicannonRequesterBlockEntity;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
@@ -73,8 +75,9 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * and closed shapes a rail draws itself as (M21, ADR-033), the controller (display),
  * the interface (framed aisle plate; brass port at the back), input and output (aisle openings; intake on top, pull port at
  * the back), since M11 the copper-bodied production station (aisle opening) and, since M20, the same station with its
- * <b>stopped</b> lamp burning, and since issue #34 the Crafter Feeder in all six facings, each with the shaft axis a
- * placement gives it. The warehouse terminal is the one
+ * <b>stopped</b> lamp burning, since issue #34 the Crafter Feeder in all six facings, each with the shaft axis a
+ * placement gives it, and since issue #45 the Schematicannon Requester in all six facings with a Warehouse Remote
+ * standing in its cradle. The warehouse terminal is the one
  * exhibit whose front is <b>not</b> its aisle side: since ADR-022 a player stands at its screen and the crane loads it
  * through the opposite face, so the front camera sees the screen and the back camera sees the arm port.
  * <p>
@@ -110,11 +113,11 @@ public final class BlocksVisualScenario implements VisualScenario {
     private static final int SCREEN_SETTLE_TICKS = 10;
     private static final int CHEST_SLOTS = 27;
     /**
-     * First slot the items start at, so the nineteen of them end in the chest's last slot: the last slot of the top row,
-     * then the middle and bottom rows (issue #46 made them nineteen; the middle row's first slot was first while
-     * eighteen fitted after it).
+     * First slot the items start at, so the twenty of them end in the chest's last slot: the last two slots of the top
+     * row, then the middle and bottom rows (issue #45 made them twenty, issue #46 nineteen; the middle row's first slot
+     * was first while eighteen fitted after it).
      */
-    private static final int FIRST_ITEM_SLOT = 8;
+    private static final int FIRST_ITEM_SLOT = 7;
 
     /** Close-up cameras relative to an exhibit's block centre: to the side, above and in front of or behind it. */
     private static final double CLOSE_SIDE = 1.4;
@@ -367,6 +370,16 @@ public final class BlocksVisualScenario implements VisualScenario {
                     WareworksBlocks.WAREHOUSE_HOME_POINT.getDefaultState()
                             .setValue(WarehouseHomePointBlock.FACING, Direction.SOUTH)
                             .setValue(WarehouseHomePointBlock.REFUSED, true))),
+            // The Schematicannon Requester (issue #45) in all six facings, each with a Warehouse Remote standing in its
+            // cradle, so the remote's renderer is seen to turn with the model. Facing north, its back - the cradle,
+            // the lamp and the grace box - looks at the front camera; facing south the back camera sees it. Without a
+            // cannon in front every one shows the red lamp, which is a real state; the dark one is the item model.
+            requesterExhibit("requester_north", Direction.NORTH),
+            requesterExhibit("requester_south", Direction.SOUTH),
+            requesterExhibit("requester_east", Direction.EAST),
+            requesterExhibit("requester_west", Direction.WEST),
+            requesterExhibit("requester_up", Direction.UP),
+            requesterExhibit("requester_down", Direction.DOWN),
             // Last, because it is the only exhibit wider than its own block: a wall of wooden bays running through
             // every fill step from empty to full, left to right and bottom to top. It is built from the middle
             // column outwards and upwards so that every bay is placed beside one that is already standing, which is
@@ -382,6 +395,17 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.getDefaultState()
                         .setValue(WarehouseCrafterFeederBlock.FACING, facing)
                         .setValue(WarehouseCrafterFeederBlock.AXIS_ALONG_FIRST_COORDINATE, alongFirst)));
+    }
+
+    /** A Schematicannon Requester exhibit facing {@code facing}, with a Warehouse Remote in its cradle. */
+    private static Exhibit requesterExhibit(String label, Direction facing) {
+        return new Exhibit(label, (level, pos) -> {
+            level.setBlockAndUpdate(pos, WareworksBlocks.SCHEMATICANNON_REQUESTER.getDefaultState()
+                    .setValue(SchematicannonRequesterBlock.FACING, facing));
+            if (!(level.getBlockEntity(pos) instanceof SchematicannonRequesterBlockEntity requester)
+                    || !requester.showRemote(new ItemStack(WareworksItems.WAREHOUSE_REMOTE.get())))
+                throw new VisualTestException("no remote in the requester exhibit at " + pos);
+        });
     }
 
     /** A rail at {@code pos} with one rail on each named side, so the middle one draws the shape those sides make. */
@@ -575,7 +599,11 @@ public final class BlocksVisualScenario implements VisualScenario {
 
     @Override
     public void setup(VisualScript script) {
+        // The row and the rack yard reach further from the origin than the client's view distance since issue #45 made
+        // the row six exhibits longer, so the client is asked for them from the middle of the scene.
+        double middle = yardEnd() / 2.0;
         script.server("blocks: clear the area and place the exhibits", BlocksVisualScenario::build)
+                .camera(CameraView.of("middle", middle, FAR_HEIGHT, FAR_DISTANCE, middle, BLOCK_CENTER, BLOCK_CENTER))
                 .until("blocks: wait until the client has every exhibit", BlocksVisualScenario::clientReady,
                         SCENE_READY_TIMEOUT_TICKS);
     }
@@ -822,6 +850,8 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(),
                 WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
+                // The Schematicannon Requester is the last block (issue #45).
+                WareworksBlocks.SCHEMATICANNON_REQUESTER.asItem(),
                 // Items that are not blocks follow every block: the hand truck (issue #37) and the Warehouse Remote
                 // (issue #44).
                 WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem());

@@ -86,10 +86,19 @@ final class AisleFixture {
      * @param rails  number of rails in front of the dock
      */
     AisleFixture(GameTestHelper helper, int aisleZ, int rails) {
+        this(helper, new BlockPos(0, 0, aisleZ), rails);
+    }
+
+    /**
+     * An aisle shifted by {@code origin}: the controller at {@code (origin.x, BASE_Y + origin.y, origin.z)}, everything
+     * else in the same place relative to it. Still test-relative, so it may also stand far outside the test's bounds, in
+     * a chunk the test force-loads itself (issue #45).
+     */
+    AisleFixture(GameTestHelper helper, BlockPos origin, int rails) {
         this.helper = helper;
-        this.controller = new BlockPos(0, BASE_Y, aisleZ);
-        this.dock = new BlockPos(1, BASE_Y, aisleZ);
-        this.motor = new BlockPos(1, FLOOR_Y, aisleZ);
+        this.controller = new BlockPos(origin.getX(), BASE_Y + origin.getY(), origin.getZ());
+        this.dock = controller.relative(AISLE);
+        this.motor = new BlockPos(dock.getX(), FLOOR_Y + origin.getY(), dock.getZ());
         this.rails = rails;
         // The relative layout only maps rack positions; its height covers the dock's default mast height.
         this.relative = BranchLayout.of(dock, AISLE, AisleGeometry.of(rails, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));

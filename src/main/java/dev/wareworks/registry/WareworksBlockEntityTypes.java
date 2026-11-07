@@ -8,11 +8,13 @@ import com.tterrag.registrate.util.entry.BlockEntityEntry;
 import dev.wareworks.Wareworks;
 import dev.wareworks.client.render.FluidBayRenderer;
 import dev.wareworks.client.render.RackBayRenderer;
+import dev.wareworks.client.render.SchematicannonRequesterRenderer;
 import dev.wareworks.client.render.StackerCraneRenderer;
 import dev.wareworks.client.render.WarehouseInterfaceRenderer;
 import dev.wareworks.client.render.WarehouseOutputRenderer;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.requester.SchematicannonRequesterBlockEntity;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlockEntity;
 import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
@@ -183,6 +185,18 @@ public final class WareworksBlockEntityTypes {
     public static final BlockEntityEntry<WarehouseHomePointBlockEntity> WAREHOUSE_HOME_POINT = REGISTRATE
             .blockEntity("warehouse_home_point", WarehouseHomePointBlockEntity::new)
             .validBlocks(WareworksBlocks.WAREHOUSE_HOME_POINT)
+            .register();
+
+    /**
+     * Schematicannon Requester (issue #45, ADR-080): {@code client.render.SchematicannonRequesterRenderer} draws the
+     * Warehouse Remote standing in its cradle (the only renderer registration for this type; the lambda is only
+     * evaluated on the client). No Flywheel visual. <b>No capability at all</b>: a Schematicannon adds every
+     * neighbour's item handler to its own inventories and would pull the remote out.
+     */
+    public static final BlockEntityEntry<SchematicannonRequesterBlockEntity> SCHEMATICANNON_REQUESTER = REGISTRATE
+            .blockEntity("schematicannon_requester", SchematicannonRequesterBlockEntity::new)
+            .validBlocks(WareworksBlocks.SCHEMATICANNON_REQUESTER)
+            .renderer(() -> SchematicannonRequesterRenderer::new)
             .register();
 
     private WareworksBlockEntityTypes() {

@@ -13,6 +13,7 @@ import dev.wareworks.client.ponder.scenes.PackageScenes;
 import dev.wareworks.client.ponder.scenes.PortScenes;
 import dev.wareworks.client.ponder.scenes.ProductionScenes;
 import dev.wareworks.client.ponder.scenes.RackBayScenes;
+import dev.wareworks.client.ponder.scenes.RequesterScenes;
 import dev.wareworks.client.ponder.scenes.StockRuleScenes;
 import dev.wareworks.client.ponder.scenes.TerminalScenes;
 import dev.wareworks.client.ponder.scenes.TwoCraneScenes;
@@ -61,6 +62,7 @@ import net.minecraft.resources.ResourceLocation;
  *       warehouse/bays_in_an_aisle</td></tr>
  *   <tr><td>fluid_bay_copper, fluid_bay_brass</td><td>warehouse/fluid_bay, warehouse/fluid_request</td></tr>
  *   <tr><td>hand_truck</td><td>hand_truck/carrying</td></tr>
+ *   <tr><td>schematicannon_requester</td><td>requester/ordering</td></tr>
  * </table>
  */
 public final class WareworksPonderScenes {
@@ -231,5 +233,11 @@ public final class WareworksPonderScenes {
         // one scene is load, walk slowly, set down.
         scenes.forComponents(WareworksItems.HAND_TRUCK)
                 .addStoryBoard("hand_truck/carrying", HandTruckScenes::carrying);
+
+        // The Schematicannon Requester (issue #45, ADR-080), registered last so no scene of any other block moves
+        // (ADR-016). Its own block only: the remote and the terminal teach nothing new here, and the three setup steps a
+        // player cannot guess (the remote, Skip missing Blocks, the route out of the buffer) are this block's story.
+        scenes.forComponents(WareworksBlocks.SCHEMATICANNON_REQUESTER)
+                .addStoryBoard("requester/ordering", RequesterScenes::ordering, AllCreatePonderTags.LOGISTICS);
     }
 }

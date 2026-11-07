@@ -13,6 +13,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.StackerCraneBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
+import dev.wareworks.content.requester.SchematicannonRequesterBlock;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
@@ -36,8 +37,8 @@ import net.minecraft.world.level.material.MapColor;
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
  * controller, interface, the three rack bays (wood, andesite, brass), the two fluid bays (copper, brass), input,
- * output, terminal, production station, crafter feeder, stock keeper, optimizer, home point (GameTest
- * {@code creativetaborderandicon}). The bays
+ * output, terminal, production station, crafter feeder, stock keeper, optimizer, home point, schematicannon
+ * requester (GameTest {@code creativetaborderandicon}). The bays
  * stand directly after the interface because they are the other half of the same answer: an interface turns somebody
  * else's inventory into a storage location, a bay <b>is</b> one — and the fluid bays stand directly after the item
  * ones, weakest first, because they are the same block for the other kind of goods. Recipes are hand-written JSON in
@@ -358,6 +359,30 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .blockstate(WareworksBlockStateGen.homePointBlockProvider())
+                    .item()
+                    .transform(ModelGen.customItemModel("_", "block"))
+                    .register();
+
+    /**
+     * Schematicannon Requester (issue #45, ADR-080): set against a Create Schematicannon, it orders what the cannon is
+     * missing at the terminal its Warehouse Remote is linked to, from stock only, and the crane delivers into that
+     * terminal's buffer. The last block, because it is the one that reaches out of the warehouse to another machine.
+     * <p>
+     * Six facings, the front towards the cannon. Its own blockstate ({@link WareworksBlockStateGen#requesterBlockProvider()})
+     * over the hand-made {@code models/block/schematicannon_requester/block.json} and its two lamp twins (authored with
+     * the cannon side facing north); the item model uses the dark block model. It holds one item, the remote, which it
+     * drops itself when broken, and has <b>no item capability</b>: the cannon takes every neighbour's inventory for its
+     * own. Not in {@code create:safe_nbt}, so a schematic carries its grace and never its remote or its orders. Protected
+     * from contraptions, does not conduct redstone, and its body is not a full cube, so it does not occlude.
+     */
+    public static final BlockEntry<SchematicannonRequesterBlock> SCHEMATICANNON_REQUESTER =
+            REGISTRATE.block("schematicannon_requester", SchematicannonRequesterBlock::new)
+                    .initialProperties(SharedProperties::softMetal)
+                    .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK)
+                            .noOcclusion().isRedstoneConductor((state, level, pos) -> false))
+                    .transform(TagGen.pickaxeOnly())
+                    .transform(WareworksTags.relocationProtected())
+                    .blockstate(WareworksBlockStateGen.requesterBlockProvider())
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();

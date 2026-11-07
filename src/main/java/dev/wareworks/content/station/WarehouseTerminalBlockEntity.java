@@ -116,6 +116,8 @@ import net.neoforged.neoforge.items.ItemStackHandler;
  * <li>{@link #fetchCraft} — the crafting panel's Fetch: the grid's ingredients brought here by a <b>craft order</b>,
  * the second list order a terminal can run beside its clipboard's (issue #24, slice 2, ADR-062).</li>
  * </ul>
+ * Two entry points ask for no player: {@link #requestFromComputer} (issue #9) and {@link #requestStockOnly}, a
+ * Schematicannon Requester's order from stock only (issue #45).
  * A request is validated before it reaches the controller: the player must be allowed to use the block (the vanilla
  * container rule, {@link #canPlayerUse}), the amount must be positive, and the item must be one the <b>server's own</b>
  * stock index holds — a client-sent item is never trusted, only matched against that index. The controller then clamps
@@ -818,6 +820,50 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return checked.refusal().get();
         return checked.controller().request(target.orElse(worldPosition), key, amount,
                 Math.max(1, WareworksConfig.maxTerminalRequestAmount()), StockAccess.AUTOMATION);
+    }
+
+    /**
+     * Server: a request <b>from stock only</b> for up to {@code amount} items of {@code key}, delivered into this
+     * terminal's buffer: what a Schematicannon Requester orders with the remote linked to this terminal (issue #45,
+     * ADR-080). It never starts production and never asks anything.
+     * <p>
+     * The request a stock-list click makes — the same queue, merging, caps, buffer and crane — with two differences.
+     * It is made with {@link StockAccess#AUTOMATION}, because nobody is there to agree to going below a Stock Keeper's
+     * reserve, so a reserve holds items back from it as from redstone and computers. And the amount is <b>clamped to the
+     * stock automation may take</b> before the controller sees it, so the controller's plan for what it would have to
+     * make is always empty: "never produce" is decided here, on the server, in the same tick.
+     * <p>
+     * Checked in this order: the checks of a computer's request ({@link #checkRequest} without a player and to here);
+     * stock for automation, otherwise {@link RequestRejection#RESERVED} when only a reserve holds it back and
+     * {@link RequestRejection#NOT_IN_STOCK} otherwise; then the controller's own refusals. Nothing is remembered: no
+     * refusal goes into {@code lastRejection} and nothing counts towards anyone's "most used" order.
+     *
+     * @return the accepted request with the amount this call granted ({@code granted} at most {@code amount} and at
+     *         most the stock), or the reason it was refused
+     */
+    public RequestResult requestStockOnly(ItemKey key, int amount) {
+        Objects.requireNonNull(key, "key");
+        RequestCheck checked = checkRequest(null, key, amount, Optional.empty());
+        if (checked.refusal().isPresent())
+            return checked.refusal().get();
+        WarehouseControllerBlockEntity controller = checked.controller();
+        long stock = controller.availableTo(StockAccess.AUTOMATION, key);
+        if (stock <= 0)
+            return RequestResult.rejected(controller.availableTo(StockAccess.PLAYER, key) > 0
+                    ? RequestRejection.RESERVED : RequestRejection.NOT_IN_STOCK);
+        int clamped = (int) Math.min(amount, stock);
+        RequestResult result = controller.request(worldPosition, key, clamped,
+                Math.max(1, WareworksConfig.maxTerminalRequestAmount()), StockAccess.AUTOMATION);
+        if (result.producing() > 0) {
+            // Cannot happen after the clamp; if a future planner ever makes up the difference anyway, the share is given
+            // back at once rather than leaving a production order behind a block that promised never to start one.
+            UUID id = result.request().orElseThrow().id();
+            controller.reduceRequestShare(id, result.granted(), result.producing());
+            Wareworks.LOGGER.warn("A stock-only request for {} x{} at the terminal at {} planned production; given back",
+                    key, clamped, worldPosition);
+            return RequestResult.rejected(RequestRejection.NOT_IN_STOCK);
+        }
+        return result;
     }
 
     /**

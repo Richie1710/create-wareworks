@@ -14,6 +14,7 @@ import dev.wareworks.core.stock.RestockLimits;
 import dev.wareworks.core.storage.BayTier;
 import dev.wareworks.core.optimizer.OptimizerLimits;
 import dev.wareworks.core.remote.RemoteLimits;
+import dev.wareworks.core.requester.RequesterLimits;
 import dev.wareworks.core.storage.FluidBayTier;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
@@ -23,7 +24,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * <p>
  * Keys and defaults follow {@code docs/warehouse-system.md} §9; the TOML file groups them into the sections
  * {@code aisle}, {@code crane}, {@code stations}, {@code storage}, {@code controller}, {@code chunkLoading},
- * {@code handTruck}, {@code computers}, {@code remote} and {@code optimizer}.
+ * {@code handTruck}, {@code computers}, {@code remote}, {@code optimizer} and {@code requester}.
  * <p>
  * SERVER config values exist only while a server runs (and on connected clients). Always read them through the typed
  * getters below: they fall back to the default when the config is not loaded (registry events, datagen, main menu,
@@ -595,6 +596,35 @@ public final class WareworksConfig {
         return OptimizerLimits.clampTrips(get(SERVER.optimizerTripsPerRequest));
     }
 
+    // --- requester -----------------------------------------------------------------------------------------------
+
+    /**
+     * How often a Schematicannon Requester looks at its cannon and its orders, in ticks (issue #45, ADR-080,
+     * {@link RequesterLimits}); also the back-off after a refusal. Clamped into
+     * {@value RequesterLimits#MIN_POLL_TICKS}..{@value RequesterLimits#MAX_POLL_TICKS}.
+     */
+    public static int requesterPollIntervalTicks() {
+        return RequesterLimits.clampPoll(get(SERVER.requesterPollIntervalTicks));
+    }
+
+    /**
+     * The dead-man switch of a Schematicannon Requester's order, in live ticks (issue #45, ADR-080): an order that has
+     * not completed after this long while its terminal and controller were loaded is given up and placed again. Clamped
+     * into {@value RequesterLimits#MIN_TIMEOUT_TICKS}..{@value RequesterLimits#MAX_TIMEOUT_TICKS}.
+     */
+    public static int requesterOrderTimeoutTicks() {
+        return RequesterLimits.clampTimeout(get(SERVER.requesterOrderTimeoutTicks));
+    }
+
+    /**
+     * The shortest time between two material list refreshes one Schematicannon Requester may ask its cannon for, in
+     * ticks (issue #45, ADR-080); only when its own count of what the schematic still needs went stale. Clamped into
+     * {@value RequesterLimits#MIN_REFRESH_TICKS}..{@value RequesterLimits#MAX_REFRESH_TICKS}.
+     */
+    public static int requesterChecklistRefreshTicks() {
+        return RequesterLimits.clampRefresh(get(SERVER.requesterChecklistRefreshTicks));
+    }
+
     /** The config values. Read them through the static getters of {@link WareworksConfig}. */
     public static final class Server {
         public final ModConfigSpec.IntValue maxAisleLength;
@@ -678,6 +708,10 @@ public final class WareworksConfig {
         public final ModConfigSpec.BooleanValue remoteCrossDimension;
 
         public final ModConfigSpec.IntValue optimizerTripsPerRequest;
+
+        public final ModConfigSpec.IntValue requesterPollIntervalTicks;
+        public final ModConfigSpec.IntValue requesterOrderTimeoutTicks;
+        public final ModConfigSpec.IntValue requesterChecklistRefreshTicks;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -1238,6 +1272,27 @@ public final class WareworksConfig {
                             + "better.")
                     .defineInRange("tripsPerRequest", OptimizerLimits.DEFAULT_TRIPS, OptimizerLimits.MIN_TRIPS,
                             OptimizerLimits.MAX_TRIPS);
+            builder.pop();
+
+            builder.comment("The Schematicannon Requester: orders what a Schematicannon is missing from the warehouse")
+                    .push("requester");
+            requesterPollIntervalTicks = builder
+                    .comment("[in Ticks] How often a requester looks at its cannon and its orders. Also how long it "
+                            + "waits before it tries again after the warehouse could not serve an order.")
+                    .defineInRange("pollIntervalTicks", RequesterLimits.DEFAULT_POLL_TICKS,
+                            RequesterLimits.MIN_POLL_TICKS, RequesterLimits.MAX_POLL_TICKS);
+            requesterOrderTimeoutTicks = builder
+                    .comment("[in Ticks] The dead-man switch: an order that has not arrived after this long is given up "
+                            + "and placed again. Only time in which the terminal and its warehouse were loaded counts.")
+                    .defineInRange("orderTimeoutTicks", RequesterLimits.DEFAULT_TIMEOUT_TICKS,
+                            RequesterLimits.MIN_TIMEOUT_TICKS, RequesterLimits.MAX_TIMEOUT_TICKS);
+            requesterChecklistRefreshTicks = builder
+                    .comment("[in Ticks] When a requester's count of what the schematic still needs goes stale (for "
+                            + "example items were taken out of the cannon's chest), it asks the cannon for a fresh "
+                            + "material list at most once in this many ticks, and orders what the cannon reports "
+                            + "missing in between.")
+                    .defineInRange("checklistRefreshTicks", RequesterLimits.DEFAULT_REFRESH_TICKS,
+                            RequesterLimits.MIN_REFRESH_TICKS, RequesterLimits.MAX_REFRESH_TICKS);
             builder.pop();
         }
     }

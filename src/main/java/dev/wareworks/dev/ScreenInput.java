@@ -7,6 +7,7 @@ import java.util.List;
 
 import org.lwjgl.glfw.GLFW;
 
+import com.simibubi.create.content.schematics.cannon.SchematicannonScreen;
 import com.simibubi.create.foundation.gui.widget.IconButton;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
@@ -116,6 +117,14 @@ final class ScreenInput {
             int.class);
     private static final Method OPTIMIZER_STATUS_LINE = method(WarehouseOptimizerScreen.class, "statusLine");
     private static final Field OPTIMIZER_BUTTON = field(WarehouseOptimizerScreen.class, "optimiseButton");
+    /**
+     * Create's Schematicannon screen (issue #45): the toggle that shows the placement settings, the "Skip missing
+     * Blocks" option among them (built only once they are shown), and the Play and Stop buttons.
+     */
+    private static final Field CANNON_SETTINGS_BUTTON = field(SchematicannonScreen.class, "showSettingsButton");
+    private static final Field CANNON_SKIP_MISSING_BUTTON = field(SchematicannonScreen.class, "skipMissingButton");
+    private static final Field CANNON_PLAY_BUTTON = field(SchematicannonScreen.class, "playButton");
+    private static final Field CANNON_STOP_BUTTON = field(SchematicannonScreen.class, "resetButton");
     /** What the optimizer screen's row hit test returns for "no row here" ({@code WarehouseOptimizerScreen.NONE}). */
     private static final int NO_OPTIMIZER_ROW = -1;
     /** What the keeper screen's own hit tests return for "nothing here" ({@code WarehouseStockKeeperScreen.NONE}). */
@@ -316,13 +325,48 @@ final class ScreenInput {
 
     /** The centre of one of the terminal's icon buttons, checked with the widget's own hit test. */
     private static Point terminalButton(WarehouseTerminalScreen screen, Field field, String name) {
+        return iconButton(screen, field, "terminal", name);
+    }
+
+    /** The centre of an icon button held in {@code field} of {@code screen}, checked with the widget's own hit test. */
+    private static Point iconButton(Screen screen, Field field, String screenName, String name) {
         IconButton button = (IconButton) get(field, screen);
         if (button == null)
-            throw new VisualTestException("the terminal screen has no " + name + " button yet (not laid out)");
+            throw new VisualTestException("the " + screenName + " screen has no " + name + " button yet (not laid out)");
         Point point = centre(button);
         if (!button.isMouseOver(point.x(), point.y()))
-            throw new VisualTestException("the " + name + " button's own hit test does not put " + point + " on it");
+            throw new VisualTestException("the " + name + " button's own hit test does not put " + point + " on it"
+                    + (button.active ? "" : " (the button is inactive)"));
         return point;
+    }
+
+    // --- Create's Schematicannon screen (issue #45) ------------------------------------------------------------------
+
+    /**
+     * The centre of the Schematicannon's <b>placement settings</b> toggle, which shows and hides the row of options
+     * "Skip missing Blocks" belongs to; checked with the widget's own hit test.
+     */
+    static Point cannonSettingsButton(SchematicannonScreen screen) {
+        return iconButton(screen, CANNON_SETTINGS_BUTTON, "Schematicannon", "placement settings");
+    }
+
+    /**
+     * The centre of the Schematicannon's <b>"Skip missing Blocks"</b> option, checked with the widget's own hit test.
+     * The screen builds the button only while its placement settings are shown ({@link #cannonSettingsButton}), so
+     * the field is read when the click is sent, never earlier.
+     */
+    static Point cannonSkipMissingButton(SchematicannonScreen screen) {
+        return iconButton(screen, CANNON_SKIP_MISSING_BUTTON, "Schematicannon", "skip missing");
+    }
+
+    /** The centre of the Schematicannon's Play button; its hit test fails while the cannon already runs. */
+    static Point cannonPlayButton(SchematicannonScreen screen) {
+        return iconButton(screen, CANNON_PLAY_BUTTON, "Schematicannon", "play");
+    }
+
+    /** The centre of the Schematicannon's Stop button; its hit test fails while the cannon is stopped. */
+    static Point cannonStopButton(SchematicannonScreen screen) {
+        return iconButton(screen, CANNON_STOP_BUTTON, "Schematicannon", "stop");
     }
 
     // --- the terminal's crafting panel (M32, issue #24) --------------------------------------------------------------

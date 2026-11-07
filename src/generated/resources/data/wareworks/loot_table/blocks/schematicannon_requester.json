@@ -1,0 +1,21 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "bonus_rolls": 0.0,
+      "conditions": [
+        {
+          "condition": "minecraft:survives_explosion"
+        }
+      ],
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "wareworks:schematicannon_requester"
+        }
+      ],
+      "rolls": 1.0
+    }
+  ],
+  "random_sequence": "wareworks:blocks/schematicannon_requester"
+}

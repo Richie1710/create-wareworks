@@ -51,6 +51,7 @@ final class VisualScenarios {
             Map.entry(HandTruckVisualScenario.NAME, HandTruckVisualScenario::new),
             Map.entry(RemoteVisualScenario.NAME, RemoteVisualScenario::new),
             Map.entry(OptimizerVisualScenario.NAME, OptimizerVisualScenario::new),
+            Map.entry(RequesterVisualScenario.NAME, RequesterVisualScenario::new),
             Map.entry(ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new));
 
     private VisualScenarios() {
