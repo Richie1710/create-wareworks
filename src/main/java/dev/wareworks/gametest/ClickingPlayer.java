@@ -62,6 +62,16 @@ final class ClickingPlayer extends ServerPlayer {
         return player;
     }
 
+    /**
+     * A player standing at the absolute {@code feet} of {@code level}, looking north: also in another dimension than
+     * the test's own, for the rules that tell the dimensions apart (issue #44).
+     */
+    static ClickingPlayer in(ServerLevel level, Vec3 feet) {
+        ClickingPlayer player = new ClickingPlayer(level);
+        player.moveTo(feet.x, feet.y, feet.z, 180.0F, 30.0F);
+        return player;
+    }
+
     /** The translation keys of what this player was told, in order. */
     List<String> toldKeys() {
         List<String> keys = new ArrayList<>(told.size());

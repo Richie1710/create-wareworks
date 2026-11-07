@@ -5,6 +5,7 @@ import com.tterrag.registrate.util.entry.ItemEntry;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.handtruck.HandTruckItem;
+import dev.wareworks.content.remote.WarehouseRemoteItem;
 
 /**
  * Item registrations that are not block items.
@@ -26,6 +27,19 @@ public final class WareworksItems {
             .properties(p -> p.stacksTo(1))
             .model((context, provider) -> provider.withExistingParent(context.getName(),
                     provider.modLoc("item/hand_truck/item")))
+            .register();
+
+    /**
+     * The Warehouse Remote (issue #44, ADR-077): sneak and right-click a warehouse terminal to link it, then right-click
+     * anywhere within the server's range to open that terminal's screen. Everything requested from afar is still
+     * delivered by the crane into the terminal's buffer or to a package door. It never stacks; the link is the item
+     * component {@code wareworks:remote_link}. Its look is the hand-made {@code models/item/warehouse_remote/item.json}.
+     */
+    public static final ItemEntry<WarehouseRemoteItem> WAREHOUSE_REMOTE = REGISTRATE
+            .item("warehouse_remote", WarehouseRemoteItem::new)
+            .properties(p -> p.stacksTo(1))
+            .model((context, provider) -> provider.withExistingParent(context.getName(),
+                    provider.modLoc("item/warehouse_remote/item")))
             .register();
 
     private WareworksItems() {

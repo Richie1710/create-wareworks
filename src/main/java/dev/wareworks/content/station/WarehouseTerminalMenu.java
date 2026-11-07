@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -17,6 +18,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.remote.RemoteBinding;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crafting.IngredientPicker;
 import dev.wareworks.core.stock.StockAccess;
@@ -42,7 +44,9 @@ import dev.wareworks.network.TerminalStockPayload;
 import dev.wareworks.network.TerminalUsagePayload;
 import dev.wareworks.registry.WareworksMenuTypes;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
@@ -106,6 +110,16 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * warehouse shares and that nothing but these pushes ever asks for. The menu holds no chosen door: the choice lives in
  * the player's screen, and a request names the door it is for.
  * <p>
+ * <b>Opened from afar</b> (issue #44, ADR-077): a screen a Warehouse Remote opened ({@link #createRemote}) is the same
+ * menu with a {@link RemoteBinding}, and the client knows it as {@link #isRemote()}. Everything that asks the warehouse
+ * for something works from afar — requests, fetches, lays, the clipboard order, cancels, doors — because all of it is
+ * delivered by the crane into the terminal or to a door. What would move an item between the terminal and the player
+ * does not: the buffer and list slots refuse to be emptied or filled by hand, a shift-click moves nothing, and a craft
+ * is refused ({@link WarehouseTerminalBlockEntity#craftFromBuffer}), because its result goes into the player's hands.
+ * Both sides lock the slots alike, so the client predicts nothing the server refuses. The terminal's position and
+ * dimension are kept apart from its block entity ({@link #terminalPos()}, {@link #terminalDimension()}), because a
+ * client far away has no block entity for it.
+ * <p>
  * <b>Slot count.</b> The number of buffer slots is the one the server announced in the menu's extra data, on both
  * sides. The handler behind them is wrapped in a {@link FixedSlotsItemHandler} of exactly that size, because a
  * terminal's own buffer may have another one (grown past the config by save data, or shrunk by {@code /data merge}
@@ -142,6 +156,20 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     private TerminalMenuLayout layout;
     private IItemHandler bufferHandler;
     private IItemHandler listHandler;
+    /**
+     * Where the terminal stands, independent of its block entity (issue #44): read from the extra data on the client,
+     * taken from the block entity on the server. Set during the super constructor, so without initializers.
+     */
+    private BlockPos terminalPos;
+    private ResourceKey<Level> terminalDimension;
+    /** Client: whether the server opened this screen through a Warehouse Remote (issue #44). No initializer. */
+    private boolean remoteOnClient;
+    /**
+     * Server: the remote this menu was opened through, or {@code null} for a screen opened at the terminal (issue #44).
+     * Assigned after the super constructor by {@link #createRemote}; the slots read it only when a player acts.
+     */
+    @Nullable
+    private RemoteBinding remoteBinding;
 
     /** Server side only; also set during the super constructor, so likewise without initializers. */
     private StockDiff<ItemKey> stockDiff;
@@ -224,13 +252,32 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         super(type, id, inv, terminal);
     }
 
-    /** Server: the menu of {@code terminal} for {@code inventory}'s player. */
+    /** Server: the menu of {@code terminal} for {@code inventory}'s player, who stands at it. */
     public static WarehouseTerminalMenu create(int id, Inventory inventory, WarehouseTerminalBlockEntity terminal) {
         return new WarehouseTerminalMenu(WareworksMenuTypes.WAREHOUSE_TERMINAL.get(), id, inventory, terminal);
     }
 
     /**
+     * Server: the menu of {@code terminal} for {@code inventory}'s player, opened from afar through the Warehouse Remote
+     * {@code binding} names (issue #44, ADR-077). It stays open only while that remote still reaches the terminal
+     * ({@link WarehouseTerminalBlockEntity#canPlayerUse}), and moves no item between the terminal and the player.
+     */
+    public static WarehouseTerminalMenu createRemote(int id, Inventory inventory, WarehouseTerminalBlockEntity terminal,
+            RemoteBinding binding) {
+        Objects.requireNonNull(binding, "binding");
+        WarehouseTerminalMenu menu = create(id, inventory, terminal);
+        menu.remoteBinding = binding;
+        return menu;
+    }
+
+    /**
      * Client: the block entity behind the screen, at the position the server wrote into the extra data.
+     * <p>
+     * The extra data is the block position, the buffer slot count, the dimension and whether the screen was opened from
+     * afar ({@code WarehouseTerminalBlockEntity#writeOpenData}). A screen opened from afar, or one whose terminal stands
+     * in another dimension than the player's, has no block entity on the client: the client has the terminal's chunk at
+     * most by chance, and another terminal at the same coordinates of the player's own dimension is not this one
+     * (issue #44). The menu then works from the position, dimension and slot count alone.
      * <p>
      * {@code @OnlyIn(Dist.CLIENT)} mirrors the annotation on {@code MenuBase#createOnClient},
      * and the lookup itself lives in {@code client.gui} and is named
@@ -243,13 +290,23 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         // The slot count comes from the server, so both sides build the same slots even if the block entity is missing
         // or its own buffer has a different size.
         bufferSlots = Math.max(1, extraData.readVarInt());
-        return dev.wareworks.client.gui.ClientTerminals.at(pos);
+        terminalPos = pos;
+        terminalDimension = extraData.readResourceKey(Registries.DIMENSION);
+        remoteOnClient = extraData.readBoolean();
+        if (remoteOnClient)
+            return null;
+        return dev.wareworks.client.gui.ClientTerminals.at(terminalDimension, pos);
     }
 
     @Override
     protected void initAndReadInventory(WarehouseTerminalBlockEntity terminal) {
         if (bufferSlots <= 0 && terminal != null)
             bufferSlots = terminal.bufferSlots(); // server side: the block entity is authoritative
+        if (terminalPos == null && terminal != null) {
+            // Server side: where the block entity stands. The client read both from the extra data.
+            terminalPos = terminal.getBlockPos();
+            terminalDimension = terminal.getLevel() != null ? terminal.getLevel().dimension() : Level.OVERWORLD;
+        }
         bufferSlots = Math.max(1, bufferSlots);
         // One size for both sides, whatever the local handler has (see the class comment).
         bufferHandler = new FixedSlotsItemHandler(
@@ -287,9 +344,12 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     protected void addSlots() {
         // Exactly the announced number of buffer slots, then the one list slot, so bufferSlots is the index of the
         // list slot and bufferSlots + LIST_SLOTS the index of the first player slot.
+        // The remote flag is asked when a player acts, not now: on the server it is set after the super constructor.
+        BooleanSupplier remote = this::isRemote;
         for (int slot = 0; slot < bufferSlots; slot++)
-            addSlot(new TerminalBufferSlot(bufferHandler, slot, layout.bufferSlotX(slot), layout.bufferSlotY(slot)));
-        addSlot(new TerminalListSlot(listHandler, layout.listSlotX(), layout.listSlotY()));
+            addSlot(new TerminalBufferSlot(bufferHandler, slot, layout.bufferSlotX(slot), layout.bufferSlotY(slot),
+                    remote));
+        addSlot(new TerminalListSlot(listHandler, layout.listSlotX(), layout.listSlotY(), remote));
         addPlayerSlots(layout.playerSlotsX(), layout.playerSlotsY());
     }
 
@@ -302,10 +362,37 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         return layout;
     }
 
-    /** The terminal this menu belongs to; {@code null} on a client whose block entity is not loaded. */
+    /**
+     * The terminal this menu belongs to; {@code null} on a client whose block entity is not loaded, and always on the
+     * client of a screen opened from afar (issue #44). Client code that needs the terminal's position asks
+     * {@link #terminalPos()}.
+     */
     @Nullable
     public WarehouseTerminalBlockEntity terminal() {
         return contentHolder;
+    }
+
+    /** Where the terminal stands, on both sides and whether or not the client has its block entity (issue #44). */
+    public BlockPos terminalPos() {
+        return terminalPos;
+    }
+
+    /** The dimension the terminal stands in, on both sides (issue #44). */
+    public ResourceKey<Level> terminalDimension() {
+        return terminalDimension;
+    }
+
+    /**
+     * Whether this screen was opened from afar through a Warehouse Remote (issue #44, ADR-077), on both sides: its slots
+     * neither give nor take items and it cannot craft.
+     */
+    public boolean isRemote() {
+        return remoteOnClient || remoteBinding != null;
+    }
+
+    /** Server: the remote this menu was opened through; empty for a screen opened at the terminal (issue #44). */
+    public Optional<RemoteBinding> remote() {
+        return Optional.ofNullable(remoteBinding);
     }
 
     /** Number of buffer slots, i.e. the number of menu slots before the list slot. */
@@ -332,9 +419,14 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      * <b>clipboard</b> in the player inventory puts it into the empty list slot, which is how a player hands a
      * material checklist over without dragging (M23, issue #19). Everything else in the player inventory does nothing,
      * exactly as before.
+     * <p>
+     * In a screen opened from afar (issue #44) a shift-click moves nothing anywhere: either way it would carry an item
+     * between the terminal and a player who is not there.
      */
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
+        if (isRemote())
+            return ItemStack.EMPTY;
         Slot slot = slots.get(index);
         if (!slot.hasItem())
             return ItemStack.EMPTY;
@@ -1195,15 +1287,27 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         return level == null ? NEVER : level.getGameTime();
     }
 
-    /** A buffer slot: the player may take items out, but nothing can be put in (as for funnels and chutes). */
+    /**
+     * A buffer slot: the player may take items out, but nothing can be put in (as for funnels and chutes). In a screen
+     * opened from afar nothing can be taken out either (issue #44): the player sees what arrived and collects it in
+     * person.
+     */
     private static final class TerminalBufferSlot extends SlotItemHandler {
-        private TerminalBufferSlot(IItemHandler handler, int index, int x, int y) {
+        private final BooleanSupplier remote;
+
+        private TerminalBufferSlot(IItemHandler handler, int index, int x, int y, BooleanSupplier remote) {
             super(handler, index, x, y);
+            this.remote = remote;
         }
 
         @Override
         public boolean mayPlace(ItemStack stack) {
             return false;
+        }
+
+        @Override
+        public boolean mayPickup(Player player) {
+            return !remote.getAsBoolean() && super.mayPickup(player);
         }
     }
 
@@ -1214,10 +1318,26 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
      * ({@code WarehouseTerminalBlockEntity.ListSlotHandler#isItemValid}), which {@link SlotItemHandler} asks, so the
      * rule holds for the drag, the shift-click and every other path at once — and on the server, which is the only
      * side that decides anything here.
+     * <p>
+     * In a screen opened from afar the clipboard neither goes in nor comes out (issue #44); the order it carries can
+     * still be fetched, answered and cancelled.
      */
     private static final class TerminalListSlot extends SlotItemHandler {
-        private TerminalListSlot(IItemHandler handler, int x, int y) {
+        private final BooleanSupplier remote;
+
+        private TerminalListSlot(IItemHandler handler, int x, int y, BooleanSupplier remote) {
             super(handler, 0, x, y);
+            this.remote = remote;
+        }
+
+        @Override
+        public boolean mayPlace(ItemStack stack) {
+            return !remote.getAsBoolean() && super.mayPlace(stack);
+        }
+
+        @Override
+        public boolean mayPickup(Player player) {
+            return !remote.getAsBoolean() && super.mayPickup(player);
         }
     }
 }

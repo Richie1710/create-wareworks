@@ -499,6 +499,12 @@ public final class TerminalCraftPanel {
      */
     public boolean craft(boolean all) {
         previewIn = NO_PREVIEW;
+        if (menu.isRemote()) {
+            // A screen opened from afar crafts nothing: the result would go into the player's hands (issue #44). The
+            // result cell's tooltip says so; the server refuses it all the same.
+            screen.uiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
+            return false;
+        }
         if (!describesGrid()) {
             send(TerminalCraftPayload.Action.PREVIEW);
             screen.uiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
@@ -1152,6 +1158,12 @@ public final class TerminalCraftPanel {
             tooltip.add(craftsText(ready, perCraft).copy().withStyle(ChatFormatting.GRAY));
         if (locked()) {
             tooltip.add(WareworksLang.translateDirect(TerminalCraftResult.LOCKED.langKey())
+                    .withStyle(ChatFormatting.RED));
+            return tooltip;
+        }
+        if (menu.isRemote()) {
+            // Opened from afar (issue #44): no click crafts, so the line that says why stands where the clicks would.
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_REMOTE)
                     .withStyle(ChatFormatting.RED));
             return tooltip;
         }

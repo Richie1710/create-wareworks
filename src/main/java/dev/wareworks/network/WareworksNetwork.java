@@ -172,8 +172,15 @@ public final class WareworksNetwork {
      * <b>{@code "20"} is ADR-076</b> (a recipe viewer's transfer button at a production station): the new
      * {@link ProductionPatternLayPayload} (client → server), which an older server would not understand. Nothing else
      * changed.
+     * <p>
+     * <b>{@code "21"} is issue #44</b> (the Warehouse Remote, ADR-077): the extra data a terminal screen is opened with
+     * gained the terminal's dimension and whether the screen was opened from afar, after the block position and the
+     * buffer slot count. An older client would leave both in the buffer, look the terminal up in its own dimension and
+     * close a screen opened from afar at once; an older server would send neither, and a newer client would read past
+     * the end. Client and server also changed which of them may move items through a screen opened from afar (its
+     * slots are locked on both sides). No payload type changed.
      */
-    public static final String VERSION = "20";
+    public static final String VERSION = "21";
 
     private WareworksNetwork() {
     }

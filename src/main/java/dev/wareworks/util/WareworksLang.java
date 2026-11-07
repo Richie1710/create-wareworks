@@ -1707,6 +1707,39 @@ public final class WareworksLang {
     /** Action bar: a loaded truck put into a foreign slot or thrown out went back into the inventory. */
     public static final String HAND_TRUCK_STAYS_WITH_YOU = "hand_truck.stays_with_you";
 
+    // --- warehouse remote (issue #44, ADR-077) -----------------------------------------------------------------------
+
+    /** Action bar: {@code "Linked to the Warehouse Terminal at %1$s, %2$s, %3$s"}. */
+    public static final String REMOTE_LINKED = "remote.linked";
+    /** Action bar: the link was cleared by a sneaking use into the air. */
+    public static final String REMOTE_UNLINKED = "remote.unlinked";
+    /** {@code "Linked to %1$s, %2$s, %3$s"}: tooltip line of a remote linked to a terminal in the overworld. */
+    public static final String REMOTE_TOOLTIP_LINKED = "remote.tooltip_linked";
+    /** {@code "Linked to %1$s, %2$s, %3$s in %4$s"}: the same in another dimension, with the dimension's id. */
+    public static final String REMOTE_TOOLTIP_LINKED_IN = "remote.tooltip_linked_in";
+    /** {@code "Not linked"}: tooltip line of a remote without a link. */
+    public static final String REMOTE_TOOLTIP_UNLINKED = "remote.tooltip_unlinked";
+    /** Action bar: a remote without a link was used, with how to link it. */
+    public static final String REMOTE_NOT_LINKED = "remote.not_linked";
+    /** Action bar: the linked terminal is in another dimension and the server does not allow that. */
+    public static final String REMOTE_OTHER_DIMENSION = "remote.other_dimension";
+    /** Action bar: the linked terminal was broken, replaced, or its dimension no longer exists. */
+    public static final String REMOTE_GONE = "remote.gone";
+    /** Action bar: {@code "Out of range: %1$s blocks away, at most %2$s"}. */
+    public static final String REMOTE_OUT_OF_RANGE = "remote.out_of_range";
+    /** Action bar: the linked terminal's chunk is not loaded or not ticking; a remote never loads it. */
+    public static final String REMOTE_NOT_LOADED = "remote.not_loaded";
+    /** Action bar: the player may not use a block there (spawn protection, world border). */
+    public static final String REMOTE_NOT_ALLOWED = "remote.not_allowed";
+    /**
+     * {@code "Terminal via Remote"}: the title of a terminal screen opened from afar. Shorter than the block's name with
+     * a suffix, so it leaves the warehouse and a chosen door's name their room in the title row
+     * ({@code TerminalTitleRowWidthTest}).
+     */
+    public static final String TERMINAL_REMOTE_TITLE = "gui.terminal.remote_title";
+    /** The result cell's red line in a screen opened from afar: a craft needs the player at the terminal. */
+    public static final String TERMINAL_CRAFT_REMOTE = "gui.terminal.craft.remote";
+
     private WareworksLang() {
     }
 

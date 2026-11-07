@@ -6,7 +6,6 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 import dev.wareworks.content.item.ItemKey;
-import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.crafting.IngredientPicker;
 import dev.wareworks.network.TerminalCraftLayPayload;
@@ -47,13 +46,15 @@ public final class TerminalRecipeLay {
     }
 
     /**
-     * Whether a recipe can be laid into {@code menu}'s panel at all: the player still has the menu open, and the client
-     * knows its terminal block entity, whose position the payload names. Cheap: a recipe viewer asks every tick.
+     * Whether a recipe can be laid into {@code menu}'s panel at all: the player still has the menu open. The payload
+     * names the terminal by the position the menu was opened with, so no block entity is needed, and a screen opened
+     * from afar through a Warehouse Remote lays like any other (issue #44): a lay moves nothing. Cheap: a recipe viewer
+     * asks every tick.
      */
     public static boolean canLay(WarehouseTerminalMenu menu) {
         Objects.requireNonNull(menu, "menu");
         Minecraft minecraft = Minecraft.getInstance();
-        return minecraft.player != null && minecraft.player.containerMenu == menu && menu.terminal() != null;
+        return minecraft.player != null && minecraft.player.containerMenu == menu && menu.terminalPos() != null;
     }
 
     /**
@@ -118,13 +119,12 @@ public final class TerminalRecipeLay {
         Objects.requireNonNull(menu, "menu");
         Objects.requireNonNull(recipe, "recipe");
         Objects.requireNonNull(cells, "cells");
-        WarehouseTerminalBlockEntity terminal = menu.terminal();
         ClientPacketListener connection = Minecraft.getInstance().getConnection();
-        if (!canLay(menu) || terminal == null || connection == null || !TerminalCraftLayPayload.wellFormed(cells)
+        if (!canLay(menu) || connection == null || !TerminalCraftLayPayload.wellFormed(cells)
                 || cells.stream().allMatch(List::isEmpty))
             return false;
         Optional<TerminalCraftLayPayload> payload = TerminalCraftLayPayload.fitted(menu.containerId,
-                terminal.getBlockPos(), recipe, cells, true, connection.registryAccess(),
+                menu.terminalPos(), recipe, cells, true, connection.registryAccess(),
                 connection.getConnectionType());
         if (payload.isEmpty())
             return false;

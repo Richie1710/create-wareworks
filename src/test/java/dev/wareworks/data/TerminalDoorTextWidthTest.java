@@ -33,7 +33,8 @@ import dev.wareworks.core.production.PlanRefusal;
  * that row ({@code WarehouseTerminalScreen#fitDoorLine}), so each sentence is measured with the names empty, the
  * numbers at their widest, and has to leave the names a floor of their own;</li>
  * <li>the <b>title row</b>: the gold {@code "→ <door>"} right of the screen's title, which has to leave the door's name
- * room after the title and the gap in each language;</li>
+ * room after the title and the gap in each language — after the plain title and after the one of a screen opened
+ * through a Warehouse Remote (issue #44), whichever is wider;</li>
  * <li>the <b>question</b>: the confirmation panel draws its lines {@value #DIALOG_WIDTH} px wide;</li>
  * <li>the door button's <b>tooltip</b>, whose lines the screen keeps inside the row width: its entries carry a mark,
  * the door's name and a state word, and the word has to leave the name a floor too.</li>
@@ -104,6 +105,8 @@ class TerminalDoorTextWidthTest {
     /** Room a door's name keeps in its tooltip entry beside the widest state word. */
     private static final int ENTRY_NAME_FLOOR = 90;
     private static final String TERMINAL_TITLE = "block.wareworks.warehouse_terminal";
+    /** The title of a screen opened from afar (issue #44), relative to {@code wareworks.}. */
+    private static final String REMOTE_TITLE = "gui.terminal.remote_title";
     private static final Pattern PLACEHOLDER = Pattern.compile("%(\\d+)\\$s");
 
     @Test
@@ -129,9 +132,11 @@ class TerminalDoorTextWidthTest {
                     RequestRejection.DOOR_IGNORES_REDSTONE))
                 measured += check(tooWide, code, "status row", new Line(rejection.langKey(), "", 0),
                         text(lang, rejection.langKey()), ROW_WIDTH, advances);
-            int titleRoom = ROW_WIDTH - ItemTooltipLengthTest.width(lang.get(TERMINAL_TITLE), advances) - TITLE_GAP;
-            measured += check(tooWide, code, "title row", INDICATOR, filled(lang, INDICATOR, number), titleRoom,
-                    advances);
+            for (String title : List.of(lang.get(TERMINAL_TITLE), text(lang, REMOTE_TITLE))) {
+                int titleRoom = ROW_WIDTH - ItemTooltipLengthTest.width(title, advances) - TITLE_GAP;
+                measured += check(tooWide, code, "title row after '" + title + "'", INDICATOR,
+                        filled(lang, INDICATOR, number), titleRoom, advances);
+            }
             for (Line line : DIALOG)
                 measured += check(tooWide, code, "question", line, filled(lang, line, number), DIALOG_WIDTH, advances);
             for (Line line : TOOLTIP)

@@ -108,8 +108,11 @@ public final class BlocksVisualScenario implements VisualScenario {
     /** Ticks with the screen open before the shot, so item icons and the background have rendered. */
     private static final int SCREEN_SETTLE_TICKS = 10;
     private static final int CHEST_SLOTS = 27;
-    /** Second slot of the chest's middle row. */
-    private static final int FIRST_ITEM_SLOT = 10;
+    /**
+     * First slot of the chest's middle row: the eighteen items fill the middle and bottom rows (issue #44 made them
+     * eighteen; the second slot was first while seventeen fitted after it).
+     */
+    private static final int FIRST_ITEM_SLOT = 9;
 
     /** Close-up cameras relative to an exhibit's block centre: to the side, above and in front of or behind it. */
     private static final double CLOSE_SIDE = 1.4;
@@ -811,8 +814,9 @@ public final class BlocksVisualScenario implements VisualScenario {
                 // The Crafter Feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
-                // Items that are not blocks follow every block: the hand truck (issue #37).
-                WareworksItems.HAND_TRUCK.asItem());
+                // Items that are not blocks follow every block: the hand truck (issue #37) and the Warehouse Remote
+                // (issue #44).
+                WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem());
         if (!shown.equals(expected) || icon != WareworksBlocks.STACKER_CRANE.asItem())
             throw new VisualTestException("unexpected creative tab: icon " + icon + ", items " + shown);
         tabItems = shown;

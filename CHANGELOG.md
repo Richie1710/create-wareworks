@@ -22,6 +22,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no crafting recipe. A result you set to something else, for example for another machine, stays, and so does any result
   while you only change an amount. For a pattern meant for another machine, set the result yourself: a grid that also
   happens to be a crafting recipe gets that recipe's result first.
+- **Warehouse Remote: open a Warehouse Terminal from afar** ([#44](https://github.com/Richie1710/create-wareworks/issues/44)).
+  A new item, crafted from a Create Transmitter, an ender pearl and three brass sheets. Sneak and right-click a
+  terminal to link the remote to it, then right-click anywhere within 256 blocks to open that terminal's screen; sneak
+  and right-click into the air to unlink it. From afar you can request items and fluids, deliver to a package door,
+  fetch a clipboard list or a crafting grid's ingredients and lay recipes from JEI. Everything is still delivered by
+  the crane into the terminal's buffer or to the door, never into your inventory, so the screen cannot take items out
+  of the buffer, move the clipboard or craft: do that at the terminal itself. Keep the remote in the hand you used:
+  putting it away, walking out of range or the terminal's area unloading closes the screen. The remote does not keep
+  chunks loaded. A terminal that is broken and placed again needs a new link. The new server config section `remote`
+  sets the range (`range`, default 256 blocks) and whether a remote works across dimensions (`crossDimension`, default
+  off).
+
+### Fixed
+
+- **The terminal screen's title no longer runs into "Not part of a warehouse".** In English, a terminal outside every
+  warehouse drew that line over the end of its title; it is now cut to the room the title leaves, and the status line
+  below still says it in full.
+- **A Warehouse Terminal can no longer be used from another dimension at the same coordinates.** The reach check
+  compared positions only, so a player standing at the terminal's coordinates in another dimension counted as standing
+  at it.
 
 ## [0.18.1-beta] - 2026-10-30
 

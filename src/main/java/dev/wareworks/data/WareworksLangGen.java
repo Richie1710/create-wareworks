@@ -1224,6 +1224,34 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_DROP_REFUSED), "Set it down with Right-Click");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_STAYS_WITH_YOU), "A loaded hand truck stays with you");
 
+        // Issue #44: the Warehouse Remote. Its name comes from the item builder; these are its description and messages.
+        tooltip(lang, "item.wareworks.warehouse_remote",
+                "Opens a linked _Warehouse Terminal_ from afar. The crane still delivers to the terminal or a "
+                        + "package door, never into your hands.",
+                "When used on a terminal while sneaking",
+                "_Links_ the remote to it.",
+                "When used",
+                "Opens the linked terminal's screen within the server's range. Keep it in hand: putting it away "
+                        + "closes the screen.",
+                "While open from afar",
+                "You can request, fetch and lay recipes, but not take items out or craft: do that at the terminal "
+                        + "itself.");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_LINKED), "Linked to the Warehouse Terminal at %1$s, %2$s, %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_UNLINKED), "Remote unlinked");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_TOOLTIP_LINKED), "Linked to %1$s, %2$s, %3$s");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_TOOLTIP_LINKED_IN), "Linked to %1$s, %2$s, %3$s in %4$s");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_TOOLTIP_UNLINKED), "Not linked");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_NOT_LINKED),
+                "Not linked: sneak and right-click a Warehouse Terminal");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_OTHER_DIMENSION),
+                "The linked terminal is in another dimension");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_GONE), "The linked terminal is gone");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_OUT_OF_RANGE), "Out of range: %1$s blocks away, at most %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_NOT_LOADED), "The linked terminal's area is not loaded");
+        lang.accept(WareworksLang.key(WareworksLang.REMOTE_NOT_ALLOWED), "You cannot use that terminal");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_REMOTE_TITLE), "Terminal via Remote");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_REMOTE), "Craft in person: the result goes to you");
+
         severalCranes(lang);
     }
 

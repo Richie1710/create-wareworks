@@ -67,7 +67,7 @@ class TerminalCraftTextWidthTest {
     private static final Set<String> TOOLTIP_LINES = Set.of("toggle", "toggle_hint", "clear", "per_craft",
             "available", "short", "missing", "makeable", "cell_empty", "cell_empty_shift", "cell_clear", "stock_hint",
             "ready", "once", "all", "fetch_hint", "button.answer", "button.resume", "button.cancel", "cancel_mark",
-            "progress", "in_flight", "crafts");
+            "progress", "in_flight", "crafts", "remote");
     /** An argument that is an item's name: it gives way first wherever the text stands, so it is measured empty. */
     private static final char NAME = 'n';
     /** An argument that is a number, measured at its widest. */

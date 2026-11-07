@@ -46,9 +46,10 @@ dev.wareworks
 │                              WareworksEntityTypes (the mod's only entity: PALLET, the load of a broken rack bay -
 │                              no spawn egg, no item form, M28, issue #20, ADR-046)
 │                              WareworksItems (plain items that are not block items, after every block in the
-│                              creative tab: today only HAND_TRUCK, issue #37, ADR-070); WareworksDataComponents
-│                              (the mod's item data components: HAND_TRUCK_LOAD, the container a hand truck carries,
-│                              ADR-070)
+│                              creative tab: HAND_TRUCK, issue #37, ADR-070, and WAREHOUSE_REMOTE, issue #44,
+│                              ADR-077); WareworksDataComponents (the mod's item data components: HAND_TRUCK_LOAD,
+│                              the container a hand truck carries, ADR-070, and REMOTE_LINK, the terminal a remote
+│                              opens, ADR-077)
 ├── command                    WareworksCommands (`/wareworks chunks`, permission 2: what the mod holds force-loaded per
 │                              dimension, and the release valve — a hard requirement of M19, because nothing outside
 │                              NeoForge's own validation callback can enumerate a mod's chunk tickets, ADR-031)
@@ -219,6 +220,8 @@ dev.wareworks
 │   ├── handtruck              the hand truck's pure numbers (issue #37, ADR-070): HandTruckPenalty (the movement input
 │   │                          scaled by the speed multiplier, the forward impulse capped below a sprint's 0.8, the
 │   │                          one-tick carry window) and HandTruckLimits (the size budget of one carried container)
+│   ├── remote                 the Warehouse Remote's range arithmetic (issue #44, ADR-077): RemoteLimits (the clamped
+│   │                          range, exactly the range still reaching, the distance rounded up for a message)
 │   ├── kinetics               OverstressRecheck (issue #38, ADR-071): when an overstressed kinetic consumer has its
 │   │                          network recomputed, and whether the recomputed totals show its flag is stale
 │   ├── computer               what a computer asks for, as pure logic (issue #9, ADR-074): ResultPage (a 1-based page
@@ -440,6 +443,11 @@ dev.wareworks
 │   │                          second copy), HandTruckSpill (a loaded truck as plain stacks), HandTruckCarry (the carry
 │   │                          stamp and the server half of the penalty), HandTruckSlotGuard (a menu listener that
 │   │                          hands a loaded truck back) and HandTruckHooks (every game-bus listener)
+│   ├── remote                 the Warehouse Remote (issue #44, ADR-077): WarehouseRemoteItem (the link click in
+│   │                          onItemUseFirst, open and unlink in use, the link tooltip), RemoteLink (the component
+│   │                          value: the terminal's GlobalPos and identity), RemoteAccess (the server's rules for
+│   │                          linking, opening and staying open, without loading a chunk) and RemoteBinding (the
+│   │                          hand and terminal identity a screen opened from afar is bound to)
 │   ├── kinetics               StaleOverstressCheck (issue #38, ADR-071): clears an overstress Create keeps after the
 │   │                          network has the capacity again; one per stacker crane dock and Crafter Feeder, called
 │   │                          from their server tick
@@ -1152,7 +1160,8 @@ pipeline the MVP hardened (queue, reservations, planner, reroutes, persistence).
 * **The server owns the item list.** The screen can only offer `stockSnapshot()`, and `requestFromTerminal` accepts an
   `ItemKey` only after matching it against the controller's live stock index, so a client can never request something the
   server does not hold. The player must also pass vanilla's own container reach check
-  (`Container#stillValidBlockEntity`), the same rule a chest GUI uses.
+  (`Container#stillValidBlockEntity`), the same rule a chest GUI uses. (Since issue #44 in the terminal's own
+  dimension, or from afar through a linked Warehouse Remote, ADR-077.)
 
 *Reason:* A separate `LocationKind` would have to be threaded through the planner's `allowsTarget`, the reroute
 fallbacks, `PlannerInput`, the reservation ledger, the transfer contexts and the persisted records — every one of them a
@@ -4877,7 +4886,8 @@ while production keeps "herstellen").
   `FakePlayer` and takes one of the menu's eight actions per tick (`MAX_REQUESTS_PER_TICK`).
   `WarehouseTerminalBlockEntity#craftFromBuffer` then checks that the menu belongs to this terminal, that it is the
   one the player has open, and that the player is in reach (`Container#stillValidBlockEntity`). No aisle is needed: a
-  terminal crafts from its own buffer.
+  terminal crafts from its own buffer. A screen opened from afar through a Warehouse Remote never crafts (issue #44,
+  ADR-077).
 * **A craft is the player's hand, not a warehouse transfer.** Items move between that terminal's buffer and the crafting
   player's own 36 main inventory slots, in one call, and nowhere else (except the logged drop below): nothing moves
   between warehouse locations, storage is never touched, and nothing a craft makes enters the stock index. Per craft,
@@ -7728,6 +7738,82 @@ still only evaluates. `WareworksNetwork.VERSION` is 20. `RecipeExecutionBoundary
 `getRecipeManager` is JEI's and serves the visual harness. Checked by `PatternLayTest`, three `ProductionGameTests` and
 the visual scenario `patternjei` with the real JEI.
 
+### ADR-077 — A Warehouse Remote opens a linked terminal's screen from afar: the link names the terminal by position and identity, the screen stays open only while the hand that opened it holds the remote, and nothing in that screen moves an item to the player ([issue #44](https://github.com/Richie1710/create-wareworks/issues/44))
+
+*Context:* the owner asked for a held item that opens a warehouse terminal's screen from a distance. The hard rule is
+that items only move through a crane's handling head, and three paths of the terminal screen move items between the
+terminal and the player's own inventory: the buffer slots, the clipboard slot and crafting (the result goes into the
+player's hands first). Every reach check of the terminal goes through one method, `canPlayerUse`, which is vanilla's
+container rule; that rule compares coordinates only, not dimensions. The client screen closed itself when the client
+had no block entity for the terminal, which from afar it usually does not. `Level#getBlockEntity` loads a chunk that is
+not loaded. A creative client can send a stack with any component it likes.
+
+*Decision:*
+
+* **D1. The link is a component of ours with the terminal's identity.** `wareworks:remote_link` (`RemoteLink`) holds the
+  terminal's `GlobalPos` and a random UUID the terminal makes the first time a remote is linked to it and keeps in its
+  full save only (`TerminalId`, never in `writeSafe`). A remote opens only the terminal at that position with that id,
+  so a forged position reaches nothing, and a terminal broken and placed again, printed from a schematic or set down by
+  someone else on the same spot is a new one. The component is persistent and synced in full, because a creative
+  client rebuilds the stack from its own copy.
+* **D2. The link click is answered in `onItemUseFirst`**, before the block and also when sneaking, from what both sides
+  know: a sneaking player on a terminal is a link (`sidedSuccess`), everything else passes. So a plain right-click on a
+  terminal with the remote in hand opens it in person, and the client never goes on to `use` for a click the server
+  took as a link. A sneaking `use` into the air clears the link: a sneaking click that points at a block or an entity
+  (picked like the client's crosshair) passes and keeps it, because such a click also reaches `use` when the block does
+  not take it, and a missed link click or one adventure mode stops must not wipe the link. Linking refuses fake players
+  silently and a position the player may not use (`Level#mayInteract`).
+* **D3. Opening checks in a fixed order** (`RemoteAccess#open`): a link, the dimension (`remote.crossDimension`), that
+  the dimension exists, the range within one dimension (`remote.range`, from the eyes to the block's centre), that the
+  chunk is loaded and ticking, that a terminal with the linked id stands there, and `mayInteract`. The chunk comes
+  before the block entity, so a remote never loads a chunk, not even in a Deployer. Each refusal is one action bar
+  line. An opened screen puts the remote on a 10-tick cooldown, because every open rebuilds the menu and resends the
+  whole stock. Fake players open nothing.
+* **D4. One choke point.** `canPlayerUse` is `!isRemoved()` and then one of two rules. While the player's open menu is
+  this terminal's remote menu, only `RemoteAccess#stillHolds` decides: the terminal's chunk is still loaded and
+  ticking, the hand the remote was used from (`RemoteBinding`) still holds a remote linked to this terminal, the player
+  is still in range and may still use the block. Otherwise it is the in-person rule, vanilla's in the terminal's own
+  dimension, which also fixes a player at the same coordinates of another dimension. The remote rule reads no block
+  entity: vanilla's rule calls `Level#getBlockEntity`, which on the server renews a chunk ticket on every call, so asked
+  every tick from afar it would hold the terminal's chunk for as long as the screen stays open. That is one look at one
+  hand, never an inventory scan, so vanilla's two `stillValid` calls a tick cost nothing, and every one of the
+  terminal's server checks accepts the remote without a change of its own. The screen closes when the remote leaves
+  the hand, the player leaves the range, or the terminal is broken or its chunk stops ticking (and then unloads).
+* **D5. Nothing in a remote screen moves an item to or from the player.** The buffer slots refuse `mayPickup`, the list
+  slot `mayPlace` and `mayPickup`, `quickMoveStack` moves nothing, and `craftFromBuffer` refuses a remote menu with the
+  existing `TerminalCraftResult.OUT_OF_REACH`; the client sends no craft click and says why in the result's tooltip.
+  Both sides build the same locked slots from the open data, so the client predicts nothing the server refuses.
+  Requests, fetches, lays, the clipboard order, cancels and door deliveries work from afar, because the crane delivers
+  all of them into the terminal or to a door.
+* **D6. The client needs no block entity.** The open data gained the terminal's dimension and a remote flag after the
+  position and the buffer slot count. A remote screen, or one whose terminal is in another dimension, looks up no client
+  block entity; the menu keeps the position and the dimension, which the remembered crafting grid and the JEI lay use.
+* **D7. Two server settings**, section `remote`: `range` (256 blocks, 16 to 30 000 000, clamped in
+  `core.remote.RemoteLimits`) and `crossDimension` (false). The range is only measured within one dimension: the
+  coordinates of two dimensions are not comparable, so another dimension is either refused or, where allowed, not
+  measured.
+
+*Alternatives rejected:*
+* **The position alone in the link.** A creative client could aim a remote at any terminal on the server.
+* **Any linked remote anywhere in the inventory keeps the screen open.** That is an inventory scan twice a tick, and
+  it would miss a remote on the cursor.
+* **Delivering into the player's inventory, or crafting from afar.** Both are item teleportation.
+* **A new rejection reason or craft result for "remote".** Both travel by ordinal or name and are pinned by tests; the
+  existing `OUT_OF_REACH` already says what happened.
+* **The remote holding the terminal's chunk.** It would be a chunk loader in a player's pocket; the warehouse's own
+  chunk holds (ADR-031) are the opt-in for that.
+
+*Consequences:* `WareworksNetwork.VERSION` is 21 (the open data changed, and which side may move items through a screen
+opened from afar). A world in which no remote was ever linked saves its terminals byte for byte as before; an older
+terminal gets its id when the first remote is linked to it. The link is synced with the stack, so anyone who sees the
+remote's tooltip sees where its terminal stands. A protection mod that cancels block clicks stops linking, but opening
+fires only the item's own use; `mayInteract` covers spawn protection and the world border, not claims. A portal trip
+or a respawn closes the screen (the client closes every screen then), and so does the chunk unloading when the
+aisle's hold ends. `ItemCensus` counts a remote without its link. Checked by `RemoteLimitsTest`,
+`TerminalCraftTextWidthTest` (the red craft line), `RemoteGameTests`, `WareworksItemGameTests` (recipe, grid, tab
+order), the visual scenarios `remote`, `blocks` and `tooltips`, and `runRobustnessTest` (the terminal's save data
+changed).
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -7812,6 +7898,12 @@ the visual scenario `patternjei` with the real JEI.
   `FILLING` reservation, the fill ledger and the recipe memo are derived and rebuilt from the job and the queue, never
   saved. A fluid question is transient like every confirmation. The client gets the fluid cells and fill lines in the
   terminal's stock push, network version 18.
+* **The Warehouse Remote** (issue #44, ADR-077) adds one NBT key to the terminal and one item component. The terminal
+  saves its identity as a UUID under `TerminalId`, in the full save only and only once a remote has been linked to it,
+  so a world without remotes saves byte for byte as before and a schematic print (`writeSafe`, ADR-061) never carries
+  it. The remote saves its link in `wareworks:remote_link` (`{terminal: {dimension, pos}, terminal_id}`), synced to
+  clients in full like the hand truck's load. What ties an open screen to the remote, the hand and the id
+  (`RemoteBinding`), lives in the open menu and is gone with it.
 * After a restart, jobs resume from the persisted state (`CraneStateMachine.resume` makes a loaded state consistent). There is no `FAULT` phase: if a referenced block is missing, a job aborts with a reason before the pick, and after it the held items are rerouted (`REROUTE`), held and retried (`HOLDING`) or waited with at the requesting output (`WAITING_FOR_TARGET`). Items are dropped only when the dock itself breaks (`stacker-crane.md` §4.1, `warehouse-system.md` §8).
 
 ## Performance rules

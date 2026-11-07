@@ -92,6 +92,7 @@ public final class WareworksItemGameTests {
     private static final String COPPER_SHEET = "copper_sheet";
     private static final String CRAFTER = "crafter";
     private static final String ELECTRON_TUBE = "electron_tube";
+    private static final String ENDER_PEARL = "ender_pearl";
     private static final String INDUSTRIAL_IRON_BLOCK = "industrial_iron_block";
     private static final String IRON_SHEET = "iron_sheet";
     private static final String LARGE_COGWHEEL = "large_cogwheel";
@@ -99,6 +100,7 @@ public final class WareworksItemGameTests {
     private static final String PRECISION_MECHANISM = "precision_mechanism";
     private static final String ROSE_QUARTZ_LAMP = "rose_quartz_lamp";
     private static final String SHAFT = "shaft";
+    private static final String TRANSMITTER = "transmitter";
     /** A plank for the wooden rack bay's grid; any one of {@link #PLANKS} would do. */
     private static final String OAK_PLANKS = "oak_planks";
 
@@ -274,6 +276,10 @@ public final class WareworksItemGameTests {
         ItemStack cog = stack(COGWHEEL);
         CraftingInput handTruck = grid(3, 3, none, stack(SHAFT), none, none, alloy, none, cog, stack(IRON_SHEET), cog);
         assertCrafts(helper, recipes, level, handTruck, WareworksItems.HAND_TRUCK.asItem(), ONE);
+        // The Warehouse Remote (issue #44): Create's transmitter as the aerial over an ender pearl in a brass shell.
+        CraftingInput remote = grid(3, 3, none, stack(TRANSMITTER), none, sheet, vanilla(ENDER_PEARL), sheet, none,
+                sheet, none);
+        assertCrafts(helper, recipes, level, remote, WareworksItems.WAREHOUSE_REMOTE.asItem(), ONE);
 
         // The crane is mechanical crafting. MechanicalCraftingRecipe#matches rejects every input that is not a
         // MechanicalCraftingInput, so the grid has to be built the way a crafter tower builds it.
@@ -345,8 +351,9 @@ public final class WareworksItemGameTests {
                 // The crafter feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
-                // The hand truck is no block, so it stands after every block (issue #37).
-                WareworksItems.HAND_TRUCK.asItem()),
+                // The hand truck is no block, so it stands after every block (issue #37), and the Warehouse Remote
+                // after it (issue #44).
+                WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem()),
                 "creative tab order");
         helper.assertTrue(tab.getIconItem().is(WareworksBlocks.STACKER_CRANE.asItem()), "creative tab icon: " + tab.getIconItem());
         helper.succeed();
@@ -440,7 +447,13 @@ public final class WareworksItemGameTests {
                 // chest across a base is early-game work.
                 new ExpectedRecipe(WareworksItems.HAND_TRUCK, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(SHAFT), IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.of(COGWHEEL),
-                                IngredientSpec.ofTag(IRON_PLATES), IngredientSpec.of(COGWHEEL))));
+                                IngredientSpec.ofTag(IRON_PLATES), IngredientSpec.of(COGWHEEL))),
+                // The Warehouse Remote (issue #44): brass tier with an ender pearl, because it reaches a terminal from
+                // afar, and Create's transmitter, the part of its own linked controller that sends.
+                new ExpectedRecipe(WareworksItems.WAREHOUSE_REMOTE, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(TRANSMITTER), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofVanilla(ENDER_PEARL), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES))));
     }
 
     /** Asserts that the recipe's filled slots are exactly the expected ingredients, in any order and with duplicates. */

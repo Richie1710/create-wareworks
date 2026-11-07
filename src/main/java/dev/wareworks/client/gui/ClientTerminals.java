@@ -6,6 +6,8 @@ import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
 
 /**
  * The client's lookup of a warehouse terminal block entity, for the menu's client factory
@@ -24,13 +26,16 @@ public final class ClientTerminals {
     }
 
     /**
-     * The terminal at {@code pos} in the client level, or {@code null} while no level is loaded or the block entity at
-     * that position is missing or of another type. The menu then builds its slots from the slot count the server sent.
+     * The terminal at {@code pos} of {@code dimension} in the client level, or {@code null} while no level is loaded,
+     * the client level is another dimension (issue #44: a terminal at the same coordinates there is not this one), or
+     * the block entity at that position is missing or of another type. The menu then builds its slots from the slot
+     * count the server sent.
      */
     @Nullable
-    public static WarehouseTerminalBlockEntity at(BlockPos pos) {
+    public static WarehouseTerminalBlockEntity at(ResourceKey<Level> dimension, BlockPos pos) {
         ClientLevel level = Minecraft.getInstance().level;
-        if (level != null && level.getBlockEntity(pos) instanceof WarehouseTerminalBlockEntity terminal)
+        if (level != null && level.dimension().equals(dimension)
+                && level.getBlockEntity(pos) instanceof WarehouseTerminalBlockEntity terminal)
             return terminal;
         return null;
     }

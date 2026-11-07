@@ -20,6 +20,7 @@ import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.handtruck.HandTruckLoad;
 import dev.wareworks.content.handtruck.HandTruckSpill;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.remote.WarehouseRemoteItem;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.core.inventory.InventorySnapshot;
@@ -273,10 +274,19 @@ final class ItemCensus {
      * <p>
      * A package inside a package is counted the same way. The recursion always terminates: a data component is an
      * immutable value and cannot contain itself, and its depth is bounded by what NBT would accept.
+     * <p>
+     * A Warehouse Remote (issue #44) counts without its link: linking, relinking and unlinking change the stack's
+     * components, not the items there are.
      */
     private static void add(Map<ItemKey, Long> counts, ItemStack stack, long copies) {
         if (stack.isEmpty() || copies == 0)
             return;
+        if (WarehouseRemoteItem.link(stack) != null) {
+            ItemStack unlinked = stack.copy();
+            unlinked.remove(WareworksDataComponents.REMOTE_LINK.get());
+            put(counts, ItemKey.of(unlinked), copies);
+            return;
+        }
         HandTruckLoad load = HandTruckItem.load(stack);
         if (load != null) {
             addLoadedTruck(counts, stack, load, copies);
@@ -306,7 +316,8 @@ final class ItemCensus {
 
     /** Counts {@code amount} items of {@code key}, a package again as its contents. */
     private static void add(Map<ItemKey, Long> counts, ItemKey key, long amount) {
-        if (key.getItem() instanceof PackageItem || key.getItem() instanceof HandTruckItem) {
+        if (key.getItem() instanceof PackageItem || key.getItem() instanceof HandTruckItem
+                || key.getItem() instanceof WarehouseRemoteItem) {
             add(counts, key.toStack(), amount);
             return;
         }

@@ -10,29 +10,30 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly **seventeen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   lists exactly **eighteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
    interface, **wooden rack bay, andesite rack bay, brass rack bay**, **copper fluid bay, brass fluid bay**, warehouse
    input, warehouse output, warehouse terminal, warehouse production station, **warehouse crafter feeder**, warehouse
-   stock keeper, warehouse home point, and the **hand truck**, the one item that is no block, last — the three rack bays stand directly after the interface, weakest first, the two
+   stock keeper, warehouse home point, and the **hand truck** and the **warehouse remote**, the two items that are no blocks, last — the three rack bays stand directly after the interface, weakest first, the two
    fluid bays directly after them, weakest first again, and the crafter feeder directly after the station it serves.
    (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **seventeen** items shows a short Create-style description (issue #22): one sentence what
+3. Holding Shift on each of the **eighteen** items shows a short Create-style description (issue #22): one sentence what
    the block is, at most one note the Ponder scenes do not show; the stacker crane and the crafter feeder additionally
    show their stress impact. At **2560x1440 or 5120x1440 with the automatic GUI scale**, in English and in German, hover
    each bay, the terminal, the output, the crane and the crafter feeder (the tallest tooltip of all) in the **bottom row
    of your inventory**: the item name at the top of the Shift tooltip is on screen. **Does each one tell you what the
    block is for without reading like a telegram?**
-4. JEI/EMI shows **seventeen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
+4. JEI/EMI shows **eighteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
    terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass nuggets**
    the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an andesite casing between
    two andesite alloy, with no electron tube and no precision mechanism), and the crafter feeder is one column: a
-   precision mechanism over a brass casing over a vanilla Crafter, and the hand truck is a shaft over andesite alloy over
-   a cogwheel, an iron sheet and a cogwheel. In the **vanilla recipe book** the other **sixteen**
-   appear once you hold one of their ingredients — the terminal shows up with a precision mechanism and the output with
-   a brass nugget — while the stacker crane never does, because mechanical crafting has no recipe-book category
+   precision mechanism over a brass casing over a vanilla Crafter, the hand truck is a shaft over andesite alloy over
+   a cogwheel, an iron sheet and a cogwheel, and the warehouse remote is a Create Transmitter over an ender pearl
+   between two brass sheets, with a third brass sheet below. In the **vanilla recipe book** the other **seventeen**
+   appear once you hold one of their ingredients — the terminal shows up with a precision mechanism, the output with
+   a brass nugget and the remote with an ender pearl — while the stacker crane never does, because mechanical crafting has no recipe-book category
    (Create's own mechanical crafting recipes behave the same).
 4a. Lay out the **input** recipe (funnel over casing) and then the **output** recipe (casing over funnel with a brass
     nugget on each side of the funnel) in a crafting table: each gives exactly its own block, and neither turns into
@@ -3744,4 +3745,51 @@ you get tired of waiting, and put it back before judging check 160.
      to a chest: it ends on the chest. Does watching it change feel helpful or restless?
 410. **Block Cutting.** Press **+** in Create's Block Cutting category with many outputs: the first output lands in the
      result, and you change it by hand. Good enough?
+
+## BO. The Warehouse Remote ([issue #44](https://github.com/Richie1710/create-wareworks/issues/44))
+
+> A held item that opens a linked terminal's screen from afar (ADR-077, `docs/warehouse-system.md` §3.4.7).
+> `RemoteLimitsTest` checks the range arithmetic, `RemoteGameTests` the link, every refusal, the screen closing and the
+> locked slots in a world, and the `remote` visual scenario a real link, a real order from far away and the screen
+> closing, in English and German. What is left is what only a player can judge, and a real dedicated server.
+> Setup: a stocked warehouse with a terminal, a remote crafted or taken from the creative tab.
+
+411. **Look.** Hold the remote in first and third person, put it in an item frame and look at its icon in the inventory.
+     Does it read as a handheld remote, and is the screen side the one facing you?
+412. **Linking.** Sneak and right-click the terminal: the action bar says "Linked to the Warehouse Terminal at x, y, z"
+     and the tooltip "Linked to x, y, z". A plain right-click on the terminal with the remote in hand opens the screen
+     the ordinary way, titled "Warehouse Terminal", not "Terminal via Remote".
+413. **Ordering from afar.** Walk about 100 blocks away, keep the terminal's area loaded (a second player there, or
+     `/forceload`) and right-click into the air: "Terminal via Remote" opens with the live stock list, the warehouse
+     ("Warehouse A") at the right end of the title row without touching the title. Order a stack of iron: the crane
+     delivers it into the terminal's buffer, your inventory stays as it was, and the buffer on your screen fills.
+414. **Nothing comes to you.** In that screen click a buffer slot, Shift-click it, press a hotbar key over it and try to
+     drag a clipboard into the list slot: nothing moves and nothing flickers back. Hover the craft result: one red line,
+     "Craft in person: the result goes to you", and a click only plays the refusal sound. Is it clear why?
+415. **Everything else works.** From afar ask for a fluid, choose a package door and order to it, fetch a clipboard list
+     that is already in the list slot, use the crafting panel's Fetch and press JEI's **+**: each works as at the
+     terminal and is delivered there.
+416. **Closing.** The hotbar selection cannot change while a screen is open, so move the remote out of the hand
+     instead: with the mouse over an empty inventory slot, press the number key of the remote's hotbar slot (or press
+     Q over the remote): the screen closes. Open it again, then walk away until you are more than 256 blocks from the
+     terminal: it closes. Open it again with the remote in the off hand: it opens, and swapping it out of the off hand
+     (the swap key over another slot) closes it. Open it once more and let the terminal's area unload (the other
+     player leaves, or `/forceload remove`): the screen closes, and the chunk really unloads (it does not stay loaded
+     behind the closed screen; `/forceload query` and the F3 chunk count tell).
+417. **Refusals.** Each is one action bar line: an unlinked remote ("Not linked: …"), too far ("Out of range: N blocks
+     away, at most 256", N never equal to the limit), in the Nether ("The linked terminal is in another dimension"),
+     the terminal's area unloaded ("… is not loaded"), the terminal broken and placed again ("The linked terminal is
+     gone"). The last one needs a new link.
+418. **Unlinking.** Sneak and right-click a chest or the floor with a block in the off hand: the link stays and the
+     block is placed. Sneak and right-click into the air: "Remote unlinked", and the tooltip says "Not linked".
+419. **Across dimensions.** Set `remote.crossDimension = true`, force-load the terminal's chunk and use the remote in the
+     Nether: the screen opens and works; the range is not checked. A portal trip with the screen open closes it. Set it
+     back.
+420. **A dedicated server.** On a real server, as a player who is not an operator: a terminal inside spawn protection
+     can neither be linked nor opened ("You cannot use that terminal"). Outside it, open from afar while your client no
+     longer has the terminal's chunk: the screen stays open and updates.
+421. **Two players.** One stands at the terminal, the other uses a remote: both order, both see the same buffer, and
+     only the one standing there can take items out or craft.
+422. **German.** Item name "Lager-Fernbedienung", the Shift tooltip, the title "Terminal (Fernbedienung)" beside "Lager
+     A", every action bar line and the red craft line: everything reads well and fits.
 

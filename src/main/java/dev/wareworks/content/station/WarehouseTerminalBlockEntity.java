@@ -29,6 +29,8 @@ import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.item.ClipboardList;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.remote.RemoteAccess;
+import dev.wareworks.content.remote.RemoteBinding;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
@@ -64,12 +66,14 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.Containers;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -127,6 +131,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     public static final String LIST_STATE_TAG = "ListState";
     /** NBT key of the bounded craft order numbers in client packets (goggles; issue #24). */
     public static final String CRAFT_STATE_TAG = "CraftState";
+    /** NBT key of the terminal's identity, which a Warehouse Remote's link names (issue #44, ADR-077). */
+    public static final String TERMINAL_ID_TAG = "TerminalId";
 
     /**
      * The clipboard a list order is read from and ticked off on ({@link #listSlot()}). Its own handler rather than a
@@ -159,6 +165,13 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     private List<TerminalStockEntry> computerSnapshot;
     /** The game time {@link #computerSnapshot} was built at. */
     private long computerSnapshotTime;
+    /**
+     * This terminal's identity, which a Warehouse Remote's link names besides the position (issue #44, ADR-077); made
+     * on first use ({@link #terminalId()}). Saved in the full save only, never in what a schematic keeps
+     * ({@code writeSafe}), so a printed terminal is a new one.
+     */
+    @Nullable
+    private UUID terminalId;
 
     public WarehouseTerminalBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.terminalBufferSlots());
@@ -501,9 +514,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     }
 
     /**
-     * Opens the terminal's screen for {@code player} (server). The extra data carries the block position, so the client
-     * menu finds this block entity, and the buffer slot count, so both sides build the same slots even if the client's
-     * block entity is missing.
+     * Opens the terminal's screen for {@code player} (server), who stands at it. The extra data carries the block
+     * position, so the client menu finds this block entity, the buffer slot count, so both sides build the same slots
+     * even if the client's block entity is missing, the dimension, so a client in another one never takes a terminal at
+     * the same coordinates there for this one, and that the screen is not a remote one ({@link #writeOpenData}).
      *
      * @return whether a screen was opened
      */
@@ -513,10 +527,54 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return false;
         return player.openMenu(new SimpleMenuProvider(
                 (id, inventory, owner) -> WarehouseTerminalMenu.create(id, inventory, this),
-                getBlockState().getBlock().getName()), buffer -> {
-                    buffer.writeBlockPos(worldPosition);
-                    buffer.writeVarInt(bufferSlots());
-                }).isPresent();
+                getBlockState().getBlock().getName()), buffer -> writeOpenData(buffer, false)).isPresent();
+    }
+
+    /**
+     * Opens the terminal's screen for {@code player} from afar, through the Warehouse Remote in {@code hand} (server;
+     * issue #44, ADR-077). Whether the remote may open it at all is {@link RemoteAccess#open}'s to decide; this only
+     * builds the menu, bound to that hand and this terminal's identity ({@link RemoteBinding}), under the title
+     * {@code "Terminal via Remote"}. From then on the screen stays open only while {@link #canPlayerUse}
+     * accepts the remote, and it can neither take items out of the buffer nor craft into the player's hands
+     * ({@link WarehouseTerminalMenu#isRemote()}).
+     *
+     * @return whether a screen was opened
+     */
+    public boolean openRemoteScreen(ServerPlayer player, InteractionHand hand) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(hand, "hand");
+        if (level == null || level.isClientSide || isRemoved())
+            return false;
+        RemoteBinding binding = new RemoteBinding(hand, terminalId());
+        return player.openMenu(new SimpleMenuProvider(
+                (id, inventory, owner) -> WarehouseTerminalMenu.createRemote(id, inventory, this, binding),
+                WareworksLang.translateDirect(WareworksLang.TERMINAL_REMOTE_TITLE)),
+                buffer -> writeOpenData(buffer, true)).isPresent();
+    }
+
+    /**
+     * The menu's extra data, in the order {@code WarehouseTerminalMenu#createOnClient} reads it: the block position, the
+     * buffer slot count, the dimension and whether the screen was opened from afar (issue #44: the last two are
+     * {@code WareworksNetwork.VERSION} {@code "21"}).
+     */
+    private void writeOpenData(RegistryFriendlyByteBuf buffer, boolean remote) {
+        buffer.writeBlockPos(worldPosition);
+        buffer.writeVarInt(bufferSlots());
+        buffer.writeResourceKey(level.dimension());
+        buffer.writeBoolean(remote);
+    }
+
+    /**
+     * This terminal's identity (server; issue #44, ADR-077): the id a Warehouse Remote's link names besides the
+     * position, so a remote opens only this terminal and not one placed later at the same spot. Made on first use and
+     * kept in the full save; a terminal saved before it existed gets one the first time a remote is linked to it.
+     */
+    public UUID terminalId() {
+        if (terminalId == null) {
+            terminalId = UUID.randomUUID();
+            setChanged();
+        }
+        return terminalId;
     }
 
     /**
@@ -528,17 +586,40 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     }
 
     /**
-     * Whether {@code player} may use this terminal, by the same rule vanilla containers use
-     * ({@code Container#stillValidBlockEntity}): the block entity must still be the one at its position and the player
-     * must be within their block interaction range plus four blocks of it. Never throws.
-     * <p>
+     * Whether {@code player} may use this terminal. Never throws. Two ways in:
+     * <ul>
+     * <li><b>In person</b>, by the same rule vanilla containers use ({@code Container#stillValidBlockEntity}): the block
+     * entity must still be the one at its position and the player must be within their block interaction range plus
+     * four blocks of it — <b>in this terminal's dimension</b>, which the vanilla rule does not check, so a player
+     * standing at the same coordinates in another dimension is not at this terminal (issue #44).</li>
+     * <li><b>Through a Warehouse Remote</b> (issue #44, ADR-077): the player has this terminal's screen open from afar
+     * right now, and the hand that opened it still holds a remote linked to this terminal, within range
+     * ({@link RemoteAccess#stillHolds}). A remote menu is only ever the player's open menu, so nothing else the player
+     * holds makes a terminal usable. While that menu is open, this is the <b>only</b> way in: the in-person rule reads
+     * the block entity through {@code Level#getBlockEntity}, which on the server renews a chunk ticket on every call, so
+     * asking it every tick from afar would keep the terminal's chunk loaded for as long as the screen stays open.</li>
+     * </ul>
      * This is also what keeps an open screen honest: Create's {@code MenuBase} asks it every tick, so the menu closes by
-     * itself when the block is broken, replaced or unloaded, or when the player walks away.
+     * itself when the block is broken, replaced or unloaded, or when the player walks away or puts the remote away.
+     * Every server check of a player's action at this terminal goes through here.
      */
     @Override
     public boolean canPlayerUse(Player player) {
         Objects.requireNonNull(player, "player");
-        return !isRemoved() && Container.stillValidBlockEntity(this, player);
+        if (isRemoved())
+            return false;
+        Optional<RemoteBinding> remote = remoteBinding(player);
+        return remote.isPresent() ? RemoteAccess.stillHolds(player, this, remote.get()) : inPerson(player);
+    }
+
+    private boolean inPerson(Player player) {
+        return player.level() == level && Container.stillValidBlockEntity(this, player);
+    }
+
+    /** The remote binding of {@code player}'s open menu when that is a screen of this terminal opened from afar. */
+    private Optional<RemoteBinding> remoteBinding(Player player) {
+        return player.containerMenu instanceof WarehouseTerminalMenu menu && menu.terminal() == this ? menu.remote()
+                : Optional.empty();
     }
 
     /**
@@ -899,7 +980,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * <b>The player's own hand, and nothing else.</b> A craft runs only for a player who has <b>this</b> terminal's
      * menu open right now and may still use the block ({@link #canPlayerUse}: the block is still here and within their
      * reach), which is exactly the player who could take the same items out of the buffer by hand. Anything else is
-     * {@link TerminalCraftResult#OUT_OF_REACH} and moves nothing. This is the only entry into {@link TerminalCrafting},
+     * {@link TerminalCraftResult#OUT_OF_REACH} and moves nothing — a screen opened from afar through a Warehouse Remote
+     * included (issue #44): the result would go into the player's hands, and the remote moves no item. This is the only entry into {@link TerminalCrafting},
      * the one class of the mod that runs a recipe (ADR-059), and it is reached only from the menu's payload entry
      * ({@link WarehouseTerminalMenu#submitCraft}): no tick, order, rule or automation path calls it.
      * <p>
@@ -914,7 +996,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         Objects.requireNonNull(hint, "hint");
         if (level == null || level.isClientSide || isRemoved())
             return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
-        if (menu.terminal() != this || player.containerMenu != menu || !canPlayerUse(player))
+        if (menu.terminal() != this || player.containerMenu != menu || menu.isRemote() || !canPlayerUse(player))
             return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
         return TerminalCrafting.craft(level, player, buffer, menu.bufferSlots(), grid, hint, all);
     }
@@ -1904,6 +1986,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // The craft order beside it, under a compound of its own (issue #24, ADR-062). A finished one is kept, as the
         // clipboard's is, until the next Fetch replaces it.
         TerminalCraftOrder.write(tag, craftOrder, registries);
+        // The identity a remote's link names (issue #44), only once it exists. writeSafe never reaches here, so a
+        // schematic print gets a new one.
+        if (terminalId != null)
+            tag.putUUID(TERMINAL_ID_TAG, terminalId);
     }
 
     @Override
@@ -1917,6 +2003,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // anyway.
         if (!isFullSave(tag))
             return;
+        // A full save without an identity is a terminal no remote was ever linked to; it gets one on first use.
+        terminalId = tag.hasUUID(TERMINAL_ID_TAG) ? tag.getUUID(TERMINAL_ID_TAG) : null;
         listSlot.setStackInSlot(LIST_SLOT, ItemStack.EMPTY);
         if (tag.contains(LIST_SLOT_TAG, Tag.TAG_COMPOUND))
             listSlot.deserializeNBT(registries, tag.getCompound(LIST_SLOT_TAG));

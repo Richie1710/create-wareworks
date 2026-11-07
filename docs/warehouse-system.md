@@ -1972,6 +1972,9 @@ The player-facing request station of an aisle: a screen instead of a filter slot
   the buffer. This is the one place in the mod where a recipe runs, and only a player's click runs it; nothing the
   warehouse does by itself reaches it. The panel's **Fetch** has the crane bring what the grid still needs for N
   crafts, as a second order of ordinary requests beside the clipboard order (ADR-062); it crafts nothing.
+* **Since issue #44 its screen opens from afar** (§3.4.7, ADR-077): a Warehouse Remote linked to the terminal opens
+  the same screen within the server's range. Requests, fetches and lays work as at the terminal and are delivered
+  into its buffer or to a door; nothing is taken out of the buffer and nothing is crafted from afar.
 * **In-game teaching (M13):** two Ponder scenes in `client.ponder.scenes.TerminalScenes`, both registered for the
   terminal item. `warehouse/terminal` ("Placing a Warehouse Terminal") covers §3.4.3: the screen is placed facing the
   player, a terminal placed **from beside the rack** has its port turned onto the aisle by the controller, and a wrench
@@ -2039,7 +2042,8 @@ Classes: `content.station.WarehouseTerminalBlock` / `WarehouseTerminalBlockEntit
     without an aisle.
   * `requestFromTerminal(Player, ItemKey, int)` → `RequestResult`, validated in this order: server side and not removed
     (`NO_CONTROLLER`); the player may use the block (`NO_CONTROLLER`'s sibling `OUT_OF_REACH`, checked with vanilla's
-    own `Container#stillValidBlockEntity`, i.e. block interaction range + 4); a positive amount (`INVALID_AMOUNT`),
+    own `Container#stillValidBlockEntity`, i.e. block interaction range + 4; since issue #44 in the terminal's own
+    dimension, or from afar through a linked Warehouse Remote, §3.4.7); a positive amount (`INVALID_AMOUNT`),
     then clamped to `maxTerminalRequestAmount`; an aisle with a loaded controller where this terminal is an aligned
     output-style member (`NO_CONTROLLER`, which also covers a misaligned terminal and one outside every aisle); and the
     item must be held by **the server's own stock index** (`NOT_IN_STOCK`). The controller then clamps to
@@ -2527,7 +2531,8 @@ Networking decision and reasons: **ADR-019**.
 * **Closing safely.** The menu is a Create `MenuBase`, so `stillValid` asks the terminal's `canPlayerUse`
   (`IInteractionChecker`): a block that was broken, replaced or unloaded, or a player who walked out of range, closes
   the screen on the next tick without any extra bookkeeping. The client closes the screen itself when its block entity
-  is missing.
+  is missing. Since issue #44 a screen opened through a Warehouse Remote stays open while the remote still reaches the
+  terminal, and has no client block entity at all (§3.4.7).
 * **Slots.** The terminal's buffer is shown as real slots: a player can take delivered items out by hand or shift-click
   them into their inventory, but nothing can be put in — the same rule automation sees.
 * **Tests**: JUnit `StockListModelTest`, `TerminalSearchTest`, `TerminalAmountsTest`, `CountFormatTest`,
@@ -3215,8 +3220,9 @@ order ends (below).
 **One craft is a transaction that refuses before anything moves** (`content.station.TerminalCrafting`, the only class
 of the mod that runs a recipe; ADR-059). The click sends `TerminalCraftPayload(containerId, CRAFT | CRAFT_ALL, cells,
 hint)`; after `submitCraft`'s checks, `WarehouseTerminalBlockEntity#craftFromBuffer` checks that the menu belongs to
-this terminal, that it is the one the player has open and that the player is in reach (`OUT_OF_REACH` otherwise). No
-aisle is needed. The recipe is resolved once per click (`GRID_EMPTY`, `NO_RECIPE`), and then, per craft:
+this terminal, that it is the one the player has open, that it was not opened from afar through a Warehouse Remote
+(issue #44, §3.4.7) and that the player is in reach (`OUT_OF_REACH` otherwise). No aisle is needed. The recipe is
+resolved once per click (`GRID_EMPTY`, `NO_RECIPE`), and then, per craft:
 
 1. **Limited crafting.** For a `ServerPlayer`, one fresh `ResultContainer` per craft must accept the recipe
    (`setRecipeUsed`), otherwise `LOCKED`. The same container awards the recipe in step 6; one per craft because the
@@ -3296,7 +3302,7 @@ made before a refusal, red otherwise.
 | `NO_RECIPE` | the grid matches no crafting recipe, or makes an item this world has disabled | nothing | "The grid makes nothing" |
 | `LOCKED` | `doLimitedCrafting` is on and the player has not unlocked the recipe | nothing | "You have not unlocked this recipe" |
 | `GRID_EMPTY` | the grid is empty | nothing | "Lay a recipe first" |
-| `OUT_OF_REACH` | the menu is not this terminal's, not the one the player has open, or the player walked away | nothing | "You are too far away" |
+| `OUT_OF_REACH` | the menu is not this terminal's, not the one the player has open, was opened from afar through a Warehouse Remote (§3.4.7), or the player walked away | nothing | "You are too far away" |
 
 A payload that is not a click of this player's open screen gets **no answer at all** and does nothing: a wrong
 `containerId`, a player without a terminal menu, a `FakePlayer`, an action past the eight per tick, and a malformed
@@ -3328,9 +3334,10 @@ the `containerId` against the player's open menu, an action this build knows, no
 actions per tick — and drops it without an answer otherwise. The menu first makes the Fetch's grid its own preview
 (`previewCraft`: the recipe is looked up there and nowhere else, ADR-059), then
 `WarehouseTerminalBlockEntity#fetchCraft` checks, in this order: the menu is this terminal's and the one the player has
-open, and the player is in reach (`OUT_OF_REACH`); no craft order is open (`ALREADY_RUNNING`; a clipboard order never
-blocks a Fetch, and a finished craft order is replaced); the terminal has an aisle (`NO_AISLE`); the grid is not empty
-(`GRID_EMPTY`), makes something (`NO_RECIPE`) and is unlocked for this player (`LOCKED`). Then N is clamped.
+open, and the player is in reach or reaches it with a linked Warehouse Remote (`OUT_OF_REACH`, §3.4.7); no craft
+order is open (`ALREADY_RUNNING`; a clipboard order never blocks a Fetch, and a finished craft order is replaced); the
+terminal has an aisle (`NO_AISLE`); the grid is not empty (`GRID_EMPTY`), makes something (`NO_RECIPE`) and is
+unlocked for this player (`LOCKED`). Then N is clamped.
 
 **The demand is a top-up against the buffer, and nothing else.** Per ingredient, `need(N) = max(0, uses × N −
 inBuffer)` (`CraftGrid#toFetch`; `uses` is at most 9 and N at most 65 536, so it fits an `int`). Open requests to the
@@ -3749,7 +3756,7 @@ carried by every view after it for as long as the menu is open.
 | `ALREADY_RUNNING` | a craft order is open at the terminal (the "+" is greyed out then, so this needs a race) | nothing | "Already fetching ingredients here" |
 | `GRID_EMPTY` | no cell names an item | nothing | "Lay a recipe first" |
 | `NOT_LAID` | the picked grid matches no crafting recipe of this server | nothing; the panel keeps the grid it had | "This recipe cannot be laid here" — the lay's own refusal, since the grid on screen is not the one refused |
-| `OUT_OF_REACH` | the menu is not open any more, or the player walked away | nothing | "You are too far away" |
+| `OUT_OF_REACH` | the menu is not open any more, or the player walked away (or out of a Warehouse Remote's reach, §3.4.7) | nothing | "You are too far away" |
 
 **Adopting the laid grid** (`TerminalCraftPanel#adoptLay`). The panel takes each number once, and reads the lay, never
 the view's own cells: a preview of the old grid that reached the server after the lay is answered for that grid, and
@@ -4310,6 +4317,152 @@ the beat sets the Packager's `LINKED` state itself, because a client level deriv
   checked" flag). The fixtures are shared with the M26 tests in `PackageDoorFixture`.
 * **Robustness**: the door order phase of `runRobustnessTest` (§8.1) rides a real chunk unload and a real save, quit
   and rejoin in the middle of a crane trip to the door.
+
+#### 3.4.7 The Warehouse Remote (issue #44, ADR-077)
+
+A held item that opens a linked terminal's screen from afar. It moves no item: everything asked for through it is
+delivered by the crane into the terminal's own buffer or to a package door (§3.4.6), exactly like a click made at the
+terminal, and the screen it opens can neither take items out nor craft. The player collects in person.
+
+The item is `wareworks:warehouse_remote` (`content.remote.WarehouseRemoteItem`, `stacksTo(1)`), the last item of the
+creative tab. Recipe (shaped, category equipment): a Create Transmitter on top, an ender pearl in the middle, brass
+sheets (`#c:plates/brass`) left, right and below; it unlocks with the first ender pearl. The model is hand-made: a
+brass casing body with the terminal's screen texture on its face and a redstone antenna on top.
+
+##### The link
+
+* **Linking** is a sneaking right-click on a warehouse terminal, answered in `Item#onItemUseFirst`, which NeoForge runs
+  before the clicked block and also for a sneaking player. Client and server answer it alike from what both know, the
+  clicked block's state and the sneak state, so the client never goes on to `Item#use` for a click the server took as a
+  link. The server refuses a position the player may not use (`Level#mayInteract`: spawn protection and the world
+  border, "You cannot use that terminal") and otherwise writes the link and says "Linked to the Warehouse Terminal at
+  x, y, z". Linking again replaces the link. Fake players link nothing and are told nothing.
+* **A plain right-click on a terminal** with the remote in hand passes, so the screen opens the ordinary way, in person.
+* **Unlinking** is a sneaking right-click into the air: "Remote unlinked". Only into the air (`Item#use` checks that
+  no block within the player's block reach and no entity within their entity reach lies along the view, as the
+  client's crosshair picks them): a sneaking click on a block or an entity that does not take it reaches `Item#use`
+  too, and must not wipe the link, nor keep the other hand from placing its block. So a link click that missed the
+  terminal, or one that adventure mode does not let through to the remote, keeps the link. An unlinked remote does
+  nothing there.
+* **The link** is the item component `wareworks:remote_link` (`RemoteLink`): the terminal's `GlobalPos` and its
+  **identity**, a random UUID the terminal makes the first time a remote is linked to it and keeps under `TerminalId`
+  in its full save only. A schematic print (`writeSafe`, ADR-061) is therefore a new terminal, and so is a terminal
+  broken and placed again or another player's terminal set down on the same spot: the old link stops working. The id
+  is what defeats a forged link, since a creative client can send a stack with any position in it. `/clone` copies
+  the id with the block entity; position and id together still name one terminal.
+* **The tooltip** says "Linked to x, y, z", with the dimension's id behind it outside the Overworld, or "Not linked".
+  The link is synced with the stack, so anyone who sees the remote's tooltip sees where its terminal stands.
+
+##### Opening from afar
+
+A right-click into the air, or on a block that does not take the click. `content.remote.RemoteAccess#open` checks, in
+this order, and answers the first refusal on the action bar and nothing else:
+
+| Check | Refusal |
+|---|---|
+| a link at all | "Not linked: sneak and right-click a Warehouse Terminal" |
+| the same dimension, unless `remote.crossDimension` is on | "The linked terminal is in another dimension" |
+| the dimension still exists (`MinecraftServer#getLevel`) | "The linked terminal is gone" |
+| in the same dimension: from the player's eyes to the terminal block's centre at most `remote.range` | "Out of range: 300 blocks away, at most 256" (rounded up, so it never reads "256 blocks away, at most 256") |
+| the terminal's chunk is loaded and ticking (`isLoaded`, `shouldTickBlocksAt`) | "The linked terminal's area is not loaded" |
+| a terminal stands there, not removed, with the linked identity | "The linked terminal is gone" |
+| the player may use a block there (`Level#mayInteract`) | "You cannot use that terminal" |
+
+The chunk is checked **before** the block entity is read, because `Level#getBlockEntity` loads a chunk that is not
+loaded: a remote never loads one, not even when a Deployer fires it every cycle. Across dimensions, where the server
+allows it, the range is not measured, because the coordinates of two dimensions are not comparable. A fake player
+opens nothing and is told nothing. An opened screen puts the remote on a cooldown of 10 ticks
+(`RemoteAccess.OPEN_COOLDOWN_TICKS`), so a client cannot have the server rebuild the menu and resend the whole stock
+every tick.
+
+The screen comes from `WarehouseTerminalBlockEntity#openRemoteScreen`: the same menu, built by
+`WarehouseTerminalMenu#createRemote` with a `RemoteBinding` (the hand the remote was used from and the terminal's
+identity), under the title "Terminal via Remote" ("Terminal (Fernbedienung)" in German). It is no longer than the
+block's own name, so the warehouse ("Warehouse A") still fits beside it in the title row; a chosen door's name, and
+the long line of a terminal that is not part of a warehouse, are cut to the room the title leaves.
+
+##### Staying open
+
+Every server check of a player at a terminal goes through `WarehouseTerminalBlockEntity#canPlayerUse`, and Create's
+`MenuBase#stillValid` asks it every tick. It now has two ways in, and while the player's open menu is this terminal's
+remote menu only the second one counts:
+
+* **in person**: vanilla's container rule (`Container#stillValidBlockEntity`, block interaction range + 4) **in the
+  terminal's own dimension**. Vanilla compares coordinates only, so before issue #44 a player standing at the same
+  coordinates in another dimension passed; that is fixed for every terminal check;
+* **through the remote**: the player has this terminal's remote screen open right now, and `RemoteAccess#stillHolds`
+  agrees: the terminal's chunk is still loaded and ticking, the bound hand still holds a remote linked to exactly this
+  terminal (position, dimension and identity), the player is still within `remote.range` (or in another dimension the
+  server allows) and may still use the block. It looks at one hand, never at the inventory, so asking it twice a tick
+  costs next to nothing, and it reads no block entity: the in-person rule calls `Level#getBlockEntity`, which on the
+  server renews a chunk ticket on every call and, asked every tick from afar, would hold the terminal's chunk loaded
+  for as long as the screen stays open.
+
+So the screen closes on the next tick when the remote leaves that hand (moved to another slot, dropped, put into a
+chest), when the player walks out of range, when the range is lowered, when the terminal is broken, and when its chunk
+stops ticking; the chunk then unloads as it would without the screen. A portal trip or a respawn closes it too: the client closes every open screen
+then. Nothing else the player holds makes a terminal usable: the remote menu has to be the player's open menu.
+
+**The remote holds no chunk.** The terminal's chunk has to be loaded by something else: a player nearby, the
+warehouse's own chunk hold while it has work (§11, off by default), or a chunk loader. A screen open from afar closes
+when the hold ends and the chunk stops ticking, and nothing it asks keeps the chunk from unloading.
+
+##### What works from afar, and what does not
+
+Everything that asks the warehouse for something: item and fluid requests with their questions, cancels, delivering
+to a package door, the clipboard order already in the list slot (fetch, answer, cancel), the crafting panel's Fetch
+with its questions and chain offer, and laying a recipe from JEI. A request from afar is a player's request at that
+terminal like any other (`StockAccess.PLAYER`).
+
+What would move an item between the terminal and a player who is not there is locked on both sides, so the client
+predicts nothing the server refuses:
+
+* the buffer slots cannot be emptied by hand (`TerminalBufferSlot#mayPickup`);
+* the list slot neither takes nor gives a clipboard (`TerminalListSlot#mayPlace`, `#mayPickup`);
+* a shift-click moves nothing either way (`WarehouseTerminalMenu#quickMoveStack`);
+* a craft is refused with `OUT_OF_REACH` (`WarehouseTerminalBlockEntity#craftFromBuffer`), because its result goes
+  into the player's hands. The client sends no craft click and plays the refusal sound, and the result cell's tooltip
+  has one red line, "Craft in person: the result goes to you", instead of the two click hints.
+
+No rejection reason and no craft result was added: those values travel by ordinal or name and are pinned by tests.
+
+##### The client
+
+The menu's extra data gained the terminal's dimension and whether the screen was opened from afar, after the block
+position and the buffer slot count (`WareworksNetwork.VERSION` `"21"`). A screen opened from afar, or one whose
+terminal stands in another dimension than the player, has no client block entity: the client has that chunk at most by
+chance, and a terminal at the same coordinates of the player's own dimension is not this one (`ClientTerminals#at` now
+takes the dimension). The menu keeps the position and the dimension itself (`terminalPos()`, `terminalDimension()`,
+`isRemote()`), so the screen does not close itself for want of a block entity, the crafting grid is remembered under
+the terminal's dimension and position, and a JEI lay names the menu's position. Live updates already went by container
+id (§3.4.2) and needed no change.
+
+##### Classes and tests
+
+* `core.remote.RemoteLimits` (the clamped range, exactly the range still reaching, the distance rounded up for a
+  message); `content.remote`: `WarehouseRemoteItem`, `RemoteLink`, `RemoteAccess`, `RemoteBinding`;
+  `WarehouseTerminalBlockEntity#openRemoteScreen`, `#terminalId` and the split `#canPlayerUse`;
+  `WarehouseTerminalMenu#createRemote`, `#isRemote`, `#remote`, `#terminalPos`, `#terminalDimension`, the slot locks and
+  the `quickMoveStack` guard; `registry.WareworksItems.WAREHOUSE_REMOTE`,
+  `registry.WareworksDataComponents.REMOTE_LINK`; the config section `remote` (§9).
+* **JUnit**: `RemoteLimitsTest` (exactly the range reaches, the configured range is clamped, a shown distance rounds
+  up); `TerminalCraftTextWidthTest` measures the red craft line in both languages; `ItemTooltipLengthTest` and
+  `LangConsistencyTest` cover the description and the messages; `TerminalTitleRowWidthTest` keeps both titles beside
+  the widest warehouse in the title row, and `TerminalDoorTextWidthTest` leaves a chosen door's name its floor after
+  either title.
+* **GameTests**: `gametest.RemoteGameTests` (linking; unlinking only into the air, not at a block, an entity or a
+  terminal in adventure mode; opening from afar; every refusal, a dimension the server does not have and the world
+  border included; the screen closing when the remote leaves the hand, the player the range, the world border moves
+  past the terminal or the terminal's chunk stops ticking, after which that chunk unloads; the list slot keeping a
+  clipboard that lies in it against every click, the other locked slots and the refused craft; a request from afar
+  delivered into the terminal; a player at the same coordinates in another dimension refused);
+  `WareworksItemGameTests` (the recipe, its grid, the tab order ending with the remote). `ItemCensus` counts a remote
+  without its link, so a link step looks neutral to a census.
+* **Visual**: the `remote` scenario (`dev.RemoteVisualScenario`) links with a real click, goes far away, opens the
+  screen with the remote, orders with a real stock-cell click, checks that a buffer click takes nothing and that the
+  craft tooltip shows the remote line, and closes the screen by putting the remote away, in English and German. The
+  `blocks` scenario shows the remote in the creative tab and the `tooltips` scenario measures its description.
+* **Robustness**: `runRobustnessTest`, because the terminal's save data gained the identity.
 
 ### 3.5 Warehouse Production Station (`content.station`, M11)
 
@@ -7894,6 +8047,8 @@ the **two cranes in flight** phase of the `robustness` scenario (§8.1).
 | `preventElytra` (`handTruck`) | true | a player carrying a loaded truck cannot glide |
 | `maxLoadKiB` (`handTruck`) | 512 | the largest save data one carried container may have; a fuller one is refused with a message. Kept below the 2 MiB a network packet may carry |
 | `computerAccess` (section `computers`, issue #9) | true | whether CC: Tweaked computers may use a warehouse terminal as a peripheral (`wareworks_terminal`, §7.7, `docs/computercraft.md`). Off, every peripheral method answers with an error. Never read without CC: Tweaked |
+| `range` (section `remote`, issue #44) | 256 | how far a Warehouse Remote reaches its linked terminal, in blocks, from the player's eyes to the terminal block's centre (§3.4.7, ADR-077). Only within one dimension; set it very high for no limit. Checked when the screen opens and every tick while it is open. The terminal's chunk must be loaded and ticking all the same: a remote never loads one |
+| `crossDimension` (`remote`) | false | whether a remote may open a terminal in another dimension. The range is not measured then, because the coordinates of two dimensions are not comparable |
 
 Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (`1/384 = 0.0026041666…`). The TOML file groups the keys into sections, so the full path of a key is `<section>.<key>`:
 
@@ -7907,6 +8062,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `chunkLoading` (M19; the section comment says in as many words that this **is a chunk loader**) | `maxTicketedAislesPerLevel`, `maxChunksPerAisle`, `releaseDelayTicks`, `maxHoldTicks`, `maxCollectHoldAislesPerLevel` | 0–64, 1–64, 0–1200, 0–1728000, 0–64 |
 | `handTruck` (issue #37) | `speedMultiplier`, `preventSprinting`, `preventElytra`, `maxLoadKiB` | 0.1–1.0, boolean, boolean, 16–1024 |
 | `computers` (issue #9) | `computerAccess` | boolean |
+| `remote` (issue #44) | `range`, `crossDimension` | 16–30000000, boolean |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 

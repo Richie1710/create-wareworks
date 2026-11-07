@@ -12,6 +12,7 @@ import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.stock.RestockLimits;
 import dev.wareworks.core.storage.BayTier;
+import dev.wareworks.core.remote.RemoteLimits;
 import dev.wareworks.core.storage.FluidBayTier;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
@@ -20,7 +21,8 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * world by {@code <world>/serverconfig/wareworks-server.toml} (NeoForge {@code ServerLifecycleHooks.handleServerAboutToStart}).
  * <p>
  * Keys and defaults follow {@code docs/warehouse-system.md} §9; the TOML file groups them into the sections
- * {@code aisle}, {@code crane}, {@code stations}, {@code storage}, {@code controller}, {@code chunkLoading} and {@code handTruck}.
+ * {@code aisle}, {@code crane}, {@code stations}, {@code storage}, {@code controller}, {@code chunkLoading},
+ * {@code handTruck}, {@code computers} and {@code remote}.
  * <p>
  * SERVER config values exist only while a server runs (and on connected clients). Always read them through the typed
  * getters below: they fall back to the default when the config is not loaded (registry events, datagen, main menu,
@@ -563,6 +565,25 @@ public final class WareworksConfig {
         return get(SERVER.computerAccess);
     }
 
+    // --- remote --------------------------------------------------------------------------------------------------
+
+    /**
+     * How far a Warehouse Remote reaches its linked terminal within one dimension, in blocks (issue #44, ADR-077,
+     * {@link RemoteLimits}): from the player's eyes to the terminal block's centre, clamped into
+     * {@value RemoteLimits#MIN_RANGE}..{@value RemoteLimits#MAX_RANGE}.
+     */
+    public static int remoteRange() {
+        return RemoteLimits.clampRange(get(SERVER.remoteRange));
+    }
+
+    /**
+     * Whether a Warehouse Remote may open a terminal in another dimension (issue #44, ADR-077); the range is not
+     * measured then, because the coordinates of two dimensions are not comparable.
+     */
+    public static boolean remoteCrossDimension() {
+        return get(SERVER.remoteCrossDimension);
+    }
+
     /** The config values. Read them through the static getters of {@link WareworksConfig}. */
     public static final class Server {
         public final ModConfigSpec.IntValue maxAisleLength;
@@ -641,6 +662,9 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue handTruckMaxLoadKiB;
 
         public final ModConfigSpec.BooleanValue computerAccess;
+
+        public final ModConfigSpec.IntValue remoteRange;
+        public final ModConfigSpec.BooleanValue remoteCrossDimension;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -1179,6 +1203,19 @@ public final class WareworksConfig {
                                     + "items back from it like from a redstone request, and maxTerminalRequestAmount "
                                     + "and the open request caps bound it.")
                     .define("computerAccess", true);
+            builder.pop();
+
+            builder.comment("The Warehouse Remote: opens a linked warehouse terminal's screen from afar").push("remote");
+            remoteRange = builder
+                    .comment("[in Blocks] How far a Warehouse Remote reaches its linked terminal, from the player's eyes "
+                            + "to the terminal. Only within one dimension; set it very high for no limit.",
+                            "The terminal's chunk must be loaded and ticking all the same: a remote never loads one, "
+                                    + "and the screen closes when the chunk unloads.")
+                    .defineInRange("range", RemoteLimits.DEFAULT_RANGE, RemoteLimits.MIN_RANGE,
+                            RemoteLimits.MAX_RANGE);
+            remoteCrossDimension = builder
+                    .comment("Lets a remote open a terminal in another dimension; the range is not checked then.")
+                    .define("crossDimension", false);
             builder.pop();
         }
     }

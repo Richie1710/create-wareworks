@@ -11,6 +11,7 @@ import com.mojang.logging.LogUtils;
 
 import net.minecraft.CrashReport;
 import net.minecraft.client.Minecraft;
+import net.minecraft.sounds.SoundSource;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.sound.PlaySoundEvent;
@@ -51,6 +52,8 @@ public final class VisualTestHarness {
     private VisualStep current;
     private int currentTicks;
     private boolean finished;
+    /** Whether {@link #muteOnce} has turned the master volume down yet. */
+    private boolean muted;
     /** Whether a step is being ticked right now; nested client tick loops must not advance the run. */
     private boolean ticking;
     /** Whether a frame callback is running right now; the client renders nested inside steps that pump its loop. */
@@ -97,8 +100,26 @@ public final class VisualTestHarness {
 
     private static void onClientTick(ClientTickEvent.Post event) {
         VisualTestHarness harness = active;
-        if (harness != null)
-            harness.tick();
+        if (harness == null)
+            return;
+        harness.muteOnce();
+        harness.tick();
+    }
+
+    /**
+     * Turns the master volume to zero on the first tick that has options, so a test window plays nothing through the
+     * speakers. Only in memory: nothing here saves the options. The sound counts are unaffected, because
+     * {@link PlaySoundEvent} fires before the sound engine looks at the volume.
+     */
+    private void muteOnce() {
+        if (muted)
+            return;
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.options == null)
+            return;
+        minecraft.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
+        muted = true;
+        LOGGER.info(PREFIX + "sound: master volume set to 0 for the run");
     }
 
     private static void onRenderFrame(RenderFrameEvent.Post event) {

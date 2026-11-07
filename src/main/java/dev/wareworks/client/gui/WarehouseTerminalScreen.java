@@ -37,7 +37,6 @@ import dev.wareworks.content.station.TerminalListState;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.TerminalScreenStatus;
-import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.crafting.CraftAmounts;
 import dev.wareworks.core.crafting.CraftFetchQuestion;
@@ -515,8 +514,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * and hit-tested inside it. It outlives every re-layout of this screen, because a fold or a resize is not an edit.
      */
     private final TerminalCraftPanel craftPanel;
-    /** Where this terminal's grid is remembered ({@link #rememberedGrids}); {@code null} without a block entity. */
-    @Nullable
+    /**
+     * Where this terminal's grid is remembered ({@link #rememberedGrids}): its dimension and position as the menu was
+     * opened with, so a screen opened from afar without a block entity remembers it too (issue #44).
+     */
     private final GlobalPos craftGridKey;
     /** Whether the crafting panel is folded out, making the window {@value TerminalMenuLayout#FOLDED_WIDTH} px wide. */
     private boolean craftOpen = rememberedCraftPanel;
@@ -582,8 +583,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         model.setInStockOnly(rememberedInStockOnly);
         model.setQuery(rememberedQuery);
         keepGridsOfThisConnection();
-        craftGridKey = craftGridKey(menu.terminal());
-        CraftGrid<ItemKey> remembered = craftGridKey == null ? null : rememberedGrids.get(craftGridKey);
+        craftGridKey = GlobalPos.of(menu.terminalDimension(), menu.terminalPos());
+        CraftGrid<ItemKey> remembered = rememberedGrids.get(craftGridKey);
         craftPanel = new TerminalCraftPanel(this, menu, remembered == null ? CraftGrid.empty() : remembered,
                 this::rememberGrid);
     }
@@ -697,8 +698,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         craftPanel.opened();
 
         updateOptionButtons();
-        if (menu.terminal() == null && minecraft != null && minecraft.player != null)
-            minecraft.player.closeContainer(); // the block entity is gone: nothing to show and nothing to request from
+        // The block entity is gone: nothing to show and nothing to request from. A screen opened from afar never has
+        // one on the client (issue #44); the server closes it when its terminal is gone.
+        if (menu.terminal() == null && !menu.isRemote() && minecraft != null && minecraft.player != null)
+            minecraft.player.closeContainer();
     }
 
     // --- server updates --------------------------------------------------------------------------------------------
@@ -1310,18 +1313,19 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /**
      * The title row's right-hand label as it is drawn: the warehouse, or, while a door is chosen, the door's name in
-     * gold behind an arrow, its name cut to the room the screen's title leaves.
+     * gold behind an arrow. The screen's title keeps its place, so the label is cut to the room the title leaves — the
+     * door's name, or the whole line where a terminal is not part of a warehouse, which is long enough to run into a
+     * title (and is said whole in the status row anyway).
      */
     public Component titleRowLabel() {
+        int room = ROW_WIDTH - font.width(title) - TEXT_GAP;
         Optional<TerminalDoorRow> chosen = chosenRow();
-        if (chosen.isPresent()) {
-            int room = ROW_WIDTH - font.width(title) - TEXT_GAP;
+        if (chosen.isPresent())
             return fitArgument(WarehouseTerminalScreen::doorIndicatorText, doorName(chosen.get()), room);
-        }
-        return status.hasAisle()
+        return fitTo(status.hasAisle()
                 ? WareworksLang.translateDirect(WareworksLang.GOGGLES_WAREHOUSE_LETTER,
                         String.valueOf(status.aisleLetter()))
-                : WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE);
+                : WareworksLang.translateDirect(WareworksLang.TERMINAL_NO_AISLE), room);
     }
 
     /** The row of the chosen door in the last push; empty for here. */
@@ -2297,12 +2301,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /** Keeps {@code grid} as the one this player laid at this terminal, or forgets an empty one. */
     private void rememberGrid(CraftGrid<ItemKey> grid) {
-        if (craftGridKey != null) {
-            if (grid.isEmpty())
-                rememberedGrids.remove(craftGridKey);
-            else
-                rememberedGrids.put(craftGridKey, grid);
-        }
+        if (grid.isEmpty())
+            rememberedGrids.remove(craftGridKey);
+        else
+            rememberedGrids.put(craftGridKey, grid);
         updateCraftButtons();
     }
 
@@ -2350,14 +2352,6 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             rememberedGrids.clear();
             rememberedGridRegistries = registries;
         }
-    }
-
-    /** Where the grid of {@code terminal} is remembered; {@code null} for a block entity the client does not have. */
-    @Nullable
-    private static GlobalPos craftGridKey(@Nullable WarehouseTerminalBlockEntity terminal) {
-        if (terminal == null || terminal.getLevel() == null)
-            return null;
-        return GlobalPos.of(terminal.getLevel().dimension(), terminal.getBlockPos());
     }
 
     /**

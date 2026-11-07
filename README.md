@@ -139,6 +139,9 @@ teleported: every item you put in or take out is carried by the crane, where you
   is set down again, facing you. While the truck is loaded you walk at **half speed** and cannot sprint or glide (a
   server can change all three), and a loaded truck goes into no other container and cannot be dropped. An empty truck
   in your inventory costs nothing. Warehouse blocks, ender chests and shulker boxes stay where they are.
+* **Warehouse Remote**: opens a **Warehouse Terminal's screen from afar**. Sneak and right-click a terminal to link the
+  remote, then right-click anywhere within the server's range (256 blocks by default) to open it. What you order is
+  still delivered by the crane into the terminal or to a package door, never into your inventory.
 
 **Mechanical Arms** can use the stations directly: the warehouse input only as a target to put items into, and the
 output, terminal and production station only as a source to take items from. Clicking a station again with the arm
@@ -413,6 +416,16 @@ Your grid is your own — two players at one terminal each lay their own — and
 keep the grid you laid there until you leave the world or server. While a fetch runs, though, everyone at that
 terminal sees its recipe, so nobody changes it half way, and it stays in the grid afterwards in place of the one
 you had laid there. Wareworks never crafts on its own: a recipe runs only when you click the result.
+
+**From afar, with a Warehouse Remote.** Sneak and right-click a terminal with the remote to link it, then right-click
+anywhere within 256 blocks (the server can change that) to open that terminal's screen, titled "Terminal via Remote".
+Sneak and right-click into the air to unlink it. You can order items and fluids, choose a package door, fetch a clipboard list
+or a grid's ingredients and lay recipes from JEI, exactly as at the terminal. The crane still delivers into the
+terminal or to the door, so from afar you cannot take items out of its slots, move the clipboard or craft; collect and
+craft at the terminal itself. Keep the remote in the hand you used: putting it away, walking out of range or the
+terminal's area unloading closes the screen. The remote loads no chunks, so the terminal's area must be loaded by
+something else, and it works in the terminal's own dimension unless the server allows more. A terminal that is broken
+and placed again needs a new link.
 
 **Warehouse Output.** No screen: set the filter slot and amount, then send a redstone pulse. This is the automatable
 path for your factory — and the same block can keep asking by itself, or take items *in*, which is the next section.
