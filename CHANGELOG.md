@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0-beta] - 2026-11-07
+
 ### Added
 
 - **Schematicannon Requester: a Schematicannon orders what it is missing from the warehouse**
   ([#45](https://github.com/Richie1710/create-wareworks/issues/45)). A new block, crafted like the Stock Keeper with
   Create's empty schematic in place of its comparator. Set it against a Schematicannon and right-click it with a linked
   Warehouse Remote: the remote stays in it, and whenever the cannon stops for a missing item, the requester orders it at
-  the remote's terminal. It orders **from stock only** and never starts production, at most a stack or exactly what the
-  schematic still needs if that is less, and never more than the cannon's chest has room for; it orders nothing while
+  the remote's terminal. It orders **from stock only** and never starts production, at most a stack, or what the
+  schematic still needs according to the cannon's material list if that is less (an item the list does not show is
+  ordered a stack at a time), and never more than the cannon's chest has room for; it orders nothing while
   that chest or the terminal is full. It **never orders an item twice** while an order for it is on its way, lies in the
   terminal or travels the belt: a value box on the back sets how long it waits after the items have left the terminal
   (10 seconds by default). An order that has not arrived after 10 minutes in which the warehouse could serve it is given
@@ -26,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the requester never loads chunks. The new server config section `requester` sets how often it looks
   (`pollIntervalTicks`, default 20), the give-up time (`orderTimeoutTicks`, default 12000) and how often it may ask the
   cannon for a fresh material list (`checklistRefreshTicks`, default 1200). A Ponder scene shows the set-up.
+
+### Changed
+
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because of the new Schematicannon Requester block. Worlds from older versions load
+  unchanged. Opening a world in an older version of the mod again loses its Schematicannon Requesters and the Warehouse
+  Remotes inside them, so back up the world before downgrading.
 
 ## [0.19.0-beta] - 2026-11-07
 
@@ -1533,7 +1543,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.19.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.20.0-beta...HEAD
+[0.20.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.19.0-beta...v0.20.0-beta
 [0.19.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.1-beta...v0.19.0-beta
 [0.18.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.0-beta...v0.18.1-beta
 [0.18.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.17.1-beta...v0.18.0-beta
