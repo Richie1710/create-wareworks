@@ -1274,7 +1274,7 @@ public final class WareworksLangGen {
                 "When clicked with a linked remote",
                 "Keeps it as its _link_. Sneak with an empty hand to take it out.",
                 "When the cannon is missing an item",
-                "Orders it _from stock only_: a stack at most, or what the schematic still needs, and _never twice_.",
+                "Orders it _from stock only_: up to a stack at a time, and _never twice_.",
                 "When the lamp is red",
                 "Look with _Goggles_. A cannon placed by hand _skips missing blocks_: turn that off.");
 

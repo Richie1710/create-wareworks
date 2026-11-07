@@ -7453,9 +7453,10 @@ order.
 warehouse terminal, through a linked **Warehouse Remote** lying in its cradle. It moves no item: the crane delivers
 into the terminal's buffer, exactly as for a stock-list click, and the player's own **funnel and belt** take the items
 from the buffer to a chest beside the cannon (the buffer is extract-only already). It orders **from stock only**, a
-stack at a time at most, never more than the schematic still needs or the cannon's inventories hold, and **never
-twice** while an order is on its way or lies in the buffer. It never starts production and never offers to make
-anything. The clipboard order (§3.4.4) remains the way to have the whole material list delivered at once.
+stack at a time at most, never more than the cannon's inventories hold or, by the cannon's material list, the schematic
+still needs (an item the list does not show is ordered a stack at a time), and **never twice** while an order is on
+its way or lies in the buffer. It never starts production and never offers to make anything. The clipboard order
+(§3.4.4) remains the way to have the whole material list delivered at once.
 
 **The block** (`SchematicannonRequesterBlock`, `wareworks:schematicannon_requester`) is a directional block that is no
 warehouse member: it stands beside the cannon, anywhere within the remote's range of the terminal. Its **front faces
@@ -7478,7 +7479,7 @@ the cannon**, in any of the six directions; the cannon is `pos.relative(FACING)`
 | a real player with a **linked** remote | the link check below runs with that player; on success one remote goes in (a copy in creative), the player becomes the **owner**, the action bar says "Ordering through the Warehouse Terminal at x, y, z" and Create's controller sound plays. A cannon that skips missing blocks adds one **chat** line naming Create's option "Skip missing Blocks" |
 | an unlinked remote, or any refused check | the remote's own action bar text (`remote.*`, §3.4.7); the remote stays in the hand |
 | a remote while one is in | "Take the remote out first: sneak and right-click with an empty hand". No swap |
-| sneaking, empty main hand | the open orders are given back, the remote goes into the hand (or the inventory), owner and orders are cleared: "Remote taken out: orders given up" (Create's Lectern Controller gesture) |
+| sneaking, empty main hand | the open orders are given back, the remote goes into the hand (or the inventory), owner and orders are cleared: "Remote taken out: orders given up" (Create's Lectern Controller gesture). Whatever the off hand holds: vanilla drops a sneaking click before the block when either hand holds an item that does not bypass the sneak, so `SchematicannonRequesterHooks` sets `setUseBlock(TRUE)` on the `RightClickBlock` event for exactly this click (main hand, empty, sneaking, no fake player, this block holding a remote, both sides; an empty requester leaves the off hand's click to vanilla), as `ProductionStationHooks` does for the station; the main hand's answer is consumed, so the off hand's item is not used |
 | empty hand | the current status on the action bar |
 | a fake player (Deployer) | nothing, silently, in either direction |
 
@@ -7655,8 +7656,9 @@ poll times are rebuilt on the first poll. Request ids survive a restart, so trac
 reloads its material list after a rejoin, the fingerprint changes and the counter rebases. A requester that is not
 loaded does not poll; an unloaded terminal or controller shows "The terminal's area is not loaded" or "The terminal
 belongs to no warehouse" and its orders do not age; an unloaded cannon reads as no cannon and its orders are given back
-after two polls. Clients get the remote for the cradle and the goggle summary; the lamps are block state. No payload:
-`WareworksNetwork.VERSION` stays 22.
+after two polls. Clients get the remote for the cradle and the goggle summary; the lamps are block state. No payload
+changed, but `WareworksNetwork.VERSION` was raised to 23 for the release, so a client and a server of different
+versions refuse each other both ways (NeoForge's registry sync alone only keeps an older client off a newer server).
 
 **Not built:** a screen, swapping remotes, ordering ahead of the cannon (the clipboard order does that), delivering into
 the cannon or its chest (that would be item teleportation), production, and a retry interval of its own.
@@ -7665,7 +7667,8 @@ the cannon or its chest (that would be item teleportation), production, and a re
 * `core.requester`: `RequesterOrders`, `RequesterOrder`, `OrderShare`, `OrderAmount`, `ChecklistNeed`, `VariantPick`,
   `RequesterStatus`, `RequesterLimits`.
 * `content.requester`: `SchematicannonRequesterBlock` / `BlockEntity`, `CannonView`, `NoTicket`, `RemoteSlot`,
-  `GraceBehaviour`, `RequesterBackFace`, `RequesterSummary`, `RequesterLines`;
+  `GraceBehaviour`, `RequesterBackFace`, `RequesterSummary`, `RequesterLines`, `SchematicannonRequesterHooks` (the
+  sneak take-out with a full off hand);
   `content.remote.RemoteAccess#checkFromBlock` and `RemoteCheck`; `WarehouseTerminalBlockEntity#requestStockOnly`;
   `client.render.SchematicannonRequesterRenderer`; `data.WareworksBlockStateGen#requesterBlockProvider`; the config
   section `requester` (§9).

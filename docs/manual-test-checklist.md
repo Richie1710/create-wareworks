@@ -3914,8 +3914,10 @@ you get tired of waiting, and put it back before judging check 160.
      it, the value box beside it, nothing floats or clips. Repeat with `/flywheel backend off`.
 448. **Taking it out and breaking it.** Mid order, sneak and right-click with an empty hand: the remote comes back,
      "Remote taken out: orders given up", and the terminal's open request shrinks by the requester's share only (a stack
-     you clicked yourself for the same item stays). Put it back, order again and break the block: the remote drops, the
-     share is given back. A Deployer can neither put a remote in nor take one out.
+     you clicked yourself for the same item stays). Do it once more with a **torch in your off hand** (main hand empty):
+     the remote must come out the same way and the torch must stay in your hand, not be placed on the requester, which
+     is the case vanilla drops before the block reaches it. Put it back, order again and break the block: the remote
+     drops, the share is given back. A Deployer can neither put a remote in nor take one out.
 449. **Ponder.** Open the requester's Ponder scene: does it show the three things a player cannot guess (the remote,
      "Skip missing Blocks", the funnel and belt out of the terminal) slowly enough to follow?
 450. **German at GUI scale 4.** With `de_de` and GUI scale 4, read the Shift tooltip, the action bar lines, the chat

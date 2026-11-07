@@ -488,7 +488,9 @@ dev.wareworks
 │   │                          rooms), NoTicket (block, block entity and chunk reads that load nothing and add no
 │   │                          ticket), RemoteSlot (the one-remote slot, never a capability), GraceBehaviour (the value
 │   │                          box on the back), RequesterBackFace (where the value box and the cradle sit),
-│   │                          RequesterSummary and RequesterLines (the goggle summary and the texts)
+│   │                          RequesterSummary and RequesterLines (the goggle summary and the texts),
+│   │                          SchematicannonRequesterHooks (the interaction event that hands the sneaking take-out to
+│   │                          the block whatever the off hand holds, as ProductionStationHooks does)
 │   ├── kinetics               StaleOverstressCheck (issue #38, ADR-071): clears an overstress Create keeps after the
 │   │                          network has the capacity again; one per stacker crane dock and Crafter Feeder, called
 │   │                          from their server tick
@@ -8123,7 +8125,9 @@ fix); read once a second it holds nothing for good, but keeps re-ticketing a chu
   that `ServerPlayer`; an unlinked remote, a fake player (silently) and a filled slot are refused, with the existing
   `remote.*` texts where they fit. A filled slot is **refused, not swapped**: a swap would hide a hand-over of open
   orders. Sneaking with an empty hand takes the remote out, Create's Lectern Controller gesture, and gives the open
-  orders back first (D9); an empty-hand click shows the status on the action bar. A wrench, goggles, a clipboard and
+  orders back first (D9); whatever the off hand holds, because `SchematicannonRequesterHooks` hands that click to a
+  requester holding a remote (`setUseBlock(TRUE)`, as `ProductionStationHooks` does), which vanilla would drop before
+  it otherwise; an empty-hand click shows the status on the action bar. A wrench, goggles, a clipboard and
   the Mechanical Arm keep their own click (ADR-060). The remote drops only in `destroy()` (ADR-013), after the give-back.
   If the cannon skips missing blocks, insertion also sends one chat line naming Create's own option, because a cannon
   placed from its item starts with "Skip missing Blocks" on and then never asks for anything.
@@ -8249,10 +8253,12 @@ fix); read once a second it holds nothing for good, but keeps re-ticketing a chu
   The remote lies in a cradle on the back, drawn by `SchematicannonRequesterRenderer`. Messages go to the action bar,
   except the one chat line of D2. One Ponder scene, `requester/ordering`, shows the three steps no tooltip can carry:
   the remote, the cannon's option and the route out of the buffer (ADR-016).
-* **D14. No network change.** Insertion and removal are vanilla `useItemOn` / `useWithoutItem`, the grace is Create's
-  `ValueSettingsPacket`, and the slot, the summary and the lamps ride the block entity packet and the block state, so
-  `WareworksNetwork.VERSION` stays **22**. As for every new block, NeoForge's registry sync refuses a client without
-  it.
+* **D14. No new payload, but a new network version.** Insertion and removal are vanilla `useItemOn` /
+  `useWithoutItem`, the grace is Create's `ValueSettingsPacket`, and the slot, the summary and the lamps ride the
+  block entity packet and the block state, so no payload changed. `WareworksNetwork.VERSION` was still raised to
+  **23** for the 0.20.0-beta release: NeoForge's registry sync only refuses a client that lacks a key the server has,
+  so it keeps an older client off a newer server but lets a newer client join an older server. With the new version,
+  mixed pairs are refused both ways, as the changelog says.
 
 *Alternatives rejected:*
 * **A screen.** It would add a payload and a menu for one item and one number; the slot is a click, the number a value

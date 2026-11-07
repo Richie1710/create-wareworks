@@ -5,8 +5,9 @@ import java.util.Optional;
 
 /**
  * How much one order of a Schematicannon Requester asks for (issue #45, ADR-080, {@code docs/warehouse-system.md}): a
- * full stack at most, or exactly what the schematic still needs if that is less, and never more than the cannon's
- * inventories, the terminal's buffer or the warehouse's stock can take or give. Pure arithmetic.
+ * full stack at most, or what the schematic still needs by the cannon's material list if that is less (a full stack
+ * for an item the list does not show), and never more than the cannon's inventories, the terminal's buffer or the
+ * warehouse's stock can take or give. Pure arithmetic.
  * <p>
  * <b>The need</b> ({@link #need}) comes from the cannon's material list:
  * <pre>

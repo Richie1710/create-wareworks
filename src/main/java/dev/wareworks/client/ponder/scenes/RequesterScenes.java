@@ -257,7 +257,7 @@ public final class RequesterScenes {
 
         scene.overlay().showOutline(PonderPalette.INPUT, "stock", util.select().position(stone), TEXT_TICKS);
         scene.overlay().showText(CRANE_TRIP_TICKS)
-                .text("From stock only, one stack at most or what the schematic still needs; the crane delivers it "
+                .text("From stock only, up to a stack at a time; the crane delivers it "
                         + "into the terminal's buffer")
                 .attachKeyFrame()
                 .placeNearTarget()

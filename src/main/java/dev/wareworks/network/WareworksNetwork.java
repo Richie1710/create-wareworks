@@ -188,8 +188,13 @@ public final class WareworksNetwork {
      * client would read as the activity after it. The goggle data is no payload, but it crosses the same connection, so
      * the versions must not mix. A crane's {@code RELOCATE} job saved by this build is dropped by an older one, which
      * spills what it carried at the dock.
+     * <p>
+     * <b>{@code "23"} is issue #45</b> (the Schematicannon Requester, ADR-080): no payload changed, but a new block
+     * did. NeoForge's registry sync only refuses a client that lacks a key the server has, so an older client is kept
+     * off a newer server, but a newer client would join an older server and find no requester there. The version was
+     * raised for the release so that mixed pairs are refused both ways.
      */
-    public static final String VERSION = "22";
+    public static final String VERSION = "23";
 
     private WareworksNetwork() {
     }

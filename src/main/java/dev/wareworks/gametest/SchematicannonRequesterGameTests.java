@@ -38,6 +38,7 @@ import dev.wareworks.content.requester.GraceBehaviour;
 import dev.wareworks.content.requester.NoTicket;
 import dev.wareworks.content.requester.SchematicannonRequesterBlock;
 import dev.wareworks.content.requester.SchematicannonRequesterBlockEntity;
+import dev.wareworks.content.requester.SchematicannonRequesterHooks;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.StockKeeperRules;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
@@ -248,6 +249,8 @@ public final class SchematicannonRequesterGameTests {
     /** A player's click that takes the crane three trips, so the requester's share behind it arrives last. */
     private static final int BIG_PLAYER_SHARE = 130;
     private static final int CHEST_SLOTS = 27;
+    /** The torches in the off hand of {@link #removalWorksWithAFullOffHand}. */
+    private static final int OFF_HAND_TORCHES = 16;
 
     private static final ItemKey STONE = ItemKey.of(Items.STONE);
     private static final ItemKey COBBLE = ItemKey.of(Items.COBBLESTONE);
@@ -1256,6 +1259,55 @@ public final class SchematicannonRequesterGameTests {
     }
 
     /**
+     * <b>Sneaking with an empty main hand takes the remote out whatever is in the off hand</b>
+     * ({@link SchematicannonRequesterHooks}). Vanilla drops a sneaking interaction before the block whenever either hand
+     * holds something that does not bypass the sneak, so with a torch in the off hand the main hand's click passed and
+     * the off hand's click placed the torch on the requester, the remote staying in. The click goes through both hands
+     * the way the client sends them ({@link #useLikeTheClient}); the torch stays in the off hand and nothing is placed.
+     */
+    @GameTest(template = EMPTY_7X5X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void removalWorksWithAFullOffHand(GameTestHelper helper) {
+        helper.setBlock(LONE_TERMINAL, terminalState());
+        helper.setBlock(LONE_REQUESTER, requesterState(Direction.EAST));
+        helper.startSequence().thenIdle(1).thenExecute(() -> {
+            WarehouseTerminalBlockEntity terminal = (WarehouseTerminalBlockEntity) helper.getBlockEntity(LONE_TERMINAL);
+            BlockPos requesterPos = helper.absolutePos(LONE_REQUESTER);
+            ClickingPlayer player = ClickingPlayer.at(helper, LONE_STAND);
+            ItemStack remote = remoteFor(helper.getLevel(), terminal);
+            ItemKey remoteKey = ItemKey.of(remote);
+            player.getInventory().setItem(0, remote);
+            player.getInventory().selected = 0;
+            SchematicannonRequesterBlockEntity requester = requesterAt(helper, LONE_REQUESTER);
+            helper.assertTrue(click(player, requesterPos, Direction.UP, false).consumesAction(), "the insert");
+            assertTold(helper, player, "the insert", WareworksLang.REQUESTER_LINKED);
+            helper.assertTrue(requester.hasRemote(), "the remote went in");
+
+            player.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(Items.TORCH, OFF_HAND_TORCHES));
+            Map<ItemKey, Long> start = ItemCensus.take(helper, player);
+            ItemCensus.change(start, remoteKey, 1);
+            helper.assertTrue(useLikeTheClient(player, requesterPos, Direction.UP, true) == InteractionHand.MAIN_HAND,
+                    "the sneaking click is taken by the empty main hand");
+            assertTold(helper, player, "the removal", WareworksLang.REQUESTER_REMOVED);
+            helper.assertFalse(requester.hasRemote(), "the slot is empty");
+            helper.assertValueEqual(ItemKey.of(player.getMainHandItem()), remoteKey, "the remote in the hand");
+            helper.assertTrue(player.getOffhandItem().is(Items.TORCH)
+                    && player.getOffhandItem().getCount() == OFF_HAND_TORCHES, "the torch stays in the off hand");
+            helper.assertTrue(helper.getBlockState(LONE_REQUESTER.above()).isAir(), "and nothing is placed");
+            helper.assertValueEqual(ItemCensus.take(helper, player), start, "every item is accounted for");
+
+            player.setShiftKeyDown(true);
+            helper.assertFalse(SchematicannonRequesterHooks.forcesBlockUse(player, helper.getLevel(), requesterPos,
+                    InteractionHand.MAIN_HAND), "something in the main hand is a click for that item, as before");
+            ItemStack held = player.getMainHandItem();
+            player.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+            helper.assertFalse(SchematicannonRequesterHooks.forcesBlockUse(player, helper.getLevel(), requesterPos,
+                    InteractionHand.MAIN_HAND), "an empty requester leaves the off hand's click to vanilla");
+            player.setItemInHand(InteractionHand.MAIN_HAND, held);
+            player.setShiftKeyDown(false);
+        }).thenSucceed();
+    }
+
+    /**
      * A requester polling a terminal far away (the remote's range raised to reach it) keeps no chunk loaded: with the
      * cannon missing stone, it looks at the terminal every second, the released chunk unloads all the same, the
      * terminal's block entity with it, and the requester then says so; its polls never load the unloaded chunk again
@@ -2212,6 +2264,31 @@ public final class SchematicannonRequesterGameTests {
                 InteractionHand.MAIN_HAND, new BlockHitResult(hit, face, pos, false));
         player.setShiftKeyDown(false);
         return result;
+    }
+
+    /**
+     * One right-click on {@code face} of the absolute {@code pos} as the client sends it ({@code Minecraft#startUseItem}):
+     * the main hand first through {@code ServerPlayerGameMode#useItemOn}, then the off hand only when the main hand's
+     * click was not taken. Answers the hand that took it, or {@code null}.
+     */
+    @Nullable
+    private static InteractionHand useLikeTheClient(ServerPlayer player, BlockPos pos, Direction face,
+            boolean sneaking) {
+        Vec3 hit = Vec3.atCenterOf(pos).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
+        player.setShiftKeyDown(sneaking);
+        try {
+            for (InteractionHand hand : InteractionHand.values()) {
+                InteractionResult result = player.gameMode.useItemOn(player, player.serverLevel(),
+                        player.getItemInHand(hand), hand, new BlockHitResult(hit, face, pos, false));
+                if (result.consumesAction())
+                    return hand;
+                if (result == InteractionResult.FAIL)
+                    return null;
+            }
+            return null;
+        } finally {
+            player.setShiftKeyDown(false);
+        }
     }
 
     /** The remote of hotbar {@code slot} is refused with {@code key} on the action bar and stays in the hand. */

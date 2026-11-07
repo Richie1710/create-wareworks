@@ -134,6 +134,10 @@ public class SchematicannonRequesterBlock extends DirectionalBlock
     /**
      * The main hand without a remote: sneaking with it empty takes the remote out, an empty hand shows the status, and
      * anything else passes, so a held block is placed against this one as usual. Fake players pass.
+     * <p>
+     * A sneaking player with something in the <b>off hand</b> only reaches this method at all because
+     * {@link SchematicannonRequesterHooks} asks for it: vanilla drops a sneaking interaction before the block whenever
+     * either hand holds something that does not bypass the sneak.
      */
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
