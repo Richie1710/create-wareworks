@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.inventory.LocationCount;
 import dev.wareworks.core.inventory.StockIndex;
 import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.warehouse.LocationKind;
@@ -148,7 +150,7 @@ class JobPlannerTest {
         denyLists.add(location);
     }
 
-    /** Gives {@code location} a storage priority (M16); higher fills first when storing. */
+    /** Gives {@code location} a storage priority (M16); higher fills first and empties last (issue #47). */
     private void priority(RackPosition location, int priority) {
         priorities.put(location, priority);
     }
@@ -1353,34 +1355,166 @@ class JobPlannerTest {
     }
 
     /**
-     * Retrieval keeps the shortest path, always: the planner passes the neutral priority literally on that path, so a
-     * high priority can never send the crane past a nearer location holding the same item. The same for a SUPPLY.
+     * A retrieval empties the lowest priority first (issue #47, ADR-078): what a player fills first is emptied last, so
+     * the crane drives past a nearer location prioritised higher to the farther one that holds the same item at a lower
+     * priority, and does not even ask the nearer one. The same for a SUPPLY.
      */
     @Test
-    void retrievalIgnoresStorePriorities() {
-        RackPosition near = rack(1, 0, Side.LEFT);
-        RackPosition farPrioritised = rack(9, 0, Side.LEFT);
-        stock.update(near, slots(0, DIAMOND, 10));
-        stock.update(farPrioritised, slots(0, DIAMOND, 10));
-        live.extractable.put(near, 10);
-        live.extractable.put(farPrioritised, 10);
+    void retrievalTakesTheLowestPriorityFirstAlthoughFarther() {
+        RackPosition nearRack = rack(1, 0, Side.LEFT);
+        RackPosition farOverflow = rack(9, 0, Side.LEFT);
+        stock.update(nearRack, slots(0, DIAMOND, 10));
+        stock.update(farOverflow, slots(0, DIAMOND, 10));
+        live.extractable.put(nearRack, 10);
+        live.extractable.put(farOverflow, 10);
         live.insertable.put(OUT_A, STACK);
         live.insertable.put(IN_C, STACK); // the production station of the supply below
-        priority(farPrioritised, 9);
+        priority(nearRack, 5);
+        priority(farOverflow, 1);
         PlannerInput.Builder<String, RackPosition> base = input().storePriority(this::priorityOf)
-                .storageLocations(List.of(near, farPrioritised));
+                .storageLocations(List.of(nearRack, farOverflow));
 
         PlanResult<String, RackPosition> retrieve = planner.plan(base
                 .requests(List.of(request(id(1), DIAMOND, 5, OUT_A))).build());
-        assertEquals(near, retrieve.job().orElseThrow().job().source(),
-                "a retrieve takes the nearest source, priority or not");
-        assertEquals(List.of(near), live.extractCalls, "the far, prioritised source is never asked");
+        assertEquals(farOverflow, retrieve.job().orElseThrow().job().source(),
+                "a retrieve takes the lowest priority, although it is farther");
+        assertEquals(List.of(farOverflow), live.extractCalls, "the nearer, higher prioritised source is never asked");
 
         live.extractCalls.clear();
         PlanResult<String, RackPosition> supply = planner.plan(base.requests(List.of())
                 .supplies(List.of(new PlannerInput.SupplyNeed<>(id(2), DIAMOND, 5, IN_C))).build());
-        assertEquals(near, supply.job().orElseThrow().job().source(), "a supply takes the nearest source too");
-        assertEquals(List.of(near), live.extractCalls);
+        assertEquals(farOverflow, supply.job().orElseThrow().job().source(), "a supply takes the lowest priority too");
+        assertEquals(List.of(farOverflow), live.extractCalls);
+    }
+
+    /**
+     * Among sources of the same priority the shortest path still decides (issue #47), and a source of a lower priority
+     * that cannot give anything right now falls through to the next priority, nearest first.
+     */
+    @Test
+    void retrievalAmongEqualPrioritiesTakesTheShortestPath() {
+        RackPosition near = rack(2, 0, Side.LEFT);
+        RackPosition far = rack(8, 0, Side.RIGHT);
+        RackPosition nearest = rack(1, 0, Side.RIGHT);
+        RackPosition emptyLowest = rack(11, 0, Side.LEFT);
+        stock.update(far, slots(0, DIAMOND, 10));
+        stock.update(near, slots(0, DIAMOND, 10));
+        stock.update(nearest, slots(0, DIAMOND, 10));
+        stock.update(emptyLowest, slots(0, DIAMOND, 10));
+        live.extractable.put(far, 10);
+        live.extractable.put(near, 10);
+        live.extractable.put(nearest, 10);
+        live.extractable.put(emptyLowest, 0); // a pipe emptied it since its index entry was read
+        live.insertable.put(OUT_A, STACK);
+        priority(near, 4);
+        priority(far, 4);
+        priority(nearest, 7);
+        priority(emptyLowest, 2);
+
+        PlanResult<String, RackPosition> result = planner.plan(input().storePriority(this::priorityOf)
+                .storageLocations(List.of(near, far, nearest, emptyLowest))
+                .requests(List.of(request(id(1), DIAMOND, 5, OUT_A))).build());
+        assertEquals(near, result.job().orElseThrow().job().source(), "priority 4 twice: the nearer one");
+        assertEquals(List.of(emptyLowest, near), live.extractCalls,
+                "the lowest priority first, then the nearer of the two at 4; neither the farther nor priority 7");
+    }
+
+    /**
+     * A warehouse whose locations all have the same priority — 0, the default, or any other — takes out of storage in
+     * exactly the order it did before issue #47: travel time crane → source → target, then index order, with the same
+     * sequence of live extracts and the same result. Seeded layouts on both sides of the aisle, with sources that give
+     * nothing so the whole order is visible, for RETRIEVE and SUPPLY.
+     */
+    @Test
+    void uniformPrioritiesReproduceTheOldRetrievalOrder() {
+        for (long seed = 1; seed <= 12; seed++) {
+            Random random = new Random(seed);
+            stock.clear();
+            priorities.clear();
+            live.extractable.clear();
+            live.insertable.put(OUT_A, STACK);
+            live.insertable.put(IN_C, STACK);
+            List<RackPosition> storage = new ArrayList<>();
+            for (int i = 0; i < 9; i++) {
+                RackPosition location = rack(1 + random.nextInt(14), random.nextInt(3),
+                        random.nextBoolean() ? Side.LEFT : Side.RIGHT);
+                if (storage.contains(location))
+                    continue;
+                storage.add(location);
+                stock.update(location, slots(1, DIAMOND, 1 + random.nextInt(20)));
+                // Most sources give nothing live, so the run falls through and shows its whole order.
+                live.extractable.put(location, random.nextInt(4) == 0 ? 5 : 0);
+            }
+            String scene = "seed " + seed + ", storage " + storage;
+            for (boolean supply : new boolean[] {false, true}) {
+                RackPosition target = supply ? IN_C : OUT_A;
+                List<RackPosition> expected = new ArrayList<>();
+                for (LocationCount<RackPosition> entry : stock.readOnlyView().locationsOf(DIAMOND))
+                    expected.add(entry.location());
+                // A stable sort keeps index order among equal travel times: the old ranking's last two keys.
+                expected.sort(Comparator.comparingLong(location -> TravelTimeModel.add(
+                        TravelTimeModel.travelTicks(SPEEDS, 0, 0, location.x(), location.y()),
+                        TravelTimeModel.travelTicks(SPEEDS, location.x(), location.y(), target.x(), target.y()))));
+                List<String> results = new ArrayList<>();
+                List<List<RackPosition>> calls = new ArrayList<>();
+                // -1: an input built without a priority at all, the planner input of before M16.
+                for (int uniform : new int[] {-1, 0, 7}) {
+                    PlannerInput.Builder<String, RackPosition> base = input().storageLocations(storage);
+                    if (uniform >= 0)
+                        base.storePriority(location -> uniform);
+                    if (supply)
+                        base.supplies(List.of(new PlannerInput.SupplyNeed<>(id(2), DIAMOND, 30, IN_C)));
+                    else
+                        base.requests(List.of(request(id(1), DIAMOND, 30, OUT_A)));
+                    live.extractCalls.clear();
+                    PlanResult<String, RackPosition> result = planner.plan(base.build());
+                    results.add(describe(result) + " " + result.reasons());
+                    calls.add(List.copyOf(live.extractCalls));
+                }
+                for (List<RackPosition> run : calls) {
+                    assertEquals(expected.subList(0, run.size()), run,
+                            "the old order, travel time then index order: " + scene);
+                    assertEquals(calls.getFirst(), run, "the same live extracts whatever the uniform priority: "
+                            + scene);
+                }
+                for (String result : results)
+                    assertEquals(results.getFirst(), result, "the same job: " + scene);
+                assertFalse(calls.getFirst().isEmpty(), scene);
+            }
+        }
+    }
+
+    /**
+     * A retrieval larger than one source is split over several trips, and every trip drains the lowest priority that
+     * still holds an unreserved item: the overflow chest first, then the next priority, the racks last (issue #47).
+     */
+    @Test
+    void aSplitRetrievalDrainsTheLowestPriorityFirstAndOnlyThenTheNext() {
+        RackPosition rack = rack(1, 0, Side.LEFT); // nearest, filled first
+        RackPosition middle = rack(5, 0, Side.RIGHT);
+        RackPosition overflow = rack(12, 0, Side.LEFT); // farthest, filled last
+        stock.update(rack, slots(0, DIAMOND, 50));
+        stock.update(middle, slots(0, DIAMOND, 30));
+        stock.update(overflow, slots(0, DIAMOND, 40));
+        live.extractable.put(rack, 50);
+        live.extractable.put(middle, 30);
+        live.extractable.put(overflow, 40);
+        live.insertable.put(OUT_A, 1000);
+        priority(rack, 6);
+        priority(middle, 3);
+        priority(overflow, 0);
+        PlannerInput.OpenRequest<String, RackPosition> order = request(id(1), DIAMOND, 100, OUT_A);
+
+        List<String> trips = new ArrayList<>();
+        for (int trip = 0; trip < 3; trip++) {
+            TransportJob<String, RackPosition> job = planner.plan(input().storePriority(this::priorityOf)
+                    .storageLocations(List.of(rack, middle, overflow)).requests(List.of(order)).build())
+                    .job().orElseThrow().job();
+            trips.add(job.source() + " x" + job.plannedAmount());
+            ledger.track(job);
+        }
+        assertEquals(List.of(overflow + " x40", middle + " x30", rack + " x30"), trips,
+                "the overflow emptied, then the middle priority, and only the rest out of the racks");
     }
 
     /** A store reroute is still storing, so it honours the priority like the store plan does. */

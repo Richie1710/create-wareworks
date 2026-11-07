@@ -34,7 +34,8 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       must be available and accept at least 1 (live). A <b>warehouse port</b> ({@link PlannerInput#roomBound()}, M27,
  *       ADR-065) must take the whole trip, or at least one full stack of a larger one, and the trip is bounded by its
  *       live room, so the crane never waits in front of a port while the world runs. Candidates are the locations
- *       holding the key per index, available and not fully reserved, ranked by travel time crane → source → output.
+ *       holding the key per index, available and not fully reserved, ranked by the storage priority a player gave them,
+ *       <b>lowest first</b> (issue #47, ADR-078), then by travel time crane → source → output.
  *       Amount =
  *       {@code min(need, carryLimit, liveExtractable − reservedStock)}, and for a port also its room. The target's
  *       live room is measured less what other jobs already bring there ({@link ReservationView#reservedInbound}, issue
@@ -109,14 +110,15 @@ import dev.wareworks.core.warehouse.LocationKind;
  * stock back. Every other storing path (the store plan and the store reroute) drops them, so a dedicated location never
  * receives new items its filter rejects.
  * <p>
- * <b>Storage priorities and where they may not reach</b> (M16, issue #11, ADR-028): a player's priority is a property of
- * a storage <i>location</i> ({@link PlannerInput#storePriority()}), it orders only the locations the rules above it left
- * equal, and it is read in exactly one method, {@link #collectStorage}. Retrieval ({@link #planOutOfStorage}), the
+ * <b>Storage priorities</b> (M16, issue #11, ADR-028; issue #47, ADR-078): a player's priority is a property of a
+ * storage <i>location</i> ({@link PlannerInput#storePriority()}), and each direction reads it in its own place. When
+ * storing, {@link #collectStorage} orders by it, <b>higher first</b>, only the locations the rules above it left equal.
+ * When taking out of storage, {@link #planOutOfStorage} (RETRIEVE and SUPPLY) and {@link #planFill} (the fluid's bay and
+ * the empty containers' rack) order by it, <b>lowest first</b>, as their first key and before travel time, so what a
+ * player fills first is emptied last and an overflow is drained before the racks, even when it is farther away. The
  * station fallback ({@link #selectStation}) and the accepting ports ({@link #collectPorts}) pass
- * {@link #NEUTRAL_PRIORITY} or their own strength, so "a high priority must never send the crane past a nearer location
- * that holds the same item" holds structurally and cannot be broken by forgetting a check. On a reroute with
- * {@code allowRejected} the priority is still below the filter class, so a priority can never lift a rejecting location
- * above an accepting one.
+ * {@link #NEUTRAL_PRIORITY} or their own strength. On a reroute with {@code allowRejected} the priority is still below
+ * the filter class, so a priority can never lift a rejecting location above an accepting one.
  * <p>
  * <b>Accepting warehouse ports</b> (M17, issue #12, ADR-029): a port is a <b>target</b> and nothing else. It is never a
  * source, so retrieval cannot see it — {@link #planOutOfStorage} iterates {@code stock().locationsOf(key)} and a station
@@ -172,10 +174,10 @@ public final class JobPlanner<K, L> {
     /** Filter rank of a candidate no store filter applies to (stations, retrieve sources): neither better nor worse. */
     private static final int NEUTRAL_FILTER_RANK = FilterMatch.UNFILTERED.storeRank();
     /**
-     * Storage priority of a candidate no priority applies to (M16, issue #11): every path that does <b>not</b> store
-     * passes this literally, so retrieval and station ranking are free of priorities <b>by construction</b> rather than
-     * by a check. It is also the value of an unprioritised storage location, so a warehouse nobody prioritised ranks
-     * exactly as it did before M16.
+     * Storage priority of a candidate no priority applies to (M16, issue #11): the station fallback
+     * ({@link #selectStation}) passes it literally, so stations are ranked free of priorities <b>by construction</b>
+     * rather than by a check. It is also the value of an unprioritised storage location, so a warehouse nobody
+     * prioritised ranks exactly as it did before M16.
      */
     private static final int NEUTRAL_PRIORITY = 0;
     /**
@@ -254,6 +256,22 @@ public final class JobPlanner<K, L> {
             .thenComparing((Candidate<?> candidate) -> !candidate.consolidates())
             .thenComparing((Candidate<?> candidate) -> !candidate.compatible())
             .thenComparing((a, b) -> Integer.compare(b.priority(), a.priority()))
+            .thenComparingLong(Candidate::travelTicks)
+            .thenComparingInt(Candidate::order);
+    /**
+     * The ranking of the sources a retrieve or a supply takes out of storage, lower first (issue #47, ADR-078): the
+     * storage priority <b>lowest first</b> → travel time → index order. It is the mirror of the priority key in
+     * {@link #RANKING}: what a player fills first is emptied last, so an overflow chest at priority 0 is drained before
+     * racks at a higher priority, even when it is farther away, and only among sources of the same priority does the
+     * shortest path decide.
+     * <p>
+     * A comparator of its own rather than {@link #RANKING} with a negated priority, so a range widened later cannot trip
+     * over {@code -Integer.MIN_VALUE}. The keys of {@link #RANKING} above the priority are constants for a source (class,
+     * filter, consolidation, compatibility), so with every priority at 0 this is exactly the order the sources were tried
+     * in before issue #47 — travel time, then index order — and the same sequence of live extracts.
+     */
+    private static final Comparator<Candidate<?>> SOURCE_RANKING = Comparator
+            .comparingInt((Candidate<?> candidate) -> candidate.priority())
             .thenComparingLong(Candidate::travelTicks)
             .thenComparingInt(Candidate::order);
 
@@ -554,13 +572,14 @@ public final class JobPlanner<K, L> {
                             pos.x(), pos.y()),
                     input.travel().travelTicks(pos.branch(), pos.x(), pos.y(), outputPos.branch(), outputPos.x(),
                             outputPos.y()));
-            // Retrieval never reads a storage priority (M16) and never a port rank (M17): the neutral values are passed
-            // literally, so the shortest path wins and neither a prioritised location nor a port can send the crane past
-            // a nearer source of the same item.
+            // The storage priority decides first, lowest first (issue #47, ADR-078): what a player fills first is
+            // emptied last. Read only for the real candidates, which are all loaded. A port rank (M17) is never read
+            // here: a port is no source.
+            int priority = input.storePriority().applyAsInt(location);
             candidates.add(new Candidate<>(location, LocationKind.STORAGE, CLASS_STORAGE, NEUTRAL_FILTER_RANK, false,
-                    false, NEUTRAL_PRIORITY, travel, rank, limit));
+                    false, priority, travel, rank, limit));
         }
-        candidates.sort(RANKING);
+        candidates.sort(SOURCE_RANKING);
         for (Candidate<L> candidate : candidates) {
             if (!budget.tryUse())
                 return Optional.empty();
@@ -639,8 +658,10 @@ public final class JobPlanner<K, L> {
      * <li>The amount of one trip is bounded by <b>both</b> carry limits, the empty and the filled one: 16 empty buckets
      * fit one grabber stack, 16 lava buckets do not, and the head has to hold what comes out of the bay
      * ({@code ExchangeDecision}). Buckets therefore travel one per trip, which the owner accepted.</li>
-     * <li>Every (rack, bay) pair is ranked by crane → rack → bay → station ({@link TravelTimeModel#add}), then by index
-     * order, and tried with the live extract at the rack (once per rack) and the live fill at the bay.</li>
+     * <li>Every (rack, bay) pair is ranked by the bay's storage priority, lowest first, then by the rack's, lowest first
+     * (issue #47, ADR-078: the fluid and the empties both leave storage, and the fluid is what was asked for), then by
+     * crane → rack → bay → station ({@link TravelTimeModel#add}), then by index order, and tried with the live extract
+     * at the rack (once per rack) and the live fill at the bay. With every priority at 0 this is the order of M31.</li>
      * </ol>
      * Nothing planned: {@link NoJobReason#NO_EMPTY_CONTAINERS} when no rack really gave an empty container, otherwise
      * {@link NoJobReason#NOT_IN_STOCK} (the bays did not have the fluid after all).
@@ -661,9 +682,13 @@ public final class JobPlanner<K, L> {
         if (limit < 1)
             return Optional.empty();
         List<PlannerInput.FillBay<L>> bays = new ArrayList<>();
+        Map<L, Integer> bayPriorities = new HashMap<>();
         for (PlannerInput.FillBay<L> bay : supply.bays(filledKey)) {
-            if (input.available().test(bay.bay()))
+            if (input.available().test(bay.bay())) {
                 bays.add(bay);
+                // Read once the bay is known loaded, like the rack's below (issue #47, ADR-078).
+                bayPriorities.put(bay.bay(), input.storePriority().applyAsInt(bay.bay()));
+            }
         }
         if (bays.isEmpty()) {
             reasons.add(NoJobReason.NOT_IN_STOCK);
@@ -678,6 +703,7 @@ public final class JobPlanner<K, L> {
                 continue;
             if (entry.count() - input.reservations().reservedStock(rack, emptyKey) <= 0)
                 continue;
+            int rackPriority = input.storePriority().applyAsInt(rack);
             RackPosition rackPos = position(rack);
             long toRack = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(),
                     rackPos.branch(), rackPos.x(), rackPos.y());
@@ -688,14 +714,17 @@ public final class JobPlanner<K, L> {
                                 bayPos.x(), bayPos.y())),
                         input.travel().travelTicks(bayPos.branch(), bayPos.x(), bayPos.y(), stationPos.branch(),
                                 stationPos.x(), stationPos.y()));
-                candidates.add(new FillCandidate<>(rack, bay, travel, order++));
+                candidates.add(new FillCandidate<>(rack, bay, bayPriorities.get(bay.bay()), rackPriority, travel,
+                        order++));
             }
         }
         if (candidates.isEmpty()) {
             reasons.add(NoJobReason.NO_EMPTY_CONTAINERS);
             return Optional.empty();
         }
-        candidates.sort(Comparator.comparingLong((FillCandidate<L> candidate) -> candidate.travelTicks())
+        candidates.sort(Comparator.comparingInt((FillCandidate<L> candidate) -> candidate.bayPriority())
+                .thenComparingInt(FillCandidate::rackPriority)
+                .thenComparingLong(FillCandidate::travelTicks)
                 .thenComparingInt(FillCandidate::order));
         // One live extract per rack, however many bays it is paired with: the empties at a rack do not depend on the bay.
         Map<L, Long> extractable = new HashMap<>();
@@ -728,8 +757,12 @@ public final class JobPlanner<K, L> {
         return Optional.empty();
     }
 
-    /** One (rack, bay) pair of a fill trip, ranked by the travel of its three legs, then by index order. */
-    private record FillCandidate<L>(L rack, PlannerInput.FillBay<L> bay, long travelTicks, int order) {
+    /**
+     * One (rack, bay) pair of a fill trip, ranked by the bay's storage priority, then the rack's, both lowest first
+     * (issue #47, ADR-078), then by the travel of its three legs, then by index order.
+     */
+    private record FillCandidate<L>(L rack, PlannerInput.FillBay<L> bay, int bayPriority, int rackPriority,
+            long travelTicks, int order) {
     }
 
     // --- collect (M18, issue #13) --------------------------------------------------------------------------------
@@ -854,7 +887,8 @@ public final class JobPlanner<K, L> {
      * consolidation, then item-type compatibility, then the location's storage priority (M16), then {@code baseTravel} +
      * travel from {@code (fromX, fromY)}. Every path that <b>stores into a location</b> goes through here (the store plan
      * through {@link #selectStoreTarget} and both reroutes into storage), so the store filter and the priority are each
-     * honoured exactly once, in one place — and nowhere else, which is what keeps priorities out of retrieval.
+     * honoured exactly once, in one place. Taking out of storage reads the priority the other way round, lowest first
+     * ({@link #SOURCE_RANKING}, issue #47, ADR-078).
      *
      * @param allowRejected rank locations whose filter rejects {@code key} last instead of dropping them. Only the
      *                      {@code RETRIEVE} reroute passes {@code true}: it puts items back that already left the
@@ -950,8 +984,8 @@ public final class JobPlanner<K, L> {
             boolean consolidates = input.stock().countAt(key, location) > 0;
             // Nothing of another item type (per index): item types are not mixed while such locations are free.
             boolean compatible = consolidates || holdsOnlyTypeOf(input, location, key);
-            // The one place a storage priority is read (M16), and only once the location may take the item at all: it
-            // decides among the locations the rules above left equal, and never against them.
+            // The one place a storage priority is read when storing (M16), and only once the location may take the item
+            // at all: it decides among the locations the rules above left equal, and never against them.
             int priority = input.storePriority().applyAsInt(location);
             RackPosition pos = position(location);
             long travel = TravelTimeModel.add(baseTravel,
@@ -1160,8 +1194,9 @@ public final class JobPlanner<K, L> {
      *                     {@link #NEUTRAL_FILTER_RANK} where no filter applies (stations, retrieve sources)
      * @param consolidates already holds the item key (storage only)
      * @param compatible   holds nothing or only items of the key's type per index (storage only)
-     * @param priority     the storage priority a player gave the location, higher first (M16), or an accepting port's
-     *                     strength (M17); {@link #NEUTRAL_PRIORITY} where neither applies (stations, retrieve sources)
+     * @param priority     the storage priority a player gave the location, higher first when storing (M16) and lowest
+     *                     first for a retrieve source (issue #47, {@link #SOURCE_RANKING}), or an accepting port's
+     *                     strength (M17); {@link #NEUTRAL_PRIORITY} where neither applies (stations)
      * @param limit        the most items this candidate may take, which differs between a port and a storage location
      *                     whenever a stock rule's maximum bounds the latter (M15 × M17)
      */

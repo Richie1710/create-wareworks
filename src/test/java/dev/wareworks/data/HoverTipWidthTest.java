@@ -75,6 +75,23 @@ class HoverTipWidthTest {
             fail("These hover tip lines run off a narrow screen; shorten them:\n  " + String.join("\n  ", tooWide));
     }
 
+    /**
+     * The storage priority tip still names the empty hand in both languages, in the words the {@code filterclicks}
+     * visual scenario looks for ({@code FilterClicksVisualScenario#checkHoverTip}): shortening it to fit the line above
+     * once dropped the German "leerer Hand" (issue #47), and only that slow client run would have noticed.
+     */
+    @Test
+    void thePriorityTipNamesTheEmptyHandInBothLanguages() throws IOException {
+        String key = PREFIX + "interface.store_priority_tip";
+        Map<String, String> phrases = Map.of("en_us", "empty hand", "de_de", "leerer Hand");
+        for (Map.Entry<String, Path> language : languages().entrySet()) {
+            String text = ItemTooltipLengthTest.strings(language.getValue()).get(key);
+            String phrase = phrases.get(language.getKey());
+            assertTrue(text != null && text.contains(phrase),
+                    language.getKey() + " priority tip '" + text + "' does not contain '" + phrase + "'");
+        }
+    }
+
     /** Every {@code _tip} key of the generated lang is measured above: a new one has to be added here first. */
     @Test
     void everyTipKeyIsMeasured() throws IOException {

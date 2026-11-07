@@ -80,10 +80,11 @@ import net.neoforged.neoforge.items.IItemHandler;
  * left out of client packets entirely ({@link StorageFilterBehaviour}), so an unfiltered rack wall costs no update-tag
  * bytes.
  * <p>
- * <b>Storage priority (M16, ADR-028).</b> The same value box carries a second setting on a hold-to-edit board: a
- * priority 0..9 that decides which of the <b>equally suitable</b> storage locations the crane fills first. It is a
- * property of the location, like the filter, and applies only when <b>storing</b>: retrieval always takes the shortest
- * path, and raising a priority never moves what is already stored. The plate of the aisle face is too small for a second
+ * <b>Storage priority (M16, ADR-028; issue #47, ADR-078).</b> The same value box carries a second setting on a
+ * hold-to-edit board: a priority 0..9 that decides which of the <b>equally suitable</b> storage locations the crane
+ * fills first, and which location it empties first: retrieval takes from the <b>lowest</b> priority that holds the item
+ * and only then by the shortest path. It is a property of the location, like the filter, and raising a priority never
+ * moves what is already stored. The plate of the aisle face is too small for a second
  * value box, which is why both settings share one ({@link StorageFilterBehaviour}). A change is reported through the
  * same registry notification as a filter change, and the number travels in the update tag only while it is not 0, so an
  * unprioritised rack wall still costs nothing.
@@ -175,9 +176,10 @@ public class WarehouseInterfaceBlockEntity extends SmartBlockEntity
     }
 
     /**
-     * The storage priority of this location ({@code docs/warehouse-system.md} §3.1, ADR-028): 0..9, higher fills first.
-     * It decides only <b>where new items go</b>, among the locations the store filter, consolidation and item-type
-     * grouping left equal; it never affects retrieval and never re-shuffles what is already stored.
+     * The storage priority of this location ({@code docs/warehouse-system.md} §3.1, ADR-028, ADR-078): 0..9, higher
+     * fills first and empties last. When storing it orders only the locations the store filter, consolidation and
+     * item-type grouping left equal; when taking out of storage it is the first key, lowest first, before the shortest
+     * path (issue #47). It never re-shuffles what is already stored.
      */
     @Override
     public int storePriority() {

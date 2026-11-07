@@ -52,6 +52,8 @@ class JobPlannerFillTest {
     /** What a bay's live fill answers; absent means "everything it is asked for". */
     private final Map<RackPosition, Integer> liveFill = new HashMap<>();
     private final List<RackPosition> fillCalls = new ArrayList<>();
+    /** Storage priorities of racks and bays ({@link PlannerInput#storePriority()}); absent means 0. */
+    private final Map<RackPosition, Integer> priorities = new HashMap<>();
     private final Map<String, Integer> carryLimits = new HashMap<>(Map.of(BUCKET, 16, LAVA_BUCKET, 1, IRON, STACK));
 
     private static Supplier<UUID> sequentialIds() {
@@ -116,6 +118,10 @@ class JobPlannerFillTest {
         return new PlannerInput.OpenRequest<>(id, LAVA_BUCKET, remaining, TERMINAL, RequestKind.FILL);
     }
 
+    private int priorityOf(RackPosition location) {
+        return priorities.getOrDefault(location, 0);
+    }
+
     private void emptiesAt(RackPosition rack, int count) {
         stock.update(rack, slots(1, BUCKET, count));
         extractable.put(rack, count);
@@ -164,6 +170,85 @@ class JobPlannerFillTest {
                 TravelTimeModel.travelTicks(SPEEDS, 3, 0, 0, 0)),
                 TravelTimeModel.stopTicks(SPEEDS, TRANSFER_TICKS, LocationKind.OUTPUT.armStroke()));
         assertEquals(expected, planned.estimatedTicks(), "three legs and three stops");
+    }
+
+    /**
+     * The fluid leaves storage too, so a fill trip draws it from the bay of the lowest storage priority first, although
+     * it is farther (issue #47, ADR-078): what a player fills first is emptied last.
+     */
+    @Test
+    void theFluidComesFromTheLowestPriorityBayFirst() {
+        emptiesAt(NEAR_RACK, 4);
+        bayContainers.put(NEAR_BAY, 5);
+        bayContainers.put(FAR_BAY, 5);
+        insertable.put(TERMINAL, 9);
+        priorities.put(NEAR_BAY, 6);
+        priorities.put(FAR_BAY, 2);
+        TransportJob<String, RackPosition> job = planner.plan(input().storePriority(this::priorityOf)
+                .requests(List.of(fill(id(1), 1))).build()).job().orElseThrow().job();
+        assertEquals(NEAR_RACK, job.source());
+        assertEquals(FAR_BAY, job.target(), "the lower priority bay, although the other one is on the way");
+        assertEquals(List.of(FAR_BAY), fillCalls, "the higher priority bay is never asked");
+    }
+
+    /**
+     * The empty containers are taken out of storage as well: among bays of one priority they come from the rack of the
+     * lowest priority first. The bay's priority is the first key, because the fluid is what was asked for, so a rack
+     * priority never sends the trip to a bay of a higher priority.
+     */
+    @Test
+    void theEmptiesComeFromTheLowestPriorityRackAndTheBayDecidesFirst() {
+        emptiesAt(NEAR_RACK, 4);
+        emptiesAt(FAR_RACK, 4);
+        bayContainers.put(NEAR_BAY, 5);
+        bayContainers.put(FAR_BAY, 5);
+        insertable.put(TERMINAL, 9);
+        priorities.put(NEAR_RACK, 3);
+        priorities.put(FAR_RACK, 0);
+        TransportJob<String, RackPosition> job = planner.plan(input().storePriority(this::priorityOf)
+                .requests(List.of(fill(id(1), 1))).build()).job().orElseThrow().job();
+        assertEquals(FAR_RACK, job.source(), "the lower priority rack, although it is farther");
+        assertEquals(NEAR_BAY, job.target(), "bays of one priority: the cheaper pair");
+
+        priorities.put(NEAR_BAY, 1);
+        priorities.put(FAR_BAY, 4);
+        priorities.put(NEAR_RACK, 0);
+        priorities.put(FAR_RACK, 9);
+        job = planner.plan(input().storePriority(this::priorityOf).requests(List.of(fill(id(1), 1))).build()).job()
+                .orElseThrow().job();
+        assertEquals(NEAR_BAY, job.target(), "the bay's priority first");
+        assertEquals(NEAR_RACK, job.source(), "then the rack's");
+
+        priorities.put(NEAR_BAY, 4);
+        priorities.put(FAR_BAY, 1);
+        job = planner.plan(input().storePriority(this::priorityOf).requests(List.of(fill(id(1), 1))).build()).job()
+                .orElseThrow().job();
+        assertEquals(FAR_BAY, job.target(), "a rack priority never outranks the bay's");
+        assertEquals(NEAR_RACK, job.source());
+    }
+
+    /** One priority everywhere, 0 or any other, ranks the pairs exactly as before issue #47: by the three legs. */
+    @Test
+    void uniformPrioritiesRankThePairsAsBefore() {
+        emptiesAt(FAR_RACK, 4);
+        emptiesAt(NEAR_RACK, 4);
+        bayContainers.put(NEAR_BAY, 5);
+        bayContainers.put(FAR_BAY, 5);
+        insertable.put(TERMINAL, 9);
+        liveFill.put(NEAR_BAY, 0); // so the run falls through and shows the order of its fill calls
+        List<String> runs = new ArrayList<>();
+        for (int uniform : new int[] {-1, 0, 5}) {
+            PlannerInput.Builder<String, RackPosition> base = input().requests(List.of(fill(id(1), 1)));
+            if (uniform >= 0)
+                base.storePriority(location -> uniform);
+            fillCalls.clear();
+            TransportJob<String, RackPosition> job = planner.plan(base.build()).job().orElseThrow().job();
+            runs.add(job.source() + " " + job.target() + " " + fillCalls);
+        }
+        // Near rack + near bay 2+1+3, far rack + near bay 9+6+3, then a tie at 20 blocks that index order breaks: the
+        // far rack was indexed first.
+        assertEquals(FAR_RACK + " " + FAR_BAY + " " + List.of(NEAR_BAY, NEAR_BAY, FAR_BAY), runs.getFirst());
+        assertEquals(List.of(runs.getFirst(), runs.getFirst(), runs.getFirst()), runs);
     }
 
     @Test

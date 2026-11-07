@@ -594,8 +594,11 @@ that are equally suitable, the crane fills the highest one first, so the vault b
 of the aisle. The number is drawn on the block while it is not 0, and a Create clipboard copies filter and priority
 together down a whole rack wall.
 
-* **Storing only.** Retrieval always takes the nearest source, and raising a priority never moves what is already
-  stored. A running job keeps its target.
+* **Filled first, emptied last.** Every order (terminal, outputs, lists, computers, production ingredients) takes the
+  item from the location with the **lowest** priority that holds it, so overflow chests left at 0 are drained before
+  your prioritised racks; among locations of the same priority the crane takes the shortest way. A warehouse without
+  priorities fetches as it always did. Raising a priority never moves what is already stored, and a running job keeps
+  its target.
 * **It never overrules a filter**, and it never mixes item types: a dedicated location still wins, and a location that
   already holds the incoming item still wins. The priority decides between the locations that are otherwise equal.
 

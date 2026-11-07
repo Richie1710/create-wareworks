@@ -917,7 +917,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     /**
      * The storage priority of the storage location at {@code rack} ({@code docs/warehouse-system.md} §3.1, ADR-028,
-     * M16): the planner's {@code storePriority}, higher fills first. One map lookup.
+     * M16): the planner's {@code storePriority}, higher fills first and empties last (issue #47, ADR-078). One map
+     * lookup.
      * <p>
      * Like {@link #storeFilterMatch} it resolves a location this controller has not read yet through
      * {@link #readStoreSettingsAt} — the <b>same</b> one-shot resolve, down to the same {@link #storeSettingsResolver}

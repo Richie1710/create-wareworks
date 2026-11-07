@@ -146,7 +146,7 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
 
     /**
      * The storage priority of this location, {@value #MIN_PRIORITY}..{@value #MAX_PRIORITY}; higher fills first when
-     * storing. Clamped on read, so a number saved under a wider range is never silently rewritten.
+     * storing and empties last when taking out of storage (issue #47). Clamped on read, so a number saved under a wider range is never silently rewritten.
      */
     public int priority() {
         return Mth.clamp(priority, MIN_PRIORITY, MAX_PRIORITY);
@@ -219,7 +219,8 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
     }
 
     /**
-     * "Hold with an empty hand to set the priority; higher fills first", the third line of the hover tip Create shows
+     * "Priority: hold with an empty hand; higher fills first, empties last" (issue #47; until then "Hold with an empty
+     * hand to set the priority; higher fills first"), the third line of the hover tip Create shows
      * for this slot: with an item in hand the click sets the filter on the press ({@link StorageFilterClicks}), and
      * nothing else in the game says which way the number ranks.
      */

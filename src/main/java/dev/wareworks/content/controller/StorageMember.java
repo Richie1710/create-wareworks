@@ -94,9 +94,9 @@ public interface StorageMember extends WarehouseMember {
 
     /**
      * The storage priority a player gave this location ({@code docs/warehouse-system.md} §3.1, ADR-028, M16): 0..9,
-     * higher fills first. It orders only the locations the store filter, consolidation and item-type grouping left
-     * equal, it is read only when items are <b>stored</b>, and it is a property of the location and of no item — which
-     * is what keeps it out of the retrieval path entirely.
+     * higher fills first and empties last (issue #47, ADR-078). When storing it orders only the locations the store
+     * filter, consolidation and item-type grouping left equal; when taking out of storage it is the first key, lowest
+     * first, before the shortest path. It is a property of the location and of no item.
      * <p>
      * The default is 0, "no preference", so a storage member without a priority slot needs no change and a warehouse
      * nobody prioritised plans exactly as it did before M16.

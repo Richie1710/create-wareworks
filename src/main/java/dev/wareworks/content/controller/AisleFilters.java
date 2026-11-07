@@ -57,6 +57,13 @@ import net.minecraft.world.level.Level;
  * defaulting to 0 only means the warehouse stores in the old travel-time order into a <b>permitted</b> location, just
  * not the preferred one. The dangerous default would be "assume high", which is never taken.
  * <p>
+ * Taking out of storage reads the same number the other way round, lowest first (issue #47, ADR-078), so there a
+ * default 0 is not neutral: it makes the location the <b>most</b> preferred source. That is still harmless. The planner
+ * reads a priority only for loaded sources the stock index says hold the item, and one the one-shot resolve still
+ * cannot read (a block entity that is no storage member any more, before its index entry is pruned) is checked with
+ * one live, budgeted extract like every source: it gives nothing, and the planner goes on to the next. Nothing is taken
+ * from a wrong place and nothing is stored anywhere by it.
+ * <p>
  * <b>Selecting and excluding filters.</b> Create's list and attribute filters have a deny mode, where {@code test}
  * answers true for everything the filter does <i>not</i> list. Such a location accepts the item but was not dedicated
  * to it, so it is {@link FilterMatch#ALLOWED} rather than {@link FilterMatch#DEDICATED} and gets no ranking bonus (M8
@@ -391,10 +398,12 @@ final class AisleFilters {
     }
 
     /**
-     * The storage priority of the storage location at {@code rack}, for {@code PlannerInput#storePriority} (M16).
-     * {@value #NO_PRIORITY} for a location that carries none — and for one that cannot be resolved at all, which only
-     * costs the old travel-time order for a few hundred ticks after a load and can never store into a forbidden place
-     * (see the class comment).
+     * The storage priority of the storage location at {@code rack}, for {@code PlannerInput#storePriority} (M16; read
+     * when storing, higher first, and when taking out of storage, lowest first, issue #47).
+     * {@value #NO_PRIORITY} for a location that carries none — and for one that cannot be resolved at all, which when
+     * storing only costs the old travel-time order for a few hundred ticks after a load and can never store into a
+     * forbidden place, and when taking out ranks the location first, where one live extract that gives nothing sends
+     * the planner on to the next source (see the class comment).
      *
      * @param resolver as in {@link #match}: the same one-shot resolve, so the first plan after a load already knows the
      *                 priorities of the locations it ranks

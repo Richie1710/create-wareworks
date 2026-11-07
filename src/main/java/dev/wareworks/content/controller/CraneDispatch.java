@@ -765,8 +765,9 @@ final class CraneDispatch {
                 // Store filters decide before the estimate and before any live call, so a location that may not take the
                 // item costs neither a live simulation nor a remembered refusal (ADR-021).
                 .storeFilter(controller::storeFilterMatch)
-                // The player's storage priority, from the same cache: it orders only the locations the filter,
-                // consolidation and item-type grouping left equal, and it is read nowhere but when storing (ADR-028).
+                // The player's storage priority, from the same cache: when storing it orders only the locations the
+                // filter, consolidation and item-type grouping left equal, higher first (ADR-028); when taking out of
+                // storage (retrieve, supply, fill) it is the first key, lowest first (issue #47, ADR-078).
                 .storePriority(controller::storePriorityAt)
                 // The aisle's accepting ports, already gated: direction, redstone and the pulse token are applied here,
                 // so the planner only ranks them (M17, ADR-029). An aisle of plain outputs answers an empty list without

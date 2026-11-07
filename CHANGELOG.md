@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets the range (`range`, default 256 blocks) and whether a remote works across dimensions (`crossDimension`, default
   off).
 
+### Changed
+
+- **A storage priority now also decides where items are taken from: the lowest priority is emptied first**
+  ([#47](https://github.com/Richie1710/create-wareworks/issues/47)). What fills first now empties last, so overflow
+  chests left at 0 behind prioritised racks are drained before the racks instead of staying full for ever. Among
+  locations of the same priority the crane still takes the shortest way. This holds for every order: terminal clicks,
+  JEI and the crafting panel's Fetch, clipboard lists, package doors, Warehouse Outputs, computers and the ingredients
+  of production orders; a fluid request takes its fluid from the fluid bay of the lowest priority. A warehouse that sets
+  no priorities behaves exactly as before. Where a priority keeps items near the door, an order may now take a longer
+  way. Storing is unchanged.
+
 ### Fixed
 
 - **The terminal screen's title no longer runs into "Not part of a warehouse".** In English, a terminal outside every

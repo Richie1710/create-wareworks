@@ -414,7 +414,7 @@ public class FluidBayBlockEntity extends SmartBlockEntity
         return Optional.of(FluidDedication.from(dedicatedFluid()));
     }
 
-    /** The storage priority a player gave this bay (0..9, higher fills first); it never affects retrieval. */
+    /** The storage priority a player gave this bay (0..9, higher fills first and empties last, issue #47). */
     @Override
     public int storePriority() {
         return storeFilterBehaviour.priority();

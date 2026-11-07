@@ -122,13 +122,15 @@ import dev.wareworks.core.inventory.StockView;
  *                             location is ranked last rather than dropped, so leftovers can go back where they came
  *                             from
  * @param storePriority        the storage priority a player gave a location (M16, issue #11, ADR-028): higher fills
- *                             first. It is a property of the <b>location</b> and of nothing else — the type
- *                             {@code ToIntFunction<? super L>} is that guarantee, and it is why a priority can never
- *                             depend on the item and never reach the retrieval path. Consulted only in
- *                             {@link JobPlanner#selectStorage}, as the sort key <b>below</b> the store filter,
- *                             consolidation and item-type grouping and <b>above</b> travel time, so a preference never
- *                             overrules a filter and never mixes item types; the default is {@link #NO_PRIORITY},
- *                             i.e. 0 for every location, which makes the ranking the function it was before M16
+ *                             first and empties last (issue #47, ADR-078). It is a property of the <b>location</b> and
+ *                             of nothing else — the type {@code ToIntFunction<? super L>} is that guarantee, and it is
+ *                             why a priority can never depend on the item. When <b>storing</b> (the store plan and the
+ *                             reroutes into storage) it is the sort key <b>below</b> the store filter, consolidation and
+ *                             item-type grouping and <b>above</b> travel time, higher first, so a preference never
+ *                             overrules a filter and never mixes item types. When taking <b>out</b> of storage
+ *                             (retrieve, supply, and a fill trip's bay and rack) it is the first key, <b>lowest</b>
+ *                             first, above travel time. The default is {@link #NO_PRIORITY}, i.e. 0 for every
+ *                             location, which makes both rankings the functions they were before M16
  * @param portRank             the signed rank of an accepting warehouse port (M17, issue #12): {@code < 0} an
  *                             <b>overflow</b>, which every storage location outranks, {@code > 0} a <b>diversion</b>,
  *                             which outranks every storage location, and the magnitude minus one is the strength a

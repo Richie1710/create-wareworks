@@ -14,14 +14,18 @@ import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.ProductionPatterns;
+import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.storage.StorageFilterBehaviour;
 import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.content.storage.WarehouseInterfaceBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import net.minecraft.core.BlockPos;
@@ -40,6 +44,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.properties.ChestType;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import net.neoforged.neoforge.items.IItemHandler;
@@ -61,6 +66,12 @@ import net.neoforged.neoforge.items.IItemHandler;
  * limitation, {@code prioritygoggles} the goggle data and the update-tag budget on both sides of the network, and
  * {@code prioritydropsandclipboard} the drop and all four clipboard directions.
  * <p>
+ * <b>Retrieval</b> (issue #47, ADR-078) reads the same number the other way round: what is filled first is emptied
+ * last. {@code retrievalterminaldrainstheoverflowfirst}, {@code retrievaloutputportdrainstheoverflowfirst} and
+ * {@code retrievalsupplydrainstheoverflowfirst} each put the item into a nearer rack prioritised
+ * {@value #RACK_PRIORITY} and a farther overflow chest at priority 0, and serve a terminal click, a redstone request at
+ * a warehouse output and a production order's ingredients out of the overflow first, and only the rest out of the rack.
+ * <p>
  * Layout: the {@link AisleFixture} aisle on {@code aisle_16x10x7} (controller x = 0, dock x = 1 at z = 3 along +X,
  * {@value #RAILS} rails), storage locations on the left rack plane and the stations on the right. Every test that moves
  * items asserts the item conservation invariant on each tick ({@link ItemCensus}).
@@ -78,6 +89,14 @@ public final class StoragePriorityGameTests {
     private static final int SETTLE_TICKS = 60;
     /** The priority a preferred location gets in these tests; any value above 0 would do. */
     private static final int PREFERRED = 3;
+    /** The priority of the nearer rack in the retrieval tests (issue #47): the overflow at 0 must still empty first. */
+    private static final int RACK_PRIORITY = 5;
+    /** Items of one type in the rack and in the overflow chest of the retrieval tests. */
+    private static final int HELD = 16;
+    /** A terminal click larger than the overflow holds, so it is served in two trips. */
+    private static final int CLICKED = 20;
+    /** A redstone request smaller than the overflow holds, so it is served out of the overflow alone. */
+    private static final int PULSED = 8;
 
     /** Nearest storage location to the crane's parking position, and the one travel time alone would choose. */
     private static final RackPosition NEAR = new RackPosition(1, 0, Side.LEFT);
@@ -85,6 +104,13 @@ public final class StoragePriorityGameTests {
     /** Far end of the aisle: only a priority ever sends new items here. */
     private static final RackPosition FAR = new RackPosition(5, 0, Side.LEFT);
     private static final RackPosition INPUT_RACK = new RackPosition(2, 0, Side.RIGHT);
+    /**
+     * The delivery station of the retrieval tests (a terminal, an output, a production station), right across the
+     * aisle from {@link #NEAR}: the cheapest source by far, so only the priority can send the crane to {@link #FAR}.
+     */
+    private static final RackPosition STATION_RACK = new RackPosition(1, 0, Side.RIGHT);
+    /** Where the production order of {@link #retrievalSupplyDrainsTheOverflowFirst} is to be delivered. */
+    private static final RackPosition OUTPUT_RACK = new RackPosition(3, 0, Side.RIGHT);
     /**
      * Storage locations of {@link #priorityColdCacheAfterReload}: deliberately <b>more</b> than
      * {@code maxSnapshotsPerTick} (default 4), because the controller drains its restored locations at that rate while
@@ -100,6 +126,10 @@ public final class StoragePriorityGameTests {
     private static final ItemKey IRON = ItemKey.of(Items.IRON_INGOT);
     private static final ItemKey GOLD = ItemKey.of(Items.GOLD_INGOT);
     private static final ItemKey REDSTONE = ItemKey.of(Items.REDSTONE);
+    private static final ItemKey LOG = ItemKey.of(Items.OAK_LOG);
+    private static final ItemKey PLANK = ItemKey.of(Items.OAK_PLANKS);
+    /** One log makes four planks, as in {@code ProductionGameTests}. */
+    private static final int PLANKS_PER_LOG = 4;
 
     /** Create's filter key and Create's generic value-settings keys, as a funnel would write them to a clipboard. */
     private static final String FILTER_TAG = "Filter";
@@ -318,6 +348,110 @@ public final class StoragePriorityGameTests {
                     helper.assertValueEqual(aisle.storedAt(NEAR, IRON), (long) BATCH,
                             "and a raised priority never re-shuffles what is already stored");
                     aisle.assertIdleAndEmpty();
+                })
+                .thenSucceed();
+    }
+
+    // --- retrieval (issue #47, ADR-078) -------------------------------------------------------------------------------
+
+    /**
+     * The headline case of issue #47: a terminal click for more than the overflow chest holds. The rack beside the
+     * terminal is the cheapest source by far and is prioritised {@value #RACK_PRIORITY}; the overflow at the far end of
+     * the aisle keeps priority 0. The first trip must empty the overflow, and only the rest may come out of the rack.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void retrievalTerminalDrainsTheOverflowFirst(GameTestHelper helper) {
+        AisleFixture aisle = retrievalAisle(helper, IRON);
+        aisle.terminal(STATION_RACK);
+        Map<ItemKey, Long> conserved = ItemCensus.of(IRON, 2 * HELD);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while a terminal click is served"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(2, 0, 1))
+                .thenExecute(() -> {
+                    prioritiseRack(aisle);
+                    RequestResult result = aisle.terminalAt(STATION_RACK).requestFromTerminal(
+                            playerAt(helper, aisle.rackPos(STATION_RACK)), IRON, CLICKED);
+                    helper.assertTrue(result.isAccepted(), "the click is accepted: " + result);
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                })
+                .thenWaitUntil(() -> assertFirstTripFromTheOverflow(helper, aisle, IRON, HELD))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(STATION_RACK, IRON), (long) CLICKED,
+                        "the whole click arrived"))
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(aisle.storedAt(FAR, IRON), 0L, "the overflow was emptied");
+                    helper.assertValueEqual(aisle.storedAt(NEAR, IRON), (long) (2 * HELD - CLICKED),
+                            "only the rest came out of the rack");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenSucceed();
+    }
+
+    /** The same rule for a redstone request at a warehouse output: it is served out of the overflow alone. */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void retrievalOutputPortDrainsTheOverflowFirst(GameTestHelper helper) {
+        AisleFixture aisle = retrievalAisle(helper, IRON);
+        aisle.output(STATION_RACK);
+        BlockPos trigger = aisle.rackPos(STATION_RACK).relative(aisle.sideDirection(STATION_RACK));
+        Map<ItemKey, Long> conserved = ItemCensus.of(IRON, 2 * HELD);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while a redstone request is served"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(2, 0, 1))
+                .thenExecute(() -> {
+                    prioritiseRack(aisle);
+                    aisle.requestAt(STATION_RACK, IRON.toStack(), PULSED, trigger);
+                    helper.assertTrue(aisle.outputAt(STATION_RACK).lastRejection().isEmpty(),
+                            "the request is accepted: " + aisle.outputAt(STATION_RACK).lastRejection());
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                })
+                .thenWaitUntil(() -> assertFirstTripFromTheOverflow(helper, aisle, IRON, PULSED))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(STATION_RACK, IRON), (long) PULSED,
+                        "the request arrived"))
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(aisle.storedAt(FAR, IRON), (long) (HELD - PULSED),
+                            "the overflow gave all of it");
+                    helper.assertValueEqual(aisle.storedAt(NEAR, IRON), (long) HELD, "the rack gave nothing");
+                    aisle.assertIdleAndEmpty();
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The same rule for a production order's ingredients (a {@code SUPPLY}): the overflow holds one log, the order needs
+     * two, so the first trip takes the overflow's log and only the second one goes to the rack.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void retrievalSupplyDrainsTheOverflowFirst(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(NEAR, LOG.toStack(HELD));
+        aisle.storage(FAR, LOG.toStack(1));
+        aisle.production(STATION_RACK);
+        aisle.output(OUTPUT_RACK);
+        WarehouseProductionBlockEntity station = aisle.productionAt(STATION_RACK);
+        helper.assertTrue(station.setPatternEntry(0, 0, LOG, 1), "ingredient set");
+        helper.assertTrue(station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, PLANK, PLANKS_PER_LOG),
+                "result set");
+        Map<ItemKey, Long> conserved = ItemCensus.of(LOG, HELD + 1);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while the ingredients travel"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(2, 0, 1))
+                .thenExecute(() -> {
+                    prioritiseRack(aisle);
+                    RequestResult result = aisle.controller().request(aisle.absoluteRackPos(OUTPUT_RACK), PLANK,
+                            2 * PLANKS_PER_LOG);
+                    helper.assertTrue(result.isAccepted(), "the order is accepted: " + result);
+                    helper.assertValueEqual(result.producing(), 2 * PLANKS_PER_LOG, "all of it is produced");
+                    aisle.motor().generatedSpeed.setValue(TEST_RPM);
+                })
+                .thenWaitUntil(() -> assertFirstTripFromTheOverflow(helper, aisle, LOG, 1))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(STATION_RACK, LOG), 2L,
+                        "both logs arrived at the production station"))
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(aisle.storedAt(FAR, LOG), 0L, "the overflow was emptied");
+                    helper.assertValueEqual(aisle.storedAt(NEAR, LOG), (long) (HELD - 1),
+                            "only the second log came out of the rack");
                 })
                 .thenSucceed();
     }
@@ -608,6 +742,42 @@ public final class StoragePriorityGameTests {
     }
 
     // --- helpers ------------------------------------------------------------------------------------------------------
+
+    /**
+     * The aisle of the retrieval tests, unpowered: {@value #HELD} of {@code key} in the rack at {@link #NEAR} and as many
+     * in the overflow chest at {@link #FAR}. The station is placed by the test.
+     */
+    private static AisleFixture retrievalAisle(GameTestHelper helper, ItemKey key) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
+        aisle.storage(NEAR, key.toStack(HELD));
+        aisle.storage(FAR, key.toStack(HELD));
+        return aisle;
+    }
+
+    /** The near rack gets {@value #RACK_PRIORITY}, the overflow keeps 0, before anything is requested. */
+    private static void prioritiseRack(AisleFixture aisle) {
+        aisle.setStorePriority(NEAR, RACK_PRIORITY);
+        aisle.setStorePriority(FAR, 0);
+    }
+
+    /** The crane's first trip takes {@code amount} of {@code key} out of the overflow, although the rack is nearer. */
+    private static void assertFirstTripFromTheOverflow(GameTestHelper helper, AisleFixture aisle, ItemKey key,
+            int amount) {
+        helper.assertTrue(aisle.dock().currentJob().isPresent(), "the crane has a job");
+        TransportJob<ItemKey, RackPosition> job = aisle.dock().currentJob().orElseThrow();
+        helper.assertValueEqual(job.source(), FAR, "the overflow, priority 0, is emptied first");
+        helper.assertValueEqual(job.key(), key, "the item");
+        helper.assertValueEqual(job.plannedAmount(), amount, "the trip's amount");
+        helper.assertValueEqual(aisle.storedAt(NEAR, key), (long) HELD, "nothing has left the rack yet");
+    }
+
+    /** A survival player standing at the test-relative position, so the terminal's reach check passes. */
+    private static Player playerAt(GameTestHelper helper, BlockPos pos) {
+        Player player = helper.makeMockPlayer(GameType.SURVIVAL);
+        Vec3 center = Vec3.atCenterOf(helper.absolutePos(pos));
+        player.moveTo(center.x, center.y, center.z);
+        return player;
+    }
 
     /** The store filter and priority behaviour of an interface. */
     private static StorageFilterBehaviour settingsOf(GameTestHelper helper, WarehouseInterfaceBlockEntity be) {

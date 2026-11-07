@@ -885,9 +885,9 @@ went where it went.
     of itself and must not turn into a smear (that was an M16 defect — Create's corner label on the value box was drawn
     on top of it for every targeted block, and it is switched off now). Then step close enough to hit the slot itself:
     Create's box highlight and the checkered face appear and cover the digit, which is expected, and the hover tip's
-    third line must read "Hold with an empty hand to set the priority; higher fills first". Goggles on the interface
-    read "Priority: 5"; goggles on the **controller** read "Prioritised locations: N" under the storage count, and
-    **nothing** while no location is prioritised.
+    third line must read "Priority: hold with an empty hand; higher fills first, empties last" (since issue #47).
+    Goggles on the interface read "Priority: 5"; goggles on the **controller** read "Prioritised locations: N" under the
+    storage count, and **nothing** while no location is prioritised.
 
 113. **Is the effect obvious?** Leave two nearer locations empty and unprioritised, give a **far** one priority 5, and
     feed a stack into the input. The crane must drive **past** the near ones to the far one — watch a whole trip and
@@ -896,9 +896,9 @@ went where it went.
 
     Then the two rules that matter more than the feature: give a location a **filter** for something else and a priority
     of 9 — it must still refuse the incoming item, and a *dedicated* location must still win over a merely prioritised
-    one. And **request** the stored item at the output or the terminal: the delivery must come from the **nearest**
-    source that holds it, even when a farther one is prioritised higher. A priority that changed retrieval would be a
-    defect, not a preference.
+    one. And **request** the stored item at the output or the terminal: the delivery must come from the source with the
+    **lowest** priority that holds it, even when a nearer one is prioritised higher, and among sources of one priority
+    from the nearest (*changed by issue #47*, ADR-078: until then retrieval ignored priorities; see section BP).
 
     Finally, raise a priority while the crane is **already on a trip**: the running job must finish where it was going,
     the next trip goes to the new preferred rack, and **nothing already stored may move**.
@@ -920,7 +920,7 @@ went where it went.
     a priority and no filter**, and the controller's "Prioritised locations" must not count it.
 
 115. **German (`de_de`).** Switch the language and walk the same surfaces: the board's title ("Lagerpriorität") and its
-    row ("Priorität"), the hover tip ("Mit leerer Hand halten: Priorität; höhere füllt sich zuerst"), the interface's
+    row ("Priorität"), the hover tip ("Priorität: mit leerer Hand halten; hohe zuerst voll, zuletzt leer"), the interface's
     goggle line ("Priorität: 5"), the controller's "Priorisierte Lagerplätze: N", and the interface's Shift tooltip,
     which names the priority in its one sentence (since issue #22 the descriptions are short and the Ponder scenes carry
     the detail). Nothing may show a raw key, run out of its box or be cut off.
@@ -3196,10 +3196,10 @@ you get tired of waiting, and put it back before judging check 160.
     anything into a Rack Bay. Neither log has an error mentioning `wareworks`. If you have a claim mod at hand (FTB
     Chunks, Open Parties and Claims) and a second account: claim the chunk with one player and click a slot with an
     item as the other, who is not allowed there. **Nothing may be set**, and the client must show the old filter.
-307. **German (`de_de`).** The hover tip's third line reads "Mit leerer Hand halten: Priorität; höhere füllt sich
-    zuerst", in one line that fits the screen also in the default window size, and the sixth text of the Ponder scene
-    "Regalfächer in einem Lagergang" says to hold Right-Click with an empty hand to set a priority, and that the higher
-    it is, the sooner the bay fills. Nothing shows a raw key, runs out of its box or is cut off.
+307. **German (`de_de`).** The hover tip's third line reads "Priorität: mit leerer Hand halten; hohe zuerst voll,
+    zuletzt leer" (since issue #47), in one line that fits the screen also in the default window size, and the sixth
+    text of the Ponder scene "Regalfächer in einem Lagergang" says to hold Right-Click with an empty hand to set a
+    priority, and that the higher it is, the sooner the bay fills and the later it empties. Nothing shows a raw key, runs out of its box or is cut off.
 
 ## BB. Balancing the crane ([issue #31](https://github.com/Richie1710/create-wareworks/issues/31))
 
@@ -3793,3 +3793,30 @@ you get tired of waiting, and put it back before judging check 160.
 422. **German.** Item name "Lager-Fernbedienung", the Shift tooltip, the title "Terminal (Fernbedienung)" beside "Lager
      A", every action bar line and the red craft line: everything reads well and fits.
 
+
+## BP. Filled first, emptied last ([issue #47](https://github.com/Richie1710/create-wareworks/issues/47))
+
+> A retrieval takes from the storage location with the lowest priority that holds the item; among locations of one
+> priority the shortest way still decides (ADR-078, `docs/warehouse-system.md` §3.1, §7.4). `JobPlannerTest` and
+> `JobPlannerFillTest` check the ranking, `StoragePriorityGameTests` a terminal click, a Warehouse Output's request and
+> a production order's ingredients in a world, and the `priorities` visual scenario a request served past two cheaper
+> prioritised sources. What is left is whether a player reads it as intended.
+> Setup: one aisle with a terminal near the dock, a Warehouse Output, two **racks** near the terminal prioritised 5 and
+> two **overflow chests** at the far end left at 0. Put the same item into one rack and one overflow chest (about a
+> stack each), and a second item into both racks only.
+
+423. **The overflow first.** Click half a stack of the item at the terminal: the crane drives past the nearer rack to
+     the far overflow chest. Does that read as intent rather than as a detour? Watch the goggles of both: only the
+     overflow's count drops.
+424. **Then the racks.** Click more than the overflow still holds: the first trip empties the overflow, the next one
+     takes only the rest from the rack.
+425. **One priority, the nearest.** With the item only in the two racks (both 5), click it: the nearer rack gives it.
+     Set every priority back to 0 and click again: the nearest location gives it, as before the change.
+426. **Every way of asking.** With the item back in an overflow chest, ask for it with a lever at the Warehouse Output,
+     through a clipboard list, from JEI's **+** and the crafting panel's Fetch, at a package door and, with CC: Tweaked,
+     from a computer: each comes out of the overflow first. Order something a production pattern makes from the item:
+     the ingredients come out of the overflow first too.
+427. **Fluid.** Two fluid bays with the same fluid, the nearer one prioritised 5, the farther one 0: ask for a bucket of
+     it at the terminal. The bucket is filled at the farther bay.
+428. **Storing is unchanged.** Feed the item through an input: it still goes into the prioritised rack first, not into
+     the overflow.

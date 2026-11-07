@@ -272,7 +272,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_FILTER), "Stored Items");
         lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_PRIORITY), "Storage Priority");
         lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_PRIORITY_ROW), "Priority");
-        lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_PRIORITY_TIP), "Hold with an empty hand to set the priority; higher fills first");
+        lang.accept(WareworksLang.key(WareworksLang.INTERFACE_STORE_PRIORITY_TIP), "Priority: hold with an empty hand; higher fills first, empties last");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_OPEN_REQUESTS), "Open requests: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_INPUT), "Warehouse Input:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_OUTPUT), "Warehouse Output:");

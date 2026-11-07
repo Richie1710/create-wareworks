@@ -597,7 +597,8 @@ dev.wareworks
 │                              StoragePriorityGameTests: the storage priority in the world — the crane driving past a
 │                              nearer rack, the fallback when the preferred one is full, filters and grouping still
 │                              winning, a change mid job, persistence, the cold cache, goggles, aliases and the
-│                              clipboard, M16;
+│                              clipboard, M16; and retrieval emptying the lowest priority first for a terminal
+│                              click, an output's request and a production supply (issue #47, ADR-078);
 │                              ProductionGameTests: patterns, supply jobs, the full loop with the test playing the
 │                              player's machine, refusal, cancel, timeout and persistence, M11;
 │                              MechanicalArmGameTests: arm interaction point types, their fixed modes and real
@@ -1028,8 +1029,9 @@ number there as well, for *any* targeted block — see ADR-028. That half is gon
 reach, now show the digit exactly as a player sees it.) What it asserts on the server before any shot is a **sequence**, not a total: five deliveries into the prioritised
 rack past two nearer empty ones, a live simulated insert refusing a sixth, and only then the overflow into the
 *farthest* rack of the row because that one is prioritised 1 — plus a dedicated location prioritised 7 that receives
-none of the item its filter rejects, a number raised from 0 to 9 between two shots of the same camera, and a retrieval
-served out of the cheaper source although the other one is prioritised higher. Both goggle lines are read back from the
+none of the item its filter rejects, a number raised from 0 to 9 between two shots of the same camera, and (since
+issue #47, ADR-078) a retrieval served out of an unprioritised location the player filled by hand, past the cheaper
+sources prioritised 1 and 3. Both goggle lines are read back from the
 client block entity and compared, because a screenshot cannot tell a right number from a wrong one. Two harness lessons
 came out of it and are fixed in it: a creative player that touches the ground switches flying off by itself, so a
 playable-profile scenario must re-assert flight before every camera group; and `BeltInventory#addItem` queues an
@@ -1374,7 +1376,8 @@ have, and only for interfaces that were actually filtered. `PlannerInput` gained
 *Extended by ADR-028 (M16, issue #11):* the same slot carries a second setting, the location's **storage priority**, as
 a hold-to-edit board row — and the ranking this ADR made the first sort key gained a fourth one below it. Nothing decided
 here is reversed: a priority orders only the locations the filter, consolidation and item-type grouping left equal, and
-retrieval still never asks either of the two.
+retrieval still never asks either of the two. *(Since ADR-078, issue #47, retrieval reads the priority, lowest first;
+it still never reads a filter.)*
 
 ### ADR-022 — The warehouse terminal has two directions: an aisle-derived intake port and a player-chosen screen (M10)
 *Context:* Play-testing rejected the M6 terminal. It was a rack-position member with **one** `FACING`, aligned exactly
@@ -1958,7 +1961,9 @@ with intent.
   **literally**. So "a high priority must never send the crane past a nearer location that holds the same item" holds
   **structurally**: there is no code path on which a retrieval could consult a priority, and no future edit can break it
   by forgetting a check. A `BiFunction<L, K, Integer>` like `storeFilter`'s was rejected for the same reason — it would
-  have made "the priority cannot depend on the item" a convention instead of a type.
+  have made "the priority cannot depend on the item" a convention instead of a type. *(Amended by ADR-078, issue #47:
+  retrieval now reads the same function the other way round, lowest first and before travel time, so what fills first
+  empties last. The type argument stands; the "never past a nearer location" rule no longer holds for retrieval.)*
 * **It is the fourth sort key, not the first.** The ranking reads: **hard rules** (the store filter, `FilterMatch`) →
   **automatic tidiness** (exact-item consolidation, then item-type grouping) → **explicit player preference** (the
   priority) → **cost** (travel time) → **stability** (index order). A priority therefore orders only what the rules
@@ -2000,7 +2005,8 @@ with intent.
 * **Range 0..9, no negative numbers.** `ValueSettingsScreen#getClosestCoordinate` scans board columns from 0, so a
   negative value cannot be picked on a board at all, and an offset encoding would make the saved number differ from the
   shown one. A single digit also keeps the digit on the block one glyph wide. Consequence,
-  accepted: **"fill last" is not directly expressible** — a player raises the others instead. The range is 0-based so it
+  accepted: **"fill last" is not directly expressible** — a player raises the others instead. *(Since ADR-078 a
+  location left at 0 among prioritised ones is also emptied first.)* The range is 0-based so it
   can be widened later without a save migration, and the value is clamped **on read** (like the crane's mast height), so
   a lowered maximum never rewrites a player's number.
 * **The number is readable in the world, without goggles.** `client.render.WarehouseInterfaceRenderer` draws the digit
@@ -2021,9 +2027,9 @@ with intent.
   the block to read it. `getCountLabelForValueBox()` is therefore always empty — it cannot simply be dropped, because
   Create's own implementation would put the *filter amount* there — while `isCountVisible()` stays `true`, which is what
   adds the "Hold to set the priority" hover line (since issue #30 "Hold with an empty hand to set the priority; higher
-  fills first"). The lesson is general and belongs with ADR-013: a Create hook that
-  *looks* like it is scoped to the hovered box may be scoped to the targeted **block**, and the difference is only
-  visible in `FilteringRenderer`'s statement order.
+  fills first", since issue #47 "Priority: hold with an empty hand; higher fills first, empties last"). The lesson is
+  general and belongs with ADR-013: a Create hook that *looks* like it is scoped to the hovered box may be scoped to the
+  targeted **block**, and the difference is only visible in `FilteringRenderer`'s statement order.
 * **Persistence, sync and the clipboard cost as little as the filter does.** `StorePriority` is written **only while it
   is not 0**, so a pre-M16 world reads back 0 with no migration, an unprioritised interface still syncs nothing at all,
   and a prioritised but **unfiltered** one adds one int (~66 accounting bytes) while still skipping Create's ~215-byte
@@ -2053,7 +2059,8 @@ ranking key was a rule a player cannot reason about: above the filter it breaks 
 the mixed chest, below travel time it does nothing.
 
 *Consequences:* A player can say which of the equally suitable locations fills first, and a vault dedicated to
-cobblestone can also be the *first* place cobblestone goes. Retrieval is unchanged and provably so. Nothing is ever
+cobblestone can also be the *first* place cobblestone goes. Retrieval is unchanged and provably so. *(Superseded for
+retrieval by ADR-078: the lowest priority is emptied first.)* Nothing is ever
 re-shuffled: raising a priority moves no item that is already stored, exactly as changing a filter does not (ADR-021). A
 running job keeps its target; only the next trip goes to the new preferred rack. `PlannerInput` gained `storePriority`
 and `ControllerGoggleSummary` gained `prioritisedLocations` (a count, so the tag stays bounded, and left out of the tag
@@ -2129,7 +2136,10 @@ bay hides both, because a click that misses the sphere puts the item into the ba
   (`Minecraft#handleKeybinds` drains both in one loop), which is harmless: both hold the same item.
 * **The hint says so, and says which way the number ranks**: the hover tip's third line is "Hold with an empty hand to
   set the priority; higher fills first", and the rack bay's Ponder line says the same. The direction of the scale is
-  unchanged (0 is no priority, higher fills first), as this ADR decided.
+  unchanged (0 is no priority, higher fills first), as this ADR decided. *(Issue #47, ADR-078: both texts now also say
+  that a higher priority empties last; to fit the 320 px line the tip was reworded to "Priority: hold with an empty
+  hand; higher fills first, empties last", in German "Priorität: mit leerer Hand halten; hohe zuerst voll, zuletzt
+  leer".)*
 * **No mixin, no new packet, no save change, but a new network version.** The client still sends vanilla's
   `ServerboundUseItemOnPacket` and the server answers it, so no payload's bytes change. `WareworksNetwork.VERSION`
   still goes from `"13"` to `"14"`, because client and server now disagree about who applies the click: a newer client
@@ -7299,7 +7309,7 @@ a new costume. A filled container must therefore **never be put down on the way*
   empties owed and the fluid already promised at each bay, and all three feed the existing availability formula, so
   the numbers cannot disagree.
 * **Planning.** The request stage calls `JobPlanner#planFill` for a `FILL` request. It ranks (rack, bay) pairs by
-  crane → rack → bay → station and caps each trip by both carry limits, the bay's live `simulateFill` and its free
+  crane → rack → bay → station (since ADR-078 after the bay's and then the rack's storage priority, lowest first) and caps each trip by both carry limits, the bay's live `simulateFill` and its free
   whole containers. Without empties it answers the new `NoJobReason.NO_EMPTY_CONTAINERS`, declared right after
   `NOT_IN_STOCK`. That reason **arms no back-off**: one request lacking a bucket must not stop storing from every
   input, least of all the bucket that would cure it. A rerouted `FILL` job behaves exactly like a retrieve: storage
@@ -7813,6 +7823,71 @@ aisle's hold ends. `ItemCensus` counts a remote without its link. Checked by `Re
 `TerminalCraftTextWidthTest` (the red craft line), `RemoteGameTests`, `WareworksItemGameTests` (recipe, grid, tab
 order), the visual scenarios `remote`, `blocks` and `tooltips`, and `runRobustnessTest` (the terminal's save data
 changed).
+
+### ADR-078 — A retrieval empties the lowest storage priority first; among equal priorities the shortest path still decides ([issue #47](https://github.com/Richie1710/create-wareworks/issues/47))
+
+*Context:* ADR-028 made the storage priority a storing rule only and kept it out of retrieval on purpose: "a high
+priority must never send the crane past a nearer location that holds the same item". Play showed the cost of that
+rule. A player who prioritises the racks and leaves the overflow chests at 0 gets exactly the filling order wanted, but
+every order then takes whatever is nearest, which is usually a rack, so the racks are emptied and refilled while the
+overflow stays full for ever. A player reads a priority as "fill this first", and the natural other half of that is
+"empty this last". Every withdrawal from storage goes through `JobPlanner`, and only two methods there choose a source:
+`planOutOfStorage` (every `RETRIEVE` and every `SUPPLY`: terminal clicks, JEI lays from stock, the craft panel's Fetch,
+list orders, package doors, warehouse outputs in every redstone mode, computer requests, production orders, stock rule
+restocks and make offers) and `planFill` (the empty containers' rack and the fluid's bay of a fill trip). The priority
+function `PlannerInput#storePriority` was already wired and cached for storing (`AisleFilters`, ADR-028), and a fluid
+bay is a storage location with a priority of its own.
+
+*Decision:*
+* **A retrieval takes from the location with the lowest priority that holds the item.** `planOutOfStorage` reads
+  `storePriority` for each real candidate (after the availability, refusal and reservation filters, so only real
+  candidates pay for it; every one of them is loaded) and sorts them by `JobPlanner#SOURCE_RANKING`: priority
+  **ascending** → travel time crane → source → target → index order. Among locations of the same priority the shortest
+  path still decides, exactly as before. A trip larger than one source is split as before (a short source ends the job
+  with fewer items and the request is planned again), and every trip drains the lowest priority that still holds an
+  unreserved item, so the overflow is emptied before the next priority is touched.
+* **A comparator of its own, not `RANKING`.** `RANKING` puts the higher priority first and carries four keys (class,
+  filter, consolidation, compatibility) that are constants for a source. A second comparator states the retrieval
+  order in three keys instead of negating a value inside the shared one, which would trip over `-Integer.MIN_VALUE` the
+  day the range widens.
+* **No switch and no config.** The owner decided that the priority simply means both halves, and a warehouse without
+  priorities must not notice the change at all.
+* **All priorities equal, all 0 included, is the old order literally.** With a uniform priority the first key answers 0
+  for every pair, and the remaining keys are the two the old ranking effectively had on this path (its first four keys
+  were constants), so the candidates are tried in the same order, with the same sequence of live extracts and the same
+  result. `JobPlannerTest#uniformPrioritiesReproduceTheOldRetrievalOrder` walks seeded layouts for `RETRIEVE` and
+  `SUPPLY` against an input built without a priority, one at 0 and one at 7, and against the travel-time order computed
+  independently.
+* **Fill trips: the bay's priority first, then the rack's, then travel.** A fill trip takes two things out of storage.
+  The fluid is what was asked for, so the (rack, bay) pairs of `planFill` are ranked by the bay's priority ascending,
+  then by the rack's (the empty containers) ascending, then by crane → rack → bay → station, then by index order. A
+  rack's priority never sends a trip to a bay of a higher priority. With every priority equal this is M31's order.
+* **Storing is unchanged**, and so are the paths that only pick targets: `selectStation` still passes
+  `NEUTRAL_PRIORITY`, the reroutes into storage still read the priority higher first, and an accepting port is never a
+  source.
+
+*Rejected:*
+* **A separate "retrieval priority" per location**, or a second board row. It doubles the setting a player has to keep
+  in step with the first, and the one number already says what is wanted.
+* **The priority below travel time on retrieval** (as a tie-breaker only). On a real aisle two sources almost never
+  cost exactly the same, so it would have changed nothing the issue complains about.
+* **A tidy-up job that moves stock from the overflow into the racks.** It moves items nobody asked for and spends crane
+  time; draining the overflow by the orders that happen anyway reaches the same state for free.
+
+*Consequences:* A warehouse whose racks are prioritised above its overflow chests now drains the overflow first, by
+every path that takes out of storage. A warehouse without priorities behaves exactly as before. Where a priority was set
+to keep items near the door, an order may now take a longer way; that is accepted, the crane follows the priorities.
+ADR-028's rule "a priority never sends the crane past a nearer location that holds the same item" no longer holds for
+retrieval, and its consequence "fill last is not directly expressible" softens: a location at 0 between prioritised ones
+is now also the one emptied first. With several cranes (ADR-075) each planner run applies the rule within what the
+planning crane may reach, so a lowest-priority holder outside the chosen crane's reach is treated like an unloaded
+location, as every other source rule already is. The player-facing texts say "higher fills first, empties last" (the
+interface's hover tip and the rack bay Ponder scene). Nothing new is saved or synced, so worlds load unchanged.
+Checked by `JobPlannerTest` (lowest first although farther, equal priorities by travel, uniform priorities as before,
+a split retrieval draining the priorities in order), `JobPlannerFillTest` (bay first, rack second, uniform as before),
+`StoragePriorityGameTests` (a terminal click, a warehouse output's redstone request and a production order's
+ingredients, each served out of a farther overflow at 0 before a nearer rack at 5) and the visual scenario
+`priorities`, whose closing retrieval now goes past the cheaper prioritised sources to an unprioritised one.
 
 ## Persistence & sync
 

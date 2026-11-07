@@ -95,10 +95,11 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *   <li><b>a changed number takes effect</b> — in the Flywheel pass one location is raised from 0 to
  *       {@value #CHANGED_PRIORITY} between two shots of the same camera, a second item type is fed, and it lands
  *       there instead of in the two unprioritised locations nearer to the input that would have taken it before;</li>
- *   <li><b>retrieval ignores all of it</b> — the closing request is served out of the location prioritised
- *       {@value #FALLBACK_PRIORITY} because it is the cheaper source, not out of the one prioritised
- *       {@value #PREFERRED_PRIORITY}. The crane is standing beyond both when the job is planned, so the two travel
- *       times really differ (on a straight aisle every source <i>between</i> crane and output costs the same).</li>
+ *   <li><b>retrieval empties the lowest priority first</b> (issue #47, ADR-078) — before the closing request a player
+ *       puts {@value #REQUEST_AMOUNT} gold ingots by hand into the unprioritised location at the input end of the row,
+ *       and the request is served out of that one: past the location prioritised {@value #FALLBACK_PRIORITY}, which
+ *       lies between the crane and the output and is by far the cheaper source, and past the one prioritised
+ *       {@value #PREFERRED_PRIORITY}. What a player fills first is emptied last.</li>
  * </ul>
  * The order of the deliveries is recorded per server poll and asserted as a sequence, not just as a final total: which
  * location received which items, in which order.
@@ -253,13 +254,19 @@ public final class PrioritiesVisualScenario implements VisualScenario {
      *       travel time;</li>
      *   <li>the location the pass raises sits <b>between</b> the preferred one and the fallback. That is what makes the
      *       closing retrieval mean something: the crane ends its trip there, so the fallback lies between the crane and
-     *       the output and the preferred one lies behind it. On a straight aisle every source between crane and output
-     *       costs the same, so any other arrangement would have compared two equal travel times and proved nothing.</li>
+     *       the output and costs nothing extra, while the first location of the row, where the gold put in by hand lies
+     *       at priority 0, is the dearest source of all. Only the priority can send the crane back there.</li>
      * </ul>
      */
     private static final List<Rack> ROW = List.of(Rack.ordinary(2), Rack.ordinary(3), Rack.preferred(4),
             Rack.dedicated(5, DEDICATED_TO), Rack.of(6, Role.CHANGED, NO_PRIORITY),
             Rack.of(7, Role.FALLBACK, FALLBACK_PRIORITY));
+    /**
+     * Where the closing retrieval's items are put by hand (issue #47): the first location of the row, unprioritised and
+     * empty until then, and the farthest from the crane once it stands at the raised location, one position before the
+     * fallback. The request empties it again, so both passes photograph the row as the store phases left it.
+     */
+    private static final RackPosition HAND_FILLED = ROW.getFirst().position();
 
     // Cameras, relative to the lower corner of the dock block. The row occupies x 2..8 at z -1..0 and y 2..3, so its
     // faces lie on the plane z = 0 and the aisle line (rails, crane) is z 0..1. The player is a real creature here, so
@@ -388,9 +395,9 @@ public final class PrioritiesVisualScenario implements VisualScenario {
         if (pass == VisualPass.FLYWHEEL) {
             fly(script);
             changeAPriority(script);
-            // The closing retrieval parks the crane past the whole row and proves that a priority never reaches the
-            // retrieval path. Both passes shoot the same settled scene afterwards.
-            retrieveFromTheCheaperSource(script);
+            // The closing retrieval empties the lowest priority first and parks the crane past the whole row. Both
+            // passes shoot the same settled scene afterwards.
+            retrieveFromTheLowestPriority(script);
         }
 
         fly(script);
@@ -413,8 +420,8 @@ public final class PrioritiesVisualScenario implements VisualScenario {
             script.client("priorities: every check passed",
                     context -> LOGGER.info(PREFIX + "priorities: ALL CHECKS PASSED (the priority decides, a filter "
                             + "outranks it, the preferred location fills until it is full, the prioritised fallback "
-                            + "takes the overflow, a changed number takes effect, retrieval ignores priorities, "
-                            + "goggles)"));
+                            + "takes the overflow, a changed number takes effect, retrieval empties the lowest "
+                            + "priority first, goggles)"));
         }
     }
 
@@ -451,15 +458,19 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     }
 
     /**
-     * The closing retrieval. It is the only place this scenario asks the warehouse for something back, and it is set up
-     * so that the answer means something: the crane stands <b>past</b> both gold sources when the job is planned, so
-     * the source prioritised {@value #FALLBACK_PRIORITY} is genuinely cheaper than the one prioritised
-     * {@value #PREFERRED_PRIORITY}, and taking the cheaper one is what "a priority never sends the crane past a nearer
-     * source" looks like. On a straight aisle every source between the crane and the output costs the same, so a crane
-     * parked at the input end would have made the check vacuous.
+     * The closing retrieval (issue #47, ADR-078). It is the only place this scenario asks the warehouse for something
+     * back, and it is set up so that the answer means something: {@value #REQUEST_AMOUNT} gold ingots are put by hand
+     * into the unprioritised location at the input end of the row, and the crane stands at the raised location, one
+     * position before the fallback, when the job is planned (it ends the change phase's trip there). The fallback, prioritised {@value #FALLBACK_PRIORITY}, then lies between the crane and the output and
+     * costs nothing extra, the preferred one ({@value #PREFERRED_PRIORITY}) a little, and the hand-filled one at 0 the
+     * most. Travel time would take the fallback; the priority sends the crane all the way back.
      */
-    private void retrieveFromTheCheaperSource(VisualScript script) {
-        script.server("priorities: ask the output for " + REQUEST_AMOUNT + " " + STORED + " with a redstone pulse",
+    private void retrieveFromTheLowestPriority(VisualScript script) {
+        script.server("priorities: put " + REQUEST_AMOUNT + " " + STORED + " by hand into " + HAND_FILLED,
+                        PrioritiesVisualScenario::fillByHand)
+                .serverUntil("priorities: wait until the controller has read the hand-filled location",
+                        PrioritiesVisualScenario::handFilledIndexed, SYNC_TIMEOUT_TICKS)
+                .server("priorities: ask the output for " + REQUEST_AMOUNT + " " + STORED + " with a redstone pulse",
                         PrioritiesVisualScenario::requestStored)
                 .serverUntil("priorities: wait until the output has the requested items",
                         PrioritiesVisualScenario::requestDelivered, DELIVERED_TIMEOUT_TICKS)
@@ -961,9 +972,27 @@ public final class PrioritiesVisualScenario implements VisualScenario {
     }
 
     /**
-     * The crane is idle past the whole row, and the items came out of the location prioritised
-     * {@value #FALLBACK_PRIORITY} — the cheaper source — while the one prioritised {@value #PREFERRED_PRIORITY} was
-     * left untouched.
+     * Puts {@value #REQUEST_AMOUNT} of the stored item into the unprioritised location at the input end of the row, the
+     * way a player's hopper or hand would: the warehouse learns about it only by reading the inventory.
+     */
+    private static void fillByHand(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        insertAll(level, inventoryPos(layout(context.origin()), HAND_FILLED), new ItemStack(STORED, REQUEST_AMOUNT));
+    }
+
+    /** The controller's index counts the hand-filled items, so the request below is planned with all three sources. */
+    private static boolean handFilledIndexed(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = WareworksBlockEntityTypes.WAREHOUSE_CONTROLLER.getNullable(
+                server.overworld(), controllerPos(context.origin()));
+        if (controller == null)
+            throw new VisualTestException("the controller of the aisle is missing");
+        return controller.countOf(ItemKey.of(STORED)) == GOLD_FED + REQUEST_AMOUNT;
+    }
+
+    /**
+     * The crane is idle past the whole row, and the items came out of the hand-filled location at priority 0 — the
+     * dearest source of the three — while the ones prioritised {@value #FALLBACK_PRIORITY} and
+     * {@value #PREFERRED_PRIORITY} were left untouched.
      */
     private boolean craneParkedAtOutput(MinecraftServer server, VisualContext context) {
         ServerLevel level = server.overworld();
@@ -983,15 +1012,18 @@ public final class PrioritiesVisualScenario implements VisualScenario {
                 - countAt(level, inventoryPos(layout, rack(Role.PREFERRED).position()), STORED);
         long fromFallback = FALLBACK_BATCH
                 - countAt(level, inventoryPos(layout, rack(Role.FALLBACK).position()), STORED);
-        if (fromPreferred != 0 || fromFallback != REQUEST_AMOUNT)
-            throw new VisualTestException("the retrieval took " + fromPreferred + " out of the location prioritised "
-                    + PREFERRED_PRIORITY + " and " + fromFallback + " out of the one prioritised " + FALLBACK_PRIORITY
-                    + ", expected 0 and " + REQUEST_AMOUNT + ": a priority must not decide where items come from");
-        assertConserved(level, dock,
-                Map.of(ItemKey.of(STORED), (long) GOLD_FED, ItemKey.of(CHANGED_ITEM), (long) CHANGE_BATCH));
-        LOGGER.info(PREFIX + "priorities: CHECK retrieval ignored the priorities: all {} {} came out of {} "
-                        + "(priority {}), none out of {} (priority {}); the crane is parked at x={}", REQUEST_AMOUNT,
-                STORED, rack(Role.FALLBACK).position(), FALLBACK_PRIORITY, rack(Role.PREFERRED).position(),
+        long fromHand = REQUEST_AMOUNT - countAt(level, inventoryPos(layout, HAND_FILLED), STORED);
+        if (fromPreferred != 0 || fromFallback != 0 || fromHand != REQUEST_AMOUNT)
+            throw new VisualTestException("the retrieval took " + fromHand + " out of the unprioritised location "
+                    + HAND_FILLED + ", " + fromFallback + " out of the one prioritised " + FALLBACK_PRIORITY + " and "
+                    + fromPreferred + " out of the one prioritised " + PREFERRED_PRIORITY + ", expected "
+                    + REQUEST_AMOUNT + ", 0 and 0: a retrieval empties the lowest priority first");
+        assertConserved(level, dock, Map.of(ItemKey.of(STORED), (long) GOLD_FED + REQUEST_AMOUNT,
+                ItemKey.of(CHANGED_ITEM), (long) CHANGE_BATCH));
+        LOGGER.info(PREFIX + "priorities: CHECK retrieval emptied the lowest priority first: all {} {} came out of {} "
+                        + "(priority {}), none out of the cheaper {} (priority {}) or {} (priority {}); the crane is "
+                        + "parked at x={}", REQUEST_AMOUNT, STORED, HAND_FILLED, NO_PRIORITY,
+                rack(Role.FALLBACK).position(), FALLBACK_PRIORITY, rack(Role.PREFERRED).position(),
                 PREFERRED_PRIORITY, String.format(Locale.ROOT, "%.2f", crane.craneState().pose().x()));
         return true;
     }
