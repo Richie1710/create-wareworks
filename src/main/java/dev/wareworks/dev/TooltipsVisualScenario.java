@@ -74,8 +74,8 @@ public final class TooltipsVisualScenario implements VisualScenario {
     private static final List<String> ITEM_IDS = List.of("stacker_crane", "warehouse_rail", "warehouse_controller",
             "warehouse_interface", "rack_bay_wood", "rack_bay_andesite", "rack_bay_brass", "fluid_bay_copper",
             "fluid_bay_brass", "warehouse_input", "warehouse_output", "warehouse_terminal", "warehouse_production",
-            "warehouse_crafter_feeder", "warehouse_stock_keeper", "warehouse_home_point", "hand_truck",
-            "warehouse_remote");
+            "warehouse_crafter_feeder", "warehouse_stock_keeper", "warehouse_optimizer", "warehouse_home_point",
+            "hand_truck", "warehouse_remote");
 
     /** The Shift tooltip of every item in the language measured last, by item path, for the shots after it. */
     private final Map<String, List<Component>> measured = new HashMap<>();

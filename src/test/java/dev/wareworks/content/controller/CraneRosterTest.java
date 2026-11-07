@@ -104,4 +104,21 @@ class CraneRosterTest {
         assertEquals(four, CraneCounts.unpack(four.pack()));
         assertEquals(CraneCounts.NONE, CraneCounts.unpack(new int[] {1, 2}), "the wrong length reads as none");
     }
+
+    /** A relocation (issue #46) is a job of the crane's own: counted as working, named with its target, packed whole. */
+    @Test
+    void aRelocatingCraneIsWorkingAndTravelsWhole() {
+        assertTrue(CraneRoster.Activity.RELOCATING.isJob());
+        assertFalse(CraneRoster.Activity.RELOCATING.namesCrane());
+        CraneRoster roster = CraneRoster.of(List.of(
+                new CraneRoster.Entry(1, CraneRoster.Activity.RELOCATING, 4, Optional.of(TARGET), 7),
+                entry(2, CraneRoster.Activity.IDLE)), 0, 4);
+        assertEquals(new CraneCounts(2, 1, 0, 0), roster.counts());
+        CraneRoster read = CraneRoster.unpack(roster.pack()).orElseThrow();
+        assertEquals(roster, read);
+        assertEquals(CraneRoster.Activity.RELOCATING, read.entries().get(0).activity());
+        assertEquals(Optional.of(TARGET), read.entries().get(0).target());
+        assertEquals(0, read.entries().get(0).otherCrane(), "a relocation waits for nobody");
+        assertEquals(7, read.entries().get(0).seconds());
+    }
 }

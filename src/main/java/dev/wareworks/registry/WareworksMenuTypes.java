@@ -4,6 +4,7 @@ import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.tterrag.registrate.util.entry.MenuEntry;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.station.OptimizerMenu;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.StockKeeperMenu;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
@@ -37,6 +38,12 @@ public final class WareworksMenuTypes {
     public static final MenuEntry<StockKeeperMenu> WAREHOUSE_STOCK_KEEPER = REGISTRATE
             .menu("warehouse_stock_keeper", StockKeeperMenu::new,
                     () -> dev.wareworks.client.gui.WarehouseStockKeeperScreen::new)
+            .register();
+
+    /** The Warehouse Optimizer's screen (issue #46, ADR-079). */
+    public static final MenuEntry<OptimizerMenu> WAREHOUSE_OPTIMIZER = REGISTRATE
+            .menu("warehouse_optimizer", OptimizerMenu::new,
+                    () -> dev.wareworks.client.gui.WarehouseOptimizerScreen::new)
             .register();
 
     private WareworksMenuTypes() {

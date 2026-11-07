@@ -18,6 +18,7 @@ import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseProductionBlock;
+import dev.wareworks.content.station.WarehouseOptimizerBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.storage.FluidBayBlock;
@@ -35,7 +36,7 @@ import net.minecraft.world.level.material.MapColor;
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
  * controller, interface, the three rack bays (wood, andesite, brass), the two fluid bays (copper, brass), input,
- * output, terminal, production station, crafter feeder, stock keeper, home point (GameTest
+ * output, terminal, production station, crafter feeder, stock keeper, optimizer, home point (GameTest
  * {@code creativetaborderandicon}). The bays
  * stand directly after the interface because they are the other half of the same answer: an interface turns somebody
  * else's inventory into a storage location, a bay <b>is</b> one — and the fluid bays stand directly after the item
@@ -311,6 +312,30 @@ public final class WareworksBlocks {
                     .transform(TagGen.pickaxeOnly())
                     .transform(WareworksTags.relocationProtected())
                     .blockstate(WareworksBlockStateGen.stockKeeperBlockProvider())
+                    .item()
+                    .transform(ModelGen.customItemModel("_", "block"))
+                    .register();
+
+    /**
+     * Warehouse Optimizer (issue #46, ADR-079). The aisle member that lists the items a player wants moved up to better
+     * storage locations and asks the warehouse to do it, on request and for a bounded number of trips. Built like the
+     * stock keeper, beside which it stands in the creative tab: a horizontal blockstate over the hand-made
+     * {@code models/block/warehouse_optimizer/block.json} (authored with the aisle side facing north), which is also the
+     * item model.
+     * <p>
+     * It holds no items, so a schematic may carry its list along: like the keeper it is deliberately <i>not</i> in
+     * {@code create:safe_nbt} ({@code WarehouseOptimizerBlockEntity#writeSafe}). A wrench pickup and a broken block drop
+     * through the loot table and keep no list. Does not conduct redstone, like the other members that sit in a rack
+     * row. Protected from contraptions; drops itself.
+     */
+    public static final BlockEntry<WarehouseOptimizerBlock> WAREHOUSE_OPTIMIZER =
+            REGISTRATE.block("warehouse_optimizer", WarehouseOptimizerBlock::new)
+                    .initialProperties(SharedProperties::softMetal)
+                    .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.NETHERITE_BLOCK)
+                            .isRedstoneConductor((state, level, pos) -> false))
+                    .transform(TagGen.pickaxeOnly())
+                    .transform(WareworksTags.relocationProtected())
+                    .blockstate(BlockStateGen.horizontalBlockProvider(true))
                     .item()
                     .transform(ModelGen.customItemModel("_", "block"))
                     .register();

@@ -149,6 +149,15 @@ import dev.wareworks.core.inventory.StockView;
  *                             filled key, the bays holding that fluid and their live fill. Consulted only for a
  *                             {@link RequestKind#FILL} request; the default {@link FillSupply#none()} makes an input
  *                             built without it <b>literally</b> the input the planner received before M31
+ * @param relocations          what the warehouse's optimizers asked to move to a better storage location (issue #46,
+ *                             ADR-079), oldest order first, at most one need per key. Planned by the <b>last</b> stage of
+ *                             {@link JobPlanner#plan}, only when no request, supply or arrival produced a job, so a
+ *                             relocation never makes anybody wait. The default is the empty list, which makes an input
+ *                             built without it <b>literally</b> the input the planner received before issue #46
+ * @param relocateTarget       whether a storage location may receive a relocation of a key at all: the property-of-the-place
+ *                             half of the strictly-better rule ({@link RelocationRule}), which the content layer answers
+ *                             with "not a fluid bay". Consulted for the relocation stage and the {@code RELOCATE} reroute
+ *                             only; the default lets every location through
  * @param liveSimulationBudget maximum number of live callback calls per planner run (bounds the cost of a full
  *                             warehouse or a long fall-through)
  * @param <K>                  item key type
@@ -167,6 +176,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Predicate<? super L> roomBound, ToIntFunction<? super K> stackSize,
         BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
         ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, FillSupply<K, L> fillSupply,
+        List<RelocateNeed<K>> relocations, BiPredicate<? super L, ? super K> relocateTarget,
         int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
@@ -259,6 +269,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Objects.requireNonNull(portRank, "portRank");
         Objects.requireNonNull(storeHeadroom, "storeHeadroom");
         Objects.requireNonNull(fillSupply, "fillSupply");
+        relocations = List.copyOf(relocations);
+        Objects.requireNonNull(relocateTarget, "relocateTarget");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
     }
@@ -368,6 +380,37 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
     }
 
     /**
+     * One key a Warehouse Optimizer asked to move to a better storage location (issue #46, ADR-079), as the planner sees
+     * it.
+     *
+     * @param id      the optimizer order's entry, which {@link PlanResult#relocationsExhausted()} names when nothing
+     *                more of the key fits anywhere better
+     * @param key     the item
+     * @param movable  how many of it may still move: the free surplus, after open requests, owed containers, production
+     *                 ingredients, a stock rule's reserve and the relocations already on their way. At least 1
+     * @param heldBack how many of the items no job has reserved at their location are spoken for all the same (open
+     *                 requests, owed containers, production ingredients, a reserve): they <b>stay where they lie</b>, and
+     *                 they lie in the worst places, because that is where a retrieve takes them from (#47). Without
+     *                 this, every trip would leave the free surplus as large as before — the moved items still count —
+     *                 and an order would carry the spoken-for items up as well, trip by trip
+     * @param <K>      item key type
+     */
+    public record RelocateNeed<K>(UUID id, K key, long movable, long heldBack) {
+        public RelocateNeed {
+            Objects.requireNonNull(id, "id");
+            Objects.requireNonNull(key, "key");
+            if (movable < 1)
+                throw new IllegalArgumentException("movable must be at least 1: " + movable);
+            heldBack = Math.max(0L, heldBack);
+        }
+
+        /** A need of which nothing is held back. */
+        public RelocateNeed(UUID id, K key, long movable) {
+            this(id, key, movable, 0L);
+        }
+    }
+
+    /**
      * One ingredient an open production order still owes its production station, as the planner sees it
      * ({@code docs/warehouse-system.md} §3.5, ADR-024).
      * <p>
@@ -444,6 +487,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private ToIntFunction<? super L> portRank = NO_PORT_RANK;
         private ToLongFunction<? super K> storeHeadroom = UNLIMITED_HEADROOM;
         private FillSupply<K, L> fillSupply = FillSupply.none();
+        private List<RelocateNeed<K>> relocations = List.of();
+        private BiPredicate<? super L, ? super K> relocateTarget = (location, key) -> true;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
         private Builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
@@ -656,6 +701,25 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * What the warehouse's optimizers asked to move ({@link PlannerInput#relocations()}). Left out, it is the empty
+         * list — the answer of a warehouse without an optimizer order, and the input the planner received before issue
+         * #46.
+         */
+        public Builder<K, L> relocations(List<RelocateNeed<K>> relocations) {
+            this.relocations = relocations;
+            return this;
+        }
+
+        /**
+         * Whether a location may receive a relocation of a key at all ({@link PlannerInput#relocateTarget()}). Left out,
+         * every location may.
+         */
+        public Builder<K, L> relocateTarget(BiPredicate<? super L, ? super K> relocateTarget) {
+            this.relocateTarget = relocateTarget;
+            return this;
+        }
+
         public Builder<K, L> liveSimulationBudget(int liveSimulationBudget) {
             this.liveSimulationBudget = liveSimulationBudget;
             return this;
@@ -669,7 +733,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     inputBuffers, inputCursor, LocationAvailability.of(available),
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, roomBound,
                     stackSize, storeFilter, storePriority,
-                    portRank, storeHeadroom, fillSupply, liveSimulationBudget);
+                    portRank, storeHeadroom, fillSupply, relocations, relocateTarget, liveSimulationBudget);
         }
     }
 }

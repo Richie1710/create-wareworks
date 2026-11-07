@@ -62,11 +62,13 @@ import dev.wareworks.core.crane.AbortReason;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.HomeReturn;
 import dev.wareworks.core.inventory.InventorySnapshot;
+import dev.wareworks.core.inventory.LocationCount;
 import dev.wareworks.core.inventory.SharedInventories;
 import dev.wareworks.core.inventory.SnapshotQueue;
 import dev.wareworks.core.inventory.StockIndex;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.FilterMatch;
+import dev.wareworks.core.job.JobPlanner;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.PlannerInput;
@@ -77,6 +79,9 @@ import dev.wareworks.core.job.Reservation;
 import dev.wareworks.core.job.ReservationView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.optimizer.OptimizerOrder;
+import dev.wareworks.core.optimizer.OptimizerOrders;
+import dev.wareworks.core.optimizer.RelocationStock;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
@@ -104,6 +109,7 @@ import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.RestockPlan;
 import dev.wareworks.core.stock.RestockPlanner;
 import dev.wareworks.content.station.KeeperRule;
+import dev.wareworks.core.stock.PriorityBreakdown;
 import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.stock.StockAvailability;
 import dev.wareworks.core.stock.StockLevels;
@@ -360,6 +366,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             new ProductionOrders<>(configuredMaxProductionOrders());
     /** Job planning and reservations; derived from the crane's job, not saved. */
     private final CraneDispatch dispatch = new CraneDispatch(this);
+    /**
+     * The Warehouse Optimizer orders of this warehouse (issue #46, ADR-079), by optimizer: the items each asked to move
+     * up to a better storage location, its trips left and what it moved. Saved
+     * ({@link ControllerPersistence#OPTIMIZER_ORDERS_TAG}) only while there is one.
+     */
+    private final OptimizerOrders<ItemKey, RackPosition> optimizerOrders = new OptimizerOrders<>();
     /**
      * The cranes of this warehouse and, while it has more than one, the traffic between them (issue #14, ADR-075). The
      * list of cranes and their last known claims are saved ({@link ControllerPersistence#CRANES_TAG}) only while there
@@ -1791,7 +1803,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Map<ItemKey, Long> requested = itemPromisedByKey();
         Map<ItemKey, Long> ingredients = productionOrders.outstandingIngredientsByKey();
         ReservationView<ItemKey, RackPosition> reservations = dispatch.reservations();
-        return key -> reservations.availableStock(key, stock.count(key),
+        // Relocated items are added back exactly as in availableStock (issue #46): a tidy-up never hides stock.
+        return key -> reservations.availableStock(key,
+                RelocationStock.counted(stock.count(key), dispatch.relocatingInFlight(key)),
                 requested.getOrDefault(key, 0L) + ingredients.getOrDefault(key, 0L));
     }
 
@@ -3052,13 +3066,329 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * minus stock reserved for jobs that serve no request, minus what the open requests for {@code key} still need from
      * storage (their remaining amounts without the items already in the crane's head for them). Reservations backing a
      * request are inside its remaining amount and are not subtracted twice. Never negative.
+     * <p>
+     * <b>Items a Warehouse Optimizer is moving are added back</b> (issue #46, ADR-079): a relocation reserves its stock
+     * at the source before the pick and carries it outside the index after it, and neither may make a player's request
+     * see less than the warehouse holds. Such a request is planned from other sources, or waits one trip until the items
+     * land.
      */
     public long availableStock(ItemKey key) {
         Objects.requireNonNull(key, "key");
         // Open production orders promise their ingredients exactly as open requests promise their items: both are
         // already spoken for, so neither may be handed out twice (§3.5, ADR-024).
-        return dispatch.reservations().availableStock(key, stock.count(key),
+        return dispatch.reservations().availableStock(key,
+                RelocationStock.counted(stock.count(key), dispatch.relocatingInFlight(key)),
                 requests.remainingOf(key) + fillLedger().owedEmpties(key) + productionOrders.outstandingIngredient(key));
+    }
+
+    /**
+     * What the warehouse holds of {@code key}: the indexed count plus what a Warehouse Optimizer's crane carries of it
+     * right now (issue #46, ADR-079), which is out of the index until the drop. What decides whether a terminal still
+     * offers the item and accepts a request for it, so a tidy-up never makes an item vanish from the screen.
+     */
+    public long heldCount(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        return stock.count(key) + dispatch.relocationsByKey().getOrDefault(key, RelocationStock.Moving.NONE).carried();
+    }
+
+    /**
+     * What the Warehouse Optimizer's trips are moving right now, per item (issue #46, ADR-079): for a caller that lists
+     * every item at once (a terminal's stock snapshot), so the relocated items are counted back in with one walk over
+     * the cranes' jobs rather than one per item. Empty while nothing is relocated.
+     */
+    public Map<ItemKey, RelocationStock.Moving> relocationsMoving() {
+        return dispatch.relocationsByKey();
+    }
+
+    // --- warehouse optimizer (issue #46, ADR-079) ---------------------------------------------------------------------
+
+    /**
+     * Starts a fresh order for the Warehouse Optimizer at {@code optimizer}: move {@code keys} (each once, in order, at
+     * most {@code OptimizerLimits#MAX_ROWS}) up to better storage locations, at most {@code optimizer.tripsPerRequest}
+     * trips. It replaces whatever order that optimizer had; a trip of the old one under way is finished all the same.
+     * Nothing is checked against the stock here: an item with nothing that may move, or nowhere better to go, simply
+     * ends at the next dispatch.
+     * <p>
+     * Only an optimizer this warehouse records as a member may start one: removing a member is what forgets its order
+     * ({@code processMembership}), and a misaligned block never becomes one, so an order it started would outlive the
+     * block with nobody left to cancel it.
+     *
+     * @return what happened, or empty when {@code optimizer} is no Warehouse Optimizer member of this warehouse (server
+     *         only)
+     */
+    public Optional<OptimizerOrders.Start> startOptimizerOrder(BlockPos optimizer, List<ItemKey> keys) {
+        Objects.requireNonNull(optimizer, "optimizer");
+        Objects.requireNonNull(keys, "keys");
+        if (level == null || level.isClientSide)
+            return Optional.empty();
+        Optional<RackPosition> rack = rackAt(optimizer);
+        if (rack.isEmpty() || membership.kindAt(rack.get()).orElse(null) != LocationKind.OPTIMIZER)
+            return Optional.empty();
+        OptimizerOrders.Start started = optimizerOrders.start(rack.get(), keys,
+                WareworksConfig.optimizerTripsPerRequest());
+        if (started == OptimizerOrders.Start.STARTED) {
+            setChanged();
+            // Event driven like every other new work: the next dispatch plans it, nothing polls (M19).
+            markChunkKeepDirty();
+        }
+        return Optional.of(started);
+    }
+
+    /**
+     * Cancels the running order of the optimizer at {@code optimizer}: no further trip is planned for it, and a trip
+     * under way is finished and still counted.
+     *
+     * @return whether a running order was cancelled
+     */
+    public boolean cancelOptimizerOrder(BlockPos optimizer) {
+        Optional<RackPosition> rack = rackAt(Objects.requireNonNull(optimizer, "optimizer"));
+        if (rack.isEmpty() || !optimizerOrders.cancel(rack.get()))
+            return false;
+        setChanged();
+        return true;
+    }
+
+    /**
+     * Forgets the order of the optimizer at {@code optimizer}, running or finished: the optimizer was removed. A trip
+     * under way is finished all the same.
+     *
+     * @return whether there was one
+     */
+    public boolean removeOptimizerOrder(BlockPos optimizer) {
+        Optional<RackPosition> rack = rackAt(Objects.requireNonNull(optimizer, "optimizer"));
+        if (rack.isEmpty() || !optimizerOrders.remove(rack.get()))
+            return false;
+        setChanged();
+        return true;
+    }
+
+    /**
+     * The order of the optimizer at {@code optimizer}, running or finished (server): its state, its entries with what
+     * each moved, its trips left and the trips on their way. Empty when it has none, or is no rack position here.
+     */
+    public Optional<OptimizerOrder<ItemKey, RackPosition>> optimizerOrder(BlockPos optimizer) {
+        return rackAt(Objects.requireNonNull(optimizer, "optimizer")).flatMap(optimizerOrders::get);
+    }
+
+    /**
+     * How many items of {@code key} a Warehouse Optimizer may still move (issue #46, ADR-079): the free surplus only.
+     * <p>
+     * {@link #availableStock} already leaves out what open requests, owed fill containers and production ingredients
+     * need; the relocations on their way are taken off again (that figure adds them back), and a stock rule's reserve
+     * is held back as from any automation ({@link StockAccess#AUTOMATION}, the stricter of the two). Each source still
+     * gives at most what no job has reserved there, which the planner checks location by location.
+     * <p>
+     * This bound is only half of "reserved stock is left alone": an item moved up still counts, so after every trip the
+     * bound is as large as before. The other half is {@link #optimizerHeldBack}, the spoken-for items the planner and
+     * the view leave in the worst places.
+     */
+    public long optimizerMovable(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        long free = RelocationStock.free(availableStock(key), dispatch.relocatingInFlight(key));
+        return Math.max(0L, stockRules().availableTo(StockAccess.AUTOMATION, key, free));
+    }
+
+    /**
+     * How many of the indexed items of {@code key} that no job has reserved at their location are spoken for all the
+     * same, given that {@code movable} of them may move ({@link #optimizerMovable}): the open requests, owed
+     * containers, production ingredients and a reserve, as far as no job carries them yet. They stay where they lie,
+     * in the worst places ({@code PlannerInput.RelocateNeed#heldBack}). A bound alone would not do it: an item moved
+     * up still counts, so after every trip the free surplus is as large as before, and the order would carry the
+     * spoken-for items up as well, one trip after the other.
+     */
+    private long optimizerHeldBack(ItemKey key, long movable) {
+        return Math.max(0L, stock.count(key) - dispatch.reservations().reservedStock(key) - movable);
+    }
+
+    /**
+     * {@code holdings} with {@code heldBack} items taken off their free figures, the worst place first — the order in
+     * which {@link PriorityBreakdown} fills and the planner's relocation stage takes — so the view offers no item the
+     * planner would leave where it lies.
+     */
+    private static List<PriorityBreakdown.Holding> withoutHeldBack(List<PriorityBreakdown.Holding> holdings,
+            long heldBack) {
+        if (heldBack <= 0)
+            return holdings;
+        List<PriorityBreakdown.Holding> worstFirst = new ArrayList<>(holdings);
+        worstFirst.sort(Comparator.comparingInt(PriorityBreakdown.Holding::priority)
+                .thenComparing(PriorityBreakdown.Holding::filterRank, Comparator.reverseOrder()));
+        List<PriorityBreakdown.Holding> kept = new ArrayList<>(worstFirst.size());
+        long held = heldBack;
+        for (PriorityBreakdown.Holding holding : worstFirst) {
+            long off = Math.min(held, holding.free());
+            held -= off;
+            kept.add(new PriorityBreakdown.Holding(holding.priority(), holding.filterRank(), holding.count(),
+                    holding.free() - off));
+        }
+        return kept;
+    }
+
+    /**
+     * What a Warehouse Optimizer's screen shows for {@code keys} (issue #46, ADR-079), one breakdown per key in their
+     * order: the counts per storage priority, what the unloaded locations hold, and how many could move to a better
+     * place now. The whole of it — {@link #optimizerRooms} and the counts — in one call.
+     * <p>
+     * Asked only while a player has the optimizer's screen open, never by a tick: a screen that is looked at for a while
+     * keeps its rooms and asks {@link #optimizerView(List, Map)} for the counts alone ({@code OptimizerMenu}).
+     */
+    public List<PriorityBreakdown> optimizerView(List<ItemKey> keys) {
+        return optimizerView(keys, optimizerRooms(keys));
+    }
+
+    /**
+     * The counts half of {@link #optimizerView(List)}: for each key the loaded storage locations that hold it, by
+     * priority, and the free surplus of each, measured against {@code rooms} as an earlier {@link #optimizerRooms}
+     * found them. A key {@code rooms} does not know has nowhere to go.
+     * <p>
+     * A location whose chunk is not loaded is counted apart, because a location nobody can read reports no priority,
+     * and reading it as priority 0 would show stock where the player put none. A location that reads another one's
+     * inventory holds no counts of its own ({@link #sharedInventoryOf}). One index lookup per key and one map lookup per
+     * location that holds it; no world access but {@code isLoaded}.
+     */
+    public List<PriorityBreakdown> optimizerView(List<ItemKey> keys, Map<ItemKey, List<PriorityBreakdown.Room>> rooms) {
+        Objects.requireNonNull(keys, "keys");
+        Objects.requireNonNull(rooms, "rooms");
+        List<PriorityBreakdown> views = new ArrayList<>(keys.size());
+        ReservationView<ItemKey, RackPosition> reserved = dispatch.reservations();
+        for (ItemKey key : keys) {
+            List<PriorityBreakdown.Holding> holdings = new ArrayList<>();
+            long unloaded = 0;
+            for (LocationCount<RackPosition> held : stock.locationsOf(key)) {
+                RackPosition rack = held.location();
+                if (sharedInventories.isAlias(rack))
+                    continue;
+                if (!isStorageLoaded(rack)) {
+                    unloaded += held.count();
+                    continue;
+                }
+                holdings.add(new PriorityBreakdown.Holding(storePriorityAt(rack),
+                        storeFilterMatch(rack, key).storeRank(), held.count(),
+                        held.count() - reserved.reservedStock(rack, key)));
+            }
+            long movable = optimizerMovable(key);
+            views.add(PriorityBreakdown.of(withoutHeldBack(holdings, optimizerHeldBack(key, movable)), unloaded,
+                    rooms.getOrDefault(key, List.of()), movable));
+        }
+        return views;
+    }
+
+    /**
+     * The rooms half of {@link #optimizerView(List)}: for each key, every loaded storage location that could take more
+     * of it — by the same rule the planner's relocation stage uses (issue #46, ADR-079): its filter allows the key, it
+     * is no fluid bay, and its snapshot estimate is above what jobs already bring there. Whether it is <b>better</b> than
+     * where the key lies is left to {@link PriorityBreakdown#of}, which knows the sources.
+     * <p>
+     * One walk over the storage locations for all keys together, from the index snapshots and with no live call: an
+     * upper bound like the planner's own estimate. A location without a snapshot answers
+     * {@link PriorityBreakdown#UNKNOWN_ROOM}, which the screen shows as "?" and never adds. The one walk of the
+     * optimizer that grows with the warehouse, so its screen runs it at most every
+     * {@code OptimizerMenu#ROOM_INTERVAL_TICKS} and when its rows change.
+     */
+    public Map<ItemKey, List<PriorityBreakdown.Room>> optimizerRooms(List<ItemKey> keys) {
+        Objects.requireNonNull(keys, "keys");
+        Map<ItemKey, List<PriorityBreakdown.Room>> rooms = new LinkedHashMap<>();
+        for (ItemKey key : keys)
+            rooms.put(key, new ArrayList<>());
+        if (rooms.isEmpty() || level == null || layout == null)
+            return rooms;
+        JobPlanner.InsertEstimate<ItemKey, RackPosition> estimate =
+                JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), ItemKey::getMaxStackSize);
+        ReservationView<ItemKey, RackPosition> reserved = dispatch.reservations();
+        for (LocationRecord record : membership.records(LocationKind.STORAGE)) {
+            RackPosition rack = record.position();
+            // Never a target, whatever the snapshot says: an alias is counted by another location, and a fluid bay would
+            // drain a filled container (ADR-079).
+            if (sharedInventories.isAlias(rack) || takesFluidContainers(rack) || !isStorageLoaded(rack))
+                continue;
+            int priority = storePriorityAt(rack);
+            long alreadyComing = reserved.reservedCapacity(rack);
+            for (Map.Entry<ItemKey, List<PriorityBreakdown.Room>> entry : rooms.entrySet()) {
+                FilterMatch filter = storeFilterMatch(rack, entry.getKey());
+                if (!filter.allowsStoring())
+                    continue;
+                long insertable = estimate.estimateInsertable(rack, entry.getKey());
+                if (insertable == JobPlanner.UNKNOWN_CAPACITY) {
+                    entry.getValue().add(new PriorityBreakdown.Room(priority, filter.storeRank(),
+                            PriorityBreakdown.UNKNOWN_ROOM));
+                    continue;
+                }
+                long room = insertable - alreadyComing;
+                if (room > 0)
+                    entry.getValue().add(new PriorityBreakdown.Room(priority, filter.storeRank(), room));
+            }
+        }
+        return rooms;
+    }
+
+    /**
+     * Whether the storage location at {@code rack} and the inventory behind it are in loaded chunks: the dispatch's own
+     * test ({@code CraneDispatch#isLoaded}), without which {@link #storePriorityAt} could not be trusted.
+     */
+    private boolean isStorageLoaded(RackPosition rack) {
+        if (level == null || layout == null)
+            return false;
+        BlockPos pos = layout.rackPos(rack);
+        return level.isLoaded(pos) && level.isLoaded(pos.relative(layout.sideDirection(rack)));
+    }
+
+    /** Whether an optimizer order still runs, so the dispatch has relocations to plan: one boolean, no world access. */
+    boolean hasPendingRelocation() {
+        return optimizerOrders.hasPending();
+    }
+
+    /**
+     * The planner's relocation needs: one per item the running orders list, oldest order first, with what may move of it
+     * ({@link #optimizerMovable}). An item with nothing left to move ends here, in every order that lists it, which is
+     * one of the two ways an entry ends (the other is the planner finding nowhere better, {@link #onRelocationsExhausted}).
+     */
+    List<PlannerInput.RelocateNeed<ItemKey>> relocationNeeds() {
+        if (!optimizerOrders.hasPending())
+            return List.of();
+        List<PlannerInput.RelocateNeed<ItemKey>> needs = new ArrayList<>();
+        boolean changed = false;
+        for (OptimizerOrders.OpenEntry<ItemKey> entry : optimizerOrders.openEntries()) {
+            long movable = optimizerMovable(entry.key());
+            if (movable <= 0)
+                changed |= optimizerOrders.endKey(entry.key());
+            else
+                needs.add(new PlannerInput.RelocateNeed<>(entry.id(), entry.key(), movable,
+                        optimizerHeldBack(entry.key(), movable)));
+        }
+        if (changed)
+            setChanged();
+        return needs;
+    }
+
+    /**
+     * The planner found nowhere better for the items of these entries, during a run in which no other crane held a job
+     * (a busy crane blocks the reach of the others, so "nothing found" would not mean "nothing fits" then): the items end
+     * in every order that lists them.
+     */
+    void onRelocationsExhausted(Set<UUID> entries) {
+        if (optimizerOrders.endExhausted(entries))
+            setChanged();
+    }
+
+    /** A crane took the relocation {@code job}: one trip of the order it serves is spent. */
+    void onRelocationAssigned(TransportJob<ItemKey, RackPosition> job) {
+        if (job.type() == JobType.RELOCATE && optimizerOrders.onAssigned(job.id(), job.key()))
+            setChanged();
+    }
+
+    /**
+     * Forgets the optimizer trips no crane of the warehouse holds any more, {@code liveJobs} being every job the dispatch
+     * tracks: a crane broken or cleared while its report could not reach this controller. Nothing to do, and nothing
+     * read, while no order remembers a trip.
+     */
+    void retainOptimizerTrips(Set<UUID> liveJobs) {
+        if (optimizerOrders.hasTripsInFlight() && optimizerOrders.retainTrips(liveJobs))
+            setChanged();
+    }
+
+    /** A relocation trip is over, finished, given up or lost: its order stops remembering it. */
+    private void onRelocationEnded(TransportJob<ItemKey, RackPosition> job) {
+        if (job.type() == JobType.RELOCATE && optimizerOrders.onJobEnded(job.id()))
+            setChanged();
     }
 
     // --- fill requests (M31, issue #21, ADR-073) ----------------------------------------------------------------------
@@ -3649,8 +3979,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public StockLevels stockLevelsOf(ItemKey key) {
         Objects.requireNonNull(key, "key");
-        return new StockLevels(stock.count(key), dispatch.reservations().reservedCapacityFor(key),
-                productionOrders.outstandingResult(key), availableStock(key));
+        return new StockLevels(stock.count(key), inbound(key), productionOrders.outstandingResult(key),
+                availableStock(key));
     }
 
     /**
@@ -3666,9 +3996,23 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public StockLevels stockLevelsOf(ItemKey key, long openRequestRemaining) {
         Objects.requireNonNull(key, "key");
         long promised = Math.max(0L, openRequestRemaining) + productionOrders.outstandingIngredient(key);
-        return new StockLevels(stock.count(key), dispatch.reservations().reservedCapacityFor(key),
-                productionOrders.outstandingResult(key),
-                dispatch.reservations().availableStock(key, stock.count(key), promised));
+        // The relocated items counted back in exactly as in availableStock (issue #46): a rule tick or a terminal row
+        // that read the plain index would see one trip less while a Warehouse Optimizer is moving the item.
+        return new StockLevels(stock.count(key), inbound(key), productionOrders.outstandingResult(key),
+                dispatch.reservations().availableStock(key,
+                        RelocationStock.counted(stock.count(key), dispatch.relocatingInFlight(key)), promised));
+    }
+
+    /**
+     * What transport jobs are bringing in of {@code key}: the room reserved for it, without the room of the Warehouse
+     * Optimizer's trips that have not picked yet (issue #46, ADR-079), whose items the index still counts at their
+     * source ({@link RelocationStock#inbound}). Racks plus this is what the warehouse will hold, with every trip
+     * counted once: the figure a stock rule's maximum, a keeper's levels and a production click's room are measured
+     * with.
+     */
+    private long inbound(ItemKey key) {
+        return RelocationStock.inbound(dispatch.reservations().reservedCapacityFor(key),
+                dispatch.relocatingPlanned(key));
     }
 
     /**
@@ -4753,8 +5097,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Optional<StockRule<ItemKey>> rule = stockRules().ruleFor(key);
         if (rule.isEmpty())
             return Long.MAX_VALUE;
-        return rule.get().headroom(stock.count(key), dispatch.reservations().reservedCapacityFor(key),
-                productionOrders.outstandingResult(key));
+        return rule.get().headroom(stock.count(key), inbound(key), productionOrders.outstandingResult(key));
     }
 
     /**
@@ -4775,7 +5118,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Optional<StockRule<ItemKey>> rule = stockRules().ruleFor(key);
         if (rule.isEmpty())
             return Long.MAX_VALUE;
-        return rule.get().headroom(stock.count(key), dispatch.reservations().reservedCapacityFor(key), 0L);
+        return rule.get().headroom(stock.count(key), inbound(key), 0L);
     }
 
     /**
@@ -5095,6 +5438,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (job.type() == JobType.STORE && job.targetKind() == LocationKind.OUTPUT && delivered > 0
                 && level.getBlockEntity(layout.rackPos(target)) instanceof WarehouseOutputBlockEntity port)
             port.recordExport(delivered);
+        // A Warehouse Optimizer counts what its trips really put down (issue #46), and only that: onResultStored above is
+        // not reached by a relocation (JobType#bringsItemsIn), so no production order is credited with a moved item.
+        if (job.type() == JobType.RELOCATE && delivered > 0 && optimizerOrders.onDelivered(job.id(), delivered))
+            setChanged();
         return requestId.map(this::hasOpenJobOwner).orElse(true);
     }
 
@@ -5137,6 +5484,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** Everything picked was delivered: release the job's reservations. */
     public void onCraneJobFinished(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
         if (acceptsReportsFrom(crane)) {
+            onRelocationEnded(job);
             dispatch.release(job.id());
             dispatch.forgetJob(crane);
             markChunkKeepDirty(); // M19: the job is done, so the aisle may be idle now
@@ -5147,6 +5495,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public void onCraneJobAborted(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job,
             AbortReason reason) {
         if (acceptsReportsFrom(crane)) {
+            onRelocationEnded(job);
             dispatch.release(job.id());
             dispatch.forgetJob(crane);
             markChunkKeepDirty(); // M19
@@ -5159,6 +5508,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public void onCraneJobLost(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job) {
         if (acceptsReportsFrom(crane)) {
+            onRelocationEnded(job);
             dispatch.release(job.id());
             dispatch.forgetJob(crane);
             markChunkKeepDirty(); // M19
@@ -6222,6 +6572,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         sharedInventories.clear();
         requests.clear();
         productionOrders.clear();
+        optimizerOrders.clear();
         fillRecipes.clear();
         dispatch.reset();
     }
@@ -6280,6 +6631,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // dock, and a second home point may become the first. Both are decided by the refresh, which also
                 // switches the lamps of the blocks that are still standing (M21, ADR-034).
                 homePointsRefreshPending = true;
+            else if (removed.kind() == LocationKind.OPTIMIZER)
+                // The optimizer left the warehouse (broken, replaced or turned away): its order goes with it, so no
+                // further trip is planned for a list nobody can see. A trip under way is finished all the same, because
+                // a crane never gives a job back (issue #46, ADR-079).
+                optimizerOrders.remove(removed.position());
             changed = true;
         }
         for (LocationRecord added : changes.added()) {
@@ -6842,6 +7198,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             case COLLECTING -> WareworksLang.DISPLAY_CRANE_COLLECTING;
             case HANDING_OVER -> WareworksLang.DISPLAY_CRANE_HANDING_OVER;
             case FILLING -> WareworksLang.DISPLAY_CRANE_FILLING;
+            case RELOCATING -> WareworksLang.DISPLAY_CRANE_RELOCATING;
             case IDLE, WAITING, MOVING_ASIDE, UNLOADED, STRANDED -> WareworksLang.DISPLAY_CRANE_IDLE;
             case PAUSED -> WareworksLang.DISPLAY_CRANE_PAUSED;
         };
@@ -6911,6 +7268,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         ControllerPersistence.writeLocations(tag, membership, stock.readOnlyView(), registries);
         ControllerPersistence.writeRequests(tag, requests.requests(), worldPosition, registries);
         ControllerPersistence.writeProductionOrders(tag, productionOrders.all(), registries);
+        // Only a warehouse with an optimizer order writes anything here, so every other saves what it did (issue #46).
+        ControllerPersistence.writeOptimizerOrders(tag, optimizerOrders.all(), registries);
         // The aisle's stock rules are saved with the controller on purpose: a keeper's chunk can be unloaded while
         // this controller plans, and a rule that is read as "no rule" would store past a maximum or hand out a
         // reserve, which nothing ever undoes (AisleStockRules).
@@ -7021,6 +7380,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             // there any more (M20, ProductionOrders#validatePlans).
             productionOrders.restore(ControllerPersistence.readProductionOrders(tag, registries));
             productionRestorePending = true;
+            // Optimizer orders belong to the saved layout as well (issue #46). A trip of one that was on its way is saved
+            // with its crane like any job, so it is finished after the load and still counted.
+            optimizerOrders.restore(ControllerPersistence.readOptimizerOrders(tag, registries));
             // Restored before the first tick, so the very first plan after a load already knows every maximum and
             // every reserve, even while the keepers themselves are still in unloaded chunks.
             stockRules.restore(ControllerPersistence.readStockRules(tag, registries));

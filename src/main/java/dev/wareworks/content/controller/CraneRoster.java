@@ -45,6 +45,8 @@ public record CraneRoster(CraneCounts counts, List<Entry> entries, int refusedDo
         HANDING_OVER,
         /** On a fill trip: empty containers to a fluid bay, filled ones on to the station (M31, issue #21). */
         FILLING,
+        /** Moving stock a Warehouse Optimizer asked for up to a better storage location (issue #46). */
+        RELOCATING,
         /** It has a job and stands still because another crane holds its rails. */
         WAITING,
         /** It moves aside for another crane. */
@@ -59,7 +61,7 @@ public record CraneRoster(CraneCounts counts, List<Entry> entries, int refusedDo
         /** Whether this is a job of the crane's own, which a line names with its target and time. */
         public boolean isJob() {
             return switch (this) {
-                case STORING, RETRIEVING, SUPPLYING, COLLECTING, HANDING_OVER, FILLING -> true;
+                case STORING, RETRIEVING, SUPPLYING, COLLECTING, HANDING_OVER, FILLING, RELOCATING -> true;
                 case IDLE, WAITING, MOVING_ASIDE, PAUSED, UNLOADED, STRANDED -> false;
             };
         }

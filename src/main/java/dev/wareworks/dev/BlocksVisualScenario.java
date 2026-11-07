@@ -18,6 +18,7 @@ import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
+import dev.wareworks.content.station.WarehouseOptimizerBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
@@ -109,10 +110,11 @@ public final class BlocksVisualScenario implements VisualScenario {
     private static final int SCREEN_SETTLE_TICKS = 10;
     private static final int CHEST_SLOTS = 27;
     /**
-     * First slot of the chest's middle row: the eighteen items fill the middle and bottom rows (issue #44 made them
-     * eighteen; the second slot was first while seventeen fitted after it).
+     * First slot the items start at, so the nineteen of them end in the chest's last slot: the last slot of the top row,
+     * then the middle and bottom rows (issue #46 made them nineteen; the middle row's first slot was first while
+     * eighteen fitted after it).
      */
-    private static final int FIRST_ITEM_SLOT = 9;
+    private static final int FIRST_ITEM_SLOT = 8;
 
     /** Close-up cameras relative to an exhibit's block centre: to the side, above and in front of or behind it. */
     private static final double CLOSE_SIDE = 1.4;
@@ -348,6 +350,11 @@ public final class BlocksVisualScenario implements VisualScenario {
                     WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                             .setValue(WarehouseStockKeeperBlock.FACING, Direction.SOUTH)
                             .setValue(WarehouseStockKeeperBlock.LIT, true))),
+            // The optimizer faces the aisle like the keeper beside it, so its panel with the three rising steps looks
+            // at the front camera (issue #46). It has one state, which is its item model.
+            new Exhibit("optimizer", (level, pos) -> level.setBlockAndUpdate(pos,
+                    WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState()
+                            .setValue(WarehouseOptimizerBlock.FACING, Direction.SOUTH))),
             // The home point faces the aisle like the stations, so its plate looks at the front camera. Shown with the
             // green lamp burning, i.e. "the crane waits here" (M21, ADR-034).
             new Exhibit("home_point", (level, pos) -> level.setBlockAndUpdate(pos,
@@ -813,7 +820,8 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 // The Crafter Feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
-                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(),
+                WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
                 // Items that are not blocks follow every block: the hand truck (issue #37) and the Warehouse Remote
                 // (issue #44).
                 WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem());

@@ -101,6 +101,7 @@ public class CraneStatusDisplaySource extends DisplaySource {
             case COLLECTING -> WareworksLang.DISPLAY_CRANE_COLLECTING;
             case HANDING_OVER -> WareworksLang.DISPLAY_CRANE_HANDING_OVER;
             case FILLING -> WareworksLang.DISPLAY_CRANE_FILLING;
+            case RELOCATING -> WareworksLang.DISPLAY_CRANE_RELOCATING;
             case PAUSED -> WareworksLang.DISPLAY_CRANE_PAUSED;
             case UNLOADED -> CraneTrafficLang.DISPLAY_CRANE_UNLOADED;
             case STRANDED -> CraneTrafficLang.DISPLAY_CRANE_STRANDED;
@@ -151,6 +152,8 @@ public class CraneStatusDisplaySource extends DisplaySource {
             case COLLECT -> WareworksLang.DISPLAY_CRANE_COLLECTING;
             // A fluid request on its way (M31, issue #21): neither storing nor retrieving, so it says what it does.
             case FILL -> WareworksLang.DISPLAY_CRANE_FILLING;
+            // Stock a Warehouse Optimizer moves up to a better place (issue #46): it stays in the warehouse.
+            case RELOCATE -> WareworksLang.DISPLAY_CRANE_RELOCATING;
         };
     }
 

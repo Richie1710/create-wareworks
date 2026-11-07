@@ -79,6 +79,7 @@ dev.wareworks
 │   ├── warehouse              aisle membership: LocationKind, LocationRecord, RackProbe, AisleMembership,
 │   │                          MembershipChanges (M2);
 │   │                          LocationKind#armStroke, how far the crane's arm reaches into a stop (issue #39, ADR-072);
+│   │                          LocationKind.OPTIMIZER, the third member kind without an inventory (issue #46, ADR-079);
 │   │                          the names a player gives a warehouse's aisles (M25, issue #15, ADR-038): AisleName (the
 │   │                          one spelling rule — a total, idempotent sanitiser capped at 16 characters, never a
 │   │                          validator, so a save, a packet and every surface necessarily agree) and AisleNames (the
@@ -114,7 +115,12 @@ dev.wareworks
 │   │                          since M31 (issue #21, ADR-073) RequestKind (STOCK / FILL: what a request promises, one
 │   │                          queue for both), JobType.FILL with TransportJob.fill / filledFor (the fill trip: rack →
 │   │                          bay → the station that asked, one job), Reservation.Kind.FILLING, PlannerInput's
-│   │                          FillSupply and JobPlanner.planFill, NoJobReason.NO_EMPTY_CONTAINERS
+│   │                          FillSupply and JobPlanner.planFill, NoJobReason.NO_EMPTY_CONTAINERS;
+│   │                          since issue #46 (ADR-079) JobType.RELOCATE with TransportJob.relocate (storage → a
+│   │                          strictly better storage location, never a port), RelocationRule (the one "strictly
+│   │                          better" rule of the planner and the optimizer's view), PlannerInput.RelocateNeed /
+│   │                          relocateTarget, JobPlanner's relocation stage after the arrivals and
+│   │                          PlanResult.relocationsExhausted
 │   ├── crane                  CranePhase, CranePose, CraneState, CraneTimings, CraneEvent, CraneEffect,
 │   │                          CraneInterruption, AbortReason, CraneStateMachine, CraneMotion (M3); CraneSoundCues
 │   │                          (when the crane makes which sound, M4; the TURN cue, M21); CraneResync (when a client
@@ -220,6 +226,13 @@ dev.wareworks
 │   ├── handtruck              the hand truck's pure numbers (issue #37, ADR-070): HandTruckPenalty (the movement input
 │   │                          scaled by the speed multiplier, the forward impulse capped below a sprint's 0.8, the
 │   │                          one-tick carry window) and HandTruckLimits (the size budget of one carried container)
+│   ├── optimizer              the Warehouse Optimizer's orders (issue #46, ADR-079): OptimizerOrders (a warehouse's
+│   │                          orders, oldest first, one per optimizer: the open entries the planner gets, a trip spent,
+│   │                          counted and ended, an item exhausted in every order), OptimizerOrder (one order: entries,
+│   │                          trips left, moved, trips in flight), OptimizerLimits (16 rows, 8 orders, 64 trips in
+│   │                          flight, the clamped trip cap) and RelocationStock (the relocated items counted back into
+│   │                          availability and taken off what may still move, and a trip not yet picked left out of
+│   │                          what comes in)
 │   ├── remote                 the Warehouse Remote's range arithmetic (issue #44, ADR-077): RemoteLimits (the clamped
 │   │                          range, exactly the range still reaching, the distance rounded up for a message)
 │   ├── kinetics               OverstressRecheck (issue #38, ADR-071): when an overstressed kinetic consumer has its
@@ -243,7 +256,9 @@ dev.wareworks
 │                              StockRuleEvaluation; and for automatic restocking (part 2) RestockPlanner,
 │                              RestockInput, RestockDecision, RestockPlan, RestockOutcome, RestockLimits,
 │                              StockRulePause (the safety stop); RuleUnit (whether a row counts items or the fluid in
-│                              the bays, in millibuckets, M31, issue #21, ADR-073)
+│                              the bays, in millibuckets, M31, issue #21, ADR-073); PriorityBreakdown (what a
+│                              Warehouse Optimizer shows for one item: the count per priority, the unloaded bucket,
+│                              the free figure and the movable estimate, issue #46, ADR-079)
 ├── content
 │   ├── item                   ItemKey (item + components, count-less), ItemHandlerSnapshots, ItemTypeSummaries
 │   │                          (goggle summary by item type), InsertOnlyItemHandler / ExtractOnlyItemHandler (views),
@@ -435,7 +450,13 @@ dev.wareworks
 │                              CrafterFeederAttachment (which station's back it touches, from block states),
 │                              CrafterRecipeCheck (the second class that may look up recipes: it evaluates and runs
 │                              none), CrafterOutputFit (whether a craft's result and remainders fit in front of the
-│                              Crafter), CrafterFeederGoggleSummary
+│                              Crafter), CrafterFeederGoggleSummary;
+│                              the Warehouse Optimizer (issue #46, ADR-079): WarehouseOptimizerBlock / BlockEntity
+│                              (the aisle member that lists items to move up; no items, no capability, no arm point,
+│                              no ticker), OptimizerRows (its 16 ghost rows and their NBT), OptimizerMenu (the actions
+│                              and the throttled push while the screen is open), OptimizerMenuLayout,
+│                              OptimizerScreenState (the bounded rows, pips, order line and last message a screen
+│                              gets), OptimizerGoggleSummary and OptimizerAction
 │   ├── handtruck              the hand truck (issue #37, ADR-070): HandTruckItem (both clicks in onItemUseFirst, the
 │   │                          loaded name and tooltip), HandTruckLoad (the component value: block state, block
 │   │                          entity type, the block entity's own save data), HandTruckRules (tags, permission,
@@ -508,7 +529,11 @@ dev.wareworks
 │                              server: a fluid cell's click in millibuckets with its acknowledgement, nothing in it
 │                              trusted) and TerminalFluidQuestionPayload (server → client: the containers, the trips
 │                              and the shortfall a fluid click would mean); the fluid cells themselves ride
-│                              TerminalStockPayload (an optional TerminalFluids on its first page).
+│                              TerminalStockPayload (an optional TerminalFluids on its first page);
+│                              the two optimizer payloads (issue #46, ADR-079): OptimizerActionPayload (client →
+│                              server: set or clear a row, import the carried clipboard, optimise all or one row,
+│                              cancel; moves no item) and OptimizerScreenPayload (server → client: the rows, each
+│                              item's breakdown behind a priority bitmask, the order's state; bounded both ways).
 │                              Everything else syncs through block entity update packets
 ├── client
 │   ├── gui                    WarehouseTerminalScreen (the terminal's screen; since M27 also its door button, the
@@ -525,7 +550,10 @@ dev.wareworks
 │   │                          since ADR-063 the laid grid it adopts once per lay); TerminalRecipeLay (the
 │   │                          JEI-free client half of a recipe viewer's "+": whether it may be used, the candidate
 │   │                          lists, the lay payload) and WarehouseTerminalScreen#forMenu (the terminal screen a
-│   │                          payload belongs to, also while a recipe viewer's screen covers it, ADR-063)
+│   │                          payload belongs to, also while a recipe viewer's screen covers it, ADR-063);
+│   │                          WarehouseOptimizerScreen (the item rows with Best, Below and Move, the status pips,
+│   │                          Optimise and the cancel mark), ClientOptimizers, OptimizerScreenUpdates (issue #46,
+│   │                          ADR-079)
 │   ├── handtruck              HandTruckClientEvents (issue #37, ADR-070: the slow walk and the sprint cap, applied to
 │   │                          the movement input like sneaking)
 │   ├── input                  StorageFilterPressGuard (issue #30, ADR-028: only the first use of a press sets a
@@ -705,7 +733,14 @@ dev.wareworks
 │                              service, no container fits, the make offer, the click cap, empties never promised twice)
 │                              and FluidRuleGameTests (fluid stock rules: the unit, the maximum on the crane's store
 │                              into a bay, the reserve against a port, an old lava-bucket row staying an item rule)
-│                              (M31, issue #21, ADR-073)
+│                              (M31, issue #21, ADR-073);
+│                              OptimizerBlockGameTests (the optimizer block alone and as an aisle member: its menu
+│                              actions, the clipboard import, hostile payloads, save and schematic copy, the counts
+│                              by priority and the order forgotten when the block is broken) and OptimizerGameTests
+│                              (relocation in a running warehouse: an overflow at 0 emptied into a rack at 5 with an
+│                              exact census, equal priority moving nothing, reserved and requested stock left alone,
+│                              a request mid order served first, the trip cap, no bucket to a fluid bay, a cancel
+│                              mid trip, a save mid trip and two cranes) (issue #46, ADR-079)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -821,6 +856,10 @@ dev.wareworks
 │                              rails, a redstone retrieval and a terminal order at once, a crane moving aside to its
 │                              dock, a crane without rotation, the goggle lines in English and German, issue #14,
 │                              ADR-075),
+│                              OptimizerVisualScenario (the Warehouse Optimizer's screen with real clicks: a ghost row,
+│                              a clipboard import, Optimise and the cancel mark, a relocation carried with the ticks
+│                              frozen, a census around every act, the 320 x 240 floor, English and German, issue
+│                              #46, ADR-079),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -7872,7 +7911,10 @@ bay is a storage location with a priority of its own.
 * **The priority below travel time on retrieval** (as a tie-breaker only). On a real aisle two sources almost never
   cost exactly the same, so it would have changed nothing the issue complains about.
 * **A tidy-up job that moves stock from the overflow into the racks.** It moves items nobody asked for and spends crane
-  time; draining the overflow by the orders that happen anyway reaches the same state for free.
+  time; draining the overflow by the orders that happen anyway reaches the same state for free. *(Amended by ADR-079,
+  issue #46: such a job now exists, but only on a player's request at a Warehouse Optimizer, for the items it lists,
+  for a bounded number of trips and only while a crane has nothing else to do. Nothing tidies in the background, so the
+  reason given here still holds for every item nobody asked to move.)*
 
 *Consequences:* A warehouse whose racks are prioritised above its overflow chests now drains the overflow first, by
 every path that takes out of storage. A warehouse without priorities behaves exactly as before. Where a priority was set
@@ -7888,6 +7930,117 @@ a split retrieval draining the priorities in order), `JobPlannerFillTest` (bay f
 `StoragePriorityGameTests` (a terminal click, a warehouse output's redstone request and a production order's
 ingredients, each served out of a farther overflow at 0 before a nearer rack at 5) and the visual scenario
 `priorities`, whose closing retrieval now goes past the cheaper prioritised sources to an unprioritised one.
+
+### ADR-079 — A Warehouse Optimizer moves the free stock of the items it lists to strictly better storage locations: on request, for a bounded number of trips, and only while a crane has nothing else to do (amends ADR-078) ([issue #46](https://github.com/Richie1710/create-wareworks/issues/46))
+
+*Context:* ADR-078 drains the overflow by the orders that happen anyway, and it rejected a tidy-up job explicitly. That
+leaves the items nobody orders: a warehouse whose racks were prioritised after it filled, or whose new rack wall went
+up beside a full overflow, keeps its stock where it is for ever, because storing never moves what is already stored
+(ADR-028) and retrieval takes only what is asked for. Issue #46 asks for a block on which a player lists items and asks
+the warehouse to move them up. The code already had what such a job must respect, and some of it is a trap:
+`JobPlanner#RANKING` puts the store filter, consolidation and item-type grouping **above** the priority, so "higher
+priority" alone is not "a better place"; a fluid bay **drains** a filled container put into it; reservations of stock
+are warehouse-wide per key, not per location; every planner stage returns as soon as it has a job, in the order
+requests, supplies, arrivals; `CraneDispatch` plans nothing at all unless `hasWork` says so; and the hard rule is that
+items move only through a crane's handling head.
+
+*Decision:*
+
+* **D1. Its own block, holding no items.** `warehouse_optimizer` is built like the stock keeper (ADR-027): a rack
+  member of the new `LocationKind.OPTIMIZER(false, FULL_STROKE)`, no station, no delivery target, never a job's source
+  or target (`TransferContexts` resolves it as missing), no item capability, no Mechanical Arm point, no ticker. Its
+  16 rows (`OptimizerRows`) are ghost items, each item in one row at most, saved and carried by schematics like the
+  keeper's rules. A clipboard is read in the screen, from the server's own copy of the cursor, by clicking it onto the
+  list cell: its orderable entries fill the free rows. A clipboard clicked on the block keeps its own click
+  (`StationScreenClick`, ADR-060), so there is no other way, and no clipboard slot, drop or `isFullSave` case exists.
+* **D2. "Strictly better" is one rule** (`core.job.RelocationRule`, used by the planner and the screen alike): a target
+  is better for a key than a source when its priority is **strictly higher** and its store filter allows the key and
+  ranks it **no worse** (`FilterMatch#storeRank`). Without the filter half the optimizer would empty a priority-0 chest
+  dedicated to cobblestone into a priority-5 general rack, and every later store would put new cobblestone back into
+  the chest. Consolidation and grouping describe what a location holds, not how good it is, so they only rank the
+  targets that pass. Per place, a target must also not be a **fluid bay** (it would drain a filled container), not the
+  source, not an alias, loaded and reachable (`PlannerInput#relocateTarget`, `#available`). Every move strictly raises
+  an item's priority, so an item moves at most nine times and two places can never trade items back and forth.
+* **D3. Only the free surplus moves.** `movable(K) = availableTo(AUTOMATION, K, availableStock(K) − inFlight(K))`,
+  never below 0, AUTOMATION being the stricter access, and each source gives at most its count minus what jobs
+  reserved there. The bound alone does not keep open requests, owed fill empties, production ingredients and a stock
+  rule's reserve in place: a moved item still counts, so after every trip the bound is as large as before. What they
+  still need (`heldBack` = the unreserved count minus `movable`, `PlannerInput.RelocateNeed#heldBack`) is counted off
+  the sources **worst first** and stays there, where a retrieve takes from (ADR-078); the view leaves it out the same
+  way.
+* **D4. One new job type, `RELOCATE`** (storage → storage, `TransportJob.relocate`). It carries no request id, does not
+  bring items in (so no production order is credited) and does not wait at a full target; its type allows no port, so
+  a relocated item can never leave the warehouse. A trip not yet picked reserves **STOCK at the source and CAPACITY at
+  the target**, after the pick the existing CAPACITY of what is held. Because that stock backs no request, the items a
+  relocation moves are **added back into the count** availability is measured against (`core.optimizer.RelocationStock`,
+  `CraneDispatch#relocatingInFlight`), so a request made mid-trip sees the full amount and is planned from other
+  sources or waits one trip; adding them onto the clamped answer instead would hand out items an open request owns.
+  The same count is used by the rule tick, a keeper's levels and a terminal's rows, and an item carried whole keeps its
+  terminal row (`WarehouseControllerBlockEntity#heldCount`). The room of a trip not yet picked is the trip's own items
+  a second time, so it is left out of what comes in (`RelocationStock#inbound`) wherever a stock rule's maximum, a
+  keeper's levels or a production click's room is measured: counted twice, an item under its maximum would go to an
+  accepting overflow port. A
+  reroute goes to storage only, filters advisory, no priority floor and no fluid bay; the existing `HOLDING` retry
+  covers the rest. The execution path needed no new branch.
+* **D5. Planned last, and only then.** A new stage after the arrival round robin in `JobPlanner#plan` runs only when no
+  earlier stage returned a job, returns the same arrival cursor as the empty return and adds **no** `NoJobReason`, so
+  goggle reasons and back-offs stay those of the real work. Sources are taken worst first (`SOURCE_RANKING`, ADR-078),
+  targets collected once with `collectStorage`'s new exclusive priority floor and ranked by `RANKING`; per source one
+  live extract, then live inserts down the targets better for that source until one accepts, all inside the planner's
+  live-call budget, and a source no target could beat costs no live call. Two optimizers listing one item make one
+  need, the oldest order's.
+  `PlanResult#relocationsExhausted` names the needs for which nothing fits anywhere better. `CraneDispatch#hasWork`
+  and the back-off pre-check ask one boolean (`hasPendingRelocation`), so relocation also runs during a
+  `WAREHOUSE_FULL` back-off; a relocation planned beside a full-warehouse reason re-arms that back-off itself
+  (`armBackoff`), or a running order would repeat the arrival scan on every dispatch.
+* **D6. The controller owns the orders** (`core.optimizer.OptimizerOrders`, keyed by the optimizer's rack position):
+  one per optimizer, at most `OptimizerLimits.MAX_ORDERS` = 8 per warehouse, each with its entries, trips left, items
+  moved and the trips in flight (at most 64). A trip is spent when a crane accepts the job and counted when the crane
+  puts the items down. An item's entry ends when its movable figure is 0, or when the planner reports it exhausted in a
+  run in which **no crane held a job** (a busy crane narrows every other crane's reach, so "nothing found" would not
+  mean "nothing fits"). While another crane holds one, the needs a run found nowhere for are asked once more, by a
+  planner run with the relocation stage alone and the reach every crane has when none holds a job
+  (`CraneDispatch#exhaustedEverywhere`), and end if that finds nothing either; a warehouse that always has one crane at
+  work would otherwise never end an item that has nowhere better to go. An item ends in every running order that
+  lists it. Only an optimizer the warehouse records as a member (`LocationKind.OPTIMIZER`) may start an order, because
+  removing the member is what forgets the order; a misaligned block is refused. An order ends when every entry has, when its
+  trips run out, when the player cancels or when the optimizer is removed; a trip under way is always finished, because
+  a crane's job is never taken back. "Now" semantics: nothing retries in the background, and pressing Optimise again
+  starts a fresh order. The trip cap is the one setting, `optimizer.tripsPerRequest` (32, clamped to 1..512 in
+  `OptimizerLimits`).
+* **D7. The view is computed only while a screen is open.** `WarehouseControllerBlockEntity#optimizerView` returns a
+  pure `core.stock.PriorityBreakdown` per item: the count per priority, an unloaded bucket (an unloaded location would
+  otherwise read as priority 0), the free figure and a movable **estimate** found without a live call, by handing out
+  the snapshot rooms greedily in the planner's own order: the worst source first, each into the targets with the
+  better filter match and then the higher priority first. It is no bound either way: a stale snapshot or an unreachable
+  place makes it high, and the planner's preference for a place that already holds the item can make it low. A room
+  without a snapshot shows as "?" and is never added. `OptimizerMenu` pushes counts every 10 ticks and repeats the rooms walk at most every
+  40 ticks, sooner when the list or the order's moved count changes.
+* **D8. No fluids.** Relocating a fluid would be a three-stop container trip; a fluid bay is never a relocation target,
+  planned or rerouted.
+
+*Rejected:*
+* **Tidying in the background**, or retrying an order until something fits. ADR-078's reason holds for that: it moves
+  items nobody asked for and spends crane time while nobody watches.
+* **Priority alone as "better".** It undoes ordinary storing wherever a filter outranks the priority (D2).
+* **A panel in the terminal.** The list belongs to the warehouse, not to a terminal's buffer, and a block shows on its
+  goggles what it is doing to anyone walking past.
+* **Charging a trip when it is planned.** A plan a crane refuses would cost a trip that never ran.
+
+*Consequences:* `WareworksNetwork.VERSION` is **22**: two new payloads (`OptimizerActionPayload`, client → server,
+moving no item; `OptimizerScreenPayload`, server → client, bounded) and `CraneRoster.Activity.RELOCATING`, inserted
+after `FILLING` into an enum the controller's goggle data carries by ordinal. The controller saves its orders under a
+new top-level `OptimizerOrders` tag, written only while an order exists, so a warehouse nobody optimised saves byte for
+byte as before; a `RELOCATE` job is saved with its crane by type name, and an older build drops it and spills what the
+crane carried at the dock. Pending orders keep no chunk loaded (M19); a trip in flight does, like every job. A crane
+that refuses a job now also drops it from the tracked list, so a refused relocation is not counted back into stock
+until the next dispatch. ADR-078's rejected tidy-up job is amended to "on request, bounded, never in the background".
+Checked by `RelocationRuleTest`, `JobPlannerRelocateTest`, `OptimizerOrdersTest`, `RelocationStockTest`,
+`PriorityBreakdownTest`, `OptimizerTextWidthTest` (every optimizer text in its room, in both languages),
+`ReservationLedgerTest`, `TransportJobTest`, `CraneRosterTest` and `AisleMembershipTest`; the GameTests
+`OptimizerBlockGameTests` and `OptimizerGameTests`, plus `WareworksItemGameTests` (recipe, grid, tab order),
+`StationClickGameTests` and `MechanicalArmGameTests`; the visual scenarios `optimizer`, `blocks` and `tooltips`; and
+`runRobustnessTest` (controller and crane persistence changed).
 
 ## Persistence & sync
 
@@ -7979,6 +8132,18 @@ ingredients, each served out of a farther overflow at 0 before a nearer rack at 
   it. The remote saves its link in `wareworks:remote_link` (`{terminal: {dimension, pos}, terminal_id}`), synced to
   clients in full like the hand truck's load. What ties an open screen to the remote, the hand and the id
   (`RemoteBinding`), lives in the open menu and is gone with it.
+* **Warehouse Optimizer orders** (issue #46, ADR-079) are the controller's, not the block's: one new top-level NBT key,
+  `OptimizerOrders` (`[{Rack, State, Trips, Moved, Entries: [{Id, Item, State, Moved}], InFlight?: [{Job, Entry}]}]`,
+  oldest first), written only while an order exists, so a warehouse nobody optimised saves byte for byte as before. It
+  lives in the controller because the trips go on while the optimizer's chunk is unloaded. Reading never throws: at
+  most 8 orders of at most 16 entries and 64 trips in flight are read, an undecodable item or an unknown state skips its
+  entry, and a "running" order left without trips or open entries is normalised to its end on load. Finished orders
+  are kept, so a screen can still say what the last one did. The relocation in flight is an ordinary crane job of type
+  `RELOCATE` in the existing `Type` string with no new field, and its reservations and the in-flight add-back are
+  derived from it, never saved. The optimizer block saves only its ghost rows (at most 16), and its `writeSafe` carries
+  them into a schematic print like a keeper's rules. The screen's numbers are derived on demand, sent only to the
+  player who has the screen open and never saved; the goggles get the moved count and the trips left while an order
+  runs.
 * After a restart, jobs resume from the persisted state (`CraneStateMachine.resume` makes a loaded state consistent). There is no `FAULT` phase: if a referenced block is missing, a job aborts with a reason before the pick, and after it the held items are rerouted (`REROUTE`), held and retried (`HOLDING`) or waited with at the requesting output (`WAITING_FOR_TARGET`). Items are dropped only when the dock itself breaks (`stacker-crane.md` §4.1, `warehouse-system.md` §8).
 
 ## Performance rules

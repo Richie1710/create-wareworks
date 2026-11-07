@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Optional;
 
 import org.jetbrains.annotations.Nullable;
+import org.lwjgl.glfw.GLFW;
+import org.lwjgl.system.Callback;
 import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
@@ -54,6 +56,8 @@ public final class VisualTestHarness {
     private boolean finished;
     /** Whether {@link #muteOnce} has turned the master volume down yet. */
     private boolean muted;
+    /** Whether {@link #keepMouseFree} has replaced the window's focus callback yet. */
+    private boolean mouseFreed;
     /** Whether a step is being ticked right now; nested client tick loops must not advance the run. */
     private boolean ticking;
     /** Whether a frame callback is running right now; the client renders nested inside steps that pump its loop. */
@@ -103,7 +107,37 @@ public final class VisualTestHarness {
         if (harness == null)
             return;
         harness.muteOnce();
+        harness.keepMouseFree();
         harness.tick();
+    }
+
+    /**
+     * Keeps the test window from taking the mouse. Minecraft grabs the cursor whenever no screen is open and its window
+     * counts as active ({@code MouseHandler#grabMouse}), so every world join and every closed screen caught the owner's
+     * mouse. Once, the window's focus callback is replaced with one that leaves Minecraft's flag alone, the window no
+     * longer minimises when a fullscreen run loses focus, and pausing on lost focus is off; on every tick the flag is
+     * set to inactive and a grab that slipped through (a click into the window before this ran) is released. The run
+     * goes on while the owner works in another window. Scenario input never needs the grab: world clicks go through
+     * {@code KeyMapping}, screen input through {@link ScreenInput}, both without the window's focus.
+     */
+    private void keepMouseFree() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.options == null || minecraft.getWindow() == null)
+            return;
+        if (!mouseFreed) {
+            long handle = minecraft.getWindow().getWindow();
+            Callback previous = GLFW.glfwSetWindowFocusCallback(handle, (window, focused) -> {
+            });
+            if (previous != null)
+                previous.free();
+            GLFW.glfwSetWindowAttrib(handle, GLFW.GLFW_AUTO_ICONIFY, GLFW.GLFW_FALSE);
+            minecraft.options.pauseOnLostFocus = false;
+            mouseFreed = true;
+            LOGGER.info(PREFIX + "mouse: the test window no longer grabs the cursor");
+        }
+        minecraft.setWindowActive(false);
+        if (minecraft.mouseHandler.isMouseGrabbed())
+            minecraft.mouseHandler.releaseMouse();
     }
 
     /**

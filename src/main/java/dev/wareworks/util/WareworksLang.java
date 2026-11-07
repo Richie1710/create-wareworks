@@ -658,6 +658,90 @@ public final class WareworksLang {
     public static final String KEEPER_FLUID_NUMBER_HINT = "gui.keeper.fluid_number_hint";
     /** {@code "%1$s buckets (%2$s mB)"}: a fluid rule's number, exact (M31). */
     public static final String KEEPER_FLUID_AMOUNT = "gui.keeper.fluid_amount";
+
+    // --- Warehouse Optimizer (issue #46, ADR-079) ---------------------------------------------------------------------
+
+    /** {@code "Warehouse Optimizer:"}: goggle header of a Warehouse Optimizer. */
+    public static final String GOGGLES_WAREHOUSE_OPTIMIZER = "gui.goggles.warehouse_optimizer";
+    /** {@code "Items: %1$s"}: rows of an optimizer that list an item. */
+    public static final String GOGGLES_OPTIMIZER_ITEMS = "gui.goggles.optimizer_items";
+    /** {@code "No items set"}: an optimizer that lists nothing yet. */
+    public static final String GOGGLES_OPTIMIZER_NO_ITEMS = "gui.goggles.optimizer_no_items";
+    /** {@code "Not part of a warehouse"}: an optimizer no loaded controller serves. */
+    public static final String GOGGLES_OPTIMIZER_NO_WAREHOUSE = "gui.goggles.optimizer_no_warehouse";
+    /** {@code "Optimising: %1$s moved, %2$s trips left"}: an optimizer whose order runs. */
+    public static final String GOGGLES_OPTIMIZER_RUNNING = "gui.goggles.optimizer_running";
+    /** {@code "Items"}: label above the item rows of an optimizer's screen. */
+    public static final String OPTIMIZER_ITEMS = "gui.optimizer.items";
+    /** {@code "Empty row"}: an item row without an item. */
+    public static final String OPTIMIZER_EMPTY_ROW = "gui.optimizer.empty_row";
+    /** Column header of the count at the best priority that holds the item. */
+    public static final String OPTIMIZER_BEST_SHORT = "gui.optimizer.best_short";
+    /** Column header of the count at the priorities below it. */
+    public static final String OPTIMIZER_BELOW_SHORT = "gui.optimizer.below_short";
+    /** Column header of what could move to a better place now. */
+    public static final String OPTIMIZER_MOVABLE_SHORT = "gui.optimizer.movable_short";
+    /** Tooltip title of the first number column. */
+    public static final String OPTIMIZER_BEST = "gui.optimizer.best";
+    /** Tooltip title of the second number column. */
+    public static final String OPTIMIZER_BELOW = "gui.optimizer.below";
+    /** Tooltip title of the third number column. */
+    public static final String OPTIMIZER_MOVABLE = "gui.optimizer.movable";
+    /** What the first number column counts. */
+    public static final String OPTIMIZER_BEST_HINT = "gui.optimizer.best_hint";
+    /** What the second number column counts. */
+    public static final String OPTIMIZER_BELOW_HINT = "gui.optimizer.below_hint";
+    /** What the third number column counts, and that it is an estimate. */
+    public static final String OPTIMIZER_MOVABLE_HINT = "gui.optimizer.movable_hint";
+    /** That reserved items are never counted as movable (third column's tooltip). */
+    public static final String OPTIMIZER_MOVABLE_RESERVED = "gui.optimizer.movable_reserved";
+    /** {@code "Priority %1$s: %2$s"}: one line of an item's breakdown, from the highest priority down. */
+    public static final String OPTIMIZER_PRIORITY = "gui.optimizer.priority";
+    /** {@code "Not loaded: %1$s"}: what storage locations in unloaded chunks hold of the item. */
+    public static final String OPTIMIZER_UNLOADED = "gui.optimizer.unloaded";
+    /** {@code "None in stock"}: an item the warehouse holds none of. */
+    public static final String OPTIMIZER_NONE_STORED = "gui.optimizer.none_stored";
+    /** {@code "Could move now: %1$s"}: the movable estimate in an item's tooltip. */
+    public static final String OPTIMIZER_MOVABLE_NOW = "gui.optimizer.movable_now";
+    /** That some better place could not be measured yet, which the "?" beside a number stands for. */
+    public static final String OPTIMIZER_MOVABLE_UNKNOWN = "gui.optimizer.movable_unknown";
+    /** How a row's item is set and cleared (item cell tooltip). */
+    public static final String OPTIMIZER_ITEM_HINT = "gui.optimizer.item_hint";
+    /** Prefix of a row's status texts, {@code gui.optimizer.pip.<pip>} ({@code OptimizerScreenState.Pip#langKey}). */
+    public static final String OPTIMIZER_PIP_PREFIX = "gui.optimizer.pip.";
+    /** How a single row is optimised (status pip tooltip). */
+    public static final String OPTIMIZER_PIP_HINT = "gui.optimizer.pip_hint";
+    /** Tooltip title of the list cell, which takes a clipboard's items. */
+    public static final String OPTIMIZER_LIST = "gui.optimizer.list";
+    /** How the list cell is used. */
+    public static final String OPTIMIZER_LIST_HINT = "gui.optimizer.list_hint";
+    /** Tooltip title of the Optimise button. */
+    public static final String OPTIMIZER_OPTIMISE = "gui.optimizer.optimise";
+    /** What the Optimise button does. */
+    public static final String OPTIMIZER_OPTIMISE_HINT = "gui.optimizer.optimise_hint";
+    /** That a press only moves what fits now, and replaces the running order. */
+    public static final String OPTIMIZER_OPTIMISE_NOW = "gui.optimizer.optimise_now";
+    /** Tooltip title of the cancel mark beside a running order. */
+    public static final String OPTIMIZER_CANCEL = "gui.optimizer.cancel";
+    /** That a trip under way is finished when an order is stopped. */
+    public static final String OPTIMIZER_CANCEL_HINT = "gui.optimizer.cancel_hint";
+    /** The status line while nothing happened yet. */
+    public static final String OPTIMIZER_HINT = "gui.optimizer.hint";
+    /** The status line while no controller serves this optimizer. */
+    public static final String OPTIMIZER_NO_WAREHOUSE = "gui.optimizer.no_warehouse";
+    /** {@code "Moved %1$s, %2$s trips left"}: the status line while the order runs. */
+    public static final String OPTIMIZER_RUNNING = "gui.optimizer.running";
+    /** {@code "Done: moved %1$s"}: the status line after every item ended. */
+    public static final String OPTIMIZER_FINISHED = "gui.optimizer.finished";
+    /** {@code "Out of trips: moved %1$s"}: the status line after the order used up its trips. */
+    public static final String OPTIMIZER_OUT_OF_TRIPS = "gui.optimizer.out_of_trips";
+    /** {@code "Stopped: moved %1$s"}: the status line after a player cancelled the order. */
+    public static final String OPTIMIZER_CANCELLED = "gui.optimizer.cancelled";
+    /**
+     * Prefix of what the last action had to say, {@code gui.optimizer.message.<message>}
+     * ({@code OptimizerScreenState.Message#langKey}).
+     */
+    public static final String OPTIMIZER_MESSAGE_PREFIX = "gui.optimizer.message.";
     /** Hint under {@link #GOGGLES_MISALIGNED} for stations. */
     public static final String GOGGLES_STATION_MISALIGNED_HINT = "gui.goggles.station_misaligned_hint";
     /** Hint under {@link #GOGGLES_MISALIGNED} for terminals, whose screen must not sit on the aisle side. */
@@ -828,6 +912,11 @@ public final class WareworksLang {
      * their way to the station that asked for them (M31, issue #21). The item is what the head holds right now.
      */
     public static final String GOGGLES_CRANE_JOB_FILL = "gui.goggles.crane_job.fill";
+    /**
+     * {@code "Relocating %1$s x%2$s"}: a relocation, i.e. items a Warehouse Optimizer asked to move up to a better
+     * storage location (issue #46, ADR-079).
+     */
+    public static final String GOGGLES_CRANE_JOB_RELOCATE = "gui.goggles.crane_job.relocate";
     /** {@code "From %1$s to %2$s"}: source and target address of a job. */
     public static final String GOGGLES_CRANE_ROUTE = "gui.goggles.crane_route";
     /** {@code "Holding:"}: header of the handling head listing. */
@@ -1633,6 +1722,11 @@ public final class WareworksLang {
     public static final String DISPLAY_CRANE_COLLECTING = "display_source.crane.collecting";
     /** Crane activity on a display: a {@code FILL} job, a fluid request on its way (M31, issue #21). */
     public static final String DISPLAY_CRANE_FILLING = "display_source.crane.filling";
+    /**
+     * Crane activity on a display: a {@code RELOCATE} job, stock a Warehouse Optimizer is moving up to a better storage
+     * location (issue #46). Neither storing nor retrieving: the items stay in the warehouse.
+     */
+    public static final String DISPLAY_CRANE_RELOCATING = "display_source.crane.relocating";
     /** Crane activity on a display: paused, whatever the reason. */
     public static final String DISPLAY_CRANE_PAUSED = "display_source.crane.paused";
     /** {@code "%1$s x%2$s"}: the item and amount of the crane's job. */
@@ -1810,8 +1904,8 @@ public final class WareworksLang {
     }
 
     /**
-     * "Storing item x N" / "Retrieving item x N" / "Handing over item x N" / "Collecting item x N" / "Filling item x N",
-     * using the item's generic name.
+     * "Storing item x N" / "Retrieving item x N" / "Handing over item x N" / "Collecting item x N" / "Filling item x N" /
+     * "Relocating item x N", using the item's generic name.
      * <p>
      * The third case is a store job into an accepting warehouse port (M17, issue #12): the type alone would call it
      * "Storing" although the items are leaving the warehouse, so the target's kind decides. The fourth is a collect job
@@ -1823,6 +1917,7 @@ public final class WareworksLang {
             case STORE -> targetKind == LocationKind.OUTPUT ? GOGGLES_CRANE_JOB_HAND_OVER : GOGGLES_CRANE_JOB_STORE;
             case RETRIEVE, SUPPLY -> GOGGLES_CRANE_JOB_RETRIEVE;
             case FILL -> GOGGLES_CRANE_JOB_FILL;
+            case RELOCATE -> GOGGLES_CRANE_JOB_RELOCATE;
         };
         return translate(key, item.getDescription(), number(amount).style(ChatFormatting.GOLD))
                 .style(ChatFormatting.GRAY);

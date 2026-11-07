@@ -12,6 +12,7 @@ import dev.wareworks.core.job.TravelTimeModel;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.stock.RestockLimits;
 import dev.wareworks.core.storage.BayTier;
+import dev.wareworks.core.optimizer.OptimizerLimits;
 import dev.wareworks.core.remote.RemoteLimits;
 import dev.wareworks.core.storage.FluidBayTier;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -22,7 +23,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * <p>
  * Keys and defaults follow {@code docs/warehouse-system.md} §9; the TOML file groups them into the sections
  * {@code aisle}, {@code crane}, {@code stations}, {@code storage}, {@code controller}, {@code chunkLoading},
- * {@code handTruck}, {@code computers} and {@code remote}.
+ * {@code handTruck}, {@code computers}, {@code remote} and {@code optimizer}.
  * <p>
  * SERVER config values exist only while a server runs (and on connected clients). Always read them through the typed
  * getters below: they fall back to the default when the config is not loaded (registry events, datagen, main menu,
@@ -584,6 +585,16 @@ public final class WareworksConfig {
         return get(SERVER.remoteCrossDimension);
     }
 
+    // --- optimizer -----------------------------------------------------------------------------------------------
+
+    /**
+     * How many trips one press of a Warehouse Optimizer's Optimise may cost at most (issue #46, ADR-079,
+     * {@link OptimizerLimits}), clamped into {@value OptimizerLimits#MIN_TRIPS}..{@value OptimizerLimits#MAX_TRIPS}.
+     */
+    public static int optimizerTripsPerRequest() {
+        return OptimizerLimits.clampTrips(get(SERVER.optimizerTripsPerRequest));
+    }
+
     /** The config values. Read them through the static getters of {@link WareworksConfig}. */
     public static final class Server {
         public final ModConfigSpec.IntValue maxAisleLength;
@@ -665,6 +676,8 @@ public final class WareworksConfig {
 
         public final ModConfigSpec.IntValue remoteRange;
         public final ModConfigSpec.BooleanValue remoteCrossDimension;
+
+        public final ModConfigSpec.IntValue optimizerTripsPerRequest;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -1216,6 +1229,15 @@ public final class WareworksConfig {
             remoteCrossDimension = builder
                     .comment("Lets a remote open a terminal in another dimension; the range is not checked then.")
                     .define("crossDimension", false);
+            builder.pop();
+
+            builder.comment("The Warehouse Optimizer: moves stock up to better storage locations").push("optimizer");
+            optimizerTripsPerRequest = builder
+                    .comment("How many crane trips one press of Optimise may cost at most. The crane only ever relocates "
+                            + "when it has nothing else to do, and an order also ends once nothing more fits anywhere "
+                            + "better.")
+                    .defineInRange("tripsPerRequest", OptimizerLimits.DEFAULT_TRIPS, OptimizerLimits.MIN_TRIPS,
+                            OptimizerLimits.MAX_TRIPS);
             builder.pop();
         }
     }

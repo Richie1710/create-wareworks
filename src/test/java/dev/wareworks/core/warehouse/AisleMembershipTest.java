@@ -286,6 +286,27 @@ class AisleMembershipTest {
         assertEquals(Optional.empty(), new AisleMembership().nextStorageLocation());
     }
 
+    /**
+     * A Warehouse Optimizer becomes a member through the ordinary probe and is counted on its own; replacing it with
+     * something else removes it again (issue #46). A kind without a case would throw here at runtime.
+     */
+    @Test
+    void optimizersAreMembersAndCounted() {
+        FakeAisle aisle = standardAisle().set(FREE_3R, RackProbe.OPTIMIZER);
+        AisleMembership membership = scanned(aisle);
+        assertEquals(1, membership.optimizerCount());
+        assertEquals(0, membership.keeperCount());
+        assertEquals(Optional.of(LocationKind.OPTIMIZER), membership.kindAt(FREE_3R));
+        assertEquals(List.of(LocationRecord.of(FREE_3R, LocationKind.OPTIMIZER)),
+                membership.records(LocationKind.OPTIMIZER));
+
+        aisle.set(FREE_3R, RackProbe.EMPTY);
+        membership.markDirty(FREE_3R);
+        MembershipChanges changes = membership.reconcile(GEOMETRY, aisle);
+        assertEquals(List.of(LocationRecord.of(FREE_3R, LocationKind.OPTIMIZER)), changes.removed());
+        assertEquals(0, membership.optimizerCount());
+    }
+
     @Test
     void kindsAndProbes() {
         assertTrue(LocationKind.STORAGE.facesAwayFromAisle());
@@ -301,6 +322,11 @@ class AisleMembershipTest {
         assertEquals(Optional.of(LocationKind.KEEPER), LocationKind.byName("KEEPER"));
         assertEquals(RackProbe.KEEPER, RackProbe.member(LocationKind.KEEPER));
         assertEquals(Optional.of(LocationKind.KEEPER), RackProbe.KEEPER.kind());
+        // A Warehouse Optimizer is a member the same way, holding no items either (issue #46).
+        assertFalse(LocationKind.OPTIMIZER.facesAwayFromAisle());
+        assertFalse(LocationKind.OPTIMIZER.isStation());
+        assertFalse(LocationKind.OPTIMIZER.isDeliveryTarget());
+        assertEquals(RackProbe.OPTIMIZER, RackProbe.member(LocationKind.OPTIMIZER));
         for (LocationKind kind : LocationKind.values()) {
             assertEquals(Optional.of(kind), LocationKind.byName(kind.name()));
             assertEquals(Optional.of(kind), RackProbe.member(kind).kind());

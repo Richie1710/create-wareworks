@@ -48,7 +48,17 @@ public enum LocationKind {
      * {@link dev.wareworks.core.address.RackPosition#ORDER} is the one the crane uses, and every further one is
      * reported as having no effect rather than quietly ignored.
      */
-    HOME(false, LocationKind.FULL_STROKE);
+    HOME(false, LocationKind.FULL_STROKE),
+    /**
+     * A warehouse optimizer: the aisle member that lists the items a player wants moved up to better storage locations,
+     * and starts that on request (issue #46, ADR-079).
+     * <p>
+     * Like a {@link #KEEPER} it is a member without a buffer — it holds no items, exposes no item capability, is never
+     * the source or the target of a transport job and is no mechanical arm target — and it is a member for the same
+     * reason: a player builds it into a rack like every other station, and the controller finds it through the ordinary
+     * membership probe. Its rack position is what the controller keys the optimizer's order by.
+     */
+    OPTIMIZER(false, LocationKind.FULL_STROKE);
 
     /**
      * The arm's full stroke: the grabber reaches one whole block into the member. It equals
@@ -83,8 +93,8 @@ public enum LocationKind {
      * Storage (interfaces in front of inventories, rack bays, fluid bays) and the warehouse input take the
      * {@link #FULL_STROKE}: their models are built for the full reach, and the inventory or the input's body covers the
      * grabber. The terminal, every warehouse output and the production station take the {@link #STATION_STROKE}, so the
-     * fork stays inside their solid body. A {@link #KEEPER} and a {@link #HOME} point are never the source or the target
-     * of a job, so their value is never used.
+     * fork stays inside their solid body. A {@link #KEEPER}, a {@link #HOME} point and an {@link #OPTIMIZER} are never
+     * the source or the target of a job, so their value is never used.
      */
     public double armStroke() {
         return armStroke;
@@ -102,8 +112,9 @@ public enum LocationKind {
      * Whether this kind is a <b>station</b>: a member with a buffer a crane fills or empties (input, output or
      * production station).
      * <p>
-     * Deliberately no longer "everything that is not storage": a {@link #KEEPER} and a {@link #HOME} point are members
-     * without any buffer, so a crane never has anything to transfer there (M15, M21).
+     * Deliberately no longer "everything that is not storage": a {@link #KEEPER}, a {@link #HOME} point and an
+     * {@link #OPTIMIZER} are members without any buffer, so a crane never has anything to transfer there (M15, M21,
+     * issue #46).
      */
     public boolean isStation() {
         return this == INPUT || this == OUTPUT || this == PRODUCTION;

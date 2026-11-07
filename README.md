@@ -129,6 +129,10 @@ teleported: every item you put in or take out is carried by the crane, where you
   ordered. Needs rotation.
 * **Warehouse Stock Keeper**: holds the warehouse's stock rules — one item per row plus a **minimum**, a **maximum** and
   a **reserve**. It holds no items itself; a row's item is only a name, and nothing you click into it is used up.
+* **Warehouse Optimizer**: tidies up on request. List up to 16 items (or click a clipboard onto its screen), see how
+  much of each lies at which storage priority, and press **Optimise**: the crane moves the free stock of those items
+  into better storage locations, a higher priority with a filter that fits no worse, whenever it has nothing else to
+  do and for a limited number of trips. Requested and reserved items stay put, and nothing moves unless you ask.
 * **Warehouse Home Point**: says "wait here". Place it beside the rails where your next job usually starts and, on a
   warehouse of more than one aisle, the crane drives back and waits in front of it once it has had nothing to do for a
   while — and drops that trip the instant there is real work, even mid-corner. Without one the dock stays the crane's
@@ -597,10 +601,22 @@ together down a whole rack wall.
 * **Filled first, emptied last.** Every order (terminal, outputs, lists, computers, production ingredients) takes the
   item from the location with the **lowest** priority that holds it, so overflow chests left at 0 are drained before
   your prioritised racks; among locations of the same priority the crane takes the shortest way. A warehouse without
-  priorities fetches as it always did. Raising a priority never moves what is already stored, and a running job keeps
-  its target.
+  priorities fetches as it always did. Raising a priority never moves what is already stored (unless you ask a
+  Warehouse Optimizer to, below), and a running job keeps its target.
 * **It never overrules a filter**, and it never mixes item types: a dedicated location still wins, and a location that
   already holds the incoming item still wins. The priority decides between the locations that are otherwise equal.
+
+**Tidying up with a Warehouse Optimizer.** Prioritised a rack wall after the warehouse filled, or built new racks beside
+a full overflow? Place a **Warehouse Optimizer** into the rack, right-click it and set the items to move: click an item
+onto a row, or click a filled-in clipboard onto the list cell left of the status line to add everything it lists. Each
+row shows how many lie at the best priority that holds the item, how many lie below it, and about how many could move
+now. Press **Optimise** (or a row's dot for that item alone) and the crane carries the items up, from the lowest
+priority first, whenever it has no request, production order or arrival to deal with. It moves only the free surplus:
+what a request, a production order or a stock rule's reserve needs stays where it is. A target must have a higher
+priority and a filter that fits the item no worse, so nothing leaves a chest dedicated to it for a general rack, and
+nothing ever goes into a fluid bay. An order ends when nothing more fits anywhere better or after
+`optimizer.tripsPerRequest` trips (32 by default); press again later to move what fits then. The red mark on the status
+line stops it, and a trip under way is finished.
 
 ## Production
 

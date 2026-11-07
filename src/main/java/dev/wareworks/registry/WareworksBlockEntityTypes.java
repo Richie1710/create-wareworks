@@ -18,6 +18,7 @@ import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
+import dev.wareworks.content.station.WarehouseOptimizerBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.FluidBayBlockEntity;
@@ -164,6 +165,15 @@ public final class WareworksBlockEntityTypes {
     public static final BlockEntityEntry<WarehouseStockKeeperBlockEntity> WAREHOUSE_STOCK_KEEPER = REGISTRATE
             .blockEntity("warehouse_stock_keeper", WarehouseStockKeeperBlockEntity::new)
             .validBlocks(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
+            .register();
+
+    /**
+     * Warehouse Optimizer: no renderer (a static block model; the list is edited in a GUI) and <b>no capability at
+     * all</b> — it holds no items (issue #46, ADR-079).
+     */
+    public static final BlockEntityEntry<WarehouseOptimizerBlockEntity> WAREHOUSE_OPTIMIZER = REGISTRATE
+            .blockEntity("warehouse_optimizer", WarehouseOptimizerBlockEntity::new)
+            .validBlocks(WareworksBlocks.WAREHOUSE_OPTIMIZER)
             .register();
 
     /**

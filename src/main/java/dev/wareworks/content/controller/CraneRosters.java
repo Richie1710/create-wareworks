@@ -76,6 +76,7 @@ public final class CraneRosters {
             case SUPPLY -> CraneRoster.Activity.SUPPLYING;
             case COLLECT -> CraneRoster.Activity.COLLECTING;
             case FILL -> CraneRoster.Activity.FILLING;
+            case RELOCATE -> CraneRoster.Activity.RELOCATING;
         };
     }
 }

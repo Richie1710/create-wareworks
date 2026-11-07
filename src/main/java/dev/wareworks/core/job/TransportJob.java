@@ -136,6 +136,19 @@ public record TransportJob<K, L>(UUID id, JobType type, L source, L target, Loca
                 Optional.ofNullable(requestId), false, 0, 0);
     }
 
+    /**
+     * A new <b>relocation</b> from one storage location to a better one (issue #46, ADR-079): stock a Warehouse
+     * Optimizer asked to move up to a higher storage priority.
+     * <p>
+     * Nobody asked for the items ({@link JobType#mayCarryRequestId()} is false), they were indexed stock before the pick
+     * and are again after the drop, and they can never leave the warehouse: {@link JobType#RELOCATE} allows a
+     * {@link LocationKind#STORAGE} target only, so even a reroute keeps them inside.
+     */
+    public static <K, L> TransportJob<K, L> relocate(UUID id, L from, L to, K key, int amount) {
+        return new TransportJob<>(id, JobType.RELOCATE, from, to, LocationKind.STORAGE, key, amount, Optional.empty(),
+                false, 0, 0);
+    }
+
     /** The kind of {@link #source()}. */
     public LocationKind sourceKind() {
         return type.sourceKind();

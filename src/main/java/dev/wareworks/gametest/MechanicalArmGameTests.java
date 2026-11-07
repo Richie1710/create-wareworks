@@ -85,6 +85,7 @@ public final class MechanicalArmGameTests {
     private static final BlockPos IDLE_ARM = new BlockPos(3, BASE_Y, 3);
     private static final BlockPos INTERFACE = new BlockPos(5, BASE_Y, 3);
     private static final BlockPos STOCK_KEEPER = new BlockPos(6, BASE_Y, 3);
+    private static final BlockPos OPTIMIZER = new BlockPos(6, BASE_Y, 0);
     private static final BlockPos CONTROLLER = new BlockPos(0, BASE_Y, 5);
     private static final BlockPos DOCK = new BlockPos(2, BASE_Y, 5);
     private static final BlockPos RAIL = new BlockPos(4, BASE_Y, 5);
@@ -168,7 +169,9 @@ public final class MechanicalArmGameTests {
         // The stock keeper is an aisle member like the stations, but it holds no items at all, so it must stay a
         // non-target: an arm placed against it, never selecting it (M15).
         helper.setBlock(STOCK_KEEPER, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState());
-        for (BlockPos pos : List.of(INTERFACE, CONTROLLER, DOCK, RAIL, STOCK_KEEPER))
+        // The same for the Warehouse Optimizer (issue #46): a member with no items at all.
+        helper.setBlock(OPTIMIZER, WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState());
+        for (BlockPos pos : List.of(INTERFACE, CONTROLLER, DOCK, RAIL, STOCK_KEEPER, OPTIMIZER))
             helper.assertTrue(primaryType(helper, pos) == null, "no mechanical arm can target "
                     + level.getBlockState(helper.absolutePos(pos)));
         helper.succeed();

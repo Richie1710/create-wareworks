@@ -565,4 +565,32 @@ class ReservationLedgerTest {
         assertEquals(0, ledger.reservedInbound(OUT));
         assertEquals(0, ledger.reservedBuffer(IN, IRON));
     }
+
+    /**
+     * A relocation (issue #46, ADR-079) holds the stock at its source and the room at its target until the pick, then
+     * the room of what the crane holds, and nothing once it is put down. Its stock backs no request.
+     */
+    @Test
+    void aRelocationHoldsStockAndRoomUntilThePickThenRoom() {
+        TransportJob<String, String> relocate = TransportJob.relocate(JOB1, A, B, IRON, 30);
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.STOCK, A, IRON, 30, null),
+                reservation(JOB1, Reservation.Kind.CAPACITY, B, IRON, 30, null)),
+                ReservationLedger.reservationsFor(relocate));
+        ledger.track(relocate);
+        assertEquals(30, ledger.reservedStock(A, IRON));
+        assertEquals(30, ledger.reservedStockNotBackingRequests(IRON), "it serves nobody");
+        assertEquals(30, ledger.reservedCapacity(B), "nobody else is planned into its room");
+        assertEquals(30, ledger.reservedCapacityFor(IRON), "a maximum errs on the safe side for one approach");
+        assertEquals(0, ledger.inTransit(IRON));
+
+        TransportJob<String, String> picked = relocate.withPicked(28);
+        ledger.track(picked);
+        assertEquals(0, ledger.reservedStock(A, IRON), "the picked items left the source");
+        assertEquals(28, ledger.reservedCapacity(B, IRON));
+        assertEquals(List.of(reservation(JOB1, Reservation.Kind.CAPACITY, B, IRON, 28, null)),
+                ledger.reservationsOf(JOB1));
+
+        ledger.track(picked.plusDelivered(28));
+        assertTrue(ledger.isEmpty(), "put down: nothing is held for it any more");
+    }
 }

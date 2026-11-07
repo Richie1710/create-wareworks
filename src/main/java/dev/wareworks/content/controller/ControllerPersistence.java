@@ -26,6 +26,8 @@ import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
+import dev.wareworks.core.optimizer.OptimizerLimits;
+import dev.wareworks.core.optimizer.OptimizerOrder;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
@@ -66,6 +68,11 @@ import net.minecraft.util.Mth;
  * Cranes:     [ { N: int, D: int[3] dock offset from the controller, B: int, X: int, S?: true,
  *                 PB: int, PX: double, Traffic: { Route?, StopB?, StopX?, For?, Since? } } ]
  *                                                  (absent while the warehouse has one crane, issue #14)
+ * OptimizerOrders: [ { Rack: { X, Y, Side, B? }, State: "RUNNING"|"FINISHED"|"OUT_OF_TRIPS"|"CANCELLED",
+ *                      Trips: int, Moved: long,
+ *                      Entries:  [ { Id: UUID, Item: &lt;ItemKey&gt;, State: "OPEN"|"DONE"|..., Moved: long } ],
+ *                      InFlight?: [ { Job: UUID, Entry: UUID } ] } ]
+ *                                                  (oldest first; absent while no optimizer order exists, issue #46)
  * </pre>
  * The stock rules are the controller's own copy of what the aisle's warehouse stock keepers hold. They are saved
  * <b>here</b> rather than only in the keepers, because a rule gates item movement in both directions and a keeper's
@@ -111,6 +118,15 @@ final class ControllerPersistence {
     static final String CHUNK_KEEP_TAG = "ChunkKeep";
     /** The cranes of a warehouse with several and the last claim this controller knew of each (issue #14, ADR-075). */
     static final String CRANES_TAG = "Cranes";
+    /** The Warehouse Optimizer orders, running and finished (issue #46, ADR-079). */
+    static final String OPTIMIZER_ORDERS_TAG = "OptimizerOrders";
+    private static final String OPTIMIZER_RACK = "Rack";
+    private static final String TRIPS = "Trips";
+    private static final String MOVED = "Moved";
+    private static final String ENTRIES = "Entries";
+    private static final String IN_FLIGHT = "InFlight";
+    private static final String TRIP_JOB = "Job";
+    private static final String TRIP_ENTRY = "Entry";
     private static final String CRANE_NUMBER = "N";
     private static final String CRANE_DOCK = "D";
     private static final String CRANE_SITE_BRANCH = "B";
@@ -823,6 +839,109 @@ final class ControllerPersistence {
             }
         }
         return pauses;
+    }
+
+    /**
+     * Writes the Warehouse Optimizer orders, oldest first, and <b>only</b> while there is one (issue #46, ADR-079), so a
+     * warehouse nobody optimised saves exactly the tag it had before. An entry whose item cannot be encoded is left out,
+     * and an order left without an entry with it; nothing is lost but the bookkeeping, because an order holds no item.
+     * Never throws.
+     */
+    static void writeOptimizerOrders(CompoundTag tag, List<OptimizerOrder<ItemKey, RackPosition>> orders,
+                                     HolderLookup.Provider registries) {
+        if (orders.isEmpty())
+            return;
+        ListTag list = new ListTag();
+        for (OptimizerOrder<ItemKey, RackPosition> order : orders) {
+            try {
+                ListTag entries = new ListTag();
+                for (OptimizerOrder.Entry<ItemKey> entry : order.entries()) {
+                    Tag keyTag = entry.key().save(registries);
+                    if (keyTag instanceof CompoundTag compound && compound.isEmpty())
+                        continue; // unencodable key (already logged by ItemKey)
+                    CompoundTag entryTag = new CompoundTag();
+                    entryTag.putUUID(ID, entry.id());
+                    entryTag.put(ITEM, keyTag);
+                    entryTag.putString(STATE, entry.state().name());
+                    entryTag.putLong(MOVED, entry.moved());
+                    entries.add(entryTag);
+                }
+                if (entries.isEmpty())
+                    continue;
+                ListTag inFlight = new ListTag();
+                for (Map.Entry<UUID, UUID> trip : order.inFlight().entrySet()) {
+                    CompoundTag tripTag = new CompoundTag();
+                    tripTag.putUUID(TRIP_JOB, trip.getKey());
+                    tripTag.putUUID(TRIP_ENTRY, trip.getValue());
+                    inFlight.add(tripTag);
+                }
+                CompoundTag entry = new CompoundTag();
+                entry.put(OPTIMIZER_RACK, writeRack(order.optimizer()));
+                entry.putString(STATE, order.state().name());
+                entry.putInt(TRIPS, order.tripsLeft());
+                entry.putLong(MOVED, order.moved());
+                entry.put(ENTRIES, entries);
+                if (!inFlight.isEmpty())
+                    entry.put(IN_FLIGHT, inFlight);
+                list.add(entry);
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Could not save the optimizer order at {}", order.optimizer(), e);
+            }
+        }
+        if (!list.isEmpty())
+            tag.put(OPTIMIZER_ORDERS_TAG, list);
+    }
+
+    /**
+     * The Warehouse Optimizer orders in saved order (issue #46). Reading never throws and skips invalid entries; at most
+     * {@value OptimizerLimits#MAX_ORDERS} orders of at most {@value OptimizerLimits#MAX_ROWS} entries are read, and an
+     * order without a readable entry is no order. Whether a running order still has anything to run is decided by
+     * {@code OptimizerOrders#restore}, so reading stays a pure decode.
+     */
+    static List<OptimizerOrder<ItemKey, RackPosition>> readOptimizerOrders(CompoundTag tag,
+                                                                           HolderLookup.Provider registries) {
+        List<OptimizerOrder<ItemKey, RackPosition>> orders = new ArrayList<>();
+        ListTag list = tag.getList(OPTIMIZER_ORDERS_TAG, Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size() && orders.size() < OptimizerLimits.MAX_ORDERS; i++) {
+            CompoundTag entry = list.getCompound(i);
+            try {
+                readOptimizerOrder(entry, registries).ifPresent(orders::add);
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Skipping unreadable optimizer order {}", entry, e);
+            }
+        }
+        return orders;
+    }
+
+    private static Optional<OptimizerOrder<ItemKey, RackPosition>> readOptimizerOrder(CompoundTag entry,
+                                                                                      HolderLookup.Provider registries) {
+        Optional<RackPosition> rack = readRack(entry.getCompound(OPTIMIZER_RACK));
+        Optional<OptimizerOrder.State> state = OptimizerOrder.State.byName(entry.getString(STATE));
+        if (rack.isEmpty() || state.isEmpty())
+            return Optional.empty();
+        List<OptimizerOrder.Entry<ItemKey>> entries = new ArrayList<>();
+        ListTag entryTags = entry.getList(ENTRIES, Tag.TAG_COMPOUND);
+        for (int i = 0; i < entryTags.size() && entries.size() < OptimizerLimits.MAX_ROWS; i++) {
+            CompoundTag entryTag = entryTags.getCompound(i);
+            Optional<ItemKey> key = ItemKey.load(registries, entryTag.get(ITEM));
+            Optional<OptimizerOrder.EntryState> entryState =
+                    OptimizerOrder.EntryState.byName(entryTag.getString(STATE));
+            if (!entryTag.hasUUID(ID) || key.isEmpty() || entryState.isEmpty())
+                continue;
+            entries.add(new OptimizerOrder.Entry<>(entryTag.getUUID(ID), key.get(), entryState.get(),
+                    entryTag.getLong(MOVED)));
+        }
+        if (entries.isEmpty())
+            return Optional.empty();
+        Map<UUID, UUID> inFlight = new LinkedHashMap<>();
+        ListTag trips = entry.getList(IN_FLIGHT, Tag.TAG_COMPOUND);
+        for (int i = 0; i < trips.size() && inFlight.size() < OptimizerLimits.MAX_IN_FLIGHT; i++) {
+            CompoundTag trip = trips.getCompound(i);
+            if (trip.hasUUID(TRIP_JOB) && trip.hasUUID(TRIP_ENTRY))
+                inFlight.put(trip.getUUID(TRIP_JOB), trip.getUUID(TRIP_ENTRY));
+        }
+        return Optional.of(new OptimizerOrder<>(rack.get(), state.get(), entries, entry.getInt(TRIPS),
+                entry.getLong(MOVED), inFlight));
     }
 
     /**

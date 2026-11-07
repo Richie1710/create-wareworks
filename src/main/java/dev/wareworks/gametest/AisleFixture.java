@@ -31,6 +31,8 @@ import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.TerminalDisplaySide;
+import dev.wareworks.content.station.WarehouseOptimizerBlock;
+import dev.wareworks.content.station.WarehouseOptimizerBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
@@ -222,6 +224,15 @@ final class AisleFixture {
                 .setValue(WarehouseHomePointBlock.FACING, relative.sideDirection(rack.side()).getOpposite()));
     }
 
+    /**
+     * An aligned Warehouse Optimizer at {@code rack}: its panel looks into the aisle, like a stock keeper (issue #46,
+     * ADR-079). It lists the items to move up to better storage locations and holds no items at all.
+     */
+    void optimizer(RackPosition rack) {
+        helper.setBlock(rackPos(rack), WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState()
+                .setValue(WarehouseOptimizerBlock.FACING, relative.sideDirection(rack.side()).getOpposite()));
+    }
+
     /** Breaks the block at a test-relative position like a player would (block entity removal logic runs, no block drop). */
     void breakBlock(BlockPos pos) {
         helper.getLevel().destroyBlock(helper.absolutePos(pos), false);
@@ -320,6 +331,14 @@ final class AisleFixture {
                 .getNullable(helper.getLevel(), absoluteRackPos(rack));
         if (be == null)
             helper.fail("missing warehouse stock keeper block entity", rackPos(rack));
+        return be;
+    }
+
+    WarehouseOptimizerBlockEntity optimizerAt(RackPosition rack) {
+        WarehouseOptimizerBlockEntity be = WareworksBlockEntityTypes.WAREHOUSE_OPTIMIZER
+                .getNullable(helper.getLevel(), absoluteRackPos(rack));
+        if (be == null)
+            helper.fail("missing warehouse optimizer block entity", rackPos(rack));
         return be;
     }
 

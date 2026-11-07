@@ -15,6 +15,7 @@ import com.simibubi.create.content.redstone.displayLink.ClickToLinkBlockItem.Cli
 import com.simibubi.create.foundation.utility.BlockHelper;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.station.OptimizerMenu;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.StockKeeperMenu;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
@@ -45,9 +46,10 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
 /**
- * A right-click on the three stations that have a screen — the warehouse terminal, the production station and the stock
- * keeper — <b>through the server's real dispatch</b> (issue #26, ADR-060): a right-click opens the screen whatever is
- * in the hand, a sneaking one places or uses the item, and the items that act on a station keep their click.
+ * A right-click on the stations that have a screen — the warehouse terminal, the production station, the stock keeper
+ * and, since issue #46, the Warehouse Optimizer — <b>through the server's real dispatch</b> (issue #26, ADR-060): a
+ * right-click opens the screen whatever is in the hand, a sneaking one places or uses the item, and the items that act
+ * on a station keep their click.
  * <ul>
  * <li>{@code stationsopenwhateverisheld} — an empty hand, a block, another warehouse block, a tool and food open each
  * station's screen; the click is consumed, nothing is placed and the stack is untouched;</li>
@@ -82,6 +84,8 @@ public final class StationClickGameTests {
     private static final BlockPos TERMINAL = new BlockPos(1, BASE_Y, 3);
     private static final BlockPos PRODUCTION = new BlockPos(3, BASE_Y, 3);
     private static final BlockPos KEEPER = new BlockPos(5, BASE_Y, 3);
+    /** Behind the production station, two blocks further from the player: a click needs no line of sight here. */
+    private static final BlockPos OPTIMIZER = new BlockPos(3, BASE_Y, 5);
     /** Where the player stands: two blocks from the stations, clear of everything placed on top of them. */
     private static final BlockPos STAND = new BlockPos(3, BASE_Y, 1);
 
@@ -350,7 +354,7 @@ public final class StationClickGameTests {
 
     // --- helpers -----------------------------------------------------------------------------------------------------
 
-    /** One of the three stations with a screen, at its place in the template. */
+    /** One of the stations with a screen, at its place in the template. */
     private record Station(String name, BlockPos pos, BlockState state, Class<? extends AbstractContainerMenu> menu,
             boolean armTarget, boolean resumes) {
     }
@@ -365,6 +369,11 @@ public final class StationClickGameTests {
                         true, true),
                 new Station("stock keeper", KEEPER, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
                         .setValue(HorizontalDirectionalBlock.FACING, Direction.NORTH), StockKeeperMenu.class,
+                        false, false),
+                // The optimizer (issue #46) behaves exactly like the keeper: no arm target, nothing to resume, and a
+                // clipboard keeps its own click, which is why its items are added in the screen.
+                new Station("optimizer", OPTIMIZER, WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState()
+                        .setValue(HorizontalDirectionalBlock.FACING, Direction.NORTH), OptimizerMenu.class,
                         false, false));
     }
 

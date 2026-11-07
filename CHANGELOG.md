@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chunks loaded. A terminal that is broken and placed again needs a new link. The new server config section `remote`
   sets the range (`range`, default 256 blocks) and whether a remote works across dimensions (`crossDimension`, default
   off).
+- **Warehouse Optimizer: move stock to better storage locations on request**
+  ([#46](https://github.com/Richie1710/create-wareworks/issues/46)). A new block for the rack, crafted like the Stock
+  Keeper with Create's brass hand in place of its comparator. List up to 16 items in its screen, by clicking an item
+  onto a row or a filled-in clipboard onto the list cell, and each row shows how many lie at the best storage priority
+  that holds the item, how many lie below it, and about how many could move now. Press **Optimise**, or a row's dot for
+  that item alone, and the crane moves the free stock of those items to locations with a higher priority whose filter
+  fits the item no worse, from the lowest priority first. It only does this while it has nothing else to do: requests,
+  production orders and arrivals always come first, and requested, reserved and stock rule items stay where they are.
+  Nothing goes into a fluid bay, and fluids are not moved. An order ends once nothing more fits anywhere better, after a
+  limited number of trips, or when you press the red mark; a trip under way is finished. The new server config section
+  `optimizer` sets the trips one press may cost (`tripsPerRequest`, default 32). Nothing moves unless a player asks.
 
 ### Changed
 

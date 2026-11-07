@@ -10,31 +10,34 @@ Where a German client is mentioned, restart with `de_de` to check the translatio
 ## A. First launch
 
 1. The creative tab **"Create: Wareworks"** appears after Create's palettes tab, its icon is the stacker crane, and it
-   lists exactly **eighteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
+   lists exactly **nineteen** items in building order: stacker crane, warehouse rail, warehouse controller, warehouse
    interface, **wooden rack bay, andesite rack bay, brass rack bay**, **copper fluid bay, brass fluid bay**, warehouse
    input, warehouse output, warehouse terminal, warehouse production station, **warehouse crafter feeder**, warehouse
-   stock keeper, warehouse home point, and the **hand truck** and the **warehouse remote**, the two items that are no blocks, last — the three rack bays stand directly after the interface, weakest first, the two
-   fluid bays directly after them, weakest first again, and the crafter feeder directly after the station it serves.
+   stock keeper, **warehouse optimizer**, warehouse home point, and the **hand truck** and the **warehouse remote**, the two items that are no blocks, last — the three rack bays stand directly after the interface, weakest first, the two
+   fluid bays directly after them, weakest first again, the crafter feeder directly after the station it serves and
+   the optimizer directly after the stock keeper.
    (`WareworksItemGameTests#creativeTabOrderAndIcon` pins that list; read it from there if the two ever disagree.)
 2. Every item icon shows its own model, no missing-texture checkerboard: the crane icon shows the rail bed with a
    miniature crane, the controller icon its display, the rail icon is readable (not a thin line at the slot's bottom).
-3. Holding Shift on each of the **eighteen** items shows a short Create-style description (issue #22): one sentence what
+3. Holding Shift on each of the **nineteen** items shows a short Create-style description (issue #22): one sentence what
    the block is, at most one note the Ponder scenes do not show; the stacker crane and the crafter feeder additionally
    show their stress impact. At **2560x1440 or 5120x1440 with the automatic GUI scale**, in English and in German, hover
    each bay, the terminal, the output, the crane and the crafter feeder (the tallest tooltip of all) in the **bottom row
    of your inventory**: the item name at the top of the Shift tooltip is on screen. **Does each one tell you what the
    block is for without reading like a telegram?**
-4. JEI/EMI shows **eighteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
+4. JEI/EMI shows **nineteen** recipes; the stacker crane needs a 3 × 4 mechanical crafter grid (either mirror image) and
    shows a **brass hand** beside its precision mechanism, rails come out **4** at a time and include a **shaft**, the
    terminal takes a **precision mechanism** (not a funnel) like the controller, the output takes two **brass nuggets**
    the input does not, and the home point stays at the andesite tier (a rose quartz lamp over an andesite casing between
-   two andesite alloy, with no electron tube and no precision mechanism), and the crafter feeder is one column: a
-   precision mechanism over a brass casing over a vanilla Crafter, the hand truck is a shaft over andesite alloy over
-   a cogwheel, an iron sheet and a cogwheel, and the warehouse remote is a Create Transmitter over an ender pearl
-   between two brass sheets, with a third brass sheet below. In the **vanilla recipe book** the other **seventeen**
-   appear once you hold one of their ingredients — the terminal shows up with a precision mechanism, the output with
-   a brass nugget and the remote with an ender pearl — while the stacker crane never does, because mechanical crafting has no recipe-book category
-   (Create's own mechanical crafting recipes behave the same).
+   two andesite alloy, with no electron tube and no precision mechanism), the optimizer is the stock keeper's plus
+   shape with a **brass hand** on top in place of the comparator (an electron tube either side of a brass casing,
+   andesite alloy below), and the crafter feeder is one column: a precision mechanism over a brass casing over a
+   vanilla Crafter, the hand truck is a shaft over andesite alloy over a cogwheel, an iron sheet and a cogwheel, and
+   the warehouse remote is a Create Transmitter over an ender pearl between two brass sheets, with a third brass sheet
+   below. In the **vanilla recipe book** the other **eighteen** appear once you hold one of their ingredients — the
+   terminal shows up with a precision mechanism, the output with a brass nugget, the optimizer with a brass hand and
+   the remote with an ender pearl — while the stacker crane never does, because mechanical crafting has no recipe-book
+   category (Create's own mechanical crafting recipes behave the same).
 4a. Lay out the **input** recipe (funnel over casing) and then the **output** recipe (casing over funnel with a brass
     nugget on each side of the funnel) in a crafting table: each gives exactly its own block, and neither turns into
     the warehouse interface (casing + funnel + brass nugget, shapeless).
@@ -3820,3 +3823,48 @@ you get tired of waiting, and put it back before judging check 160.
      it at the terminal. The bucket is filled at the farther bay.
 428. **Storing is unchanged.** Feed the item through an input: it still goes into the prioritised rack first, not into
      the overflow.
+
+
+## BQ. The Warehouse Optimizer ([issue #46](https://github.com/Richie1710/create-wareworks/issues/46))
+
+> A block that moves the free stock of the items it lists to strictly better storage locations, on request, for a
+> bounded number of trips and only while a crane has nothing else to do (ADR-079, `docs/warehouse-system.md` §3.10).
+> `RelocationRuleTest`, `JobPlannerRelocateTest`, `OptimizerOrdersTest`, `RelocationStockTest` and
+> `PriorityBreakdownTest` check the rules, `OptimizerBlockGameTests` and `OptimizerGameTests` the block and real trips
+> in a world with an item census, and the `optimizer` visual scenario real clicks in English and German. What is left
+> is what only a player can judge.
+> Setup: one aisle with a terminal, an optimizer in the rack, two **overflow chests** at priority 0 holding about three
+> stacks of cobblestone and a stack of iron, and an empty **rack wall** of four locations at priority 5. One more chest
+> at 0 with a **cobblestone filter**, holding a stack of cobblestone.
+
+429. **Look.** The block in the rack, in the hand, in an item frame and in the creative tab right after the stock
+     keeper: does the panel with three rising steps read as "move up", and does it sit well beside the keeper?
+430. **The screen.** Right-click it with anything in hand. Set cobblestone and iron by clicking them onto rows, clear
+     one with an empty hand, Shift-click an item from your inventory. For cobblestone Best, Below and Move read about
+     256 / 0 / 192: all of it lies at 0, which is the best priority that holds it so far, and the dedicated chest's
+     stack does not count as movable. After the moves of check 432 it reads about 192 / 64 / 0. Hover a row: the
+     priorities 9 down to 0 that hold it. Are the three short headers understood without hovering, and is a "Best" that
+     counts priority 0 before anything moved confusing?
+431. **A clipboard.** Write cobblestone, iron and gold on a Create clipboard and click it onto the list cell left of the
+     status line: the missing items are added, the status line says how many; click it again: "Its items are listed
+     already". Fill all 16 rows and click a longer clipboard: it says how many found no free row.
+432. **Optimise.** Press the play button. The crane carries cobblestone and iron from the overflow chests into the rack
+     wall, one trip at a time; the pips turn aqua while it works and green when nothing more fits; the status line
+     counts "Moved n, k trips left". The dedicated chest keeps its cobblestone. Does the screen feel alive enough while
+     the crane works, and does "done" read as done?
+433. **Work comes first.** While it runs, click a stack of iron at the terminal and put items into an input: the crane
+     finishes its trip, then serves the request and the input before the next relocation, and the request gets the full
+     amount.
+434. **The stop.** Start again with fresh stock and press the red mark mid trip: the crane finishes the trip it is on
+     and then stops; the status line says "Stopped: moved n". Press a single row's pip: only that item moves.
+435. **The trip cap.** Set `optimizer.tripsPerRequest = 2` and press Optimise with plenty to move: exactly two trips,
+     then "Out of trips". Set it back.
+436. **Goggles and displays.** With goggles on the optimizer: its items and, while it runs, "Optimising: n moved, k
+     trips left". On the dock and the controller's crane list the crane says it is relocating. A crane status display
+     link says "Relocating".
+437. **Nothing in a fluid bay.** Put lava buckets into an overflow chest at 0 next to a fluid bay at 9 and an empty rack
+     at 5, list the lava bucket and optimise: the buckets go to the rack, never into the bay.
+438. **Leaving it.** Save and quit mid trip, rejoin: the trip finishes and the order goes on. Break the optimizer mid
+     order: the trip under way finishes, then nothing more moves.
+439. **German.** Block name, Shift tooltip, the three headers ("Oben", "Tiefer", "Umlag."), every status line, pip
+     tooltip and goggle line: does everything read well and fit at the 320 x 240 GUI floor?

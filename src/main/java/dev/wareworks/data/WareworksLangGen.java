@@ -10,6 +10,7 @@ import dev.wareworks.content.crane.CranePauseReason;
 import dev.wareworks.content.crane.CraneTrafficInfo;
 import dev.wareworks.content.crane.DockJoinStatus;
 import dev.wareworks.content.station.HomePointStatus;
+import dev.wareworks.content.station.OptimizerScreenState;
 import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.core.crane.CranePhase;
@@ -486,6 +487,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_HAND_OVER), "Handing over %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_COLLECT), "Collecting %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_FILL), "Filling %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_JOB_RELOCATE), "Relocating %1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_ROUTE), "From %1$s to %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HOLDING), "Holding:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRANE_HEAD_EMPTY), "Grabber empty");
@@ -1087,6 +1089,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_HANDING_OVER), "Handing over");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_COLLECTING), "Collecting");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_FILLING), "Filling");
+        lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_RELOCATING), "Relocating");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_PAUSED), "Paused");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_JOB), "%1$s x%2$s");
         lang.accept(WareworksLang.key(WareworksLang.DISPLAY_CRANE_LINE_TARGET), "To %1$s");
@@ -1253,6 +1256,93 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_CRAFT_REMOTE), "Craft in person: the result goes to you");
 
         severalCranes(lang);
+        optimizer(lang);
+    }
+
+    /**
+     * Issue #46 (ADR-079): the Warehouse Optimizer — its description, its goggle lines and its screen. Every screen text
+     * is held to the room it is drawn in, in both languages, by {@code OptimizerTextWidthTest}.
+     */
+    private static void optimizer(BiConsumer<String, String> lang) {
+        tooltip(lang, "block.wareworks.warehouse_optimizer",
+                "Moves the _free_ stock of the items it lists to _better storage locations_: a higher _priority_, "
+                        + "and a filter that fits no worse.",
+                "When Optimise is pressed",
+                "The crane moves what fits _now_, whenever it has nothing else to do, for a limited number of "
+                        + "_trips_. Reserved items stay put.",
+                "With a clipboard",
+                "Click a filled-in _clipboard_ onto the list cell of its screen to add the items it lists.");
+
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_OPTIMIZER), "Warehouse Optimizer:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_OPTIMIZER_ITEMS), "Items: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_OPTIMIZER_NO_ITEMS), "No items set");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_OPTIMIZER_NO_WAREHOUSE), "Not part of a warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_OPTIMIZER_RUNNING),
+                "Optimising: %1$s moved, %2$s trips left");
+
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_ITEMS), "Items");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_EMPTY_ROW), "Empty row");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_BEST_SHORT), "Best");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_BELOW_SHORT), "Below");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MOVABLE_SHORT), "Move");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_BEST), "At the best priority");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_BELOW), "At lower priorities");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MOVABLE), "Could move now");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_BEST_HINT),
+                "Stored at the highest priority that holds it");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_BELOW_HINT), "Stored at every priority below that");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MOVABLE_HINT),
+                "Estimated room in better places");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MOVABLE_RESERVED),
+                "Requested and reserved items stay put");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PRIORITY), "Priority %1$s: %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_UNLOADED), "Not loaded: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_NONE_STORED), "None in stock");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MOVABLE_NOW), "Could move now: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MOVABLE_UNKNOWN), "? = not every place is measured yet");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_ITEM_HINT),
+                "Item sets it, an empty hand clears it");
+        for (OptimizerScreenState.Pip pip : OptimizerScreenState.Pip.values()) {
+            lang.accept(WareworksLang.key(pip.langKey()), switch (pip) {
+                case IDLE -> "Not being optimised";
+                case RUNNING -> "Being moved to better places";
+                case DONE -> "Done: nothing more fits higher";
+                case NOTHING_TO_MOVE -> "Nothing to move";
+            });
+        }
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PIP_HINT), "Click to optimise this item alone");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST), "Clipboard");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST_HINT),
+                "Click a clipboard here to add its items");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_OPTIMISE), "Optimise");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_OPTIMISE_HINT),
+                "Moves the listed items to better places");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_OPTIMISE_NOW),
+                "Only what fits now, while the crane is free");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_CANCEL), "Stop optimising");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_CANCEL_HINT), "A trip under way is finished");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_HINT), "Set items, then press Optimise");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_NO_WAREHOUSE), "Not part of a warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_RUNNING), "Moved %1$s, %2$s trips left");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_FINISHED), "Done: moved %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_OUT_OF_TRIPS), "Out of trips: moved %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_CANCELLED), "Stopped: moved %1$s");
+        for (OptimizerScreenState.Message message : OptimizerScreenState.Message.values()) {
+            if (message == OptimizerScreenState.Message.NONE)
+                continue;
+            lang.accept(WareworksLang.key(message.langKey()), switch (message) {
+                case NONE -> throw new IllegalStateException("NONE has no sentence");
+                // The count last, after a colon: it may be 1, and a fixed plural behind it would be wrong then.
+                case ADDED -> "Items added: %1$s";
+                case ADDED_NO_ROOM -> "Added %1$s; %2$s found no free row";
+                case ALL_LISTED -> "Its items are listed already";
+                case CLIPBOARD_EMPTY -> "No items on that clipboard";
+                case NOT_A_CLIPBOARD -> "Click with a clipboard";
+                case ALREADY_LISTED -> "That item is listed already";
+                case NO_ITEMS -> "Set an item first";
+                case TOO_MANY_ORDERS -> "Too many optimizers are busy";
+            });
+        }
     }
 
     /**
@@ -1313,6 +1403,7 @@ public final class WareworksLangGen {
                 case COLLECTING -> "%1$s: collecting";
                 case HANDING_OVER -> "%1$s: handing over";
                 case FILLING -> "%1$s: filling";
+                case RELOCATING -> "%1$s: relocating";
                 case WAITING -> "%1$s: waiting for crane %2$s";
                 case MOVING_ASIDE -> "%1$s: moving aside for crane %2$s";
                 case PAUSED -> "%1$s: paused";

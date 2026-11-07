@@ -2,6 +2,7 @@ package dev.wareworks.network;
 
 import java.util.Optional;
 
+import dev.wareworks.content.station.OptimizerMenu;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.StockKeeperMenu;
 import dev.wareworks.content.station.TerminalCraftOutcome;
@@ -179,8 +180,16 @@ public final class WareworksNetwork {
      * close a screen opened from afar at once; an older server would send neither, and a newer client would read past
      * the end. Client and server also changed which of them may move items through a screen opened from afar (its
      * slots are locked on both sides). No payload type changed.
+     * <p>
+     * <b>{@code "22"} is issue #46</b> (the Warehouse Optimizer, ADR-079): the two optimizer payloads
+     * ({@link OptimizerActionPayload} client → server, {@link OptimizerScreenPayload} server → client), which an older
+     * build would neither send nor understand; and {@code CraneRoster.Activity.RELOCATING}, inserted after
+     * {@code FILLING} into an enum the crane list of the controller's goggle data carries by ordinal, which an older
+     * client would read as the activity after it. The goggle data is no payload, but it crosses the same connection, so
+     * the versions must not mix. A crane's {@code RELOCATE} job saved by this build is dropped by an older one, which
+     * spills what it carried at the dock.
      */
-    public static final String VERSION = "21";
+    public static final String VERSION = "22";
 
     private WareworksNetwork() {
     }
@@ -242,6 +251,10 @@ public final class WareworksNetwork {
                 WareworksNetwork::onStockKeeperScreen);
         registrar.playToServer(StockKeeperRulePayload.TYPE, StockKeeperRulePayload.STREAM_CODEC,
                 WareworksNetwork::onStockKeeperRule);
+        registrar.playToClient(OptimizerScreenPayload.TYPE, OptimizerScreenPayload.STREAM_CODEC,
+                WareworksNetwork::onOptimizerScreen);
+        registrar.playToServer(OptimizerActionPayload.TYPE, OptimizerActionPayload.STREAM_CODEC,
+                WareworksNetwork::onOptimizerAction);
     }
 
     // --- server --------------------------------------------------------------------------------------------------
@@ -435,6 +448,17 @@ public final class WareworksNetwork {
                 payload.key(), payload.value());
     }
 
+    /**
+     * A player clicked in their open Warehouse Optimizer screen (issue #46, ADR-079). The payload moves no item: the
+     * server writes a ghost item into a row, reads the clipboard on its own copy of the player's cursor, or asks the
+     * warehouse to start or stop an order, after resolving the menu the player really has open. An action this build
+     * does not know does nothing.
+     */
+    private static void onOptimizerAction(OptimizerActionPayload payload, IPayloadContext context) {
+        payload.action().ifPresent(action -> OptimizerMenu.submit(context.player(), payload.containerId(), action,
+                payload.row(), payload.key()));
+    }
+
     // --- client --------------------------------------------------------------------------------------------------
 
     private static void onTerminalStock(TerminalStockPayload payload, IPayloadContext context) {
@@ -516,5 +540,10 @@ public final class WareworksNetwork {
     private static void onStockKeeperScreen(StockKeeperScreenPayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.StockKeeperScreenUpdates.onState(payload);
+    }
+
+    private static void onOptimizerScreen(OptimizerScreenPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.OptimizerScreenUpdates.onState(payload);
     }
 }

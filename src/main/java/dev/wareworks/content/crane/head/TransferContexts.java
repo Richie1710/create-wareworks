@@ -163,10 +163,10 @@ public final class TransferContexts {
                     yield resolveCollect(level, pos, port);
                 yield Resolution.available(ofDelivery(level, delivery, kind));
             }
-            // A warehouse stock keeper and a home point hold no items at all, so no job can ever name one as a source
-            // or a target (M15, M21): a crane that somehow asked for one is told the member is not there, which is
-            // exactly true.
-            case KEEPER, HOME -> Resolution.MISSING;
+            // A warehouse stock keeper, a home point and an optimizer hold no items at all, so no job can ever name one
+            // as a source or a target (M15, M21, issue #46): a crane that somehow asked for one is told the member is
+            // not there, which is exactly true.
+            case KEEPER, HOME, OPTIMIZER -> Resolution.MISSING;
         };
     }
 

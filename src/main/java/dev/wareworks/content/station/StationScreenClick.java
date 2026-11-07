@@ -9,8 +9,9 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.common.Tags;
 
 /**
- * The one rule for the three stations that open a <b>screen</b> on a right-click — the warehouse terminal, the
- * production station and the stock keeper ({@code docs/warehouse-system.md} §3.4.2, §3.5, §3.6; issue #26, ADR-060):
+ * The one rule for the stations that open a <b>screen</b> on a right-click — the warehouse terminal, the production
+ * station, the stock keeper and the Warehouse Optimizer ({@code docs/warehouse-system.md} §3.4.2, §3.5, §3.6; issue #26,
+ * ADR-060; issue #46):
  * <b>a right-click opens the screen whatever is in the hand, and a sneaking one uses the item</b>, which is how a
  * vanilla chest behaves.
  * <p>

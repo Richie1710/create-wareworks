@@ -40,6 +40,7 @@ import dev.wareworks.core.inventory.SlotView;
 import dev.wareworks.core.inventory.StockView;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.ReservationView;
+import dev.wareworks.core.optimizer.RelocationStock;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.stock.StockLevels;
@@ -318,15 +319,30 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         Map<ItemKey, StockLevels> levelCache = new HashMap<>();
         Function<ItemKey, StockLevels> levels = key -> levelCache.computeIfAbsent(key,
                 item -> controller.stockLevelsOf(item, promised.getOrDefault(item, 0L)));
-        List<TerminalStockEntry> entries = new ArrayList<>(stock.distinctKeys());
+        // What a Warehouse Optimizer is moving (issue #46, ADR-079), empty while nothing is: a relocation reserves its
+        // stock at the source before the pick and carries it outside the index after it, so the rows count it back in
+        // exactly as the controller's availableStock does, and an item whose every unit is in a crane's head keeps its
+        // row. A tidy-up never makes the warehouse look smaller than it is.
+        Map<ItemKey, RelocationStock.Moving> moving = controller.relocationsMoving();
+        List<TerminalStockEntry> entries = new ArrayList<>(stock.distinctKeys() + moving.size());
         // The totals walked as entries, not every key looked up again: keys that share a hash code (ADR-064) would make
         // a lookup per key cost the square of their number.
         for (Map.Entry<ItemKey, Long> stored : stock.totals().entrySet()) {
             ItemKey key = stored.getKey();
             long total = stored.getValue();
-            if (total > 0)
-                entries.add(entry(controller, rules, levels, key, total,
-                        reservations.availableStock(key, total, spoken.getOrDefault(key, 0L)),
+            if (total > 0) {
+                RelocationStock.Moving relocated = moving.getOrDefault(key, RelocationStock.Moving.NONE);
+                entries.add(entry(controller, rules, levels, key, total + relocated.carried(),
+                        reservations.availableStock(key, RelocationStock.counted(total, relocated.inFlight()),
+                                spoken.getOrDefault(key, 0L)),
+                        producible.containsKey(key), producible.getOrDefault(key, 0L)));
+            }
+        }
+        for (Map.Entry<ItemKey, RelocationStock.Moving> relocated : moving.entrySet()) {
+            ItemKey key = relocated.getKey();
+            if (stock.count(key) <= 0 && relocated.getValue().carried() > 0)
+                entries.add(entry(controller, rules, levels, key, relocated.getValue().carried(),
+                        reservations.availableStock(key, relocated.getValue().inFlight(), spoken.getOrDefault(key, 0L)),
                         producible.containsKey(key), producible.getOrDefault(key, 0L)));
         }
         // Rows that exist although the aisle holds none of the item, and that would each become unreachable without
@@ -335,14 +351,19 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // player looks, and a row that has vanished can never be requested again.
         List<TerminalStockEntry> pinned = new ArrayList<>(producible.size() + rules.governedKeys().size());
         for (Map.Entry<ItemKey, Long> entry : producible.entrySet()) {
-            if (stock.count(entry.getKey()) <= 0)
+            if (stock.count(entry.getKey()) <= 0 && !isCarried(moving, entry.getKey()))
                 pinned.add(entry(controller, rules, levels, entry.getKey(), 0L, 0L, true, entry.getValue()));
         }
         for (ItemKey key : rules.governedKeys()) {
-            if (stock.count(key) <= 0 && !producible.containsKey(key))
+            if (stock.count(key) <= 0 && !producible.containsKey(key) && !isCarried(moving, key))
                 pinned.add(entry(controller, rules, levels, key, 0L, 0L, false, 0L));
         }
         return window(entries, pinned);
+    }
+
+    /** Whether a relocation carries {@code key} in a crane's head: it then has a stocked row of its own. */
+    private static boolean isCarried(Map<ItemKey, RelocationStock.Moving> moving, ItemKey key) {
+        return moving.getOrDefault(key, RelocationStock.Moving.NONE).carried() > 0;
     }
 
     /**
@@ -439,7 +460,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return false;
         if (producible.contains(key))
             return true;
-        return controller().map(controller -> controller.countOf(key) > 0 || controller.stockRules().governsKey(key))
+        return controller().map(controller -> controller.heldCount(key) > 0 || controller.stockRules().governsKey(key))
                 .orElse(false);
     }
 
@@ -834,8 +855,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // Resolve against the server's own state: a key the aisle neither holds nor can produce is refused before it
         // reaches the queue, whatever the client claimed. ItemKey compares item and components, so a matching key is
         // the indexed one. A producible key is allowed through here and the controller decides how much of it can
-        // really be promised (M11, ADR-024).
-        if (controller.countOf(key) <= 0 && !controller.producibleKeys().contains(key))
+        // really be promised (M11, ADR-024). Items a Warehouse Optimizer's crane carries are held all the same (issue #46).
+        if (controller.heldCount(key) <= 0 && !controller.producibleKeys().contains(key))
             return RequestCheck.refused(remembered(player, door,
                     RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
         return new RequestCheck(controller, Optional.empty());

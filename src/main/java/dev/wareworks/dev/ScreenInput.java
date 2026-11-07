@@ -12,6 +12,7 @@ import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
 import dev.wareworks.client.gui.TerminalCraftPanel;
 import dev.wareworks.client.gui.TerminalListTable;
+import dev.wareworks.client.gui.WarehouseOptimizerScreen;
 import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.client.gui.WarehouseStockKeeperScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
@@ -100,6 +101,23 @@ final class ScreenInput {
             double.class, double.class, int.class);
     private static final Method KEEPER_TOOLTIP_AT = method(WarehouseStockKeeperScreen.class, "tooltipAt", int.class,
             int.class);
+    /** The Warehouse Optimizer's hit tests, its tooltip, its status line and its Optimise button (issue #46). */
+    private static final Method OPTIMIZER_ROW_AT = method(WarehouseOptimizerScreen.class, "rowAt", double.class,
+            double.class);
+    private static final Method OPTIMIZER_OVER_CELL = method(WarehouseOptimizerScreen.class, "isOverCell",
+            double.class, double.class, int.class);
+    private static final Method OPTIMIZER_OVER_STATUS = method(WarehouseOptimizerScreen.class, "isOverStatus",
+            double.class, double.class, int.class);
+    private static final Method OPTIMIZER_OVER_LIST_CELL = method(WarehouseOptimizerScreen.class, "isOverListCell",
+            double.class, double.class);
+    private static final Method OPTIMIZER_OVER_CANCEL = method(WarehouseOptimizerScreen.class, "isOverCancel",
+            double.class, double.class);
+    private static final Method OPTIMIZER_TOOLTIP_AT = method(WarehouseOptimizerScreen.class, "tooltipAt", int.class,
+            int.class);
+    private static final Method OPTIMIZER_STATUS_LINE = method(WarehouseOptimizerScreen.class, "statusLine");
+    private static final Field OPTIMIZER_BUTTON = field(WarehouseOptimizerScreen.class, "optimiseButton");
+    /** What the optimizer screen's row hit test returns for "no row here" ({@code WarehouseOptimizerScreen.NONE}). */
+    private static final int NO_OPTIMIZER_ROW = -1;
     /** What the keeper screen's own hit tests return for "nothing here" ({@code WarehouseStockKeeperScreen.NONE}). */
     private static final int NO_NUMBER_FIELD = -1;
     /** Middle of a vanilla 16x16 menu slot, measured from {@code Slot#x}/{@code y}. */
@@ -713,6 +731,107 @@ final class ScreenInput {
         @SuppressWarnings("unchecked")
         List<Component> tooltip = (List<Component>) invoke(KEEPER_TOOLTIP_AT, screen, (int) point.x(), (int) point.y());
         return tooltip;
+    }
+
+    /**
+     * The centre of the item cell of row {@code row} in the Warehouse Optimizer's screen (issue #46), the cell an item
+     * on the cursor writes into and an empty hand clears, checked with the screen's own hit tests for the row, the cell
+     * and the status pip.
+     */
+    static Point optimizerCell(WarehouseOptimizerScreen screen, int row) {
+        int[] centre = screen.cellCentre(row).orElseThrow(() -> new VisualTestException(
+                "optimizer row " + row + " is not on screen (scroll " + screen.scroll() + ")"));
+        Point point = new Point(centre[0], centre[1]);
+        requireOptimizerRow(screen, point, row);
+        if (!(Boolean) invoke(OPTIMIZER_OVER_CELL, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the optimizer screen's hit test does not put " + point + " on the cell of "
+                    + "row " + row);
+        if ((Boolean) invoke(OPTIMIZER_OVER_STATUS, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the optimizer screen's hit test puts " + point + " on the pip of row " + row);
+        return point;
+    }
+
+    /**
+     * The centre of the status pip of row {@code row} in the Warehouse Optimizer's screen, the row's own Optimise,
+     * checked with the screen's own hit tests for the row, the pip and the cell.
+     */
+    static Point optimizerPip(WarehouseOptimizerScreen screen, int row) {
+        int[] centre = screen.pipCentre(row).orElseThrow(() -> new VisualTestException(
+                "optimizer row " + row + " is not on screen (scroll " + screen.scroll() + ")"));
+        Point point = new Point(centre[0], centre[1]);
+        requireOptimizerRow(screen, point, row);
+        if (!(Boolean) invoke(OPTIMIZER_OVER_STATUS, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the optimizer screen's hit test does not put " + point + " on the pip of "
+                    + "row " + row);
+        if ((Boolean) invoke(OPTIMIZER_OVER_CELL, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the optimizer screen's hit test puts " + point + " on the cell of row " + row);
+        return point;
+    }
+
+    /** The centre of the optimizer's list cell, which reads a clipboard on the cursor, checked with its hit test. */
+    static Point optimizerListCell(WarehouseOptimizerScreen screen) {
+        int[] centre = screen.listCellCentre();
+        Point point = new Point(centre[0], centre[1]);
+        if (!(Boolean) invoke(OPTIMIZER_OVER_LIST_CELL, screen, point.x(), point.y()))
+            throw new VisualTestException("the optimizer screen's hit test does not put " + point + " on its list cell");
+        if ((Integer) invoke(OPTIMIZER_ROW_AT, screen, point.x(), point.y()) != NO_OPTIMIZER_ROW)
+            throw new VisualTestException("the optimizer's list cell at " + point + " lies on an item row");
+        return point;
+    }
+
+    /**
+     * The centre of the optimizer's Optimise button, checked against the button itself (a widget answers its own click)
+     * and against the cancel mark and the list cell beside it, so the click can be nothing else.
+     */
+    static Point optimizerOptimiseButton(WarehouseOptimizerScreen screen) {
+        IconButton button = (IconButton) get(OPTIMIZER_BUTTON, screen);
+        Point point = centre(button);
+        int[] drawn = screen.optimiseCentre();
+        if (Math.abs(point.x() - drawn[0]) > 1.0 || Math.abs(point.y() - drawn[1]) > 1.0)
+            throw new VisualTestException("the Optimise button stands at " + point + " but the layout puts it at ("
+                    + drawn[0] + ", " + drawn[1] + ")");
+        if (!button.visible || !button.active || !button.isMouseOver(point.x(), point.y()))
+            throw new VisualTestException("the Optimise button does not take a click at " + point);
+        if ((Boolean) invoke(OPTIMIZER_OVER_CANCEL, screen, point.x(), point.y())
+                || (Boolean) invoke(OPTIMIZER_OVER_LIST_CELL, screen, point.x(), point.y()))
+            throw new VisualTestException("the Optimise button at " + point + " overlaps the cancel mark or the list "
+                    + "cell");
+        return point;
+    }
+
+    /**
+     * The centre of the red cancel mark at the right end of the optimizer's status text, checked with its hit test and
+     * against the Optimise button beside it. The screen only answers it while an order runs.
+     */
+    static Point optimizerCancelMark(WarehouseOptimizerScreen screen) {
+        int[] centre = screen.cancelCentre();
+        Point point = new Point(centre[0], centre[1]);
+        if (!(Boolean) invoke(OPTIMIZER_OVER_CANCEL, screen, point.x(), point.y()))
+            throw new VisualTestException("the optimizer screen's hit test does not put " + point + " on its cancel "
+                    + "mark");
+        if (((IconButton) get(OPTIMIZER_BUTTON, screen)).isMouseOver(point.x(), point.y()))
+            throw new VisualTestException("the cancel mark at " + point + " lies on the Optimise button");
+        return point;
+    }
+
+    /** The tooltip the optimizer's screen draws for a mouse at {@code point}; the scenario hovers the point first. */
+    static List<Component> optimizerTooltip(WarehouseOptimizerScreen screen, Point point) {
+        @SuppressWarnings("unchecked")
+        List<Component> tooltip = (List<Component>) invoke(OPTIMIZER_TOOLTIP_AT, screen, (int) point.x(),
+                (int) point.y());
+        return tooltip;
+    }
+
+    /** What the optimizer's status row says before it is fitted to its room, so a run can measure it. */
+    static Component optimizerStatusLine(WarehouseOptimizerScreen screen) {
+        return (Component) invoke(OPTIMIZER_STATUS_LINE, screen);
+    }
+
+    private static void requireOptimizerRow(WarehouseOptimizerScreen screen, Point point, int row) {
+        int hit = (Integer) invoke(OPTIMIZER_ROW_AT, screen, point.x(), point.y());
+        if (hit != row)
+            throw new VisualTestException("the optimizer screen's hit test puts " + point + " on row " + hit + ", not "
+                    + row);
     }
 
     /**

@@ -3,7 +3,9 @@ package dev.wareworks.core.job;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -80,6 +82,14 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       ({@link NoJobReason#NO_MATCHING_FILTER}), from "an accepting port was the only place left and it is full"
  *       ({@link NoJobReason#PORT_FULL}) and from "a rule holds enough already"
  *       ({@link NoJobReason#AT_MAXIMUM}).</li>
+ *   <li><b>RELOCATE</b> last (issue #46, ADR-079), and only when none of the stages above returned a job: the keys a
+ *       Warehouse Optimizer asked to move ({@link PlannerInput#relocations()}), oldest order first. Its sources are the
+ *       locations holding the key, ranked like a retrieve's ({@link #SOURCE_RANKING}, lowest priority first), its
+ *       targets the storage locations that are <b>strictly better</b> for the key ({@link RelocationRule}) and may take
+ *       a relocation at all ({@link PlannerInput#relocateTarget()}), ranked like a store's ({@link #RANKING}). One trip
+ *       is at most the need's movable amount and the carry limit. It adds no {@link NoJobReason}, never moves the
+ *       arrival cursor, and reports in {@link PlanResult#relocationsExhausted()} the needs for which nothing fits
+ *       anywhere better ({@link #planRelocations}).</li>
  * </ol>
  * Candidates are tried in rank order and fall through when the live result leaves nothing (§5).
  * <p>
@@ -432,9 +442,20 @@ public final class JobPlanner<K, L> {
             }
             reasons.add(survey.reason());
         }
+        int cursor = cappedCursor < 0 ? start : cappedCursor;
+        // Relocations last (issue #46, ADR-079): every stage above returns as soon as it has a job and as soon as the
+        // budget is spent, so a crane is only ever sent to tidy up when nobody waits for it and nothing arrived. The
+        // cursor is the one the empty return hands back, so a relocation never moves the arrival round robin, and it
+        // adds no reason: an optimizer that finds nothing must not change what the goggles say about storing.
+        Set<UUID> exhausted = new LinkedHashSet<>();
+        if (!input.relocations().isEmpty()) {
+            Optional<PlannedJob<K, L>> relocation = planRelocations(input, budget, exhausted);
+            if (relocation.isPresent())
+                return new PlanResult<>(relocation, reasons, cursor, exhausted);
+        }
         if (!work)
             reasons.add(NoJobReason.NO_WORK);
-        return new PlanResult<>(Optional.empty(), reasons, cappedCursor < 0 ? start : cappedCursor);
+        return new PlanResult<>(Optional.empty(), reasons, cursor, exhausted);
     }
 
     /**
@@ -452,7 +473,8 @@ public final class JobPlanner<K, L> {
      * three times {@link PlannerInput#liveSimulationBudget()} live calls for a {@code STORE} reroute (storage, then the
      * input stations, then the accepting ports), twice for a {@code RETRIEVE} or a {@code FILL} one (storage, then the
      * output stations) and
-     * for a {@code COLLECT} one (storage, then the input stations), and once for a {@code SUPPLY} one (storage alone)
+     * for a {@code COLLECT} one (storage, then the input stations), and once for a {@code SUPPLY} or a {@code RELOCATE}
+     * one (storage alone)
      * @throws IllegalArgumentException if {@code amount < 1}
      */
     public Optional<RerouteTarget<L>> planReroute(PlannerInput<K, L> input, K key, int amount, JobType type,
@@ -502,6 +524,13 @@ public final class JobPlanner<K, L> {
             // not to store may leave through one, so a player can reason that what comes out of a port is surplus and
             // the mod never quietly feeds a shredder with items somebody requested.
             case SUPPLY -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null, true)
+                    .map(Selection::target);
+            // Relocated items go back into storage and nowhere else, exactly like supply leftovers (issue #46, ADR-079):
+            // JobType.RELOCATE allows no other target, so they can never leave the warehouse. Filters are advisory for
+            // the same reason, and the location they came from may take them back. There is deliberately no priority
+            // floor - going back down is better than holding - but a fluid bay is excluded exactly as in the plan
+            // (PlannerInput#relocateTarget), or a filled container would be drained.
+            case RELOCATE -> selectRelocationStorage(input, key, amount, failedTarget, branch, x, y, budget)
                     .map(Selection::target);
             // Collected items are storing items (M18, issue #13), so a rejecting filter drops the location as in the
             // store plan, and the fallback is an input buffer — from where they are stored normally. A port is
@@ -854,6 +883,142 @@ public final class JobPlanner<K, L> {
         return Optional.empty();
     }
 
+    // --- relocate (issue #46, ADR-079) ----------------------------------------------------------------------------
+
+    /**
+     * The relocation stage: the needs in order, each searched by {@link #planRelocation}, until one produces a job or the
+     * budget is spent. A need whose search ended with nothing found while the budget still had calls left is added to
+     * {@code exhausted}: nothing more of its key fits anywhere better now. A need the budget cut short is not, so the
+     * next run searches it again.
+     */
+    private Optional<PlannedJob<K, L>> planRelocations(PlannerInput<K, L> input, Budget budget, Set<UUID> exhausted) {
+        for (PlannerInput.RelocateNeed<K> need : input.relocations()) {
+            Optional<PlannedJob<K, L>> job = planRelocation(input, need, budget);
+            if (job.isPresent())
+                return job;
+            if (budget.exhausted)
+                return Optional.empty();
+            exhausted.add(need.id());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * One relocation need: a trip of its key from a storage location to a strictly better one ({@link RelocationRule}).
+     * <ol>
+     * <li><b>Sources</b> are the locations holding the key per index, available, not known to refuse it and with stock
+     * no job has reserved, ranked by {@link #SOURCE_RANKING}: the lowest priority first, the place the optimizer exists
+     * to empty, as a retrieve would (issue #47). What the need holds back ({@link PlannerInput.RelocateNeed#heldBack()})
+     * is counted off them in that order and stays where it lies.</li>
+     * <li><b>Targets</b> are collected once by {@link #collectStorage} with the store plan's own rules (a hard filter,
+     * the refusal memory, the estimate less reserved room) above the lowest source priority, without the locations
+     * {@link PlannerInput#relocateTarget()} keeps out, and ranked by {@link #RANKING}.</li>
+     * <li>For each source in order, the targets that are better <b>for that source</b> are kept, one live extract asks
+     * how many of {@code min(movable, carryLimit)} it gives beyond what other jobs reserved there, and
+     * {@link #tryInsert} takes the first target that really accepts some of them, ranked with the travel from this
+     * source. A source no target is better for is passed over without a live call, which a per-filter-rank maximum of
+     * the target priorities decides in one comparison.</li>
+     * </ol>
+     */
+    private Optional<PlannedJob<K, L>> planRelocation(PlannerInput<K, L> input, PlannerInput.RelocateNeed<K> need,
+            Budget budget) {
+        K key = need.key();
+        int limit = limit(need.movable(), input.carryLimit().applyAsInt(key));
+        if (limit < 1)
+            return Optional.empty();
+        List<Candidate<L>> sources = new ArrayList<>();
+        Map<L, Long> unreserved = new HashMap<>();
+        int order = 0;
+        for (LocationCount<L> entry : input.stock().locationsOf(key)) {
+            int rank = order++;
+            L location = entry.location();
+            if (!input.available().test(location) || input.extractRefused().test(location, key))
+                continue;
+            long free = entry.count() - input.reservations().reservedStock(location, key);
+            if (free <= 0)
+                continue;
+            unreserved.put(location, free);
+            RackPosition pos = position(location);
+            long travel = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(), pos.branch(),
+                    pos.x(), pos.y());
+            // The source's own filter decides which targets are no worse a match (RelocationRule): a location that was
+            // re-dedicated to something else rejects its own stock and ranks worst, so anything that allows it is better.
+            FilterMatch filter = Objects.requireNonNull(input.storeFilter().apply(location, key), "storeFilter result");
+            sources.add(new Candidate<>(location, LocationKind.STORAGE, CLASS_STORAGE, filter.storeRank(), false,
+                    false, input.storePriority().applyAsInt(location), travel, rank, limit));
+        }
+        sources.sort(SOURCE_RANKING);
+        // What is spoken for stays in the worst places, where a retrieve will take it from (#47): the held-back items
+        // are counted off the sources in the very order a retrieve would empty them, and a source left with nothing is
+        // no source at all.
+        Map<L, Long> keep = new HashMap<>();
+        long held = need.heldBack();
+        for (Candidate<L> source : sources) {
+            if (held <= 0)
+                break;
+            long kept = Math.min(held, unreserved.get(source.location()));
+            keep.put(source.location(), kept);
+            held -= kept;
+        }
+        sources.removeIf(source -> unreserved.get(source.location()) - keep.getOrDefault(source.location(), 0L) <= 0);
+        if (sources.isEmpty())
+            return Optional.empty();
+        Candidate<L> first = sources.getFirst();
+        RackPosition firstPos = position(first.location());
+        List<Candidate<L>> targets = new ArrayList<>();
+        collectStorage(input, targets, key, limit, null, firstPos.branch(), firstPos.x(), firstPos.y(),
+                first.travelTicks(), false, null, first.priority());
+        targets.removeIf(candidate -> !input.relocateTarget().test(candidate.location(), key));
+        if (targets.isEmpty())
+            return Optional.empty();
+        // The highest target priority among the targets no worse a match than each filter rank: a source at or above it
+        // has nothing better to go to, so it costs one comparison instead of a walk over every target.
+        int[] bestPriority = new int[FilterMatch.REJECTED.storeRank() + 1];
+        Arrays.fill(bestPriority, Integer.MIN_VALUE);
+        for (Candidate<L> target : targets) {
+            for (int rank = target.filterRank(); rank < bestPriority.length; rank++)
+                bestPriority[rank] = Math.max(bestPriority[rank], target.priority());
+        }
+        for (Candidate<L> source : sources) {
+            if (bestPriority[source.filterRank()] <= source.priority())
+                continue;
+            if (!budget.tryUse())
+                return Optional.empty();
+            // What other jobs reserved here and what is held back here both stay: only what the live inventory gives
+            // beyond them may move.
+            long reserved = input.reservations().reservedStock(source.location(), key)
+                    + keep.getOrDefault(source.location(), 0L);
+            long live = input.liveExtract().simulateExtract(source.location(), key,
+                    CapacityMath.toIntClamped(limit + reserved));
+            int amount = (int) Math.max(0L, Math.min(limit, live - reserved));
+            if (amount < 1)
+                continue;
+            // The targets better for this source, with the trip it really has: what it gives, and the travel from here.
+            RackPosition sourcePos = position(source.location());
+            List<Candidate<L>> better = new ArrayList<>();
+            for (Candidate<L> target : targets) {
+                if (!RelocationRule.isBetter(source.priority(), source.filterRank(), target.priority(),
+                        target.filterRank()))
+                    continue;
+                RackPosition pos = position(target.location());
+                long travel = TravelTimeModel.add(source.travelTicks(), input.travel().travelTicks(sourcePos.branch(),
+                        sourcePos.x(), sourcePos.y(), pos.branch(), pos.x(), pos.y()));
+                better.add(new Candidate<>(target.location(), target.kind(), target.rankClass(), target.filterRank(),
+                        target.consolidates(), target.compatible(), target.priority(), travel, target.order(), amount));
+            }
+            better.sort(RANKING);
+            Optional<Selection<L>> selection = tryInsert(input, better, key, budget, false);
+            if (selection.isPresent()) {
+                TransportJob<K, L> job = TransportJob.relocate(newId(), source.location(),
+                        selection.get().location(), key, selection.get().amount());
+                return Optional.of(new PlannedJob<>(job, tripTicks(input, job)));
+            }
+            if (budget.exhausted)
+                return Optional.empty();
+        }
+        return Optional.empty();
+    }
+
     // --- target selection ----------------------------------------------------------------------------------------
 
     /**
@@ -877,7 +1042,7 @@ public final class JobPlanner<K, L> {
         List<Candidate<L>> candidates = new ArrayList<>();
         collectPorts(input, candidates, key, portLimit, excluded, fromBranch, fromX, fromY, baseTravel, survey);
         collectStorage(input, candidates, key, storageLimit, excluded, fromBranch, fromX, fromY, baseTravel, false,
-                survey);
+                survey, Integer.MIN_VALUE);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget, false);
     }
@@ -901,9 +1066,24 @@ public final class JobPlanner<K, L> {
             @Nullable StoreSurvey survey, boolean wholeCarry) {
         List<Candidate<L>> candidates = new ArrayList<>();
         collectStorage(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, baseTravel, allowRejected,
-                survey);
+                survey, Integer.MIN_VALUE);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget, wholeCarry);
+    }
+
+    /**
+     * The storage locations a {@code RELOCATE} reroute may put its items into (issue #46): {@link #selectStorage} with
+     * advisory filters and the whole carry, minus the locations {@link PlannerInput#relocateTarget()} keeps out of every
+     * relocation (a fluid bay).
+     */
+    private Optional<Selection<L>> selectRelocationStorage(PlannerInput<K, L> input, K key, int limit,
+            @Nullable L excluded, int fromBranch, double fromX, double fromY, Budget budget) {
+        List<Candidate<L>> candidates = new ArrayList<>();
+        collectStorage(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, 0L, true, null,
+                Integer.MIN_VALUE);
+        candidates.removeIf(candidate -> !input.relocateTarget().test(candidate.location(), key));
+        candidates.sort(RANKING);
+        return tryInsert(input, candidates, key, budget, true);
     }
 
     /**
@@ -939,10 +1119,16 @@ public final class JobPlanner<K, L> {
         return tryInsert(input, candidates, key, budget, wholeCarry);
     }
 
-    /** Adds the storage candidates for {@code key} to {@code candidates}; see {@link #selectStorage}. */
+    /**
+     * Adds the storage candidates for {@code key} to {@code candidates}; see {@link #selectStorage}.
+     *
+     * @param minPriorityExclusive only locations whose storage priority is <b>above</b> this are added: the lowest
+     *                             source priority of a relocation (issue #46), {@link Integer#MIN_VALUE} for every other
+     *                             caller, which no priority is at or below
+     */
     private void collectStorage(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
             @Nullable L excluded, int fromBranch, double fromX, double fromY, long baseTravel, boolean allowRejected,
-            @Nullable StoreSurvey survey) {
+            @Nullable StoreSurvey survey, int minPriorityExclusive) {
         if (limit < 1)
             return;
         // The available storage locations, derived once for the whole pass rather than per (station x item type)
@@ -987,6 +1173,10 @@ public final class JobPlanner<K, L> {
             // The one place a storage priority is read when storing (M16), and only once the location may take the item
             // at all: it decides among the locations the rules above left equal, and never against them.
             int priority = input.storePriority().applyAsInt(location);
+            // Only a relocation passes a floor (issue #46): no location at or below the lowest source can be better
+            // than any source, so it is not ranked at all. Every other caller passes Integer.MIN_VALUE.
+            if (priority <= minPriorityExclusive)
+                continue;
             RackPosition pos = position(location);
             long travel = TravelTimeModel.add(baseTravel,
                     input.travel().travelTicks(fromBranch, fromX, fromY, pos.branch(), pos.x(), pos.y()));

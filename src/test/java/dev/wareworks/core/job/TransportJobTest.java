@@ -261,6 +261,43 @@ class TransportJobTest {
         assertEquals(Optional.of(JobType.RETRIEVE), JobType.byName("RETRIEVE"));
         assertEquals(Optional.empty(), JobType.byName("retrieve"));
         assertEquals(Optional.empty(), JobType.byName(null));
+        // A relocation (issue #46) goes from storage to storage and nowhere else.
+        assertEquals(LocationKind.STORAGE, JobType.RELOCATE.sourceKind());
+        assertEquals(LocationKind.STORAGE, JobType.RELOCATE.plannedTargetKind());
+        assertEquals(LocationKind.STORAGE, JobType.RELOCATE.fallbackTargetKind());
+        for (LocationKind kind : LocationKind.values())
+            assertEquals(kind == LocationKind.STORAGE, JobType.RELOCATE.allowsTarget(kind), kind.name());
+        assertEquals(Optional.of(JobType.RELOCATE), JobType.byName("RELOCATE"));
+        // The members without a buffer are never where a job goes (M15, M21, issue #46).
+        for (JobType type : JobType.values()) {
+            assertFalse(type.allowsTarget(LocationKind.KEEPER), type.name());
+            assertFalse(type.allowsTarget(LocationKind.HOME), type.name());
+            assertFalse(type.allowsTarget(LocationKind.OPTIMIZER), type.name());
+        }
+    }
+
+    // --- the relocation (issue #46, ADR-079) --------------------------------------------------------------------------
+
+    @Test
+    void aRelocationServesNobodyAndNeverLeavesTheWarehouse() {
+        TransportJob<String, String> relocate = TransportJob.relocate(JOB, "overflow", "rack", ORE, 30);
+        assertEquals(JobType.RELOCATE, relocate.type());
+        assertEquals("overflow", relocate.source());
+        assertEquals("rack", relocate.target());
+        assertEquals(LocationKind.STORAGE, relocate.sourceKind());
+        assertEquals(LocationKind.STORAGE, relocate.targetKind());
+        assertEquals(30, relocate.plannedAmount());
+        assertNull(relocate.requestIdOrNull());
+        assertFalse(relocate.picked());
+        assertTrue(JobType.RELOCATE.reservesSourceStock(), "its items are indexed stock until the pick");
+        assertFalse(JobType.RELOCATE.mayCarryRequestId(), "nobody asked for them");
+        assertFalse(JobType.RELOCATE.bringsItemsIn(), "so no production order is ever credited with them");
+        assertFalse(JobType.RELOCATE.waitsAtAFullTarget(), "a full rack is rerouted, never waited at");
+        assertThrows(IllegalArgumentException.class, () -> relocate.withTarget("output", LocationKind.OUTPUT),
+                "a relocated item can never be exported");
+        assertThrows(IllegalArgumentException.class, () -> new TransportJob<>(JOB, JobType.RELOCATE, "overflow",
+                "rack", LocationKind.STORAGE, ORE, 30, Optional.of(REQUEST), false, 0, 0));
+        assertEquals("other", relocate.withTarget("other", LocationKind.STORAGE).target(), "storage stays allowed");
     }
 
     // --- the fill trip (M31, issue #21, ADR-073) ---------------------------------------------------------------------

@@ -37,6 +37,8 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       (issue #14: several cranes must not plan the same buffered items);</li>
  *   <li>not picked, retrieve or supply: {@link Reservation.Kind#STOCK} of the planned amount at the source, with the
  *       request or production ingredient line it serves ({@link JobType#reservesSourceStock()});</li>
+ *   <li>not picked, relocate (issue #46): {@link Reservation.Kind#STOCK} of the planned amount at the source and
+ *       {@link Reservation.Kind#CAPACITY} of it at the target, backing nothing;</li>
  *   <li>picked, items held, target is a delivery station (output or production,
  *       {@link LocationKind#isDeliveryTarget()}) of a type that waits for somebody
  *       ({@link JobType#waitsAtAFullTarget()}, i.e. a {@code RETRIEVE} or a {@code SUPPLY}):
@@ -213,6 +215,15 @@ public final class ReservationLedger<K, L> implements ReservationView<K, L> {
             // Retrieve and supply both take items out of storage, so both reserve stock at their source; a store and a
             // collect job bring items in and reserve room at their target instead. Nothing ever reserves the foreign
             // inventory behind a collecting port: it is not indexed stock, and the real extract is authoritative (M18).
+            // A relocation takes stock out of one storage location and promises it to another (issue #46, ADR-079), so
+            // it holds both: without the room another job could be planned into the same space while the crane is on
+            // its way. Until the pick the trip is in the index and in reservedCapacityFor alike, so whoever measures a
+            // stock rule's maximum takes the planned amount off the room again (RelocationStock#inbound).
+            if (job.type() == JobType.RELOCATE)
+                return List.of(new Reservation<>(job.id(), Reservation.Kind.STOCK, job.source(), job.key(),
+                        job.plannedAmount(), Optional.empty()),
+                        new Reservation<>(job.id(), Reservation.Kind.CAPACITY, job.target(), job.key(),
+                                job.plannedAmount(), Optional.empty()));
             if (job.type().reservesSourceStock())
                 return List.of(new Reservation<>(job.id(), Reservation.Kind.STOCK, job.source(), job.key(),
                         job.plannedAmount(), job.requestId()));

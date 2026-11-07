@@ -270,6 +270,10 @@ public final class WareworksItemGameTests {
         CraftingInput feeder = grid(1, 3, mechanism, brass, vanilla(CRAFTER));
         assertCrafts(helper, recipes, level, feeder, WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(), ONE);
         assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
+        // The optimizer (issue #46) is the keeper's shape with Create's brass hand on top, the crane's own grabber: it
+        // is the block that sets the crane moving stock about, where the keeper's comparator only reads it.
+        CraftingInput optimizer = grid(3, 3, none, stack(BRASS_HAND), none, tube, brass, tube, none, alloy, none);
+        assertCrafts(helper, recipes, level, optimizer, WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(), ONE);
         assertCrafts(helper, recipes, level, homePoint, WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(), ONE);
         // The hand truck (issue #37): a handle (shaft) on an andesite frame, an iron nose plate between two cogwheels
         // as wheels. Any iron sheet would do; Create's is the one a player has.
@@ -350,7 +354,9 @@ public final class WareworksItemGameTests {
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 // The crafter feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
-                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
+                WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(),
+                // The optimizer directly after the keeper (issue #46): both act on what the warehouse holds.
+                WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
                 // The hand truck is no block, so it stands after every block (issue #37), and the Warehouse Remote
                 // after it (issue #44).
                 WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem()),
@@ -438,6 +444,11 @@ public final class WareworksItemGameTests {
                                 IngredientSpec.ofVanilla(CRAFTER))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_STOCK_KEEPER, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.ofVanilla(COMPARATOR), IngredientSpec.of(ELECTRON_TUBE),
+                                IngredientSpec.of(BRASS_CASING), IngredientSpec.of(ELECTRON_TUBE),
+                                IngredientSpec.of(ANDESITE_ALLOY))),
+                // The optimizer (issue #46): the keeper's tier, with the crane's brass hand in place of its comparator.
+                new ExpectedRecipe(WareworksBlocks.WAREHOUSE_OPTIMIZER, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(BRASS_HAND), IngredientSpec.of(ELECTRON_TUBE),
                                 IngredientSpec.of(BRASS_CASING), IngredientSpec.of(ELECTRON_TUBE),
                                 IngredientSpec.of(ANDESITE_ALLOY))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_HOME_POINT, RecipeType.CRAFTING, ONE,

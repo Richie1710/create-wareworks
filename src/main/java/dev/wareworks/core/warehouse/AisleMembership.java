@@ -52,6 +52,7 @@ public final class AisleMembership {
     private int productions;
     private int keepers;
     private int homePoints;
+    private int optimizers;
     private boolean fullScanPending;
     private boolean dropUnverified;
     @Nullable
@@ -186,7 +187,7 @@ public final class AisleMembership {
                 removeMember(position, removed);
                 misaligned.add(position);
             }
-            case STORAGE, INPUT, OUTPUT, PRODUCTION, KEEPER, HOME -> {
+            case STORAGE, INPUT, OUTPUT, PRODUCTION, KEEPER, HOME, OPTIMIZER -> {
                 misaligned.remove(position);
                 LocationKind kind = result.kind().orElseThrow();
                 LocationKind existing = members.get(position);
@@ -216,6 +217,7 @@ public final class AisleMembership {
             case PRODUCTION -> productions++;
             case KEEPER -> keepers++;
             case HOME -> homePoints++;
+            case OPTIMIZER -> optimizers++;
             // Not exhaustiveness-checked (a switch statement, not an expression): a kind added later would keep a
             // counter at 0 for ever, and a count of 0 is what switches whole features off.
             default -> throw new IllegalStateException("unhandled location kind: " + kind);
@@ -233,6 +235,7 @@ public final class AisleMembership {
             case PRODUCTION -> productions--;
             case KEEPER -> keepers--;
             case HOME -> homePoints--;
+            case OPTIMIZER -> optimizers--;
             // See addMember: the compiler does not demand every kind here either.
             default -> throw new IllegalStateException("unhandled location kind: " + kind);
         }
@@ -281,6 +284,7 @@ public final class AisleMembership {
         productions = 0;
         keepers = 0;
         homePoints = 0;
+        optimizers = 0;
         fullScanPending = false;
         dropUnverified = false;
         roundRobinCursor = null;
@@ -350,6 +354,11 @@ public final class AisleMembership {
     /** Aligned warehouse home points ({@code docs/stacker-crane.md} §4.7, M21). */
     public int homePointCount() {
         return homePoints;
+    }
+
+    /** Aligned warehouse optimizers (issue #46, ADR-079). */
+    public int optimizerCount() {
+        return optimizers;
     }
 
     public int misalignedCount() {

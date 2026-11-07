@@ -66,7 +66,20 @@ public enum JobType {
      * down on the way: that is why the trip does not stock the filled container and fetch it again.
      */
     FILL(LocationKind.STORAGE, LocationKind.STORAGE, LocationKind.STORAGE,
-            Set.of(LocationKind.STORAGE, LocationKind.OUTPUT));
+            Set.of(LocationKind.STORAGE, LocationKind.OUTPUT)),
+    /**
+     * Storage location → a <b>better</b> storage location (issue #46, ADR-079): stock a Warehouse Optimizer asked to
+     * move from a low storage priority up to a higher one, one trip at a time and only while the crane has nothing else
+     * to do ({@code JobPlanner}'s last stage).
+     * <p>
+     * Added as a type rather than planned as a {@link #RETRIEVE} into storage, for ADR-024's reason once more: it serves
+     * nobody ({@link #mayCarryRequestId()} is false), it brings nothing in ({@link #bringsItemsIn()} is false, so no
+     * production order is ever credited with a relocated item) and it never waits at its target. Its only allowed
+     * target kind is {@link LocationKind#STORAGE}, so {@code TransportJob}'s constructor makes it impossible for a
+     * relocated item to leave the warehouse through an output or a port. Before the pick it reserves stock at its
+     * source <b>and</b> room at its target ({@code ReservationLedger#reservationsFor}).
+     */
+    RELOCATE(LocationKind.STORAGE, LocationKind.STORAGE, LocationKind.STORAGE, Set.of(LocationKind.STORAGE));
 
     private final LocationKind sourceKind;
     private final LocationKind plannedTargetKind;
@@ -99,7 +112,8 @@ public enum JobType {
     /**
      * Whether a job of this type takes items <b>out of storage</b>, so that before the pick it reserves stock at its
      * source instead of capacity at its target ({@code ReservationLedger#reservationsFor}). True for
-     * {@link #RETRIEVE}, {@link #SUPPLY} and {@link #FILL}, whose source is the rack holding the empty containers.
+     * {@link #RETRIEVE}, {@link #SUPPLY} and {@link #FILL}, whose source is the rack holding the empty containers, and
+     * for {@link #RELOCATE}, which reserves room at its target as well (issue #46).
      */
     public boolean reservesSourceStock() {
         return sourceKind == LocationKind.STORAGE;
