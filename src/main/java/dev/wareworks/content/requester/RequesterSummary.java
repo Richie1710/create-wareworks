@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.jetbrains.annotations.Nullable;
+
+import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.requester.RequesterLimits;
 import dev.wareworks.core.requester.RequesterOrder;
 import dev.wareworks.core.requester.RequesterStatus;
@@ -36,12 +39,18 @@ import net.minecraft.world.item.Items;
  * @param rows            the open orders, oldest first
  * @param gaveUp          the order the dead-man switch gave up last, while it is still shown, else {@code null}
  * @param timeouts        how many orders the dead-man switch gave up since the remote went in
+ * @param planRefusal     why the chain that would make the missing item cannot be planned, for
+ *                        {@link RequesterStatus#CANNOT_MAKE} (ADR-081), else {@code null}
+ * @param about           the item {@code planRefusal} is about (an ingredient, often), or for
+ *                        {@link RequesterStatus#MAKING_STOPPED} the item the safety stop halted (the product or an
+ *                        ingredient of its chain); {@link Items#AIR} for none
  */
 public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, Item missing, int missingCount,
                                String cannonWord, Item subject, int distance, int range, String ownerName,
-                               List<Row> rows, GaveUp gaveUp, int timeouts) {
+                               List<Row> rows, GaveUp gaveUp, int timeouts, @Nullable PlanRefusal planRefusal,
+                               Item about) {
     public static final RequesterSummary NONE = new RequesterSummary(RequesterStatus.NO_REMOTE,
-            CannonView.Phase.NO_CANNON, Items.AIR, 0, "", Items.AIR, 0, 0, "", List.of(), null, 0);
+            CannonView.Phase.NO_CANNON, Items.AIR, 0, "", Items.AIR, 0, 0, "", List.of(), null, 0, null, Items.AIR);
 
     private static final String STATUS = "Status";
     private static final String CANNON = "Cannon";
@@ -62,6 +71,9 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
     private static final String AGE = "Age";
     private static final String GRACE_LEFT = "GraceLeft";
     private static final String AMOUNT = "Amount";
+    private static final String MADE = "Made";
+    private static final String PLAN_REFUSAL = "PlanRefusal";
+    private static final String ABOUT = "About";
 
     /**
      * One open order as the goggles show it.
@@ -72,8 +84,10 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
      * @param delivered  how much of the share has arrived
      * @param liveTicks  how long it has been running while the warehouse could serve it
      * @param graceLeft  seconds of the grace that are left ({@link RequesterOrder.Phase#GRACE} only)
+     * @param made       how much of the share production still makes ({@link RequesterOrder#producing()}, ADR-081)
      */
-    public record Row(Item item, RequesterOrder.Phase phase, int share, int delivered, int liveTicks, int graceLeft) {
+    public record Row(Item item, RequesterOrder.Phase phase, int share, int delivered, int liveTicks, int graceLeft,
+                      int made) {
         public Row {
             item = item == null ? Items.AIR : item;
             phase = phase == null ? RequesterOrder.Phase.RUNNING : phase;
@@ -81,6 +95,12 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
             delivered = Math.max(0, Math.min(delivered, share));
             liveTicks = Math.max(0, liveTicks);
             graceLeft = Math.max(0, graceLeft);
+            made = Math.max(0, Math.min(made, share));
+        }
+
+        /** A row of which nothing is made. */
+        public Row(Item item, RequesterOrder.Phase phase, int share, int delivered, int liveTicks, int graceLeft) {
+            this(item, phase, share, delivered, liveTicks, graceLeft, 0);
         }
     }
 
@@ -111,6 +131,7 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
         ownerName = ownerName == null ? "" : ownerName;
         rows = List.copyOf(rows == null ? List.of() : rows.subList(0, Math.min(rows.size(), RequesterLimits.MAX_ORDERS)));
         timeouts = Math.max(0, timeouts);
+        about = about == null ? Items.AIR : about;
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -133,6 +154,8 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
             rowTag.putInt(DELIVERED, row.delivered());
             rowTag.putInt(AGE, row.liveTicks());
             rowTag.putInt(GRACE_LEFT, row.graceLeft());
+            if (row.made() > 0)
+                rowTag.putInt(MADE, row.made());
             list.add(rowTag);
         }
         tag.put(ROWS, list);
@@ -144,6 +167,8 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
             tag.put(GAVE_UP, gaveUpTag);
         }
         tag.putInt(TIMEOUTS, timeouts);
+        tag.putString(PLAN_REFUSAL, planRefusal == null ? "" : planRefusal.name());
+        tag.putString(ABOUT, id(about));
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -155,7 +180,8 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
             CompoundTag row = list.getCompound(i);
             rows.add(new Row(item(row.getString(ITEM)),
                     RequesterOrder.Phase.byName(row.getString(PHASE)).orElse(RequesterOrder.Phase.RUNNING),
-                    row.getInt(SHARE), row.getInt(DELIVERED), row.getInt(AGE), row.getInt(GRACE_LEFT)));
+                    row.getInt(SHARE), row.getInt(DELIVERED), row.getInt(AGE), row.getInt(GRACE_LEFT),
+                    row.getInt(MADE)));
         }
         GaveUp gaveUp = null;
         if (tag.contains(GAVE_UP, Tag.TAG_COMPOUND)) {
@@ -165,7 +191,20 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
         return new RequesterSummary(RequesterStatus.byName(tag.getString(STATUS)).orElse(RequesterStatus.NO_REMOTE),
                 CannonView.Phase.byName(tag.getString(CANNON)), item(tag.getString(MISSING)),
                 tag.getInt(MISSING_COUNT), tag.getString(CANNON_WORD), item(tag.getString(SUBJECT)),
-                tag.getInt(DISTANCE), tag.getInt(RANGE), tag.getString(OWNER), rows, gaveUp, tag.getInt(TIMEOUTS));
+                tag.getInt(DISTANCE), tag.getInt(RANGE), tag.getString(OWNER), rows, gaveUp, tag.getInt(TIMEOUTS),
+                planRefusal(tag.getString(PLAN_REFUSAL)), item(tag.getString(ABOUT)));
+    }
+
+    /** The plan refusal of a saved name, {@code null} for none or an unknown name. */
+    @Nullable
+    private static PlanRefusal planRefusal(String name) {
+        if (name == null || name.isEmpty())
+            return null;
+        for (PlanRefusal refusal : PlanRefusal.values()) {
+            if (refusal.name().equals(name))
+                return refusal;
+        }
+        return null;
     }
 
     private static String id(Item item) {

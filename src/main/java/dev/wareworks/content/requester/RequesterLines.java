@@ -116,7 +116,10 @@ public final class RequesterLines {
         };
     }
 
-    /** One order: running with its delivery and live age, in the buffer, or on its way. */
+    /**
+     * One order: running with its delivery and live age, being made in part (no clock: the dead-man switch waits for
+     * the machine, ADR-081), in the buffer, or on its way.
+     */
     private static LangBuilder row(RequesterSummary.Row row) {
         if (row.phase() == RequesterOrder.Phase.IN_BUFFER)
             return WareworksLang.translate(WareworksLang.requesterStatusKey(RequesterStatus.IN_BUFFER),
@@ -125,6 +128,11 @@ public final class RequesterLines {
             return WareworksLang.translate(WareworksLang.requesterStatusKey(RequesterStatus.GRACE),
                     WareworksLang.number(row.graceLeft()).style(ChatFormatting.GOLD), row.item().getDescription())
                     .style(ChatFormatting.AQUA);
+        if (row.made() > 0)
+            return WareworksLang.translate(WareworksLang.requesterStatusKey(RequesterStatus.MAKING),
+                    row.item().getDescription(), WareworksLang.number(row.share()).style(ChatFormatting.GOLD),
+                    WareworksLang.number(row.made()).style(ChatFormatting.GOLD),
+                    WareworksLang.number(row.delivered()).style(ChatFormatting.GOLD)).style(ChatFormatting.AQUA);
         return WareworksLang.translate(WareworksLang.requesterStatusKey(RequesterStatus.ORDERED),
                 row.item().getDescription(), WareworksLang.number(row.share()).style(ChatFormatting.GOLD),
                 WareworksLang.number(row.delivered()).style(ChatFormatting.GOLD),
@@ -141,7 +149,8 @@ public final class RequesterLines {
         RequesterStatus status = shown.status();
         Item subject = shown.subject() == Items.AIR ? shown.missing() : shown.subject();
         LangBuilder line = switch (status) {
-            case NO_REMOTE, NO_CANNON, SKIP_MISSING, CREATIVE, NOT_PRINTING, BLOCKED, PRINTING, ORDERED, GRACE -> null;
+            case NO_REMOTE, NO_CANNON, SKIP_MISSING, CREATIVE, NOT_PRINTING, BLOCKED, PRINTING, ORDERED, MAKING,
+                    GRACE -> null;
             case IN_BUFFER -> rowInBuffer(shown) ? null
                     : WareworksLang.translate(WareworksLang.requesterStatusKey(status), subject.getDescription());
             case LINK_OUT_OF_RANGE -> WareworksLang.translate(WareworksLang.requesterStatusKey(status),
@@ -151,6 +160,19 @@ public final class RequesterLines {
                     WareworksLang.text(shown.ownerName()).style(ChatFormatting.WHITE));
             case OUT_OF_STOCK, RESERVED -> WareworksLang.translate(WareworksLang.requesterStatusKey(status),
                     subject.getDescription());
+            // The item the safety stop halted, which the station's stopped list shows: an ingredient further down the
+            // chain as often as the missing item itself.
+            case MAKING_STOPPED -> WareworksLang.translate(WareworksLang.requesterStatusKey(status),
+                    (shown.about() == Items.AIR ? subject : shown.about()).getDescription());
+            // "Oak Planks is not in stock and cannot be made: Oak Log is missing", the controller's own sentence for
+            // the plan refusal; without a readable one, the plain out-of-stock line.
+            case CANNOT_MAKE -> shown.planRefusal() == null
+                    ? WareworksLang.translate(WareworksLang.requesterStatusKey(RequesterStatus.OUT_OF_STOCK),
+                            subject.getDescription())
+                    : WareworksLang.translate(WareworksLang.requesterStatusKey(status), subject.getDescription(),
+                            WareworksLang.translate(shown.planRefusal().langKey(),
+                                    (shown.about() == Items.AIR ? subject : shown.about()).getDescription())
+                                    .style(ChatFormatting.WHITE));
             default -> status(status);
         };
         if (line == null)

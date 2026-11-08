@@ -320,7 +320,7 @@ public final class FeederVisualScenario implements VisualScenario {
     }
 
     /** Picks the item of hotbar slot {@code hotbar} up, clicks it into {@code cell} of {@code slot}, and puts it back. */
-    private static void patternEntry(VisualScript script, int slot, int hotbar, Item item, int cell) {
+    static void patternEntry(VisualScript script, int slot, int hotbar, Item item, int cell) {
         String what = BuiltInRegistries.ITEM.getKey(item).getPath();
         script.client("feeder: pick up the " + what,
                         context -> ScreenInput.click(context.minecraft(),
@@ -345,7 +345,7 @@ public final class FeederVisualScenario implements VisualScenario {
     }
 
     /** Mouse-wheel notches over the result cell until it reads {@code count}, one notch per answer of the server. */
-    private static void scrollResult(VisualScript script, int slot, int count) {
+    static void scrollResult(VisualScript script, int slot, int count) {
         int[] scrolledAt = {-1};
         script.until("feeder: scroll the result up to " + count, context -> {
             WarehouseProductionScreen screen = productionScreen(context);
@@ -818,7 +818,7 @@ public final class FeederVisualScenario implements VisualScenario {
         return BranchLayout.of(dock, AISLE, AisleGeometry.of(RAILS, StackerCraneBlockEntity.DEFAULT_MAST_HEIGHT));
     }
 
-    private static Direction inward(BranchLayout layout, RackPosition rack) {
+    static Direction inward(BranchLayout layout, RackPosition rack) {
         return layout.sideDirection(rack.side()).getOpposite();
     }
 

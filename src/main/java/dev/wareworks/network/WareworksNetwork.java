@@ -193,8 +193,14 @@ public final class WareworksNetwork {
      * did. NeoForge's registry sync only refuses a client that lacks a key the server has, so an older client is kept
      * off a newer server, but a newer client would join an older server and find no requester there. The version was
      * raised for the release so that mixed pairs are refused both ways.
+     * <p>
+     * <b>{@code "24"} is issue #45 again</b> (the requester has items made, ADR-081): no payload changed, but the
+     * requester's goggle data gained four statuses ({@code MAKING}, {@code CANNOT_MAKE}, {@code MAKING_STOPPED},
+     * {@code PRODUCTION_BUSY}), which an older client reads as "no remote", and the plan refusal, the item it is about
+     * and each row's made part, which an older client never shows. The goggle data is no payload, but it crosses the
+     * same connection, so the versions must not mix.
      */
-    public static final String VERSION = "23";
+    public static final String VERSION = "24";
 
     private WareworksNetwork() {
     }

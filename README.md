@@ -140,11 +140,11 @@ teleported: every item you put in or take out is carried by the crane, where you
   a second one lights up red and says so.
 * **Schematicannon Requester**: feeds a Create **Schematicannon** from the warehouse. Set it against the cannon and put
   a linked **Warehouse Remote** in: whenever the cannon stops for a missing item, the requester orders it at the
-  remote's terminal, **from stock only** (it never starts production), a stack at a time at most and never more than
-  the cannon's chest holds or, by the cannon's material list, the schematic still needs, and **never twice** while an
-  order is on its way. The crane delivers into the terminal as for a click; your funnel and belt take the items on to
-  the cannon. A lamp lights while it orders and turns red when it needs you; goggles say why. See **Printing from the
-  warehouse** below.
+  remote's terminal, **from stock first**, and has what the warehouse lacks made through a production pattern, a stack
+  at a time at most and never more than the cannon's chest holds or, by the cannon's material list, the schematic
+  still needs, and **never twice** while an order is on its way. The crane delivers into the terminal as for a click;
+  your funnel and belt take the items on to the cannon. A lamp lights while it orders and turns red when it needs you;
+  goggles say why. See **Printing from the warehouse** below.
 * **Hand Truck**: moves a **chest, trapped chest or barrel with everything in it**. Right-click the container with the
   empty truck and it goes onto the truck, name, lock and an unopened loot table included; right-click the ground and it
   is set down again, facing you. While the truck is loaded you walk at **half speed** and cannot sprint or glide (a
@@ -295,7 +295,8 @@ bays** and the terminal: the fluid row and its question, an empty bucket carried
 filled there and taken straight on to the terminal, the red row when no empty container is in stock, and the pipe
 at the bay's back for bulk. The twenty-sixth belongs to the **Schematicannon Requester**: the requester set against a
 cannon, a linked remote put in, the cannon's "Skip missing Blocks" switched off, the missing items running from the
-terminal over a funnel and a belt into the cannon's chest, and the red lamp when the warehouse has none.
+terminal over a funnel and a belt into the cannon's chest, and the red lamp when the warehouse has neither the item
+nor a pattern that makes it.
 
 ## Balancing the crane
 
@@ -445,21 +446,32 @@ Build it like this: a terminal near the cannon, a **funnel** on the terminal pul
 to a **chest beside the cannon**, and the requester set against the cannon (it faces the cannon by itself when you
 place it against one). Link a Warehouse Remote to the terminal, then right-click the requester with it: the remote goes
 into its cradle and stays there. When the cannon stops because an item is missing, the requester orders it at that
-terminal: **from stock only**, never making anything; at most a stack, or what the schematic still needs according to
-the cannon's material list if that is less (an item the list does not show is ordered a stack at a time); never more
-than the cannon's chest has room for; and nothing at all while the chest or the terminal is full. It orders an item
-**once**, waits while the order is on its way, while it lies in the terminal and for a short grace while it travels the
-belt (10 seconds by default; set it on the value box on the back, 0 for a funnel straight into the chest), and only
-then orders that item again if the cannon still needs it. An order that has not arrived after 10 minutes of the
-warehouse being able to serve it is given up and placed again (the server can change that). An item the warehouse lacks
-shows a red lamp and is tried again every second.
+terminal: **from stock first**; what the warehouse lacks it has made through a production pattern, exactly as a
+terminal click would, never more than the schematic still needs (a Stock Keeper's reserve still holds items and
+ingredients back). At most a stack, or what the schematic still needs according to the cannon's material list if that
+is less (an item the list does not show is ordered a stack at a time from stock, and only what the cannon reports
+missing is made of it); never more than the cannon's chest has room for; and nothing at all while the chest or the
+terminal is full. It orders an item **once**, waits while the order is on its way, while it lies in the terminal and
+for a short grace while it travels the belt (10 seconds by default; set it on the value box on the back, 0 for a funnel
+straight into the chest), and only then orders that item again if the cannon still needs it. An order that has not
+arrived after 10 minutes of the warehouse being able to serve it is given up and placed again (the server can change
+that); while an order is being made, that switch waits for the machine, which has its own production timeout. An item
+the warehouse has neither in stock nor a pattern for shows a red lamp: new stock is noticed within a second, a new
+pattern within five. A pattern that cannot run says why ("Oak Log is missing") and is tried again every five seconds.
+* **Having things made** uses the same production stations, patterns and machines as a click at the terminal: the
+  goggles say "x16 ordered, 11 being made" while your machine works. If the machine swallows a batch, the warehouse
+  stops making that item (the requester's lamp turns red and says so) until you resume it at the Warehouse Production
+  Station.
+  Taking the remote out gives back only the requester's own share: production already running finishes, and its items
+  go into stock.
 * **Turn off "Skip missing Blocks"** in the cannon's screen. A cannon placed from its item has it on and then never
   asks for anything; the requester tells you when you put the remote in, and stays red until you do.
 * **One terminal per printing cannon** is simplest. Several requesters may order through one terminal, but sending the
   items from one terminal to the right cannon is up to your funnels and filters. One requester per cannon: a second one
   on the same cannon stays red, and while one of them still has an order on its way, the other waits for it.
-* **A Stock Keeper's reserve holds items back** from the requester, as from redstone and computers. Strict items such as
-  a patterned banner are ordered with exactly their patterns; for any other item the plain one is preferred.
+* **A Stock Keeper's reserve holds items back** from the requester, and ingredients from what it has made, as from
+  redstone and computers. Strict items such as a patterned banner are ordered with exactly their patterns; for any
+  other item the plain one is preferred, and with none in stock the one a pattern makes.
 * The remote's rules apply: the terminal must be within its range, in the same dimension unless the server allows
   more, and in a loaded area; the requester never loads chunks. The player who put the remote in is its owner, and the
   requester orders only where they may use blocks, checked again whenever they are online. Claim mods count only as far

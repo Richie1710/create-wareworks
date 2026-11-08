@@ -55,4 +55,13 @@ class RequesterLimitsTest {
         assertEquals(20, RequesterLimits.liveStep(1_000, 0, 1), "the interval is clamped to its minimum of 10");
         assertTrue(RequesterLimits.liveStep(Long.MAX_VALUE, 0, 200) <= 400);
     }
+
+    @Test
+    void aMakeRetryWaitsFivePolls() {
+        assertEquals(100, RequesterLimits.makeRetryTicks(20));
+        assertEquals(RequesterLimits.MAKE_RETRY_POLLS * RequesterLimits.MIN_POLL_TICKS,
+                RequesterLimits.makeRetryTicks(1), "of a clamped poll");
+        assertEquals(RequesterLimits.MAKE_RETRY_POLLS * RequesterLimits.MAX_POLL_TICKS,
+                RequesterLimits.makeRetryTicks(10_000));
+    }
 }

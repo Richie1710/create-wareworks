@@ -257,7 +257,7 @@ public final class RequesterScenes {
 
         scene.overlay().showOutline(PonderPalette.INPUT, "stock", util.select().position(stone), TEXT_TICKS);
         scene.overlay().showText(CRANE_TRIP_TICKS)
-                .text("From stock only, up to a stack at a time; the crane delivers it "
+                .text("From stock first, up to a stack at a time; the crane delivers it "
                         + "into the terminal's buffer")
                 .attachKeyFrame()
                 .placeNearTarget()
@@ -322,8 +322,7 @@ public final class RequesterScenes {
         scene.idle(CLICK_LEAD);
         lamp(scene, requester, false, true);
         scene.overlay().showText(TEXT_TICKS)
-                .text("If the warehouse has none, the lamp turns red and it tries again later; it never starts "
-                        + "production")
+                .text("What stock lacks, a pattern makes; with neither, the lamp turns red and it tries again later")
                 .attachKeyFrame()
                 .colored(PonderPalette.RED)
                 .placeNearTarget()

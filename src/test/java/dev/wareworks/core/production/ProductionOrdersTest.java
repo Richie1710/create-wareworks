@@ -385,6 +385,45 @@ class ProductionOrdersTest {
     }
 
     @Test
+    void aRequesterGivesBackOnlyItsOwnRootsPromise() {
+        UUID request = UUID.randomUUID();
+        // A player's earlier root promises the merged request 8, the requester's own root 4 behind it (ADR-081).
+        ProductionOrder<String, String> player = ProductionOrder.start(UUID.randomUUID(), STATION_A,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 2, lineIds, START, TIMEOUT, 0L, request, 8L);
+        ProductionOrder<String, String> own = ProductionOrder.start(UUID.randomUUID(), STATION_B,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 1, lineIds, START, TIMEOUT, 0L, request, 4L);
+        assertTrue(plans.add(player));
+        assertTrue(plans.add(own));
+
+        assertEquals(4L, plans.reducePromiseOf(own.id(), request, 10L), "never more than it promises");
+        assertEquals(0L, plans.get(own.id()).orElseThrow().unfulfilledPromise());
+        assertEquals(8L, plans.get(player.id()).orElseThrow().unfulfilledPromise(),
+                "the merged player's root keeps its promise, though it is the older one");
+        assertEquals(Optional.of(request), plans.get(own.id()).orElseThrow().backingRequest(),
+                "the order still backs the request");
+        assertTrue(plans.get(own.id()).orElseThrow().isOpen(), "and runs on: its result lands in stock");
+        assertEquals(0L, plans.reducePromiseOf(own.id(), request, 1L), "nothing left to take");
+        assertEquals(0L, plans.reducePromiseOf(player.id(), UUID.randomUUID(), 5L), "an order of another request");
+        assertEquals(0L, plans.reducePromiseOf(UUID.randomUUID(), request, 5L), "an unknown order");
+        plans.cancel(player.id(), START);
+        assertEquals(0L, plans.reducePromiseOf(player.id(), request, 5L), "a finished order");
+    }
+
+    @Test
+    void aRequesterNeverTakesOffWhatItsRootAlreadyMade() {
+        UUID request = UUID.randomUUID();
+        ProductionOrder<String, String> started = ProductionOrder.start(UUID.randomUUID(), STATION_A,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 1, lineIds, START, TIMEOUT, 0L, request, 4L);
+        ProductionOrder<String, String> madeThree = new ProductionOrder<>(started.id(), started.station(),
+                started.result(), started.resultAmount(), started.lines(), started.state(), started.deadlineTick(), 3L,
+                started.resultStockSeen(), started.backingRequest(), started.promisedToRequest(), false,
+                Optional.empty());
+        plans.restore(List.of(madeThree));
+        assertEquals(1L, plans.reducePromiseOf(madeThree.id(), request, 4L), "only the one not made yet");
+        assertEquals(3L, plans.get(madeThree.id()).orElseThrow().promisedToRequest(), "never below what it made");
+    }
+
+    @Test
     void productionNeverOwesARequestMoreThanItStillWaitsFor() {
         UUID request = UUID.randomUUID();
         ProductionOrder<String, String> first = ProductionOrder.start(UUID.randomUUID(), STATION_A,

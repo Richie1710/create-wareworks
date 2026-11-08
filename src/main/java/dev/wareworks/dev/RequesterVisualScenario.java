@@ -1197,7 +1197,7 @@ public final class RequesterVisualScenario implements VisualScenario {
      * Fails the run unless the goggles say what the header, the linked terminal, the owner and {@code wanted} say, in
      * the language the client runs in right now.
      */
-    private static void checkGoggles(VisualContext context, String moment, List<String> wanted) {
+    static void checkGoggles(VisualContext context, String moment, List<String> wanted) {
         BlockPos terminal = context.origin().offset(TERMINAL);
         String owner = context.minecraft().player.getGameProfile().getName();
         List<String> lines = GoggleShots.lines(context, context.origin().offset(REQUESTER));
@@ -1239,7 +1239,7 @@ public final class RequesterVisualScenario implements VisualScenario {
         return ItemKey.of(AllItems.EMPTY_SCHEMATIC.asStack());
     }
 
-    private static String text(String key, Object... args) {
+    static String text(String key, Object... args) {
         return WareworksLang.translate(key, args).component().getString();
     }
 
@@ -1298,7 +1298,7 @@ public final class RequesterVisualScenario implements VisualScenario {
     }
 
     /** One press of the use key, the way the mouse handler does it, and a wait until the client handled it. */
-    private static void useKey(VisualScript script, String what) {
+    static void useKey(VisualScript script, String what) {
         script.client("requester: right-click " + what,
                 context -> KeyMapping.click(context.minecraft().options.keyUse.getKey()));
         ArmVisualScenario.untilOrFail(script, "requester: the client handled the right-click on " + what,
@@ -1310,7 +1310,7 @@ public final class RequesterVisualScenario implements VisualScenario {
      * Holds or releases the sneak key, and waits until the client crouches and the server has heard it: the server
      * learns it from the player's next movement packet, which a click in the same tick would overtake.
      */
-    private static void sneak(VisualScript script, boolean down) {
+    static void sneak(VisualScript script, boolean down) {
         String what = down ? "sneaks" : "stands up";
         script.client("requester: " + (down ? "hold" : "release") + " the sneak key",
                 context -> context.minecraft().options.keyShift.setDown(down));
@@ -1322,7 +1322,7 @@ public final class RequesterVisualScenario implements VisualScenario {
     }
 
     /** Waits until the action bar shows {@code message} in the current language. */
-    private static void actionBar(VisualScript script, String what, Function<VisualContext, Component> message) {
+    static void actionBar(VisualScript script, String what, Function<VisualContext, Component> message) {
         ArmVisualScenario.untilOrFail(script, "requester: the action bar tells about " + what,
                 context -> ArmVisualScenario.overlayText(context).equals(message.apply(context).getString()),
                 MESSAGE_TIMEOUT_TICKS, context -> "the action bar reads '" + ArmVisualScenario.overlayText(context)
@@ -1345,7 +1345,7 @@ public final class RequesterVisualScenario implements VisualScenario {
         script.waitTicks(SETTLE_TICKS);
     }
 
-    private static void closeScreen(VisualScript script, String what) {
+    static void closeScreen(VisualScript script, String what) {
         script.client("requester: close " + what, context -> ScreenInput.key(context.minecraft(), GLFW.GLFW_KEY_ESCAPE))
                 .until("requester: " + what + " is closed", context -> context.minecraft().screen == null,
                         SCREEN_TIMEOUT_TICKS);
@@ -1355,7 +1355,7 @@ public final class RequesterVisualScenario implements VisualScenario {
      * Carries a stack from one place in the open screen to another with two real left clicks — pick it up, put it
      * down — which is how a player moves an item when no shift-click is available to the harness.
      */
-    private static void moveInMenu(VisualScript script, String what, String where, Place from, Place to) {
+    static void moveInMenu(VisualScript script, String what, String where, Place from, Place to) {
         script.client("requester: pick " + what + " up",
                         context -> ScreenInput.click(context.minecraft(), from.point(containerScreen(context))))
                 .until("requester: the cursor carries " + what,
@@ -1369,8 +1369,8 @@ public final class RequesterVisualScenario implements VisualScenario {
     }
 
     /** A clickable place in the open container screen, resolved when the click is sent. */
-    private record Place(Function<AbstractContainerScreen<?>, ScreenInput.Point> lookup) {
-        private Place {
+    record Place(Function<AbstractContainerScreen<?>, ScreenInput.Point> lookup) {
+        Place {
             Objects.requireNonNull(lookup, "lookup");
         }
 
@@ -1379,11 +1379,11 @@ public final class RequesterVisualScenario implements VisualScenario {
         }
     }
 
-    private static Place menuSlot(int index) {
+    static Place menuSlot(int index) {
         return new Place(screen -> ScreenInput.menuSlot(screen, index));
     }
 
-    private static Place hotbar(int hotbarIndex) {
+    static Place hotbar(int hotbarIndex) {
         return new Place(screen -> ScreenInput.hotbarSlot(screen, hotbarIndex));
     }
 
@@ -1391,7 +1391,7 @@ public final class RequesterVisualScenario implements VisualScenario {
      * The player takes hotbar slot {@code slot} in hand, which is what a hotbar key does, and the run waits until the
      * client really holds it.
      */
-    private static void selectHotbar(VisualScript script, int slot, String what, Predicate<ItemStack> held) {
+    static void selectHotbar(VisualScript script, int slot, String what, Predicate<ItemStack> held) {
         script.server("requester: take " + what + " in hand", (server, context) -> {
                     ServerPlayer player = context.serverPlayer(server);
                     player.getInventory().selected = slot;
@@ -1405,7 +1405,7 @@ public final class RequesterVisualScenario implements VisualScenario {
     }
 
     /** An empty hand, which is what lets a right-click open a block's own screen or flip a lever. */
-    private static void takeAnEmptyHand(VisualScript script) {
+    static void takeAnEmptyHand(VisualScript script) {
         selectHotbar(script, SLOT_EMPTY, "an empty hand", ItemStack::isEmpty);
     }
 
@@ -1422,13 +1422,13 @@ public final class RequesterVisualScenario implements VisualScenario {
         }, SYNC_TIMEOUT_TICKS);
     }
 
-    private static AbstractContainerScreen<?> containerScreen(VisualContext context) {
+    static AbstractContainerScreen<?> containerScreen(VisualContext context) {
         if (context.minecraft().screen instanceof AbstractContainerScreen<?> screen)
             return screen;
         throw new VisualTestException("no container screen is open: " + context.minecraft().screen);
     }
 
-    private static SchematicannonScreen cannonScreen(VisualContext context) {
+    static SchematicannonScreen cannonScreen(VisualContext context) {
         if (context.minecraft().screen instanceof SchematicannonScreen screen
                 && screen.getMenu() instanceof SchematicannonMenu)
             return screen;
@@ -1513,7 +1513,7 @@ public final class RequesterVisualScenario implements VisualScenario {
     }
 
     /** One schematic saved as an upload of {@code owner}, and the deployed schematic item that points at it. */
-    private static ItemStack saveSchematic(ServerLevel level, String owner, String file, BlockPos first,
+    static ItemStack saveSchematic(ServerLevel level, String owner, String file, BlockPos first,
             BlockPos second) {
         Path directory = CreatePaths.UPLOADED_SCHEMATICS_DIR.resolve(owner);
         SchematicExport.SchematicExportResult result = SchematicExport.saveSchematic(directory, file, true, level,
@@ -1596,7 +1596,7 @@ public final class RequesterVisualScenario implements VisualScenario {
                 .setValue(LeverBlock.POWERED, true));
     }
 
-    private static void beltFunnel(ServerLevel level, BlockPos pos, Direction facing, boolean extracting) {
+    static void beltFunnel(ServerLevel level, BlockPos pos, Direction facing, boolean extracting) {
         level.setBlockAndUpdate(pos, AllBlocks.ANDESITE_BELT_FUNNEL.getDefaultState()
                 .setValue(BeltFunnelBlock.HORIZONTAL_FACING, facing)
                 .setValue(BeltFunnelBlock.SHAPE, BeltFunnelBlock.getShapeForPosition(level, pos, facing, extracting)));
@@ -1694,7 +1694,7 @@ public final class RequesterVisualScenario implements VisualScenario {
      * ({@code BeltInventory#toInsert}), and its item capability reports only what already rides it.
      */
     @SuppressWarnings("unchecked")
-    private static List<TransportedItemStack> beltArrivals(ServerLevel level, VisualContext context) {
+    static List<TransportedItemStack> beltArrivals(ServerLevel level, VisualContext context) {
         BeltBlockEntity belt = BeltHelper.getControllerBE(level, context.origin().offset(BELT_START));
         if (belt == null || belt.getInventory() == null)
             return List.of();
@@ -1705,7 +1705,7 @@ public final class RequesterVisualScenario implements VisualScenario {
         }
     }
 
-    private static Field beltArrivalsField() {
+    static Field beltArrivalsField() {
         try {
             Field field = BeltInventory.class.getDeclaredField("toInsert");
             field.setAccessible(true);
@@ -1716,7 +1716,7 @@ public final class RequesterVisualScenario implements VisualScenario {
     }
 
     /** {@code counts} plus the items a printed block's requirement consumed, nothing for air. */
-    private static Map<ItemKey, Long> plusPrinted(ServerLevel level, Map<ItemKey, Long> counts, BlockPos pos) {
+    static Map<ItemKey, Long> plusPrinted(ServerLevel level, Map<ItemKey, Long> counts, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (state.isAir())
             return counts;
@@ -1728,7 +1728,7 @@ public final class RequesterVisualScenario implements VisualScenario {
         return result;
     }
 
-    private static Map<ItemKey, Long> plus(Map<ItemKey, Long> counts, ItemStack stack) {
+    static Map<ItemKey, Long> plus(Map<ItemKey, Long> counts, ItemStack stack) {
         return stack.isEmpty() ? counts : SceneItemCensus.plus(counts, ItemKey.of(stack), stack.getCount());
     }
 

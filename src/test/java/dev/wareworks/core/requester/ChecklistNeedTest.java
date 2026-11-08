@@ -2,6 +2,7 @@ package dev.wareworks.core.requester;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashMap;
@@ -14,7 +15,8 @@ import org.junit.jupiter.api.Test;
 /**
  * What the schematic still needs as one requester can tell (issue #45): the material list minus its own orders, a
  * rebase onto the live shares whenever Create remakes the list, and a rate-limited refresh when the count went stale,
- * so the requester never stalls.
+ * so the requester never stalls; and what of it may be made (ADR-081): the list's remainder in full, otherwise no more
+ * than the cannon reports missing.
  */
 class ChecklistNeedTest {
     private static final String STONE = "stone";
@@ -158,6 +160,88 @@ class ChecklistNeedTest {
         need.observe(list.fingerprint(), need.counts());
         assertEquals(STACK, need.need(STONE, STACK, 1, false, list, need.counts(), 0, REFRESH, NO_REFRESH));
         assertEquals(RequesterLimits.MAX_COUNTED_ITEMS, need.counts().size());
+    }
+
+    // --- what may be made (ADR-081) --------------------------------------------------------------------------------
+
+    @Test
+    void theListsRemainderMayBeMadeInFull() {
+        Material list = Material.of(80, 5);
+        assertEquals(new ChecklistNeed.Need(75, 75),
+                need.needOf(STONE, STACK, 1, false, list, Map.of(), 0, REFRESH, NO_REFRESH));
+        need.add(STONE, 64);
+        assertEquals(new ChecklistNeed.Need(11, 11),
+                need.needOf(STONE, STACK, 1, false, list, Map.of(STONE, 64), 20, REFRESH, NO_REFRESH));
+        // A fresh list of 66 rebases onto the 64 still on their way: 2 left, but the cannon misses 3.
+        assertEquals(new ChecklistNeed.Need(3, 3), need.needOf(STONE, STACK, 3, false, Material.of(66, 0),
+                Map.of(STONE, 64), 40, REFRESH, NO_REFRESH), "the cannon's floor above the remainder");
+    }
+
+    @Test
+    void anItemOffTheListIsOneStackButOnlyWhatIsMissingIsMade() {
+        assertEquals(new ChecklistNeed.Need(STACK, 2),
+                need.needOf(GLASS, STACK, 2, false, Material.of(80, 0), Map.of(), 0, REFRESH, NO_REFRESH));
+        assertEquals(new ChecklistNeed.Need(STACK, 1),
+                need.needOf(GLASS, STACK, 0, false, Material.of(80, 0), Map.of(), 0, REFRESH, NO_REFRESH));
+    }
+
+    @Test
+    void anUncountedItemIsOneStackButOnlyWhatIsMissingIsMade() {
+        Map<String, Long> required = new HashMap<>();
+        for (int i = 0; i < RequesterLimits.MAX_COUNTED_ITEMS; i++) {
+            need.add("item" + i, 1);
+            required.put("item" + i, 1L);
+        }
+        required.put(STONE, 30L);
+        Material list = new Material(required, Map.of(), 0);
+        need.observe(list.fingerprint(), need.counts());
+        assertEquals(new ChecklistNeed.Need(STACK, 4),
+                need.needOf(STONE, STACK, 4, false, list, need.counts(), 0, REFRESH, NO_REFRESH));
+    }
+
+    @Test
+    void aDamagingRequirementMakesOne() {
+        assertEquals(new ChecklistNeed.Need(1, 1),
+                need.needOf(STONE, 1, 3, true, Material.of(80, 0), Map.of(), 0, REFRESH, NO_REFRESH));
+    }
+
+    @Test
+    void theStaleFallbackMakesOnlyWhatIsMissing() {
+        need.observe(Material.of(80, 0).fingerprint(), Map.of());
+        need.add(STONE, 80);
+        Refresh stillNothing = new Refresh(Material.of(80, 0));
+        assertEquals(new ChecklistNeed.Need(2, 2), need.needOf(STONE, STACK, 2, false, Material.of(80, 0),
+                Map.of(STONE, 80), 1_000, REFRESH, stillNothing), "refreshed, and still nothing: what is missing");
+        need.add(STONE, 80);
+        assertEquals(new ChecklistNeed.Need(2, 2), need.needOf(STONE, STACK, 2, false, Material.of(80, 0),
+                Map.of(STONE, 80), 1_001, REFRESH, stillNothing), "within the pause: what is missing");
+        assertEquals(1, stillNothing.calls);
+    }
+
+    @Test
+    void aRefreshedRemainderMayBeMadeInFull() {
+        need.observe(Material.of(80, 0).fingerprint(), Map.of());
+        need.add(STONE, 80);
+        Refresh refresh = new Refresh(Material.of(80, 50));
+        assertEquals(new ChecklistNeed.Need(30, 30), need.needOf(STONE, STACK, 1, false, Material.of(80, 0),
+                Map.of(), 1_000, REFRESH, refresh), "the fresh list's remainder");
+    }
+
+    @Test
+    void needIsTheAmountOfNeedOf() {
+        Material list = Material.of(80, 5);
+        ChecklistNeed<String> other = new ChecklistNeed<>();
+        assertEquals(other.needOf(GLASS, STACK, 2, false, list, Map.of(), 0, REFRESH, NO_REFRESH).amount(),
+                need.need(GLASS, STACK, 2, false, list, Map.of(), 0, REFRESH, NO_REFRESH));
+        assertEquals(other.needOf(STONE, STACK, 1, false, list, Map.of(), 0, REFRESH, NO_REFRESH).amount(),
+                need.need(STONE, STACK, 1, false, list, Map.of(), 0, REFRESH, NO_REFRESH));
+    }
+
+    @Test
+    void aNeedMakesAtLeastOneAndNeverMoreThanItOrders() {
+        assertThrows(IllegalArgumentException.class, () -> new ChecklistNeed.Need(0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new ChecklistNeed.Need(4, 0));
+        assertThrows(IllegalArgumentException.class, () -> new ChecklistNeed.Need(4, 5));
     }
 
     @Test

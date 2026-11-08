@@ -5259,6 +5259,27 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         reduceRequest(id, share);
     }
 
+    /**
+     * {@link #reduceRequestShare(UUID, int, int)} for an asker that knows the <b>root production order</b> its own share
+     * started (issue #45, ADR-081): a Schematicannon Requester. The made part comes off the promise of that one order
+     * ({@link ProductionOrders#reducePromiseOf}) and never off another: the oldest-first walk of the three-argument form
+     * could strip a merged player's earlier root, whose items would then fall short when the requester's production
+     * does. Nothing is cancelled: the order runs on and its result lands in stock.
+     *
+     * @param producing the made part of {@code share}, {@code 0..share}
+     * @param ownRoot   the root order the asker's share started; empty takes nothing off any promise
+     */
+    public void reduceRequestShare(UUID id, int share, int producing, Optional<UUID> ownRoot) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(ownRoot, "ownRoot");
+        if (level == null || level.isClientSide || share < 1)
+            return;
+        if (producing > 0 && ownRoot.isPresent()
+                && productionOrders.reducePromiseOf(ownRoot.get(), id, Math.min(producing, share)) > 0)
+            setChanged();
+        reduceRequest(id, share);
+    }
+
     /** Server: removes request {@code id}; a crane job serving it is cancelled. */
     public Optional<RetrievalRequest<ItemKey, BlockPos>> cancelRequest(UUID id) {
         Optional<RetrievalRequest<ItemKey, BlockPos>> cancelled = requests.cancel(id);

@@ -48,6 +48,35 @@ public final class ChecklistNeed<I> {
     }
 
     /**
+     * What to order of a missing item at most, and how much of that production may make (ADR-081, rule R2: never more
+     * is made than the schematic still needs).
+     *
+     * @param amount  what to order at most, at least 1 ({@link #need})
+     * @param makeCap what of it may be made, {@code 1..amount}: all of it when the amount is the material list's
+     *                remainder, otherwise (one stack for an item the list or the counter does not know, the one of a
+     *                requirement that only damages its item, the stale-counter fallback) at most what the cannon
+     *                reports missing
+     */
+    public record Need(int amount, int makeCap) {
+        public Need {
+            if (amount < 1)
+                throw new IllegalArgumentException("amount must be at least 1: " + amount);
+            if (makeCap < 1 || makeCap > amount)
+                throw new IllegalArgumentException("makeCap must be within 1.." + amount + ": " + makeCap);
+        }
+
+        /** The list's remainder: all of it may be made. */
+        static Need remainder(int amount) {
+            return new Need(amount, amount);
+        }
+
+        /** An amount that is not the list's remainder: at most what the cannon reports missing may be made. */
+        static Need guessed(int amount, int missing) {
+            return new Need(amount, Math.min(amount, Math.max(1, missing)));
+        }
+    }
+
+    /**
      * A read of the cannon's material list.
      *
      * @param <I> item type
@@ -132,6 +161,17 @@ public final class ChecklistNeed<I> {
      */
     public int need(I item, int stack, int missing, boolean damage, Checklist<I> list, Map<I, Integer> liveShares,
             long now, int refreshTicks, Supplier<? extends Checklist<I>> refresh) {
+        return needOf(item, stack, missing, damage, list, liveShares, now, refreshTicks, refresh).amount();
+    }
+
+    /**
+     * {@link #need}, with how much of it production may make (ADR-081, {@link Need#makeCap()}): all of it when the
+     * amount is the material list's remainder, on the current list or a refreshed one, and otherwise at most what the
+     * cannon reports missing. Stock keeps the old rule (one stack for an item the list does not show): it costs no
+     * ingredients.
+     */
+    public Need needOf(I item, int stack, int missing, boolean damage, Checklist<I> list, Map<I, Integer> liveShares,
+            long now, int refreshTicks, Supplier<? extends Checklist<I>> refresh) {
         Objects.requireNonNull(item, "item");
         Objects.requireNonNull(list, "list");
         Objects.requireNonNull(liveShares, "liveShares");
@@ -139,19 +179,19 @@ public final class ChecklistNeed<I> {
         int floor = Math.max(1, missing);
         observe(list.fingerprint(), liveShares);
         if (damage)
-            return 1;
-        int need = needFrom(item, stack, floor, list);
-        if (need > 0)
+            return Need.guessed(1, floor);
+        Need need = needFrom(item, stack, floor, list);
+        if (need != null)
             return need;
         if (mayRefresh(now, refreshTicks)) {
             lastRefresh = now;
             Checklist<I> fresh = Objects.requireNonNull(refresh.get(), "refresh returned null");
             rebase(fresh.fingerprint(), liveShares);
             need = needFrom(item, stack, floor, fresh);
-            if (need > 0)
+            if (need != null)
                 return need;
         }
-        return floor;
+        return Need.guessed(floor, floor);
     }
 
     /** Whether a refresh at {@code now} is allowed: never refreshed, the pause is over, or the clock went backwards. */
@@ -196,10 +236,16 @@ public final class ChecklistNeed<I> {
         lastRefresh = NEVER;
     }
 
-    private int needFrom(I item, int stack, int floor, Checklist<I> list) {
+    /** The need by {@code list}, or {@code null} when the counter is stale (the list says nothing is left). */
+    private Need needFrom(I item, int stack, int floor, Checklist<I> list) {
         if (!counts(item))
-            return Math.max(1, stack);
-        return OrderAmount.need(stack, floor, list.required(item), list.gathered(item), ordered(item), false);
+            return Need.guessed(Math.max(1, stack), floor);
+        long required = list.required(item);
+        int need = OrderAmount.need(stack, floor, required, list.gathered(item), ordered(item), false);
+        if (need <= 0)
+            return null;
+        // Not on the list: one stack from stock, but production makes no more than the cannon reports missing.
+        return required <= 0 ? Need.guessed(need, floor) : Need.remainder(need);
     }
 
     private void rebase(Fingerprint current, Map<I, Integer> liveShares) {

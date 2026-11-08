@@ -3,6 +3,7 @@ package dev.wareworks.content.station;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -116,8 +117,8 @@ import net.neoforged.neoforge.items.ItemStackHandler;
  * <li>{@link #fetchCraft} — the crafting panel's Fetch: the grid's ingredients brought here by a <b>craft order</b>,
  * the second list order a terminal can run beside its clipboard's (issue #24, slice 2, ADR-062).</li>
  * </ul>
- * Two entry points ask for no player: {@link #requestFromComputer} (issue #9) and {@link #requestStockOnly}, a
- * Schematicannon Requester's order from stock only (issue #45).
+ * Two entry points ask for no player: {@link #requestFromComputer} (issue #9) and {@link #requestForRequester}, the
+ * same request for a Schematicannon Requester with its made part capped (issue #45, ADR-081).
  * A request is validated before it reaches the controller: the player must be allowed to use the block (the vanilla
  * container rule, {@link #canPlayerUse}), the amount must be positive, and the item must be one the <b>server's own</b>
  * stock index holds — a client-sent item is never trusted, only matched against that index. The controller then clamps
@@ -806,7 +807,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * <p>
      * Nothing is remembered: no refusal goes into this terminal's {@code lastRejection} (its goggle line is about the
      * players at it, as ADR-065 D6 says for doors), and nothing counts towards anyone's "most used" order. The request
-     * itself is saved with the controller's queue like every other.
+     * itself is saved with the controller's queue like every other. It is also what a Schematicannon Requester asks
+     * ({@link #requestForRequester}).
      *
      * @param door the package door to deliver to; empty, or this terminal's own position, for here
      * @return the accepted request with the amount this call granted, or the reason it was refused
@@ -823,47 +825,107 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     }
 
     /**
-     * Server: a request <b>from stock only</b> for up to {@code amount} items of {@code key}, delivered into this
-     * terminal's buffer: what a Schematicannon Requester orders with the remote linked to this terminal (issue #45,
-     * ADR-080). It never starts production and never asks anything.
-     * <p>
-     * The request a stock-list click makes — the same queue, merging, caps, buffer and crane — with two differences.
-     * It is made with {@link StockAccess#AUTOMATION}, because nobody is there to agree to going below a Stock Keeper's
-     * reserve, so a reserve holds items back from it as from redstone and computers. And the amount is <b>clamped to the
-     * stock automation may take</b> before the controller sees it, so the controller's plan for what it would have to
-     * make is always empty: "never produce" is decided here, on the server, in the same tick.
-     * <p>
-     * Checked in this order: the checks of a computer's request ({@link #checkRequest} without a player and to here);
-     * stock for automation, otherwise {@link RequestRejection#RESERVED} when only a reserve holds it back and
-     * {@link RequestRejection#NOT_IN_STOCK} otherwise; then the controller's own refusals. Nothing is remembered: no
-     * refusal goes into {@code lastRejection} and nothing counts towards anyone's "most used" order.
+     * What a Schematicannon Requester's order became ({@link #requestForRequester}), and the root of the production plan
+     * it started, if any (issue #45, ADR-081).
      *
-     * @return the accepted request with the amount this call granted ({@code granted} at most {@code amount} and at
-     *         most the stock), or the reason it was refused
+     * @param result         the controller's answer, exactly as for a computer's request
+     * @param productionRoot the root production order of the plan this call started for the made part; present exactly
+     *                       when the result is accepted with {@code producing > 0} (and the root was found, which it
+     *                       always is)
      */
-    public RequestResult requestStockOnly(ItemKey key, int amount) {
+    public record RequesterRequest(RequestResult result, Optional<UUID> productionRoot) {
+        public RequesterRequest {
+            Objects.requireNonNull(result, "result");
+            Objects.requireNonNull(productionRoot, "productionRoot");
+        }
+
+        static RequesterRequest of(RequestResult result) {
+            return new RequesterRequest(result, Optional.empty());
+        }
+    }
+
+    /**
+     * Server: a Schematicannon Requester's order for up to {@code amount} items of {@code key} into this terminal's
+     * buffer (issue #45, ADR-080, amended by ADR-081): what automation may claim from the racks first, and at most
+     * {@code maxMade} of the rest made through the aisle's production patterns.
+     * <p>
+     * Exactly a computer's request to here ({@link #requestFromComputer}) with the made part capped: the same queue,
+     * merging, caps, buffer and crane; {@link StockAccess#AUTOMATION} and nobody asked, so a Stock Keeper's reserve holds
+     * back the stock and the ingredients alike, and the controller's one multi-level chain per destination applies. The
+     * cap is the amount handed to the controller, {@code min(amount, stock + maxMade)}: the controller plans what the
+     * taker may not claim from that one snapshot, which is the stock read here, so it plans at most {@code maxMade}. A
+     * requester never has more made than the schematic still needs (rule R2), because it passes no more as
+     * {@code maxMade}.
+     * <p>
+     * The <b>root</b> of the plan the call started is returned with the result: the open production order backing the
+     * request that was not open before the call and is no step of a chain. A player's earlier root on the same merged
+     * request is open before the call and so is never taken for it. The requester follows that one order ({@code R3})
+     * and gives back its promise and no other ({@code WarehouseControllerBlockEntity#reduceRequestShare(UUID, int, int,
+     * Optional)}).
+     * <p>
+     * Refused in this order: the checks of a computer's request ({@link #checkRequest} without a player and to here);
+     * nothing claimable and nothing to make ({@link RequestRejection#RESERVED} when only a reserve holds stock back,
+     * otherwise {@link RequestRejection#NOT_IN_STOCK}); then the controller's own refusals, with the plan refusal and its
+     * item when the chain could not be planned. Nothing is remembered: no refusal goes into {@code lastRejection} and
+     * nothing counts towards anyone's "most used" order.
+     *
+     * @param maxMade how many of {@code amount} production may make at most (clamped into {@code 0..amount}); 0 orders
+     *                from stock alone
+     */
+    public RequesterRequest requestForRequester(ItemKey key, int amount, int maxMade) {
         Objects.requireNonNull(key, "key");
         RequestCheck checked = checkRequest(null, key, amount, Optional.empty());
         if (checked.refusal().isPresent())
-            return checked.refusal().get();
+            return RequesterRequest.of(checked.refusal().get());
         WarehouseControllerBlockEntity controller = checked.controller();
-        long stock = controller.availableTo(StockAccess.AUTOMATION, key);
-        if (stock <= 0)
-            return RequestResult.rejected(controller.availableTo(StockAccess.PLAYER, key) > 0
-                    ? RequestRejection.RESERVED : RequestRejection.NOT_IN_STOCK);
-        int clamped = (int) Math.min(amount, stock);
+        long stock = Math.max(0L, controller.availableTo(StockAccess.AUTOMATION, key));
+        int made = Math.max(0, Math.min(maxMade, amount));
+        if (stock <= 0 && made == 0)
+            return RequesterRequest.of(RequestResult.rejected(controller.availableTo(StockAccess.PLAYER, key) > 0
+                    ? RequestRejection.RESERVED : RequestRejection.NOT_IN_STOCK));
+        int clamped = (int) Math.min(amount, stock + made);
+        // The open orders before the call, so that a player's root on the same merged request is never taken for ours.
+        Set<UUID> before = new HashSet<>();
+        if (made > 0) {
+            for (ProductionOrder<ItemKey, RackPosition> order : controller.openProductionOrders())
+                before.add(order.id());
+        }
         RequestResult result = controller.request(worldPosition, key, clamped,
                 Math.max(1, WareworksConfig.maxTerminalRequestAmount()), StockAccess.AUTOMATION);
-        if (result.producing() > 0) {
-            // Cannot happen after the clamp; if a future planner ever makes up the difference anyway, the share is given
-            // back at once rather than leaving a production order behind a block that promised never to start one.
-            UUID id = result.request().orElseThrow().id();
-            controller.reduceRequestShare(id, result.granted(), result.producing());
-            Wareworks.LOGGER.warn("A stock-only request for {} x{} at the terminal at {} planned production; given back",
-                    key, clamped, worldPosition);
-            return RequestResult.rejected(RequestRejection.NOT_IN_STOCK);
+        if (!result.isAccepted() || result.producing() <= 0)
+            return RequesterRequest.of(result);
+        RetrievalRequest<ItemKey, BlockPos> request = result.request().orElseThrow();
+        Optional<UUID> root = Optional.empty();
+        for (ProductionOrder<ItemKey, RackPosition> order : controller.openProductionOrders()) {
+            if (!before.contains(order.id()) && !order.isStep()
+                    && order.backingRequest().filter(request.id()::equals).isPresent()) {
+                root = Optional.of(order.id());
+                break;
+            }
         }
-        return result;
+        if (root.isEmpty())
+            // startProductionPlan builds one plan per call and only its root backs the request, so this cannot happen;
+            // the requester then follows the share as if it came from stock.
+            Wareworks.LOGGER.warn("A requester's order for {} x{} at the terminal at {} started production of {} without "
+                    + "a root order backing request {}", key, clamped, worldPosition, result.producing(), request.id());
+        if (result.producing() > made) {
+            // Cannot happen after the cap above; if a future planner ever makes more anyway, the excess is given back at
+            // once rather than leaving production behind a block that promised never to make more than it needs.
+            int excess = result.producing() - made;
+            controller.reduceRequestShare(request.id(), excess, excess, root);
+            Wareworks.LOGGER.warn("A requester's order for {} x{} at the terminal at {} planned {} made, more than {}; "
+                    + "the excess was given back", key, clamped, worldPosition, result.producing(), made);
+            int granted = result.granted() - excess;
+            if (granted < 1)
+                return RequesterRequest.of(RequestResult.rejected(RequestRejection.NOT_IN_STOCK));
+            RetrievalRequest<ItemKey, BlockPos> now = request;
+            for (RetrievalRequest<ItemKey, BlockPos> open : controller.requestsFor(worldPosition)) {
+                if (open.id().equals(request.id()))
+                    now = open;
+            }
+            result = RequestResult.accepted(now, granted, result.merged(), made, result.refusal(), result.about());
+        }
+        return new RequesterRequest(result, result.producing() > 0 ? root : Optional.empty());
     }
 
     /**

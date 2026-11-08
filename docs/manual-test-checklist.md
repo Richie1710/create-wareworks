@@ -3875,11 +3875,15 @@ you get tired of waiting, and put it back before judging check 160.
 ## BR. The Schematicannon Requester ([issue #45](https://github.com/Richie1710/create-wareworks/issues/45))
 
 > A block set against a Create Schematicannon that orders what the cannon is missing at the terminal its Warehouse
-> Remote is linked to: from stock only, a stack at a time at most, never twice, with a dead-man switch (ADR-080,
-> `docs/warehouse-system.md` §3.11). `RequesterOrdersTest`, `OrderAmountTest`, `ChecklistNeedTest`, `OrderShareTest`,
-> `VariantPickTest` and `RequesterLimitsTest` check the rules, `SchematicannonRequesterGameTests` a real cannon printing
-> through it with an item census, and the `requester` visual scenario real clicks, the orders, the belt and a rejoin in
-> English and German. What is left is what only a player can judge, a dedicated server and a claim mod.
+> Remote is linked to: from stock first, the rest made through a production pattern (since ADR-081), a stack at a time
+> at most, never twice, with a dead-man switch (ADR-080, `docs/warehouse-system.md` §3.11). `RequesterOrdersTest`,
+> `OrderAmountTest`, `ChecklistNeedTest`, `OrderShareTest`, `VariantPickTest`, `RequesterStatusTest`,
+> `RequesterLimitsTest` and `ProductionOrdersTest` check the rules, `SchematicannonRequesterGameTests` a real cannon
+> printing through it with an item census (the production tests play the machine themselves), and the `requester` and
+> `requester-make` visual scenarios real clicks, the orders, the belt, a pattern, a real Crafter and a rejoin in
+> English and German. What is left is what only a player can judge, a dedicated server, a real machine and a claim
+> mod. Checks 453-458 need a production station beside the aisle with a machine behind it (a furnace for glass, or a
+> Crafter Feeder and a vanilla Crafter for planks) and a Warehouse Input for its results.
 > Setup: one aisle with a terminal holding about 200 stone and no glass, an andesite funnel on the terminal, a belt on
 > a motor and a funnel into a chest beside a **Schematicannon placed from its item**, a schematic of about 80 stone and
 > 4 glass loaded into it, gunpowder in the cannon, and a Warehouse Remote linked to the terminal.
@@ -3900,9 +3904,11 @@ you get tired of waiting, and put it back before judging check 160.
      never a third stack. Goggles meanwhile: "Stone x64 ordered, n delivered (m:ss)", then "lies in the terminal's
      buffer", then "Waiting n s for Stone on its way". Does it ever order stone twice while the first stack is still on
      the belt?
-444. **Out of stock.** At the glass the lamp turns red: "The warehouse has no Glass: trying again". Put 4 glass into a
-     warehouse input: within a second or two the requester orders them and the print finishes. Nothing is ever produced,
-     even if a production station could make glass.
+444. **Out of stock.** With no production station, at the glass the lamp turns red: "The warehouse has no Glass and no
+     pattern makes it: trying again". Put 4 glass into a warehouse input: within a second or two the requester orders
+     them and the print finishes. Then print again with a production station whose pattern makes glass from sand and a
+     furnace behind it that feeds a warehouse input, sand in stock and no glass: the glass is made and printed, and
+     nothing else is.
 445. **The grace value box.** Right-click the value box on the back and set it to 0, then to 60, as on any Create value
      box: the board reads seconds, and a click with a remote on the box still goes to the cradle, not to the box.
      With a long belt and the grace at 0, does it order again before the items arrive (expected), and at the default
@@ -3929,3 +3935,33 @@ you get tired of waiting, and put it back before judging check 160.
 452. **A claim mod (only if one is installed).** Claim the terminal's area for another player, then put a remote linked
      to that terminal into a requester as yourself: refused with "You cannot use that terminal" as far as the claim mod
      hooks the "may use this block" check. Note which claim mod and whether it does.
+453. **Made on demand.** No oak planks in stock, 16 oak logs, a pattern of 1 log to 4 planks at the station with a
+     Crafter Feeder and a vanilla Crafter behind it, and a schematic of 16 planks. Start the print: the lamp lights, the
+     goggles say "Oak Planks x16 ordered, 16 being made, 0 delivered" with no clock, the station gets 4 logs, your
+     Crafter makes 16 planks, the crane brings them into the terminal and the belt takes them to the cannon. Does the
+     row read clearly as "your machine is working on it"? Is exactly one order placed, and are no more planks made than
+     the schematic needs (16, from 4 logs)?
+454. **Stock first, in one order.** As 453, but with 5 oak planks in stock: one order of 16, "11 being made". The five
+     come at once, the eleven after your machine has made them (12 made, 1 left in stock), and the requester orders
+     nothing in between, not even while the five are already in the cannon's chest.
+455. **A machine that does not answer.** A planks pattern at a station with **no** machine behind it, no planks in
+     stock. The requester orders, the goggles say "being made", and the 10-minute switch does not count meanwhile (the
+     row shows no clock). After the production order's own timeout (`productionOrderTimeoutTicks`, 5 minutes by
+     default; lower it in the server config to wait less) the requester's share is cut back, the logs the station took
+     count as lost, the warehouse stops making planks and the lamp turns red: "The warehouse has stopped making Oak
+     Planks: check the machine, then resume it at the Warehouse Production". Put the machine back and resume at the
+     station: the planks are made again and the print finishes. Is the red line clear about what to do?
+456. **A pattern that cannot run.** The planks pattern, but no logs and no planks in stock: the lamp turns red and the
+     goggles say "Oak Planks is not in stock and cannot be made: Oak Log is missing". Put 16 logs into a warehouse
+     input: within about five seconds the requester orders and the planks are made. Then set a Stock Keeper's reserve
+     of all 16 logs: "Oak Planks is held back by a Stock Keeper's reserve", and nothing is made.
+457. **German at GUI scale 4, production lines.** With `de_de` and GUI scale 4, read "x16 bestellt, 11 in Herstellung,
+     0 geliefert", "ist nicht auf Lager und lässt sich nicht herstellen: Eichenstamm fehlt", the "stellt ... nicht mehr
+     her" line, "Das Lager stellt gerade anderes her: wartet" and the changed Shift tooltip line ("aus dem Bestand",
+     "Muster herstellen"): do they read well and fit?
+458. **Sharing a terminal with a computer** (only with CC: Tweaked, `-Pwareworks.cc`). Have a computer order an item
+     that needs a two-level chain at the requester's terminal, then let the cannon miss another item that needs a
+     two-level chain: the requester waits with a dark lamp, "The warehouse is busy making other things: waiting", and
+     orders as soon as the computer's chain is done. Taking the remote out while the requester's own chain runs gives
+     back only its share: the chain finishes and its items go into stock, and a click of yours merged into the same
+     request keeps its amount.

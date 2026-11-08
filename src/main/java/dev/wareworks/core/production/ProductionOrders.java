@@ -591,6 +591,28 @@ public final class ProductionOrders<K, L> {
     }
 
     /**
+     * Lowers what the one open order {@code orderId} promises request {@code requestId} by up to {@code amount}, never
+     * below what it has already made (issue #45, ADR-081). How a Schematicannon Requester gives back the made part of its
+     * share: only the root of the plan its own share started may lose its promise. {@link #reducePromise} walks every
+     * order backing the request oldest first, so it would take a merged player's earlier root first, and that player's
+     * items would then fall short when the requester's own production does.
+     *
+     * @return how much was taken off the promise, {@code 0..amount}; 0 for an unknown or finished order and for one
+     *         that backs another request
+     */
+    public long reducePromiseOf(UUID orderId, UUID requestId, long amount) {
+        Objects.requireNonNull(orderId, "orderId");
+        Objects.requireNonNull(requestId, "requestId");
+        ProductionOrder<K, L> order = orders.get(orderId);
+        if (order == null || !order.isOpen() || order.backingRequest().filter(requestId::equals).isEmpty())
+            return 0L;
+        ProductionOrder<K, L> lower = order.withPromiseReducedBy(Math.max(0L, amount));
+        if (lower != order)
+            store(lower);
+        return order.unfulfilledPromise() - lower.unfulfilledPromise();
+    }
+
+    /**
      * Lowers the promises of the open orders backing request {@code requestId}, newest first, until together they owe
      * it no more than the {@code remaining} items it still waits for (issue #24 review fix). A request is never owed
      * more by production than it waits for, so a shortfall can never take off more than the request still has: a

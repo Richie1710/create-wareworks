@@ -365,8 +365,9 @@ public final class WareworksBlocks {
 
     /**
      * Schematicannon Requester (issue #45, ADR-080): set against a Create Schematicannon, it orders what the cannon is
-     * missing at the terminal its Warehouse Remote is linked to, from stock only, and the crane delivers into that
-     * terminal's buffer. The last block, because it is the one that reaches out of the warehouse to another machine.
+     * missing at the terminal its Warehouse Remote is linked to, from stock first and the rest made through a production
+     * pattern (ADR-081), and the crane delivers into that terminal's buffer. The last block, because it is the one that
+     * reaches out of the warehouse to another machine.
      * <p>
      * Six facings, the front towards the cannon. Its own blockstate ({@link WareworksBlockStateGen#requesterBlockProvider()})
      * over the hand-made {@code models/block/schematicannon_requester/block.json} and its two lamp twins (authored with

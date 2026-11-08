@@ -1283,7 +1283,9 @@ public final class WareworksConfig {
                             RequesterLimits.MIN_POLL_TICKS, RequesterLimits.MAX_POLL_TICKS);
             requesterOrderTimeoutTicks = builder
                     .comment("[in Ticks] The dead-man switch: an order that has not arrived after this long is given up "
-                            + "and placed again. Only time in which the terminal and its warehouse were loaded counts.")
+                            + "and placed again. Only time in which the terminal and its warehouse were loaded and no "
+                            + "production order was making the item counts; a production order has its own "
+                            + "productionOrderTimeoutTicks.")
                     .defineInRange("orderTimeoutTicks", RequesterLimits.DEFAULT_TIMEOUT_TICKS,
                             RequesterLimits.MIN_TIMEOUT_TICKS, RequesterLimits.MAX_TIMEOUT_TICKS);
             requesterChecklistRefreshTicks = builder

@@ -19,9 +19,42 @@ import java.util.function.ToLongFunction;
  * </ol>
  * Variants of which nothing is available are never picked; with none left the answer is empty. Strict requirements
  * never come here: they are ordered with exactly the components the cannon reported.
+ * <p>
+ * <b>To have one made</b> ({@link #toMake}, ADR-081) is the second question, asked only when automation may take none
+ * of any variant: the plain variant when a production pattern makes it, otherwise the first a pattern makes by
+ * {@code tieBreak}. A stocked variant is always ordered first; the controller makes the rest of it only when a pattern
+ * makes exactly that key.
  */
 public final class VariantPick {
     private VariantPick() {
+    }
+
+    /**
+     * The variant to have <b>made</b> when automation may take none from stock: the plain one if a pattern makes it,
+     * else the first by {@code tieBreak}; empty when no pattern makes the item.
+     *
+     * @param producible the keys the aisle's production patterns make
+     * @param sameItem   whether a key is a variant of the missing item
+     * @param plain      whether a key has no component changes
+     * @param tieBreak   the stable order that decides among variants with components
+     * @param <K>        item key type
+     */
+    public static <K> Optional<K> toMake(Iterable<K> producible, Predicate<? super K> sameItem,
+            Predicate<? super K> plain, Comparator<? super K> tieBreak) {
+        Objects.requireNonNull(producible, "producible");
+        Objects.requireNonNull(sameItem, "sameItem");
+        Objects.requireNonNull(plain, "plain");
+        Objects.requireNonNull(tieBreak, "tieBreak");
+        K best = null;
+        for (K key : producible) {
+            if (key == null || !sameItem.test(key))
+                continue;
+            if (plain.test(key))
+                return Optional.of(key);
+            if (best == null || tieBreak.compare(key, best) < 0)
+                best = key;
+        }
+        return Optional.ofNullable(best);
     }
 
     /**

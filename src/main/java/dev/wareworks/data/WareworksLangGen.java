@@ -1262,10 +1262,11 @@ public final class WareworksLangGen {
     }
 
     /**
-     * Issue #45 (ADR-080): the Schematicannon Requester — its description, its messages and its goggle lines. Every
-     * status has a line of its own ({@code WareworksLang#requesterStatusKey}), so a red lamp always says what to do. The
-     * "Skip missing Blocks" in two of them is Create's own option name, passed in as an argument, so it reads exactly
-     * as on the cannon's screen in every language.
+     * Issue #45 (ADR-080, amended by ADR-081): the Schematicannon Requester — its description, its messages and its
+     * goggle lines. Every status has a line of its own ({@code WareworksLang#requesterStatusKey}), so a red lamp always
+     * says what to do. The "Skip missing Blocks" in two of them is Create's own option name, passed in as an argument,
+     * so it reads exactly as on the cannon's screen in every language; the reason in the "cannot be made" line is the
+     * production plan's own refusal sentence ({@code gui.production.plan.refusal.*}), passed in the same way.
      */
     private static void requester(BiConsumer<String, String> lang) {
         tooltip(lang, "block.wareworks.schematicannon_requester",
@@ -1274,7 +1275,8 @@ public final class WareworksLangGen {
                 "When clicked with a linked remote",
                 "Keeps it as its _link_. Sneak with an empty hand to take it out.",
                 "When the cannon is missing an item",
-                "Orders it _from stock only_: up to a stack at a time, and _never twice_.",
+                "Orders it _from stock_ and has the rest _made_ by a pattern: up to a stack at a time, _never "
+                        + "twice_.",
                 "When the lamp is red",
                 "Look with _Goggles_. A cannon placed by hand _skips missing blocks_: turn that off.");
 
@@ -1316,14 +1318,19 @@ public final class WareworksLangGen {
                 case BLOCKED -> "Cannon: %1$s";
                 case PRINTING -> "The cannon has what it needs";
                 case ORDERED -> "%1$s x%2$s ordered, %3$s delivered (%4$s)";
+                case MAKING -> "%1$s x%2$s ordered, %3$s being made, %4$s delivered";
                 case IN_BUFFER -> "%1$s lies in the terminal's buffer";
                 case GRACE -> "Waiting %1$s s for %2$s on its way";
                 case ORDERS_FULL -> "Four orders open: waiting";
                 case CANNON_FULL -> "The cannon's inventories are full";
                 case BUFFER_FULL -> "The terminal's buffer is full: empty it onto a belt";
-                case OUT_OF_STOCK -> "The warehouse has no %1$s: trying again";
+                case OUT_OF_STOCK -> "The warehouse has no %1$s and no pattern makes it: trying again";
                 case RESERVED -> "%1$s is held back by a Stock Keeper's reserve";
+                case CANNOT_MAKE -> "%1$s is not in stock and cannot be made: %2$s";
+                case MAKING_STOPPED -> "The warehouse has stopped making %1$s: check the machine, then resume it at "
+                        + "the Warehouse Production";
                 case TERMINAL_BUSY -> "The terminal's order slots are taken: waiting";
+                case PRODUCTION_BUSY -> "The warehouse is busy making other things: waiting";
             });
         }
     }

@@ -36,6 +36,8 @@ import dev.wareworks.content.remote.RemoteLink;
 import dev.wareworks.content.requester.CannonView;
 import dev.wareworks.content.requester.GraceBehaviour;
 import dev.wareworks.content.requester.NoTicket;
+import dev.wareworks.content.requester.RequesterLines;
+import dev.wareworks.content.requester.RequesterSummary;
 import dev.wareworks.content.requester.SchematicannonRequesterBlock;
 import dev.wareworks.content.requester.SchematicannonRequesterBlockEntity;
 import dev.wareworks.content.requester.SchematicannonRequesterHooks;
@@ -47,8 +49,13 @@ import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.production.PlanRefusal;
+import dev.wareworks.core.production.ProductionOrder;
+import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.requester.RequesterLimits;
 import dev.wareworks.core.requester.RequesterOrder;
 import dev.wareworks.core.requester.RequesterStatus;
+import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.gametest.CannonFixture.Site;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
@@ -67,7 +74,9 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestAssertException;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.network.protocol.game.ClientboundSystemChatPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -106,9 +115,10 @@ import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 
 /**
- * GameTests of the Schematicannon Requester (issue #45, ADR-080): a block set against a Create Schematicannon that
- * orders what the cannon is missing at the terminal its Warehouse Remote is linked to, from stock only, a stack at a
- * time and never twice, and moves no item itself.
+ * GameTests of the Schematicannon Requester (issue #45, ADR-080, amended by ADR-081): a block set against a Create
+ * Schematicannon that orders what the cannon is missing at the terminal its Warehouse Remote is linked to, from stock
+ * first and the rest made through the aisle's production patterns, a stack at a time and never twice, and moves no item
+ * itself.
  * <p>
  * Every test prints with a <b>real</b> cannon and a real schematic ({@link CannonFixture}) beside a real aisle: the
  * cannon walks the schematic, pauses on "Missing Item" when its chest runs dry, and the requester sees exactly that.
@@ -119,7 +129,9 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * <p>
  * <b>The books are kept in every test</b> ({@link Scene#assertKept}): the item census of the whole test, plus the
  * remotes in the requesters' cradles (which no capability shows), plus every block the cannon printed or has in the
- * air counted back as the items Create's own requirement took for it, must equal what the test started with.
+ * air counted back as the items Create's own requirement took for it, must equal what the test started with. Where a
+ * test plays the machine behind a production station ({@link #playMachine}), it books the logs it takes and the planks
+ * it hands back ({@link Scene#change}), and nowhere else.
  * <ul>
  * <li>{@code requesterordersthemissingitemintothebuffer} — the missing stone is ordered at the terminal for exactly what
  * the schematic needs, the crane delivers it into the buffer, and nothing more is ordered while it lies there;</li>
@@ -142,8 +154,23 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * order; the switch fires only after the live time, once the chunk is back;</li>
  * <li>{@code stalecounterrefreshesthechecklistonce} — a player empties the chest mid-run: the requester has Create
  * remake the material list once and orders what is left;</li>
- * <li>{@code neverstartsproduction} — producible only is out of stock, partly in stock is the stock, and no production
- * order is ever made, neither through the requester nor through {@code requestStockOnly} itself;</li>
+ * <li>{@code nopatternmeansoutofstockthenthepatternisused} — without a pattern the stock is ordered, the rest is out
+ * of stock and nothing is made, neither through the requester nor through {@code requestForRequester} itself; with the
+ * pattern the rest is made within one retry wait, by a root of its own;</li>
+ * <li>{@code stockfirsttherestismade} and {@code makesnomorethanthelistneeds} — stock first and the rest made in one
+ * order that is never placed twice, and never more made than the schematic still needs;</li>
+ * <li>{@code cannotmakenamesthemissingingredient} and {@code reserveholdstheingredientsback} — a pattern that cannot
+ * run says why, and a Stock Keeper's reserve holds the ingredients back;</li>
+ * <li>{@code deadmanstandswhilebeingmade} ({@link #MAKING_DEAD_MAN_BATCH}) — the dead-man switch waits for the
+ * machine;</li>
+ * <li>{@code failedproductionkeepsaplayersclick} ({@link #PRODUCTION_BATCH}),
+ * {@code givebacktakesonlyitsownmadepromise} and {@code givebackrightafterafailedrootkeepsaplayersclick} — a failed
+ * made part and a give-back, also one between two polls right after the requester's root failed, take nothing off a
+ * player's click merged into the same request, and the safety stop says so;</li>
+ * <li>{@code makingstoppednamesthestoppedingredient} — with a slab chain whose planks the safety stop halted, the
+ * requester's red line names the planks, the item the station lists as stopped;</li>
+ * <li>{@code madeordersurvivesasaveroundtrip} — a made part and its root come back from a save, and an older save reads
+ * as from stock;</li>
  * <li>{@code reserveholdsitback} — a Stock Keeper's reserve holds the stock back, and a lowered reserve lets part
  * through;</li>
  * <li>{@code strictrequirementordersexactcomponents} and {@code plainrequirementprefersnocomponents} — a patterned
@@ -178,6 +205,13 @@ public final class SchematicannonRequesterGameTests {
     static final String FAR_BATCH = "wareworksrequesterfar";
     /** The test that moves the world border, which is the whole level's: alone in its batch, restored after it. */
     static final String BORDER_BATCH = "wareworksrequesterborder";
+    /**
+     * The test that lowers the dead-man switch while the machine waits (ADR-081): alone in its batch, because the
+     * {@link #CONFIG_BATCH} test restores every override when it ends, which would let this one pass on the default.
+     */
+    static final String MAKING_DEAD_MAN_BATCH = "wareworksrequestermaking";
+    /** The test that lets production orders time out after 200 ticks (ADR-081), restored after the batch. */
+    static final String PRODUCTION_BATCH = "wareworksrequesterproduction";
 
     private static final int AISLE_Z = 3;
     private static final int RAILS = 5;
@@ -186,6 +220,8 @@ public final class SchematicannonRequesterGameTests {
     private static final RackPosition STORAGE_RACK = new RackPosition(1, 0, Side.LEFT);
     private static final RackPosition PRODUCTION_RACK = new RackPosition(2, 0, Side.RIGHT);
     private static final RackPosition KEEPER_RACK = new RackPosition(3, 0, Side.RIGHT);
+    /** The warehouse input the machine's planks (and fresh logs) come back through: free beside every station above. */
+    private static final RackPosition INPUT_RACK = new RackPosition(2, 0, Side.LEFT);
 
     /** The cannon beyond the rail end, its chest behind it and the requester in front of it, facing it. */
     private static final BlockPos CANNON = new BlockPos(13, BASE_Y, AISLE_Z);
@@ -246,6 +282,12 @@ public final class SchematicannonRequesterGameTests {
     private static final int SHORT_GRACE_SECONDS = 2;
     private static final int SAVED_GRACE_SECONDS = 7;
     private static final int PLAYER_SHARE = 10;
+    /** A player's click that a production order of its own makes in full: one run of the plank pattern. */
+    private static final int PLAYER_PLANKS = 4;
+    /** Production orders time out after this long in {@link #PRODUCTION_BATCH}: the configuration's floor. */
+    private static final int SHORT_PRODUCTION_TICKS = 200;
+    /** The plank pattern: one oak log makes four oak planks. */
+    private static final int PLANKS_PER_LOG = 4;
     /** A player's click that takes the crane three trips, so the requester's share behind it arrives last. */
     private static final int BIG_PLAYER_SHARE = 130;
     private static final int CHEST_SLOTS = 27;
@@ -258,6 +300,7 @@ public final class SchematicannonRequesterGameTests {
     private static final ItemKey SLAB = ItemKey.of(Items.STONE_SLAB);
     private static final ItemKey PLANK = ItemKey.of(Items.OAK_PLANKS);
     private static final ItemKey LOG = ItemKey.of(Items.OAK_LOG);
+    private static final ItemKey OAK_SLAB = ItemKey.of(Items.OAK_SLAB);
     private static final ItemKey PLAIN_BANNER = ItemKey.of(Items.WHITE_BANNER);
 
     /**
@@ -899,22 +942,280 @@ public final class SchematicannonRequesterGameTests {
                 .thenSucceed();
     }
 
+    // --- making what the warehouse lacks (ADR-081) -------------------------------------------------------------------
+
     /**
-     * Never production (owner rule 2), with oak planks that a pattern makes from the logs in stock. Straight at the
-     * terminal, a stock-only request for sixteen planks with five in stock grants five and plans nothing. The requester
-     * orders those five; once they are printed it shows "out of stock" for the rest, and no production order is ever
-     * made, nor by a stock-only request with none in stock.
+     * No pattern, then a pattern. Straight at the terminal, a requester's order for sixteen planks with five in stock and
+     * nothing to make grants the five and starts no production. The requester orders sixteen and is granted the five in
+     * stock, nothing made; once they are printed the lamp is red "out of stock", and over three retry waits nothing is
+     * ordered and no production order is made, nor by a request with none in stock. With the pattern written, the
+     * requester has the eleven still needed made within one retry wait: one order of eleven, all of it made, its own root
+     * (three runs, twelve planks) backing it. The test plays the machine; the print finishes, one plank is left over in
+     * stock and thirteen logs.
      */
-    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
-    public static void neverStartsProduction(GameTestHelper helper) {
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void noPatternMeansOutOfStockThenThePatternIsUsed(GameTestHelper helper) {
         AisleFixture aisle = warehouse(helper, true, PLANK.toStack(5), LOG.toStack(16));
         aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
         Scene scene = new Scene(helper, aisle);
-        scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 16));
+        SchematicannonBlockEntity cannon = scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 16));
         scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
         Belt.start(helper, aisle, TERMINAL_RACK, CHEST, 0);
         scene.begin(scene.remoteFor(TERMINAL_RACK));
         OrderLog log = OrderLog.watch(helper, REQUESTER);
+        UUID[] root = new UUID[1];
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> {
+                    WarehouseTerminalBlockEntity.RequesterRequest direct = aisle.terminalAt(TERMINAL_RACK)
+                            .requestForRequester(PLANK, 16, 0);
+                    RequestResult result = direct.result();
+                    helper.assertTrue(result.isAccepted(), "a requester's order is accepted: " + result);
+                    helper.assertValueEqual(result.granted(), 5, "for the stock");
+                    helper.assertValueEqual(result.producing(), 0, "nothing made");
+                    helper.assertValueEqual(direct.productionRoot(), Optional.empty(), "and no root");
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertTrue(controller.productionOrders().isEmpty(), "no production order");
+                    controller.reduceRequestShare(result.request().orElseThrow().id(), result.granted());
+                    helper.assertFalse(controller.hasOpenRequest(result.request().orElseThrow().id()),
+                            "given back again");
+                    scene.insert(REQUESTER, 0);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(5),
+                        "the requester orders sixteen and is granted the five in stock"))
+                .thenExecute(() -> helper.assertValueEqual(onlyOrder(helper, scene.requester(REQUESTER)).producing(),
+                        0, "nothing of it is made"))
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(scene.printed(SITE, Blocks.OAK_PLANKS), 5, "the five are printed");
+                    assertShows(helper, REQUESTER, RequesterStatus.OUT_OF_STOCK);
+                })
+                .thenIdle(3 * RequesterLimits.makeRetryTicks(poll()))
+                .thenExecute(() -> {
+                    assertShows(helper, REQUESTER, RequesterStatus.OUT_OF_STOCK);
+                    helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(5), "nothing more is ordered");
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "no request is open");
+                    helper.assertTrue(aisle.controller().productionOrders().isEmpty(),
+                            "and nothing is made without a pattern");
+                    RequestResult none = aisle.terminalAt(TERMINAL_RACK).requestForRequester(PLANK, 16, 0).result();
+                    helper.assertValueEqual(none.rejection(), Optional.of(RequestRejection.NOT_IN_STOCK),
+                            "a requester's order with none in stock and no pattern is refused");
+                    helper.assertValueEqual(aisle.controller().countOf(LOG), 16L, "every log stays in stock");
+                    scene.assertKept("with the rest out of stock");
+                    writePlankPattern(helper, aisle);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(5, 11),
+                        "with the pattern, the eleven still needed are ordered"))
+                .thenExecute(() -> {
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, scene.requester(REQUESTER));
+                    helper.assertValueEqual(order.producing(), 11, "all of them made");
+                    ProductionOrder<ItemKey, RackPosition> made = onlyProductionOrder(helper, aisle);
+                    helper.assertValueEqual(order.root(), Optional.of(made.id()), "the requester follows its root");
+                    helper.assertValueEqual(made.backingRequest(), Optional.of(order.requestId()),
+                            "which backs the requester's request");
+                    helper.assertValueEqual(made.resultAmount(), 12, "three runs of four");
+                    helper.assertValueEqual(made.promisedToRequest(), 11L, "promising the eleven");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                    root[0] = made.id();
+                    scene.assertKept("once the order is placed");
+                })
+                .thenWaitUntil(() -> logsAtStation(helper, aisle, 3))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 3))
+                .thenWaitUntil(() -> assertFinished(helper, cannon))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(5, 11), "two orders in all");
+                    helper.assertValueEqual(aisle.controller().productionOrder(root[0]).orElseThrow().state(),
+                            ProductionOrderState.COMPLETE, "the root completed");
+                    helper.assertValueEqual(aisle.controller().countOf(PLANK), 1L, "one plank left over in stock");
+                    helper.assertValueEqual(aisle.controller().countOf(LOG), 13L, "three logs crafted");
+                    helper.assertValueEqual(scene.requester(REQUESTER).timeouts(), 0, "nothing given up");
+                    scene.assertKept("after the print");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Stock first, the rest made, in one order: five planks in stock and a pattern, sixteen to print. One order of
+     * sixteen, eleven of them made. The five arrive and are printed first while the order runs on, lit and "being made";
+     * no second order is ever placed (checked every tick), and the print finishes once the machine has made the rest.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void stockFirstTheRestIsMade(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true, PLANK.toStack(5), LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
+        Scene scene = new Scene(helper, aisle);
+        SchematicannonBlockEntity cannon = scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 16));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        Belt.start(helper, aisle, TERMINAL_RACK, CHEST, 0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        OrderLog log = OrderLog.watch(helper, REQUESTER);
+        helper.onEachTick(() -> {
+            helper.assertTrue(log.placed().size() <= 1, "never a second order: " + log.placed());
+            aisle.controllerIfPresent().ifPresent(controller -> helper.assertTrue(
+                    controller.productionOrders().size() <= 1, "one production order: "
+                            + controller.productionOrders()));
+        });
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(16),
+                        "one order of sixteen"))
+                .thenExecute(() -> {
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, scene.requester(REQUESTER));
+                    helper.assertValueEqual(order.producing(), 11, "the five in stock first, eleven made");
+                    ProductionOrder<ItemKey, RackPosition> made = onlyProductionOrder(helper, aisle);
+                    helper.assertValueEqual(order.root(), Optional.of(made.id()), "its own root");
+                    helper.assertValueEqual(made.resultAmount(), 12, "three runs of four");
+                    RetrievalRequest<ItemKey, BlockPos> request = onlyRequest(helper, scene, TERMINAL_RACK);
+                    helper.assertValueEqual(request.requested(), 16, "the request asks for all sixteen");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(scene.printed(SITE, Blocks.OAK_PLANKS), 5,
+                        "the five in stock arrive and are printed first"))
+                .thenExecute(() -> {
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, scene.requester(REQUESTER));
+                    helper.assertValueEqual(order.phase(), RequesterOrder.Phase.RUNNING, "the order runs on");
+                    helper.assertValueEqual(order.producing(), 11, "while the eleven are made");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                    scene.assertKept("with the five printed");
+                })
+                .thenWaitUntil(() -> logsAtStation(helper, aisle, 3))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 3))
+                .thenWaitUntil(() -> assertFinished(helper, cannon))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(16), "one order in all");
+                    helper.assertValueEqual(aisle.controller().countOf(PLANK), 1L, "one plank left over");
+                    helper.assertValueEqual(aisle.controller().countOf(LOG), 13L, "three logs crafted");
+                    scene.assertKept("after the print");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Never more is made than the schematic still needs (rule R2): six planks to print and none in stock. The six are
+     * made — two runs, eight planks — and the two left over land in stock.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void makesNoMoreThanTheListNeeds(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true, LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
+        Scene scene = new Scene(helper, aisle);
+        SchematicannonBlockEntity cannon = scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 6));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        Belt.start(helper, aisle, TERMINAL_RACK, CHEST, 0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        OrderLog log = OrderLog.watch(helper, REQUESTER);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(6),
+                        "one order of what the schematic needs"))
+                .thenExecute(() -> {
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, scene.requester(REQUESTER));
+                    helper.assertValueEqual(order.producing(), 6, "all six made");
+                    ProductionOrder<ItemKey, RackPosition> made = onlyProductionOrder(helper, aisle);
+                    helper.assertValueEqual(made.resultAmount(), 8, "two runs, not a stack");
+                    helper.assertValueEqual(made.promisedToRequest(), 6L, "promising the six");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                })
+                .thenWaitUntil(() -> logsAtStation(helper, aisle, 2))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 2))
+                .thenWaitUntil(() -> assertFinished(helper, cannon))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(6), "one order in all");
+                    helper.assertValueEqual(aisle.controller().countOf(PLANK), 2L, "the two left over are in stock");
+                    helper.assertValueEqual(aisle.controller().countOf(LOG), 14L, "two logs crafted");
+                    scene.assertKept("after the print");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A pattern that cannot run says why: no planks and no logs. The lamp is red, the line is "cannot be made" with the
+     * plan's own reason about the oak log, and nothing is requested. Sixteen logs fed through a warehouse input, and the
+     * planks are ordered within one retry wait, made and printed.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void cannotMakeNamesTheMissingIngredient(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true);
+        aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
+        Scene scene = new Scene(helper, aisle);
+        SchematicannonBlockEntity cannon = scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 4));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        Belt.start(helper, aisle, TERMINAL_RACK, CHEST, 0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        OrderLog log = OrderLog.watch(helper, REQUESTER);
+        long[] stored = { -1L };
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.CANNOT_MAKE))
+                .thenIdle(RequesterLimits.makeRetryTicks(poll()) + poll())
+                .thenExecute(() -> {
+                    assertShows(helper, REQUESTER, RequesterStatus.CANNOT_MAKE);
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    requester.onGoggleObserved();
+                    helper.assertValueEqual(requester.summary().planRefusal(), PlanRefusal.MISSING_INGREDIENT,
+                            "the plan's reason");
+                    helper.assertValueEqual(requester.summary().about(), Items.OAK_LOG, "about the oak log");
+                    helper.assertValueEqual(requester.summary().subject(), Items.OAK_PLANKS, "for the planks");
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "nothing is requested");
+                    helper.assertTrue(aisle.controller().productionOrders().isEmpty(), "and nothing made");
+                    helper.assertTrue(log.placed().isEmpty(), "no order");
+                    scene.assertKept("with the pattern unable to run");
+                    aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT_RACK)), LOG.toStack(16));
+                    scene.change(LOG, 16);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().countOf(LOG), 16L,
+                        "the logs are stored"))
+                .thenExecute(() -> stored[0] = helper.getTick())
+                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(4),
+                        "the planks are ordered"))
+                .thenExecute(() -> {
+                    // One retry wait and the poll after it, plus the tick the log sees the order in.
+                    long waited = log.placedAt(Items.OAK_PLANKS, 0) - stored[0];
+                    helper.assertTrue(waited <= (long) (RequesterLimits.MAKE_RETRY_POLLS + 1) * poll() + 1,
+                            "within one retry wait: " + waited + " ticks");
+                    helper.assertValueEqual(onlyOrder(helper, scene.requester(REQUESTER)).producing(), 4,
+                            "all of them made");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                })
+                .thenWaitUntil(() -> logsAtStation(helper, aisle, 1))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 1))
+                .thenWaitUntil(() -> assertFinished(helper, cannon))
+                .thenExecute(() -> scene.assertKept("after the print"))
+                .thenSucceed();
+    }
+
+    /**
+     * A Stock Keeper's reserve holds the ingredients back as it holds stock back: every log reserved, no planks. The
+     * lamp is red "held back by a reserve", and no production order is made.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void reserveHoldsTheIngredientsBack(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true, LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        aisle.stockKeeper(KEEPER_RACK);
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 4));
+        scene.place(REQUESTER, Direction.EAST);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
         helper.onEachTick(() -> aisle.controllerIfPresent().ifPresent(controller -> helper.assertTrue(
                 controller.productionOrders().isEmpty(), "no production order, ever: "
                         + controller.productionOrders())));
@@ -922,43 +1223,474 @@ public final class SchematicannonRequesterGameTests {
         helper.startSequence()
                 .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
                 .thenExecute(() -> {
-                    WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
-                    helper.assertTrue(station.setPatternEntry(0, 0, LOG, 1), "ingredient set");
-                    helper.assertTrue(station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, PLANK, 4),
-                            "result set");
+                    WarehouseStockKeeperBlockEntity keeper = aisle.stockKeeperAt(KEEPER_RACK);
+                    keeper.editRule(0, StockKeeperRules.FIELD_ITEM, LOG, 0L);
+                    keeper.editRule(0, StockKeeperRules.FIELD_RESERVE, null, 16L);
+                    writePlankPattern(helper, aisle);
                 })
                 .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
                         .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.RESERVED))
+                .thenIdle(RequesterLimits.makeRetryTicks(poll()) + 2 * poll())
                 .thenExecute(() -> {
-                    WarehouseTerminalBlockEntity terminal = aisle.terminalAt(TERMINAL_RACK);
-                    RequestResult direct = terminal.requestStockOnly(PLANK, 16);
-                    helper.assertTrue(direct.isAccepted(), "a stock-only request is accepted: " + direct);
-                    helper.assertValueEqual(direct.granted(), 5, "for the stock");
-                    helper.assertValueEqual(direct.producing(), 0, "and nothing made");
-                    helper.assertValueEqual(direct.request().orElseThrow().requested(), 5, "the request is the stock");
-                    WarehouseControllerBlockEntity controller = aisle.controller();
-                    helper.assertTrue(controller.productionOrders().isEmpty(), "no production order");
-                    controller.reduceRequestShare(direct.request().orElseThrow().id(), direct.granted());
-                    helper.assertFalse(controller.hasOpenRequest(direct.request().orElseThrow().id()),
-                            "given back again");
+                    assertShows(helper, REQUESTER, RequesterStatus.RESERVED);
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "nothing is requested");
+                    helper.assertTrue(scene.requester(REQUESTER).orders().isEmpty(), "and no order is open");
+                    helper.assertValueEqual(aisle.controller().countOf(LOG), 16L, "every log stays in stock");
+                    scene.assertKept("with the logs reserved");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The dead-man switch waits for the machine: at its floor (600 live ticks), with the made part's logs lying at the
+     * station for 700 ticks and nobody making the planks, the order's live age does not grow, nothing is given up and
+     * the lamp says "being made". Then the machine makes them and the print finishes.
+     */
+    @GameTest(template = AISLE_16X10X7, batch = MAKING_DEAD_MAN_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void deadManStandsWhileBeingMade(GameTestHelper helper) {
+        ConfigOverrides.set(helper, WareworksConfig.SERVER.requesterOrderTimeoutTicks, DEAD_MAN_TICKS);
+        AisleFixture aisle = warehouse(helper, true, LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
+        Scene scene = new Scene(helper, aisle);
+        SchematicannonBlockEntity cannon = scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 4));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        Belt.start(helper, aisle, TERMINAL_RACK, CHEST, 0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        int[] age = { -1 };
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), 1L,
+                        "the log lies at the station"))
+                .thenExecute(() -> age[0] = onlyOrder(helper, scene.requester(REQUESTER)).liveAge())
+                .thenIdle(UNLOADED_TICKS)
+                .thenExecute(() -> {
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, requester);
+                    helper.assertValueEqual(order.liveAge(), age[0], "the clock stood while the item was made");
+                    helper.assertValueEqual(order.producing(), 4, "the made part is still owed");
+                    helper.assertValueEqual(requester.timeouts(), 0, "nothing given up");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                    scene.assertKept("while the machine waits");
+                })
+                .thenWaitUntil(() -> logsAtStation(helper, aisle, 1))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 1))
+                .thenWaitUntil(() -> assertFinished(helper, cannon))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(scene.requester(REQUESTER).timeouts(), 0, "still nothing given up");
+                    scene.assertKept("after the print");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A failed made part never costs a player anything (rule R3), with production orders timing out after 200 ticks.
+     * The crane stands still. A player's click of ten planks from stock comes first; the requester's sixteen, all made,
+     * merge behind it with a root of their own. The root times out: the request loses exactly the sixteen, the
+     * requester's order is cut by sixteen and leaves (its count of what it ordered too), the player's ten stay, and the
+     * requester orders again behind them. With the crane running, the player's ten arrive in full; the machine takes the
+     * new root's logs and never gives planks back, so the warehouse's safety stop halts making planks and the next
+     * decision shows "has stopped making" in red. Resumed at the station, the requester has them made again.
+     */
+    @GameTest(template = AISLE_16X10X7, batch = PRODUCTION_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void failedProductionKeepsAPlayersClick(GameTestHelper helper) {
+        ConfigOverrides.set(helper, WareworksConfig.SERVER.productionOrderTimeoutTicks, SHORT_PRODUCTION_TICKS);
+        ConfigOverrides.set(helper, WareworksConfig.SERVER.requesterOrderTimeoutTicks, DEAD_MAN_TICKS);
+        AisleFixture aisle = warehouse(helper, false, PLANK.toStack(PLAYER_SHARE), LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 16));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        // The player takes their planks away: into the barrel, never on to the cannon.
+        Belt.start(helper, aisle, TERMINAL_RACK, null, 0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        OrderLog log = OrderLog.watch(helper, REQUESTER);
+        UUID[] first = new UUID[1];
+        int[] stopped = { -1 };
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> {
+                    RequestResult click = aisle.controller().request(aisle.absoluteRackPos(TERMINAL_RACK), PLANK,
+                            PLAYER_SHARE, Math.max(1, WareworksConfig.maxTerminalRequestAmount()),
+                            StockAccess.PLAYER);
+                    helper.assertTrue(click.isAccepted() && click.producing() == 0,
+                            "the player's click, from stock: " + click);
                     scene.insert(REQUESTER, 0);
                 })
-                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(5),
-                        "the requester orders the five in stock"))
+                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(16),
+                        "the requester ordered"))
+                .thenExecute(() -> {
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, scene.requester(REQUESTER));
+                    RetrievalRequest<ItemKey, BlockPos> request = onlyRequest(helper, scene, TERMINAL_RACK);
+                    helper.assertValueEqual(order.requestId(), request.id(), "merged into the player's request");
+                    helper.assertValueEqual(order.ahead(), PLAYER_SHARE, "behind the player's ten");
+                    helper.assertValueEqual(order.producing(), 16, "all sixteen made");
+                    helper.assertValueEqual(request.requested(), PLAYER_SHARE + 16, "the merged amount");
+                    first[0] = order.root().orElseThrow();
+                })
                 .thenWaitUntil(() -> {
-                    helper.assertValueEqual(scene.printed(SITE, Blocks.OAK_PLANKS), 5, "and they are printed");
-                    assertShows(helper, REQUESTER, RequesterStatus.OUT_OF_STOCK);
+                    helper.assertTrue(aisle.controller().productionOrder(first[0]).orElseThrow().state()
+                            == ProductionOrderState.TIMED_OUT, "the root timed out");
+                    helper.assertFalse(scene.requester(REQUESTER).orders().stream()
+                            .anyMatch(order -> order.root().equals(Optional.of(first[0]))),
+                            "and the requester has let its order go");
+                })
+                .thenExecute(() -> {
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    helper.assertValueEqual(aisle.controller().productionOrder(first[0]).orElseThrow()
+                            .deliveredIngredients(), 0, "the crane never moved");
+                    helper.assertValueEqual(requester.timeouts(), 0, "not the dead-man switch");
+                    // The cut and the order placed again happen in one poll: sixteen off the counter, sixteen on.
+                    helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(16, 16),
+                            "the order was cut and left, and the sixteen were ordered again");
+                    RequesterOrder<ItemKey> again = onlyOrder(helper, requester);
+                    RetrievalRequest<ItemKey, BlockPos> request = onlyRequest(helper, scene, TERMINAL_RACK);
+                    helper.assertValueEqual(again.requestId(), request.id(), "into the same request");
+                    helper.assertValueEqual(again.ahead(), PLAYER_SHARE, "behind the player's ten again");
+                    helper.assertValueEqual(request.requested(), PLAYER_SHARE + 16,
+                            "the player's ten kept: only the requester's sixteen were taken off");
+                    helper.assertValueEqual(requester.orderedSinceList(Items.OAK_PLANKS), 16,
+                            "the counter lost the sixteen cut and gained the sixteen ordered again");
+                    scene.assertKept("after the shortfall");
+                    aisle.placeMotor();
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), 4L,
+                        "the new root's logs lie at the station"))
+                .thenExecute(() -> {
+                    // The machine swallows the logs and never gives anything back.
+                    int taken = extractAll(aisle.handlerAt(aisle.rackPos(PRODUCTION_RACK)), LOG);
+                    helper.assertValueEqual(taken, 4, "the machine took the logs");
+                    scene.change(LOG, -taken);
+                })
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.MAKING_STOPPED))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(aisle.inventoryCount(BELT, PLANK), (long) PLAYER_SHARE,
+                            "the player's ten arrived in full");
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "no request is open");
+                    helper.assertTrue(scene.requester(REQUESTER).orders().isEmpty(), "and no order");
+                    helper.assertTrue(aisle.controller().openProductionOrders().isEmpty(), "nothing is being made");
+                    scene.assertKept("after the safety stop");
+                    stopped[0] = log.placed().size();
+                    helper.assertFalse(aisle.productionAt(PRODUCTION_RACK).resumeStoppedProducts().isEmpty(),
+                            "the player resumes the planks at the station");
+                })
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.MAKING))
+                .thenExecute(() -> {
+                    // A root whose logs the crane did not reach within 200 ticks ends like the first one, so the number
+                    // of orders before the stop is not fixed, and a root that failed after its request was served
+                    // leaves the count of what was ordered stale (ADR-081, accepted): the order after the stop may be
+                    // the stale fallback's "what the cannon reports missing". Only that it is made in full is fixed.
+                    List<RequesterOrder<ItemKey>> placed = log.placed();
+                    helper.assertValueEqual(placed.size(), stopped[0] + 1, "the next decision has them made again");
+                    RequesterOrder<ItemKey> again = onlyOrder(helper, scene.requester(REQUESTER));
+                    helper.assertTrue(again.producing() > 0 && again.producing() == again.share(),
+                            "all of it made: " + again);
+                    helper.assertValueEqual(again.root().flatMap(aisle.controller()::productionOrder)
+                            .map(ProductionOrder::isOpen), Optional.of(true), "by a root that runs");
+                    scene.assertKept("after the resume");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Taking the remote out gives back only the requester's own made promise (rule R1), never a merged player's: no
+     * planks, a player's click of four made by a root of its own, then the requester's twelve made by another root,
+     * merged behind. The remote comes out: the requester's root promises nothing any more, the player's still four, and
+     * the request asks for the four. Both roots run on; the machine makes all sixteen, the player's four reach the
+     * buffer and the requester's twelve land in stock.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void giveBackTakesOnlyItsOwnMadePromise(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, false, LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 12));
+        scene.place(REQUESTER, Direction.EAST);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        UUID[] roots = new UUID[2];
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> {
+                    RequestResult click = aisle.controller().request(aisle.absoluteRackPos(TERMINAL_RACK), PLANK,
+                            PLAYER_PLANKS, Math.max(1, WareworksConfig.maxTerminalRequestAmount()),
+                            StockAccess.PLAYER);
+                    helper.assertValueEqual(click.producing(), PLAYER_PLANKS, "the player's four are made");
+                    roots[0] = onlyProductionOrder(helper, aisle).id();
+                    scene.insert(REQUESTER, 0);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(scene.requester(REQUESTER).orders().size(), 1,
+                        "the requester ordered"))
+                .thenExecute(() -> {
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, scene.requester(REQUESTER));
+                    helper.assertValueEqual(order.share(), 12, "twelve");
+                    helper.assertValueEqual(order.producing(), 12, "all made");
+                    helper.assertValueEqual(order.ahead(), PLAYER_PLANKS, "behind the player's four");
+                    roots[1] = order.root().orElseThrow();
+                    helper.assertFalse(roots[1].equals(roots[0]), "by a root of its own, not the player's");
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(controller.productionOrder(roots[0]).orElseThrow().promisedToRequest(),
+                            (long) PLAYER_PLANKS, "the player's root promises four");
+                    helper.assertValueEqual(controller.productionOrder(roots[1]).orElseThrow().promisedToRequest(),
+                            12L, "the requester's twelve");
+
+                    ClickingPlayer player = scene.player;
+                    helper.assertTrue(player.getMainHandItem().isEmpty(), "an empty hand");
+                    helper.assertTrue(click(player, helper.absolutePos(REQUESTER), Direction.UP, true)
+                            .consumesAction(), "the sneaking click");
+                    assertTold(helper, player, "the removal", WareworksLang.REQUESTER_REMOVED);
+                    helper.assertValueEqual(controller.productionOrder(roots[1]).orElseThrow().promisedToRequest(),
+                            0L, "the requester's root promises nothing any more");
+                    helper.assertValueEqual(controller.productionOrder(roots[0]).orElseThrow().promisedToRequest(),
+                            (long) PLAYER_PLANKS, "the player's root still promises four");
+                    helper.assertTrue(controller.productionOrder(roots[1]).orElseThrow().isOpen(),
+                            "and the requester's root runs on");
+                    helper.assertValueEqual(onlyRequest(helper, scene, TERMINAL_RACK).requested(), PLAYER_PLANKS,
+                            "the request asks for the player's four");
+                    scene.assertKept("after the removal");
+                    aisle.placeMotor();
+                })
+                .thenWaitUntil(() -> logsAtStation(helper, aisle, 4))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 4))
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(TERMINAL_RACK, PLANK), (long) PLAYER_PLANKS,
+                            "the player's four reach the buffer");
+                    helper.assertValueEqual(aisle.controller().countOf(PLANK), 12L,
+                            "the requester's twelve land in stock");
+                    helper.assertTrue(aisle.controller().openProductionOrders().isEmpty(), "both roots are done");
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "and the request served");
+                })
+                .thenExecute(() -> scene.assertKept("after the machine"))
+                .thenSucceed();
+    }
+
+    /**
+     * A give-back between two polls settles a failed root first (rule R3), with the crane stopped. A player's click of
+     * ten planks from stock comes first; the requester's sixteen, all made, merge behind it with a root of their own.
+     * That root is cancelled and the remote taken out in the same tick, before the requester polls again: the request
+     * loses the sixteen once, through the controller's shortfall, and still asks for the player's ten, which then
+     * arrive in the buffer.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void giveBackRightAfterAFailedRootKeepsAPlayersClick(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, false, PLANK.toStack(PLAYER_SHARE), LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 16));
+        scene.place(REQUESTER, Direction.EAST);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> {
+                    RequestResult click = aisle.controller().request(aisle.absoluteRackPos(TERMINAL_RACK), PLANK,
+                            PLAYER_SHARE, Math.max(1, WareworksConfig.maxTerminalRequestAmount()),
+                            StockAccess.PLAYER);
+                    helper.assertTrue(click.isAccepted() && click.producing() == 0,
+                            "the player's click, from stock: " + click);
+                    scene.insert(REQUESTER, 0);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(scene.requester(REQUESTER).orders().size(), 1,
+                        "the requester ordered"))
+                .thenExecute(() -> {
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, requester);
+                    helper.assertValueEqual(order.ahead(), PLAYER_SHARE, "behind the player's ten");
+                    helper.assertValueEqual(order.producing(), 16, "all sixteen made");
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertTrue(controller.cancelProductionOrder(order.root().orElseThrow()).isPresent(),
+                            "the requester's root is cancelled");
+                    helper.assertValueEqual(onlyRequest(helper, scene, TERMINAL_RACK).requested(), PLAYER_SHARE,
+                            "the controller took the sixteen it owed off the request");
+                    helper.assertValueEqual(onlyOrder(helper, requester).producing(), 16,
+                            "and the requester has not looked since");
+
+                    ClickingPlayer player = scene.player;
+                    helper.assertTrue(player.getMainHandItem().isEmpty(), "an empty hand");
+                    helper.assertTrue(click(player, helper.absolutePos(REQUESTER), Direction.UP, true)
+                            .consumesAction(), "the sneaking click");
+                    assertTold(helper, player, "the removal", WareworksLang.REQUESTER_REMOVED);
+                    helper.assertValueEqual(onlyRequest(helper, scene, TERMINAL_RACK).requested(), PLAYER_SHARE,
+                            "the player's ten stay: the sixteen were not given back a second time");
+                    scene.assertKept("after the removal");
+                    aisle.placeMotor();
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(TERMINAL_RACK, PLANK), (long) PLAYER_SHARE,
+                            "the player's ten reach the buffer");
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "and the request is served");
+                })
+                .thenExecute(() -> scene.assertKept("after the delivery"))
+                .thenSucceed();
+    }
+
+    /**
+     * "Has stopped making" names the item the safety stop halted, not the missing one: a two-level chain, oak slabs made
+     * of oak planks made of oak logs. A player's click has four planks made; the machine takes the log and the player
+     * gives the order up, so the warehouse stops making planks. The cannon then misses slabs: the requester's red line
+     * names Oak Planks, the item the station lists as stopped, and nothing is requested or made.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void makingStoppedNamesTheStoppedIngredient(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true, LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.OAK_SLAB.defaultBlockState(), 4));
+        scene.place(REQUESTER, Direction.EAST);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        UUID[] root = new UUID[1];
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> {
+                    writePlankPattern(helper, aisle);
+                    WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+                    helper.assertTrue(station.setPatternEntry(1, 0, PLANK, 3), "slab ingredient set");
+                    helper.assertTrue(station.setPatternEntry(1, ProductionPatterns.RESULT_ENTRY, OAK_SLAB, 6),
+                            "slab result set");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .containsAll(List.of(PLANK, OAK_SLAB)), "the planks and the slabs are producible"))
+                .thenExecute(() -> {
+                    RequestResult click = aisle.controller().request(aisle.absoluteRackPos(TERMINAL_RACK), PLANK,
+                            PLANKS_PER_LOG, Math.max(1, WareworksConfig.maxTerminalRequestAmount()),
+                            StockAccess.PLAYER);
+                    helper.assertValueEqual(click.producing(), PLANKS_PER_LOG, "the player's planks are made");
+                    root[0] = onlyProductionOrder(helper, aisle).id();
+                })
+                .thenWaitUntil(() -> logsAtStation(helper, aisle, 1))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertTrue(controller.cancelProductionOrder(root[0]).isPresent(),
+                            "the player gives the order up with its log at the machine");
+                    helper.assertTrue(controller.stockRulePause(PLANK).isPresent(), "the planks are stopped");
+                    helper.assertTrue(controller.stockRulePause(OAK_SLAB).isEmpty(), "the slabs are not");
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "the click's request went with it");
+                    scene.insert(REQUESTER, 0);
+                })
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.MAKING_STOPPED))
+                .thenExecute(() -> {
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    requester.onGoggleObserved();
+                    RequesterSummary summary = requester.summary();
+                    helper.assertValueEqual(summary.subject(), Items.OAK_SLAB, "the cannon misses slabs");
+                    helper.assertValueEqual(summary.about(), Items.OAK_PLANKS, "the stopped item is the planks");
+                    Component line = RequesterLines.actionBar(summary).component();
+                    helper.assertTrue(line.getContents() instanceof TranslatableContents contents
+                            && contents.getKey().equals(WareworksLang.key(
+                                    WareworksLang.requesterStatusKey(RequesterStatus.MAKING_STOPPED)))
+                            && contents.getArgs().length == 1
+                            && Items.OAK_PLANKS.getDescription().equals(contents.getArgs()[0]),
+                            "the red line names the planks: " + line);
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "nothing is requested");
+                    helper.assertTrue(requester.orders().isEmpty(), "and no order is open");
+                    helper.assertTrue(aisle.controller().openProductionOrders().isEmpty(), "nothing is made");
+                    scene.assertKept("with the planks stopped");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A made part survives a save: mid production (the machine has the log), the requester's block entity goes through
+     * a full save and load and comes back with its made part and its root; its clock still stands, and once the machine
+     * makes the planks the order is seen through. An order entry as 0.20.0-beta wrote it reads as one from stock, and so
+     * does one with a made part but no root.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void madeOrderSurvivesASaveRoundTrip(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true, LOG.toStack(16));
+        aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
+        Scene scene = new Scene(helper, aisle);
+        SchematicannonBlockEntity cannon = scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 4));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        Belt.start(helper, aisle, TERMINAL_RACK, CHEST, 0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        UUID[] root = new UUID[1];
+        int[] age = { -1 };
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), 1L,
+                        "the log lies at the station"))
+                .thenExecute(() -> {
+                    int taken = extractAll(aisle.handlerAt(aisle.rackPos(PRODUCTION_RACK)), LOG);
+                    scene.change(LOG, -taken);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(onlyProductionOrder(helper, aisle).state(),
+                        ProductionOrderState.WAITING_FOR_RESULT, "the machine has the log"))
+                .thenExecute(() -> {
+                    ServerLevel level = helper.getLevel();
+                    HolderLookup.Provider registries = level.registryAccess();
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    RequesterOrder<ItemKey> before = onlyOrder(helper, requester);
+                    helper.assertValueEqual(before.producing(), 4, "the made part");
+                    root[0] = before.root().orElseThrow();
+                    CompoundTag full = requester.saveWithFullMetadata(registries);
+
+                    BlockEntity loaded = BlockEntity.loadStatic(requester.getBlockPos(), requester.getBlockState(),
+                            full, registries);
+                    if (!(loaded instanceof SchematicannonRequesterBlockEntity reloaded))
+                        throw new GameTestAssertException("a saved requester loads again as one: " + loaded);
+                    level.setBlockEntity(reloaded);
+                    helper.assertTrue(scene.requester(REQUESTER) == reloaded, "replaced by its reloaded copy");
+                    helper.assertValueEqual(reloaded.orders(), requester.orders(), "the orders, made part and all");
+                    RequesterOrder<ItemKey> after = onlyOrder(helper, reloaded);
+                    helper.assertValueEqual(after.producing(), 4, "the made part kept");
+                    helper.assertValueEqual(after.root(), Optional.of(root[0]), "and its root");
+                    age[0] = after.liveAge();
+
+                    // As 0.20.0-beta wrote it: no made part at all; and a made part without its root.
+                    for (String dropped : List.of("Producing", "Root")) {
+                        CompoundTag old = full.copy();
+                        old.getList(SchematicannonRequesterBlockEntity.ORDERS_TAG, Tag.TAG_COMPOUND).getCompound(0)
+                                .remove(dropped);
+                        if (!(BlockEntity.loadStatic(requester.getBlockPos(), requester.getBlockState(), old,
+                                registries) instanceof SchematicannonRequesterBlockEntity older))
+                            throw new GameTestAssertException("an older save loads as a requester");
+                        RequesterOrder<ItemKey> read = onlyOrder(helper, older);
+                        helper.assertValueEqual(read.producing(), 0, "without " + dropped + ": from stock");
+                        helper.assertValueEqual(read.root(), Optional.empty(), "without " + dropped + ": no root");
+                        helper.assertValueEqual(read.share(), 4, "the share as saved");
+                    }
+                    scene.assertKept("after the reload");
                 })
                 .thenIdle(3 * poll())
                 .thenExecute(() -> {
-                    assertShows(helper, REQUESTER, RequesterStatus.OUT_OF_STOCK);
-                    helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(5), "nothing more is ordered");
-                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "no request is open");
-                    RequestResult none = aisle.terminalAt(TERMINAL_RACK).requestStockOnly(PLANK, 16);
-                    helper.assertValueEqual(none.rejection(), Optional.of(RequestRejection.NOT_IN_STOCK),
-                            "a stock-only request with none in stock is refused");
-                    helper.assertValueEqual(aisle.controller().countOf(LOG), 16L, "and every log stays in stock");
-                    scene.assertKept("with the rest out of stock");
+                    RequesterOrder<ItemKey> order = onlyOrder(helper, scene.requester(REQUESTER));
+                    helper.assertValueEqual(order.liveAge(), age[0], "the clock still stands");
+                    helper.assertValueEqual(order.root(), Optional.of(root[0]), "the root is followed");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                    aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT_RACK)), PLANK.toStack(4));
+                    scene.change(PLANK, 4);
+                })
+                .thenWaitUntil(() -> assertFinished(helper, cannon))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(aisle.controller().productionOrder(root[0]).map(ProductionOrder::state),
+                            Optional.of(ProductionOrderState.COMPLETE), "the root completed");
+                    scene.assertKept("after the print");
                 })
                 .thenSucceed();
     }
@@ -1805,6 +2537,18 @@ public final class SchematicannonRequesterGameTests {
         cleanUp();
     }
 
+    /** Restores the dead-man switch even when the test of {@link #MAKING_DEAD_MAN_BATCH} fails. */
+    @AfterBatch(batch = MAKING_DEAD_MAN_BATCH)
+    public static void restoreMakingDeadMan(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /** Restores the production timeout and the dead-man switch even when the test of {@link #PRODUCTION_BATCH} fails. */
+    @AfterBatch(batch = PRODUCTION_BATCH)
+    public static void restoreProduction(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
     // --- the scene -------------------------------------------------------------------------------------------------
 
     /**
@@ -1952,6 +2696,14 @@ public final class SchematicannonRequesterGameTests {
                     ItemCensus.change(counts, ItemKey.of(flying.stack), flying.stack.getCount());
             }
             return counts;
+        }
+
+        /**
+         * Books {@code delta} items of {@code key} the test itself made or took (the machine behind a production
+         * station, items fed into a warehouse input), so that {@link #assertKept} holds the census to them.
+         */
+        void change(ItemKey key, long delta) {
+            ItemCensus.change(Objects.requireNonNull(start, "start"), key, delta);
         }
 
         /** Nothing was made and nothing lost since {@link #begin}: the census equals the start exactly. */
@@ -2119,6 +2871,51 @@ public final class SchematicannonRequesterGameTests {
         helper.assertFalse(controller.isMembershipDirty(), "membership processed");
         helper.assertValueEqual(controller.pendingSnapshotCount(), 0, "storage locations read");
         helper.assertTrue(aisle.dock().isControllerLinked(), "dock linked");
+    }
+
+    /** Writes the plank pattern into the production station's first slot: one oak log makes four oak planks. */
+    private static void writePlankPattern(GameTestHelper helper, AisleFixture aisle) {
+        WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+        helper.assertTrue(station.setPatternEntry(0, 0, LOG, 1), "ingredient set");
+        helper.assertTrue(station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, PLANK, PLANKS_PER_LOG),
+                "result set");
+    }
+
+    /** The logs for {@code runs} runs of the plank pattern lie at the production station. */
+    private static void logsAtStation(GameTestHelper helper, AisleFixture aisle, int runs) {
+        helper.assertValueEqual(aisle.stationCount(PRODUCTION_RACK, LOG), (long) runs,
+                "the logs for " + runs + " runs lie at the station");
+    }
+
+    /**
+     * The test is the machine behind the production station: it takes the logs for {@code runs} runs and hands back
+     * their planks through the warehouse input, booking both ({@link Scene#change}). Call it once
+     * {@link #logsAtStation} holds.
+     */
+    private static void playMachine(GameTestHelper helper, AisleFixture aisle, Scene scene, int runs) {
+        int taken = extractAll(aisle.handlerAt(aisle.rackPos(PRODUCTION_RACK)), LOG);
+        helper.assertValueEqual(taken, runs, "the machine took the logs");
+        scene.change(LOG, -taken);
+        aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT_RACK)), PLANK.toStack(runs * PLANKS_PER_LOG));
+        scene.change(PLANK, (long) runs * PLANKS_PER_LOG);
+    }
+
+    /** Takes every item of {@code key} out of {@code handler}; answers how many. */
+    private static int extractAll(IItemHandler handler, ItemKey key) {
+        int taken = 0;
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            if (key.matches(handler.getStackInSlot(slot)))
+                taken += handler.extractItem(slot, Integer.MAX_VALUE, false).getCount();
+        }
+        return taken;
+    }
+
+    /** The one production order the aisle has, open or finished. */
+    private static ProductionOrder<ItemKey, RackPosition> onlyProductionOrder(GameTestHelper helper,
+            AisleFixture aisle) {
+        List<ProductionOrder<ItemKey, RackPosition>> orders = aisle.controller().productionOrders();
+        helper.assertValueEqual(orders.size(), 1, "production orders of the aisle");
+        return orders.getFirst();
     }
 
     /** The cannon has printed its whole schematic. */

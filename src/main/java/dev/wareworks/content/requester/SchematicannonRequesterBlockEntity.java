@@ -3,11 +3,13 @@ package dev.wareworks.content.requester;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -28,7 +30,11 @@ import dev.wareworks.content.remote.RemoteAccess;
 import dev.wareworks.content.remote.RemoteLink;
 import dev.wareworks.content.remote.WarehouseRemoteItem;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
+import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.job.RetrievalRequest;
+import dev.wareworks.core.production.PlanRefusal;
+import dev.wareworks.core.production.ProductionOrder;
+import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.requester.ChecklistNeed;
 import dev.wareworks.core.requester.OrderAmount;
 import dev.wareworks.core.requester.OrderShare;
@@ -64,10 +70,11 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity of the Schematicannon Requester (issue #45, ADR-080, {@code docs/warehouse-system.md}): orders what the
- * Schematicannon in front of it is missing at the terminal its Warehouse Remote is linked to, from stock only, a stack
- * at a time and never twice. It moves no item: the crane delivers into the terminal's buffer, and the player's own
- * funnel and belt take the items on to a chest beside the cannon.
+ * Block entity of the Schematicannon Requester (issue #45, ADR-080, amended by ADR-081, {@code docs/warehouse-system.md}):
+ * orders what the Schematicannon in front of it is missing at the terminal its Warehouse Remote is linked to, from stock
+ * first and the rest made through the aisle's production patterns, a stack at a time and never twice. It moves no item:
+ * the crane delivers into the terminal's buffer, and the player's own funnel and belt take the items on to a chest
+ * beside the cannon.
  * <p>
  * <b>Polling, not ticking.</b> The work runs once every {@code requester.pollIntervalTicks} (a second by default) and
  * costs, when nothing is missing and nothing is ordered, one look at the cannon through {@link NoTicket} and a few
@@ -80,17 +87,24 @@ import net.minecraft.world.level.block.state.BlockState;
  * <b>The order rule</b> (§7, §8): while the cannon waits for an item, an order for it is placed only when no order of
  * this requester for it is open in any phase, no matching stack lies in the buffer and fewer than
  * {@value RequesterLimits#MAX_ORDERS} orders are open ({@link RequesterOrders#lock}). It asks for the smallest of a
- * stack, what the schematic still needs, the room in the cannon's inventories, the room in the buffer and the stock
- * ({@link OrderAmount#of}) through {@link WarehouseTerminalBlockEntity#requestStockOnly}, which never plans
- * production. A strict requirement is ordered with exactly the reported components, a plain one as the variant
- * {@link VariantPick} chooses.
+ * stack, what the schematic still needs, the room in the cannon's inventories, the room in the buffer and what the
+ * stock and the patterns can give: the stock first, then at most what the schematic still needs made
+ * ({@link OrderAmount#of}), through {@link WarehouseTerminalBlockEntity#requestForRequester}, a computer's request with
+ * the made part capped. A strict requirement is ordered with exactly the reported components, a plain one as the stocked
+ * variant {@link VariantPick} chooses, or, with none in stock, as the variant a pattern makes ({@link VariantPick#toMake}).
+ * After an attempt to have something made that was refused or came back short, the next one waits
+ * {@value RequesterLimits#MAKE_RETRY_POLLS} polls.
  * <p>
  * <b>Every order is followed</b> by request id and its own share, first in, first served ({@link OrderShare}): running,
- * then in the buffer, then the block's grace ({@link GraceBehaviour}) while the items travel the belt. A running order
- * whose live age reaches the dead-man switch ({@code requester.orderTimeoutTicks}) gives back only its own outstanding
- * share ({@code reduceRequestShare}, never a cancel: a merged id would take a player's items down with it) and may be
- * placed again. The same give-back runs when the remote is taken out, the block is broken, or the cannon has stopped
- * printing for two polls in a row; a terminal that cannot be reached then simply lets its requests complete.
+ * then in the buffer, then the block's grace ({@link GraceBehaviour}) while the items travel the belt. A share that is
+ * partly made also follows the root order of the plan it started: it stays running while that order is open, its
+ * dead-man clock stands meanwhile (the production order's own timeout ends a stuck chain), and a root that fails takes
+ * exactly what it still owed off the share. A running order whose live age reaches the dead-man switch
+ * ({@code requester.orderTimeoutTicks}) gives back only its own outstanding share ({@code reduceRequestShare}, never a
+ * cancel: a merged id would take a player's items down with it) and may be placed again. The same give-back runs when
+ * the remote is taken out, the block is broken, or the cannon has stopped printing for two polls in a row; the made part
+ * of it comes off the promise of its own root only, and production already running finishes into stock. A terminal that
+ * cannot be reached then simply lets its requests complete.
  * <p>
  * <b>Identity.</b> The player who put the remote in is its owner: the remote's rules are checked with them at
  * insertion, and the claim check ({@code Level#mayInteract}) again before every order while they are online. No fake
@@ -99,8 +113,9 @@ import net.minecraft.world.level.block.state.BlockState;
  * <p>
  * <b>State.</b> The remote, its owner, the orders and the material-list counter are saved, each read only from a full
  * save, so a schematic print over a standing requester changes nothing but the grace; a schematic never carries them
- * ({@link #writeSafe}). The status, the cannon's last signature, the variant picked and the poll times are rebuilt on
- * the first poll. Clients get the remote, for the cradle, and the goggle summary while someone looks.
+ * ({@link #writeSafe}). The status, the cannon's last signature, the variant picked, the poll times and the wait before
+ * the next attempt to have something made are rebuilt on the first poll. Clients get the remote, for the cradle, and
+ * the goggle summary while someone looks.
  */
 public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         implements IHaveGoggleInformation, GoggleObservers.Observable, Clearable {
@@ -120,6 +135,9 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
     private static final String SHARE = "Share";
     private static final String AHEAD = "Ahead";
     private static final String AHEAD_DELIVERED = "AheadDelivered";
+    private static final String PRODUCING = "Producing";
+    private static final String ROOT = "Root";
+    private static final String UNSURE = "Unsure";
     private static final String PHASE = "Phase";
     private static final String LIVE_AGE = "LiveAge";
     private static final String GRACE_UNTIL = "GraceUntil";
@@ -161,6 +179,16 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
     private CannonView.Requirement requirement = CannonView.Requirement.UNKNOWN;
     @Nullable
     private ItemKey picked;
+    /** No attempt to have something made before this game time: the last one was refused or came back short. */
+    private long makeRetryAt;
+    /** Why the last attempt to have something made was refused, shown while the retry waits; {@code null} for none. */
+    @Nullable
+    private MakeRefusal makeRefusal;
+    /** Why the chain for the missing item cannot be planned, at this poll ({@link RequesterStatus#CANNOT_MAKE}). */
+    @Nullable
+    private PlanRefusal planRefusal;
+    /** The item {@link #planRefusal} is about, or the item the safety stop halted, at this poll. */
+    private Item about = Items.AIR;
     /** Each running order's own delivered amount as of the last poll that reached the terminal, for the goggles. */
     private final Map<UUID, Integer> delivered = new HashMap<>();
     @Nullable
@@ -299,6 +327,8 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         missing = cannon.missing();
         cannonWord = cannonPhase == CannonView.Phase.BLOCKED ? cannon.statusWord() : "";
         subject = Items.AIR;
+        planRefusal = null;
+        about = Items.AIR;
         refusedDistance = 0;
         refusedRange = 0;
         if (gaveUp != null && now >= gaveUpUntil)
@@ -328,7 +358,8 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
 
         Collection<ItemKey> buffered = List.of();
         if (controller != null) {
-            Function<UUID, Optional<RequesterOrders.Request>> requests = requestsOf(controller, terminal.getBlockPos());
+            Function<UUID, Optional<RequesterOrders.Request>> requests = requestsOf(controller, terminal.getBlockPos(),
+                    orders.hasRunning());
             buffered = terminal.bufferedItems().keys();
             advance(now, pollTicks, requests, buffered, controller);
             if (idlePolls >= RequesterLimits.IDLE_POLLS_BEFORE_GIVE_BACK && !orders.isEmpty())
@@ -355,21 +386,44 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         ServerPlayer ownerPlayer = owner == null ? null : server.getServer().getPlayerList().getPlayer(owner);
         if (ownerPlayer != null && !terminal.getLevel().mayInteract(ownerPlayer, terminal.getBlockPos()))
             return RequesterStatus.LINK_NOT_ALLOWED;
-        return decide(now, cannon, terminal, controller, buffered);
+        return decide(now, pollTicks, cannon, terminal, controller, buffered);
     }
 
-    /** The open requests of the terminal by id, read once per poll. */
+    /**
+     * The open requests of the terminal by id, read once per poll. With {@code making}, also which of them an open
+     * production order makes items for (ADR-081): one walk over the controller's open production orders, in memory,
+     * only while some order runs.
+     */
     private static Function<UUID, Optional<RequesterOrders.Request>> requestsOf(
-            WarehouseControllerBlockEntity controller, BlockPos terminalPos) {
+            WarehouseControllerBlockEntity controller, BlockPos terminalPos, boolean making) {
+        Set<UUID> made = new HashSet<>();
+        if (making) {
+            for (ProductionOrder<ItemKey, RackPosition> order : controller.openProductionOrders())
+                order.backingRequest().ifPresent(made::add);
+        }
         Map<UUID, RequesterOrders.Request> open = new LinkedHashMap<>();
         for (RetrievalRequest<ItemKey, BlockPos> request : controller.requestsFor(terminalPos))
-            open.put(request.id(), new RequesterOrders.Request(request.requested(), request.delivered()));
+            open.put(request.id(), new RequesterOrders.Request(request.requested(), request.delivered(),
+                    made.contains(request.id())));
         return id -> Optional.ofNullable(open.get(id));
     }
 
     /**
+     * Where the root production order {@code id} stands (ADR-081): open, completed, failed with what it still owed its
+     * request, or gone. Asked only for orders with a made part; an in-memory lookup.
+     */
+    private static RequesterOrders.RootState rootOf(WarehouseControllerBlockEntity controller, UUID id) {
+        return controller.productionOrder(id)
+                .map(order -> order.isOpen() ? RequesterOrders.RootState.OPEN
+                        : order.state() == ProductionOrderState.COMPLETE ? RequesterOrders.RootState.MADE
+                        : RequesterOrders.RootState.failed(order.unfulfilledPromise()))
+                .orElse(RequesterOrders.RootState.GONE);
+    }
+
+    /**
      * Moves the orders on, on a poll that reached the terminal and its controller: their live age grows only then
-     * ({@link RequesterLimits#liveStep}), and an order the dead-man switch gives up returns its own outstanding share.
+     * ({@link RequesterLimits#liveStep}), and not while production makes items for their request; an order the
+     * dead-man switch gives up returns its own outstanding share; a made part that fell short is taken off the counter.
      */
     private void advance(long now, int pollTicks, Function<UUID, Optional<RequesterOrders.Request>> requests,
             Collection<ItemKey> buffered, WarehouseControllerBlockEntity controller) {
@@ -377,13 +431,21 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         lastReachedTick = now;
         if (orders.isEmpty())
             return;
-        RequesterOrders.Advance<ItemKey> advance = orders.advance(now, step, requests, buffered,
-                RequesterLimits.graceTicks(graceSeconds()), WareworksConfig.requesterOrderTimeoutTicks());
+        RequesterOrders.Advance<ItemKey> advance = orders.advance(now, step, requests, id -> rootOf(controller, id),
+                buffered, RequesterLimits.graceTicks(graceSeconds()), WareworksConfig.requesterOrderTimeoutTicks());
+        for (RequesterOrders.Shortfall<ItemKey> shortfall : advance.shortfalls()) {
+            RequesterOrder<ItemKey> order = shortfall.order();
+            // The controller already took the same amount off the request (rule R3, read from the order's own root).
+            checklist.subtract(order.key().getItem(), shortfall.cut());
+            Wareworks.LOGGER.debug("Schematicannon requester at {}: production for {} of request {} fell short by {}",
+                    worldPosition, order.key(), order.requestId(), shortfall.cut());
+        }
         for (RequesterOrders.GivenBack<ItemKey> given : advance.gaveUp()) {
             RequesterOrder<ItemKey> order = given.order();
             // Only what is provably the order's own (OrderShare#returnable); 0 leaves the request as it is.
             if (given.outstanding() > 0)
-                controller.reduceRequestShare(order.requestId(), given.outstanding());
+                controller.reduceRequestShare(order.requestId(), given.outstanding(), given.producing(),
+                        given.root());
             checklist.subtract(order.key().getItem(), given.outstanding());
             timeouts++;
             gaveUp = new RequesterSummary.GaveUp(order.key().getItem(), order.share(), order.liveAge());
@@ -402,11 +464,20 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         }
     }
 
-    /** Gives every open order's outstanding share back and forgets the orders (§9.3). */
+    /**
+     * Gives every open order's outstanding share back and forgets the orders (§9.3). The made parts are settled against
+     * their roots first ({@link RequesterOrders#settle}), as a poll would: a root that failed since the last poll has
+     * already cost the merged request what it owed, and giving that part back as well would take it off a player's
+     * click merged in the same request (rule R3). The made part of a share comes off the promise of its own root only,
+     * never a merged player's (rule R1 of ADR-081: no production order is cancelled; it finishes into stock).
+     */
     private void giveBack(WarehouseControllerBlockEntity controller,
             Function<UUID, Optional<RequesterOrders.Request>> requests) {
+        for (RequesterOrders.Shortfall<ItemKey> shortfall : orders.settle(requests, id -> rootOf(controller, id)))
+            checklist.subtract(shortfall.order().key().getItem(), shortfall.cut());
         for (RequesterOrders.GivenBack<ItemKey> given : orders.giveBack(requests)) {
-            controller.reduceRequestShare(given.order().requestId(), given.outstanding());
+            controller.reduceRequestShare(given.order().requestId(), given.outstanding(), given.producing(),
+                    given.root());
             checklist.subtract(given.order().key().getItem(), given.outstanding());
         }
         delivered.clear();
@@ -425,11 +496,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
     private RequesterStatus workingStatus() {
         RequesterStatus found = null;
         for (RequesterOrder<ItemKey> order : orders.all())
-            found = RequesterStatus.first(found, switch (order.phase()) {
-                case RUNNING -> RequesterStatus.ORDERED;
-                case IN_BUFFER -> RequesterStatus.IN_BUFFER;
-                case GRACE -> RequesterStatus.GRACE;
-            });
+            found = RequesterStatus.first(found, RequesterOrders.statusOf(order));
         return found;
     }
 
@@ -460,14 +527,27 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         return false;
     }
 
-    /** The order decision for a cannon that misses an item, with the terminal and its warehouse reached (§7, §8). */
-    private RequesterStatus decide(long now, CannonView cannon, WarehouseTerminalBlockEntity terminal,
+    /**
+     * The order decision for a cannon that misses an item, with the terminal and its warehouse reached (§7, §8; the
+     * made part since ADR-081).
+     * <p>
+     * <b>Stock first.</b> A stocked variant is ordered as before, and the controller makes the rest of it only when a
+     * pattern makes exactly that key; otherwise it grants the stock. A variant a pattern makes is chosen only when
+     * automation may take none of any variant, the plain one first ({@link VariantPick#toMake}). A strict requirement
+     * always uses its exact key, which the terminal refuses when it is neither held nor made by a pattern. What may be
+     * made is capped by what the schematic still needs ({@link ChecklistNeed.Need#makeCap()}). After an attempt that was
+     * refused or came back short, the next one waits {@value RequesterLimits#MAKE_RETRY_POLLS} polls, and meanwhile the
+     * refusal that attempt got is shown rather than a plain "out of stock".
+     */
+    private RequesterStatus decide(long now, int pollTicks, CannonView cannon, WarehouseTerminalBlockEntity terminal,
             WarehouseControllerBlockEntity controller, Collection<ItemKey> buffered) {
         CannonView.Signature seen = cannon.signature();
         if (!seen.equals(signature)) {
             signature = seen;
             requirement = cannon.requirement();
             picked = null;
+            makeRetryAt = 0L;
+            makeRefusal = null;
         }
         ItemKey missingKey = seen.key();
         Item item = missingKey.getItem();
@@ -489,28 +569,75 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         long cannonRoom = cannon.roomFor(sized, stack);
         long bufferRoom = terminal.roomFor(sized);
         int maxRequest = Math.max(1, WareworksConfig.maxTerminalRequestAmount());
+        // What to have made, if anything: the stocked key itself (the controller makes the rest of it only if a pattern
+        // makes exactly that key), or with nothing stocked the variant a pattern makes. The patterns are walked only
+        // with room on both ends and no retry wait, and never at all without a production station.
+        boolean makeAllowed = now >= makeRetryAt;
+        ItemKey orderKey = key;
+        if (key == null && makeAllowed && cannonRoom > 0 && bufferRoom > 0) {
+            Set<ItemKey> producible = controller.productionStations().isEmpty() ? Set.of()
+                    : controller.producibleKeys();
+            orderKey = VariantPick.toMake(producible, candidate -> candidate.getItem() == item,
+                    SchematicannonRequesterBlockEntity::isPlain, ItemKey.ORDER).orElse(null);
+            if (orderKey == null)
+                makeRetryAt = now + RequesterLimits.makeRetryTicks(pollTicks);
+        }
+        boolean makeable = makeAllowed && orderKey != null;
         // The material list is only consulted, and perhaps refreshed, once everything outside it would allow an order.
         int need = 1;
-        if (cannonRoom > 0 && bufferRoom > 0 && available > 0) {
-            need = checklist.need(item, stack, seen.count(), requirement.damage(), cannon.checklist(),
-                    orders.liveShares(), now, WareworksConfig.requesterChecklistRefreshTicks(),
+        int makeCap = 0;
+        if (cannonRoom > 0 && bufferRoom > 0 && (available > 0 || makeable)) {
+            ChecklistNeed.Need needed = checklist.needOf(item, stack, seen.count(), requirement.damage(),
+                    cannon.checklist(), orders.liveShares(), now, WareworksConfig.requesterChecklistRefreshTicks(),
                     cannon::refreshedChecklist);
+            need = needed.amount();
+            makeCap = makeable ? needed.makeCap() : 0;
             dirty = true;
         }
         OrderAmount amount = OrderAmount.of(need, stack, cannonRoom, bufferRoom, available, availableToPlayer,
-                maxRequest);
-        if (amount.refusal().isPresent())
-            return amount.refusal().get();
+                maxRequest, makeCap);
+        if (amount.refusal().isPresent()) {
+            RequesterStatus refusal = amount.refusal().get();
+            // While a refused attempt to have it made waits for its retry, its reason says more than "out of stock".
+            if (makeRefusal != null && now < makeRetryAt
+                    && (refusal == RequesterStatus.OUT_OF_STOCK || refusal == RequesterStatus.RESERVED)) {
+                planRefusal = makeRefusal.plan();
+                about = makeRefusal.about();
+                return makeRefusal.status();
+            }
+            return refusal;
+        }
 
-        RequestResult result = terminal.requestStockOnly(key, amount.amount());
+        WarehouseTerminalBlockEntity.RequesterRequest placed = terminal.requestForRequester(orderKey, amount.amount(),
+                amount.maxMade());
+        RequestResult result = placed.result();
+        if (amount.maxMade() > 0 && (!result.isAccepted() || result.producing() < amount.maxMade())) {
+            makeRetryAt = now + RequesterLimits.makeRetryTicks(pollTicks);
+            makeRefusal = null;
+            if (!result.isAccepted()) {
+                RequesterStatus refused = statusOf(result);
+                makeRefusal = new MakeRefusal(refused, planRefusal, about);
+            }
+        }
         if (result.request().isEmpty())
-            return statusOf(result.rejection().orElse(RequestRejection.NOT_IN_STOCK));
+            return statusOf(result);
         RetrievalRequest<ItemKey, BlockPos> request = result.request().get();
         int share = result.granted();
-        orders.place(key, strict, request.id(), share, request.requested() - share, request.delivered());
+        Optional<UUID> root = placed.productionRoot();
+        int producing = root.isPresent() ? Math.min(result.producing(), share) : 0;
+        orders.place(orderKey, strict, request.id(), share, request.requested() - share, request.delivered(),
+                producing, producing > 0 ? root : Optional.empty());
         checklist.add(item, share);
         dirty = true;
-        return RequesterStatus.ORDERED;
+        return producing > 0 ? RequesterStatus.MAKING : RequesterStatus.ORDERED;
+    }
+
+    /**
+     * Why the last attempt to have the missing item made was refused, with the plan refusal and its item for
+     * {@link RequesterStatus#CANNOT_MAKE} and the stopped item for {@link RequesterStatus#MAKING_STOPPED}; transient,
+     * shown while the retry waits.
+     */
+    private record MakeRefusal(RequesterStatus status, @Nullable PlanRefusal plan, Item about) {
     }
 
     /**
@@ -531,12 +658,32 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         return key.toStack(1).isComponentsPatchEmpty();
     }
 
-    /** The requester status of a terminal's refusal: the controller's caps pass by themselves. */
-    private static RequesterStatus statusOf(RequestRejection rejection) {
-        return switch (rejection) {
+    /**
+     * The requester status of a terminal's refusal (ADR-081 §6.1): not in stock is {@link RequesterStatus#CANNOT_MAKE}
+     * when a chain could not be planned for a reason a player can act on (this also remembers the plan refusal and its
+     * item for the goggles), the safety stop is {@link RequesterStatus#MAKING_STOPPED} (remembering the stopped item,
+     * which may be an ingredient further down the chain), full production order slots are
+     * {@link RequesterStatus#PRODUCTION_BUSY}; the terminal's caps pass by themselves.
+     */
+    private RequesterStatus statusOf(RequestResult result) {
+        return switch (result.rejection().orElse(RequestRejection.NOT_IN_STOCK)) {
             case NO_CONTROLLER -> RequesterStatus.NO_CONTROLLER;
-            case NOT_IN_STOCK -> RequesterStatus.OUT_OF_STOCK;
+            case NOT_IN_STOCK -> {
+                PlanRefusal refusal = result.refusal().orElse(null);
+                if (refusal == null || refusal == PlanRefusal.NO_PATTERN || refusal == PlanRefusal.PAUSED
+                        || refusal == PlanRefusal.ORDERS_BUSY)
+                    yield RequesterStatus.OUT_OF_STOCK;
+                planRefusal = refusal;
+                about = result.about().map(ItemKey::getItem).orElse(Items.AIR);
+                yield RequesterStatus.CANNOT_MAKE;
+            }
             case RESERVED -> RequesterStatus.RESERVED;
+            case PRODUCTION_PAUSED -> {
+                // The controller names the item the safety stop halted: the product, or an ingredient of its chain.
+                about = result.about().map(ItemKey::getItem).orElse(Items.AIR);
+                yield RequesterStatus.MAKING_STOPPED;
+            }
+            case PRODUCTION_BUSY -> RequesterStatus.PRODUCTION_BUSY;
             default -> RequesterStatus.TERMINAL_BUSY;
         };
     }
@@ -679,6 +826,8 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         delivered.clear();
         signature = null;
         picked = null;
+        makeRetryAt = 0L;
+        makeRefusal = null;
         idlePolls = 0;
         lastReachedTick = -1L;
         nextPollTick = 0L;
@@ -697,7 +846,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
                         instanceof RemoteAccess.RemoteCheck.Reached reached) {
             Optional<WarehouseControllerBlockEntity> controller = reached.terminal().controller();
             if (controller.isPresent()) {
-                giveBack(controller.get(), requestsOf(controller.get(), reached.terminal().getBlockPos()));
+                giveBack(controller.get(), requestsOf(controller.get(), reached.terminal().getBlockPos(), false));
                 return;
             }
         }
@@ -732,13 +881,16 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
             int graceLeft = order.phase() == RequesterOrder.Phase.GRACE
                     ? (int) Math.max(0L, (order.graceUntil() - now + TICKS_PER_SECOND - 1) / TICKS_PER_SECOND) : 0;
             rows.add(new RequesterSummary.Row(order.key().getItem(), order.phase(), order.share(), own,
-                    order.liveAge(), graceLeft));
+                    order.liveAge(), graceLeft, order.isMaking() ? order.producing() : 0));
         }
         boolean filled = slot.isFilled();
         return new RequesterSummary(filled ? status : RequesterStatus.NO_REMOTE, cannonPhase,
                 missing.isEmpty() ? Items.AIR : missing.getItem(), missing.getCount(), cannonWord, subject,
                 refusedDistance, refusedRange, filled ? ownerName : "", rows,
-                gaveUp != null && now < gaveUpUntil ? gaveUp : null, timeouts);
+                gaveUp != null && now < gaveUpUntil ? gaveUp : null, timeouts,
+                filled && status == RequesterStatus.CANNOT_MAKE ? planRefusal : null,
+                filled && (status == RequesterStatus.CANNOT_MAKE || status == RequesterStatus.MAKING_STOPPED) ? about
+                        : Items.AIR);
     }
 
     @Override
@@ -836,6 +988,8 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         delivered.clear();
         signature = null;
         picked = null;
+        makeRetryAt = 0L;
+        makeRefusal = null;
         lastReachedTick = -1L;
         nextPollTick = 0L;
     }
@@ -862,6 +1016,13 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
             entry.putInt(AHEAD, order.ahead());
             if (order.aheadDelivered() > 0)
                 entry.putInt(AHEAD_DELIVERED, order.aheadDelivered());
+            // Only for a made part (ADR-081), so a share from stock saves exactly as in 0.20.0-beta.
+            if (order.producing() > 0) {
+                entry.putInt(PRODUCING, order.producing());
+                entry.putUUID(ROOT, order.root().orElseThrow());
+            }
+            if (order.unsure() > 0)
+                entry.putInt(UNSURE, order.unsure());
             entry.putString(PHASE, order.phase().serializedName());
             entry.putInt(LIVE_AGE, order.liveAge());
             if (order.graceUntil() != 0L)
@@ -871,19 +1032,29 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         return list;
     }
 
-    /** The saved orders; an entry without a key, a request id or a valid phase and share is skipped. Never throws. */
+    /**
+     * The saved orders; an entry without a key, a request id or a valid phase and share is skipped. A made part is read
+     * only with both its amount and its root, clamped to the share; otherwise the order reads as one from stock, which
+     * is what every 0.20.0-beta save holds. The unsure made part is clamped to what the made part leaves of the share.
+     * Never throws.
+     */
     private static List<RequesterOrder<ItemKey>> readOrders(ListTag list, HolderLookup.Provider registries) {
         List<RequesterOrder<ItemKey>> read = new ArrayList<>();
         for (int i = 0; i < list.size(); i++) {
             CompoundTag entry = list.getCompound(i);
             Optional<ItemKey> key = ItemKey.loadFrom(entry, KEY, registries);
             Optional<RequesterOrder.Phase> phase = RequesterOrder.Phase.byName(entry.getString(PHASE));
-            if (key.isEmpty() || phase.isEmpty() || !entry.hasUUID(REQUEST) || entry.getInt(SHARE) < 1)
+            int share = entry.getInt(SHARE);
+            if (key.isEmpty() || phase.isEmpty() || !entry.hasUUID(REQUEST) || share < 1)
                 continue;
             int ahead = Math.max(0, entry.getInt(AHEAD));
-            read.add(new RequesterOrder<>(key.get(), entry.getBoolean(STRICT), entry.getUUID(REQUEST),
-                    entry.getInt(SHARE), ahead, Math.max(0, Math.min(ahead, entry.getInt(AHEAD_DELIVERED))),
-                    phase.get(), Math.max(0, entry.getInt(LIVE_AGE)), entry.getLong(GRACE_UNTIL)));
+            boolean made = entry.getInt(PRODUCING) > 0 && entry.hasUUID(ROOT);
+            int producing = made ? Math.min(share, entry.getInt(PRODUCING)) : 0;
+            int unsure = Math.max(0, Math.min(share - producing, entry.getInt(UNSURE)));
+            read.add(new RequesterOrder<>(key.get(), entry.getBoolean(STRICT), entry.getUUID(REQUEST), share, ahead,
+                    Math.max(0, Math.min(ahead, entry.getInt(AHEAD_DELIVERED))), producing,
+                    made ? Optional.of(entry.getUUID(ROOT)) : Optional.empty(), unsure, phase.get(),
+                    Math.max(0, entry.getInt(LIVE_AGE)), entry.getLong(GRACE_UNTIL)));
         }
         return read;
     }

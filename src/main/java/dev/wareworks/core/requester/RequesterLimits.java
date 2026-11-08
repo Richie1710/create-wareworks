@@ -56,6 +56,12 @@ public final class RequesterLimits {
      * orders back: one poll could be a cannon whose chunk is reloading.
      */
     public static final int IDLE_POLLS_BEFORE_GIVE_BACK = 2;
+    /**
+     * How many polls a requester waits before it asks the warehouse to make something again after an attempt that was
+     * refused or came back short (ADR-081): walking the aisle's patterns once a poll for an item nobody can make would
+     * cost more than it could ever bring.
+     */
+    public static final int MAKE_RETRY_POLLS = 5;
 
     private static final int TICKS_PER_SECOND = 20;
 
@@ -65,6 +71,11 @@ public final class RequesterLimits {
     /** {@code ticks} clamped into {@value #MIN_POLL_TICKS}..{@value #MAX_POLL_TICKS}. */
     public static int clampPoll(int ticks) {
         return Math.max(MIN_POLL_TICKS, Math.min(MAX_POLL_TICKS, ticks));
+    }
+
+    /** The wait before the next attempt to have something made: {@value #MAKE_RETRY_POLLS} polls of {@code pollTicks}. */
+    public static int makeRetryTicks(int pollTicks) {
+        return MAKE_RETRY_POLLS * clampPoll(pollTicks);
     }
 
     /** {@code ticks} clamped into {@value #MIN_TIMEOUT_TICKS}..{@value #MAX_TIMEOUT_TICKS}. */

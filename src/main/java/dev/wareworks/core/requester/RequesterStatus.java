@@ -4,8 +4,8 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * What a Schematicannon Requester is doing or waiting for (issue #45, ADR-080): one status per poll, shown by its lamp
- * and its goggle lines.
+ * What a Schematicannon Requester is doing or waiting for (issue #45, ADR-080; the four about production since
+ * ADR-081): one status per poll, shown by its lamp and its goggle lines.
  * <p>
  * <b>Precedence is the declaration order</b>: when several hold, the earliest wins ({@link #first}). The ones about the
  * set-up come first (no remote, no cannon, a cannon that never asks), then the link to the terminal, then what the
@@ -47,6 +47,8 @@ public enum RequesterStatus {
     PRINTING(Lamp.DARK),
     /** An order for the missing item runs. */
     ORDERED(Lamp.LIT),
+    /** An order for the missing item runs, and production makes part of it through a pattern (ADR-081). */
+    MAKING(Lamp.LIT),
     /** The missing item lies in the terminal's buffer. */
     IN_BUFFER(Lamp.LIT),
     /** The missing item left the buffer a moment ago and is on its way to the cannon. */
@@ -57,12 +59,24 @@ public enum RequesterStatus {
     CANNON_FULL(Lamp.REFUSED),
     /** The terminal's buffer has no room for the missing item. */
     BUFFER_FULL(Lamp.REFUSED),
-    /** The warehouse does not hold the missing item. */
+    /** The warehouse does not hold the missing item, and no production pattern makes it. */
     OUT_OF_STOCK(Lamp.REFUSED),
-    /** The warehouse holds the missing item, but a Stock Keeper's reserve holds it back from automation. */
+    /**
+     * The warehouse holds the missing item, or could make it, but a Stock Keeper's reserve holds the item or its
+     * ingredients back from automation.
+     */
     RESERVED(Lamp.REFUSED),
+    /** The missing item is not in stock and a pattern makes it, but the chain cannot be planned (ADR-081). */
+    CANNOT_MAKE(Lamp.REFUSED),
+    /** The warehouse's safety stop halted making the missing item after a machine lost a batch (ADR-081). */
+    MAKING_STOPPED(Lamp.REFUSED),
     /** The terminal's order slots are taken (queue, request or buffer caps); this passes by itself. */
-    TERMINAL_BUSY(Lamp.DARK);
+    TERMINAL_BUSY(Lamp.DARK),
+    /**
+     * The production order slots are taken, or this terminal already runs its one chain for automation (ADR-081);
+     * this passes by itself.
+     */
+    PRODUCTION_BUSY(Lamp.DARK);
 
     /** What the requester's lamp shows. */
     public enum Lamp {
