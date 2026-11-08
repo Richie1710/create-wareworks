@@ -191,6 +191,11 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
     private Item about = Items.AIR;
     /** Each running order's own delivered amount as of the last poll that reached the terminal, for the goggles. */
     private final Map<UUID, Integer> delivered = new HashMap<>();
+    /**
+     * What the root of each running order with a made part has not produced yet, as of the last poll that reached the
+     * terminal, for the goggles ({@link OrderShare#beingMade}).
+     */
+    private final Map<UUID, Long> unmade = new HashMap<>();
     @Nullable
     private RequesterSummary.GaveUp gaveUp;
     private long gaveUpUntil;
@@ -456,11 +461,15 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         if (advance.changed())
             dirty = true;
         delivered.clear();
+        unmade.clear();
         for (RequesterOrder<ItemKey> order : orders.all()) {
             if (order.isRunning())
                 requests.apply(order.requestId()).ifPresent(request -> delivered.put(order.requestId(),
                         OrderShare.ownDelivered(request.requested(), request.delivered(), order.ahead(),
                                 order.share())));
+            if (order.isMaking())
+                order.root().ifPresent(root -> unmade.put(order.requestId(), controller.productionOrder(root)
+                        .map(made -> made.isOpen() ? made.unfulfilledPromise() : 0L).orElse(0L)));
         }
     }
 
@@ -481,6 +490,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
             checklist.subtract(given.order().key().getItem(), given.outstanding());
         }
         delivered.clear();
+        unmade.clear();
         dirty = true;
     }
 
@@ -488,6 +498,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
     private void dropOrders() {
         orders.clear();
         delivered.clear();
+        unmade.clear();
         dirty = true;
     }
 
@@ -537,7 +548,8 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
      * always uses its exact key, which the terminal refuses when it is neither held nor made by a pattern. What may be
      * made is capped by what the schematic still needs ({@link ChecklistNeed.Need#makeCap()}). After an attempt that was
      * refused or came back short, the next one waits {@value RequesterLimits#MAKE_RETRY_POLLS} polls, and meanwhile the
-     * refusal that attempt got is shown rather than a plain "out of stock".
+     * refusal that attempt got is shown rather than a plain "out of stock"; it is forgotten once no production station
+     * is left or a retry finds no pattern that makes the item.
      */
     private RequesterStatus decide(long now, int pollTicks, CannonView cannon, WarehouseTerminalBlockEntity terminal,
             WarehouseControllerBlockEntity controller, Collection<ItemKey> buffered) {
@@ -579,8 +591,11 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
                     : controller.producibleKeys();
             orderKey = VariantPick.toMake(producible, candidate -> candidate.getItem() == item,
                     SchematicannonRequesterBlockEntity::isPlain, ItemKey.ORDER).orElse(null);
-            if (orderKey == null)
+            if (orderKey == null) {
                 makeRetryAt = now + RequesterLimits.makeRetryTicks(pollTicks);
+                // No pattern makes it any more (removed, or its station broken): an earlier refusal no longer holds.
+                makeRefusal = null;
+            }
         }
         boolean makeable = makeAllowed && orderKey != null;
         // The material list is only consulted, and perhaps refreshed, once everything outside it would allow an order.
@@ -598,8 +613,9 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
                 maxRequest, makeCap);
         if (amount.refusal().isPresent()) {
             RequesterStatus refusal = amount.refusal().get();
-            // While a refused attempt to have it made waits for its retry, its reason says more than "out of stock".
-            if (makeRefusal != null && now < makeRetryAt
+            // While a refused attempt to have it made waits for its retry, its reason says more than "out of stock" —
+            // but only while it can still hold: without a production station nothing is made, refused or not.
+            if (makeRefusal != null && now < makeRetryAt && !controller.productionStations().isEmpty()
                     && (refusal == RequesterStatus.OUT_OF_STOCK || refusal == RequesterStatus.RESERVED)) {
                 planRefusal = makeRefusal.plan();
                 about = makeRefusal.about();
@@ -824,6 +840,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         timeouts = 0;
         gaveUp = null;
         delivered.clear();
+        unmade.clear();
         signature = null;
         picked = null;
         makeRetryAt = 0L;
@@ -880,8 +897,11 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
             int own = order.isRunning() ? delivered.getOrDefault(order.requestId(), 0) : order.share();
             int graceLeft = order.phase() == RequesterOrder.Phase.GRACE
                     ? (int) Math.max(0L, (order.graceUntil() - now + TICKS_PER_SECOND - 1) / TICKS_PER_SECOND) : 0;
+            // What production still owes: never more than is undelivered, and down run by run (ADR-081).
+            int made = order.isMaking() ? OrderShare.beingMade(order.share(), own, order.producing(),
+                    unmade.getOrDefault(order.requestId(), Long.MAX_VALUE)) : 0;
             rows.add(new RequesterSummary.Row(order.key().getItem(), order.phase(), order.share(), own,
-                    order.liveAge(), graceLeft, order.isMaking() ? order.producing() : 0));
+                    order.liveAge(), graceLeft, made, order.isMaking()));
         }
         boolean filled = slot.isFilled();
         return new RequesterSummary(filled ? status : RequesterStatus.NO_REMOTE, cannonPhase,
@@ -986,6 +1006,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         readRun(tag.getCompound(RUN_TAG));
         timeouts = Math.max(0, tag.getInt(TIMEOUTS_TAG));
         delivered.clear();
+        unmade.clear();
         signature = null;
         picked = null;
         makeRetryAt = 0L;

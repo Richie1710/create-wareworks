@@ -158,9 +158,14 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * of stock and nothing is made, neither through the requester nor through {@code requestForRequester} itself; with the
  * pattern the rest is made within one retry wait, by a root of its own;</li>
  * <li>{@code stockfirsttherestismade} and {@code makesnomorethanthelistneeds} — stock first and the rest made in one
- * order that is never placed twice, and never more made than the schematic still needs;</li>
+ * order that is never placed twice, and never more ordered made than the schematic still needs (whole runs leave the
+ * rest in stock); the goggles never show more being made than is still to come, and count down run by run;</li>
+ * <li>{@code makingrowkeepsitslinewithnothinglefttomake} — a row being made keeps its line, synced, once nothing is
+ * left to make;</li>
  * <li>{@code cannotmakenamesthemissingingredient} and {@code reserveholdstheingredientsback} — a pattern that cannot
  * run says why, and a Stock Keeper's reserve holds the ingredients back;</li>
+ * <li>{@code makerefusalgoeswithitspattern} — a refusal to make is forgotten once its pattern is gone: plain "out of
+ * stock", red;</li>
  * <li>{@code deadmanstandswhilebeingmade} ({@link #MAKING_DEAD_MAN_BATCH}) — the dead-man switch waits for the
  * machine;</li>
  * <li>{@code failedproductionkeepsaplayersclick} ({@link #PRODUCTION_BATCH}),
@@ -1056,6 +1061,12 @@ public final class SchematicannonRequesterGameTests {
             aisle.controllerIfPresent().ifPresent(controller -> helper.assertTrue(
                     controller.productionOrders().size() <= 1, "one production order: "
                             + controller.productionOrders()));
+            // The goggles never show more being made than is still to come (ADR-081).
+            SchematicannonRequesterBlockEntity requester = requesterAt(helper, REQUESTER);
+            requester.onGoggleObserved();
+            for (RequesterSummary.Row row : requester.summary().rows())
+                helper.assertTrue(row.delivered() + row.made() <= row.share(),
+                        "ordered >= being made + delivered: " + row);
         });
 
         helper.startSequence()
@@ -1083,10 +1094,31 @@ public final class SchematicannonRequesterGameTests {
                     helper.assertValueEqual(order.phase(), RequesterOrder.Phase.RUNNING, "the order runs on");
                     helper.assertValueEqual(order.producing(), 11, "while the eleven are made");
                     assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    requester.onGoggleObserved();
+                    RequesterSummary.Row row = requester.summary().rows().getFirst();
+                    helper.assertValueEqual(row.delivered(), 5, "the goggles count the five delivered");
+                    helper.assertValueEqual(row.made(), 11, "and eleven being made");
                     scene.assertKept("with the five printed");
                 })
                 .thenWaitUntil(() -> logsAtStation(helper, aisle, 3))
-                .thenExecute(() -> playMachine(helper, aisle, scene, 3))
+                // The machine makes one run at a time, so the goggles count down run by run: the root's promise falls
+                // as soon as a run lands in stock (seven, then three), before its planks are delivered.
+                .thenExecute(() -> playMachine(helper, aisle, scene, 1))
+                .thenWaitUntil(() -> assertRootProduced(helper, aisle, scene, PLANKS_PER_LOG))
+                .thenExecute(() -> scene.requester(REQUESTER).pollSoon())
+                .thenWaitUntil(() -> helper.assertTrue(goggleRow(scene).made() < 11, "the first run is counted"))
+                .thenExecute(() -> assertMakingRow(helper, scene, 5, 7, "one run made, still in stock"))
+                .thenWaitUntil(() -> helper.assertValueEqual(goggleRow(scene).delivered(), 9, "its planks delivered"))
+                .thenExecute(() -> assertMakingRow(helper, scene, 9, 7, "one run made and delivered"))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 1))
+                .thenWaitUntil(() -> assertRootProduced(helper, aisle, scene, 2 * PLANKS_PER_LOG))
+                .thenExecute(() -> scene.requester(REQUESTER).pollSoon())
+                .thenWaitUntil(() -> helper.assertTrue(goggleRow(scene).made() < 7, "the second run is counted"))
+                .thenExecute(() -> assertMakingRow(helper, scene, 9, 3, "two runs made, the second in stock"))
+                .thenWaitUntil(() -> helper.assertValueEqual(goggleRow(scene).delivered(), 13, "its planks delivered"))
+                .thenExecute(() -> assertMakingRow(helper, scene, 13, 3, "two runs made and delivered"))
+                .thenExecute(() -> playMachine(helper, aisle, scene, 1))
                 .thenWaitUntil(() -> assertFinished(helper, cannon))
                 .thenExecute(() -> {
                     helper.assertValueEqual(log.shares(Items.OAK_PLANKS), List.of(16), "one order in all");
@@ -1098,8 +1130,8 @@ public final class SchematicannonRequesterGameTests {
     }
 
     /**
-     * Never more is made than the schematic still needs (rule R2): six planks to print and none in stock. The six are
-     * made — two runs, eight planks — and the two left over land in stock.
+     * Never more is ordered made than the schematic still needs (rule R2): six planks to print and none in stock. The
+     * six are made — two runs, eight planks — and the two left over land in stock.
      */
     @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
     public static void makesNoMoreThanTheListNeeds(GameTestHelper helper) {
@@ -1201,6 +1233,92 @@ public final class SchematicannonRequesterGameTests {
                 .thenWaitUntil(() -> assertFinished(helper, cannon))
                 .thenExecute(() -> scene.assertKept("after the print"))
                 .thenSucceed();
+    }
+
+    /**
+     * A refusal to make goes with its pattern: no planks and no logs, so the plank pattern cannot run and the lamp is
+     * red "cannot be made". The pattern is cleared, and within one retry wait the requester shows a plain "out of
+     * stock" with the red lamp and no plan refusal on the goggles, and keeps showing it over two more retry waits: the
+     * stored refusal does not come back on every poll while the cannon waits on the same block.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void makeRefusalGoesWithItsPattern(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true);
+        aisle.production(PRODUCTION_RACK);
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.OAK_PLANKS.defaultBlockState(), 4));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        OrderLog log = OrderLog.watch(helper, REQUESTER);
+        long[] cleared = { -1L };
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> writePlankPattern(helper, aisle))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(PLANK), "the planks are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.CANNOT_MAKE))
+                .thenExecute(() -> {
+                    helper.assertTrue(aisle.productionAt(PRODUCTION_RACK).clearPattern(0), "pattern cleared");
+                    cleared[0] = helper.getTick();
+                })
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.OUT_OF_STOCK))
+                .thenExecute(() -> {
+                    long waited = helper.getTick() - cleared[0];
+                    helper.assertTrue(waited <= (long) (RequesterLimits.MAKE_RETRY_POLLS + 1) * poll() + 1,
+                            "within one retry wait: " + waited + " ticks");
+                })
+                .thenIdle(2 * RequesterLimits.makeRetryTicks(poll()) + poll())
+                .thenExecute(() -> {
+                    assertShows(helper, REQUESTER, RequesterStatus.OUT_OF_STOCK);
+                    SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+                    requester.onGoggleObserved();
+                    helper.assertTrue(requester.summary().planRefusal() == null,
+                            "no plan refusal left: " + requester.summary().planRefusal());
+                    helper.assertValueEqual(requester.summary().about(), Items.AIR, "about nothing");
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "nothing is requested");
+                    helper.assertTrue(aisle.controller().productionOrders().isEmpty(), "and nothing made");
+                    helper.assertTrue(log.placed().isEmpty(), "no order");
+                    scene.assertKept("with the pattern gone");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A row being made keeps its "being made" line with nothing left to make: a root that produced its promise but not
+     * its whole result (or a merged player's items counted first) leaves 0 to make while the order still waits for the
+     * root and its clock stands, so the line must not fall back to "ordered" with a stopped clock. The flag survives
+     * the sync, and only a running order is made: a row in its grace or one not being made shows nothing made.
+     */
+    @GameTest(template = EMPTY_7X5X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void makingRowKeepsItsLineWithNothingLeftToMake(GameTestHelper helper) {
+        RequesterSummary.Row making = new RequesterSummary.Row(Items.OAK_PLANKS, RequesterOrder.Phase.RUNNING, 16, 16,
+                600, 0, 0, true);
+        RequesterSummary summary = new RequesterSummary(RequesterStatus.MAKING, CannonView.Phase.MISSING,
+                Items.OAK_PLANKS, 1, "", Items.AIR, 0, 0, "Dev", List.of(making), null, 0, null, Items.AIR);
+        CompoundTag tag = new CompoundTag();
+        summary.write(tag);
+        RequesterSummary synced = RequesterSummary.read(tag);
+        helper.assertValueEqual(synced, summary, "the summary as synced");
+        helper.assertTrue(synced.rows().getFirst().making(), "still being made after the sync");
+        assertMakingLine(helper, synced, "nothing left to make");
+
+        RequesterSummary.Row ordered = new RequesterSummary.Row(Items.OAK_PLANKS, RequesterOrder.Phase.RUNNING, 16, 5,
+                600, 0, 3, false);
+        helper.assertValueEqual(ordered.made(), 0, "a row not being made shows nothing made");
+        Component line = RequesterLines.actionBar(new RequesterSummary(RequesterStatus.ORDERED,
+                CannonView.Phase.MISSING, Items.OAK_PLANKS, 1, "", Items.AIR, 0, 0, "Dev", List.of(ordered), null, 0,
+                null, Items.AIR)).component();
+        helper.assertTrue(line.getContents() instanceof TranslatableContents contents
+                && contents.getKey().equals(
+                        WareworksLang.key(WareworksLang.requesterStatusKey(RequesterStatus.ORDERED))),
+                "a row not being made says ordered: " + line);
+        RequesterSummary.Row grace = new RequesterSummary.Row(Items.OAK_PLANKS, RequesterOrder.Phase.GRACE, 16, 16, 600,
+                3, 4, true);
+        helper.assertFalse(grace.making(), "a row in its grace is not being made");
+        helper.assertValueEqual(grace.made(), 0, "and shows nothing made");
+        helper.succeed();
     }
 
     /**
@@ -2893,7 +3011,7 @@ public final class SchematicannonRequesterGameTests {
      * {@link #logsAtStation} holds.
      */
     private static void playMachine(GameTestHelper helper, AisleFixture aisle, Scene scene, int runs) {
-        int taken = extractAll(aisle.handlerAt(aisle.rackPos(PRODUCTION_RACK)), LOG);
+        int taken = extract(aisle.handlerAt(aisle.rackPos(PRODUCTION_RACK)), LOG, runs);
         helper.assertValueEqual(taken, runs, "the machine took the logs");
         scene.change(LOG, -taken);
         aisle.insertAll(aisle.handlerAt(aisle.rackPos(INPUT_RACK)), PLANK.toStack(runs * PLANKS_PER_LOG));
@@ -2902,12 +3020,59 @@ public final class SchematicannonRequesterGameTests {
 
     /** Takes every item of {@code key} out of {@code handler}; answers how many. */
     private static int extractAll(IItemHandler handler, ItemKey key) {
+        return extract(handler, key, Integer.MAX_VALUE);
+    }
+
+    /** Takes up to {@code max} items of {@code key} out of {@code handler}; answers how many. */
+    private static int extract(IItemHandler handler, ItemKey key, int max) {
         int taken = 0;
-        for (int slot = 0; slot < handler.getSlots(); slot++) {
+        for (int slot = 0; slot < handler.getSlots() && taken < max; slot++) {
             if (key.matches(handler.getStackInSlot(slot)))
-                taken += handler.extractItem(slot, Integer.MAX_VALUE, false).getCount();
+                taken += handler.extractItem(slot, max - taken, false).getCount();
         }
         return taken;
+    }
+
+    /** The requester's one goggle row, as the goggles would show it now (server). */
+    private static RequesterSummary.Row goggleRow(Scene scene) {
+        SchematicannonRequesterBlockEntity requester = scene.requester(REQUESTER);
+        requester.onGoggleObserved();
+        List<RequesterSummary.Row> rows = requester.summary().rows();
+        if (rows.size() != 1)
+            throw new GameTestAssertException("not one goggle row: " + rows);
+        return rows.getFirst();
+    }
+
+    /**
+     * The one goggle row is "being made" with {@code delivered} delivered and {@code made} still to be made, and says
+     * so through a sync and in the action bar.
+     */
+    private static void assertMakingRow(GameTestHelper helper, Scene scene, int delivered, int made, String what) {
+        RequesterSummary.Row row = goggleRow(scene);
+        helper.assertTrue(row.making(), what + ": the row is being made: " + row);
+        helper.assertValueEqual(row.delivered(), delivered, what + ": delivered");
+        helper.assertValueEqual(row.made(), made, what + ": being made");
+        RequesterSummary summary = scene.requester(REQUESTER).summary();
+        CompoundTag tag = new CompoundTag();
+        summary.write(tag);
+        helper.assertValueEqual(RequesterSummary.read(tag), summary, what + ": the summary as synced");
+        assertMakingLine(helper, summary, what);
+    }
+
+    /** The action bar of {@code summary} names its first row with the "being made" line. */
+    private static void assertMakingLine(GameTestHelper helper, RequesterSummary summary, String what) {
+        Component line = RequesterLines.actionBar(summary).component();
+        helper.assertTrue(line.getContents() instanceof TranslatableContents contents
+                && contents.getKey().equals(
+                        WareworksLang.key(WareworksLang.requesterStatusKey(RequesterStatus.MAKING))),
+                what + ": the line says being made: " + line);
+    }
+
+    /** The root of the requester's one order has produced {@code amount} so far. */
+    private static void assertRootProduced(GameTestHelper helper, AisleFixture aisle, Scene scene, long amount) {
+        UUID root = onlyOrder(helper, scene.requester(REQUESTER)).root().orElseThrow();
+        helper.assertValueEqual(aisle.controller().productionOrder(root).orElseThrow().produced(), amount,
+                "the root's produced amount");
     }
 
     /** The one production order the aisle has, open or finished. */

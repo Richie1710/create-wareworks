@@ -118,7 +118,9 @@ public final class RequesterLines {
 
     /**
      * One order: running with its delivery and live age, being made in part (no clock: the dead-man switch waits for
-     * the machine, ADR-081), in the buffer, or on its way.
+     * the machine, ADR-081), in the buffer, or on its way. Whether part is made is the order's own state, not a count:
+     * once a root has produced its promise but not its whole result, nothing is left to make and the row still says
+     * "being made", since its clock stands until the root ends.
      */
     private static LangBuilder row(RequesterSummary.Row row) {
         if (row.phase() == RequesterOrder.Phase.IN_BUFFER)
@@ -128,7 +130,7 @@ public final class RequesterLines {
             return WareworksLang.translate(WareworksLang.requesterStatusKey(RequesterStatus.GRACE),
                     WareworksLang.number(row.graceLeft()).style(ChatFormatting.GOLD), row.item().getDescription())
                     .style(ChatFormatting.AQUA);
-        if (row.made() > 0)
+        if (row.making())
             return WareworksLang.translate(WareworksLang.requesterStatusKey(RequesterStatus.MAKING),
                     row.item().getDescription(), WareworksLang.number(row.share()).style(ChatFormatting.GOLD),
                     WareworksLang.number(row.made()).style(ChatFormatting.GOLD),

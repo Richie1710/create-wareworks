@@ -72,6 +72,7 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
     private static final String GRACE_LEFT = "GraceLeft";
     private static final String AMOUNT = "Amount";
     private static final String MADE = "Made";
+    private static final String MAKING = "Making";
     private static final String PLAN_REFUSAL = "PlanRefusal";
     private static final String ABOUT = "About";
 
@@ -84,10 +85,14 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
      * @param delivered  how much of the share has arrived
      * @param liveTicks  how long it has been running while the warehouse could serve it
      * @param graceLeft  seconds of the grace that are left ({@link RequesterOrder.Phase#GRACE} only)
-     * @param made       how much of the share production still makes ({@link RequesterOrder#producing()}, ADR-081)
+     * @param made       how much of the share production still owes ({@code OrderShare#beingMade}, ADR-081), 0 unless
+     *                   {@code making}
+     * @param making     whether part of the share is being made ({@link RequesterOrder#isMaking()}): the row says
+     *                   "being made" and shows no clock, also once {@code made} is down to 0 while the root is still
+     *                   open
      */
     public record Row(Item item, RequesterOrder.Phase phase, int share, int delivered, int liveTicks, int graceLeft,
-                      int made) {
+                      int made, boolean making) {
         public Row {
             item = item == null ? Items.AIR : item;
             phase = phase == null ? RequesterOrder.Phase.RUNNING : phase;
@@ -95,12 +100,13 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
             delivered = Math.max(0, Math.min(delivered, share));
             liveTicks = Math.max(0, liveTicks);
             graceLeft = Math.max(0, graceLeft);
-            made = Math.max(0, Math.min(made, share));
+            making = making && phase == RequesterOrder.Phase.RUNNING;
+            made = making ? Math.max(0, Math.min(made, share)) : 0;
         }
 
         /** A row of which nothing is made. */
         public Row(Item item, RequesterOrder.Phase phase, int share, int delivered, int liveTicks, int graceLeft) {
-            this(item, phase, share, delivered, liveTicks, graceLeft, 0);
+            this(item, phase, share, delivered, liveTicks, graceLeft, 0, false);
         }
     }
 
@@ -154,8 +160,10 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
             rowTag.putInt(DELIVERED, row.delivered());
             rowTag.putInt(AGE, row.liveTicks());
             rowTag.putInt(GRACE_LEFT, row.graceLeft());
-            if (row.made() > 0)
+            if (row.making()) {
+                rowTag.putBoolean(MAKING, true);
                 rowTag.putInt(MADE, row.made());
+            }
             list.add(rowTag);
         }
         tag.put(ROWS, list);
@@ -181,7 +189,7 @@ public record RequesterSummary(RequesterStatus status, CannonView.Phase cannon, 
             rows.add(new Row(item(row.getString(ITEM)),
                     RequesterOrder.Phase.byName(row.getString(PHASE)).orElse(RequesterOrder.Phase.RUNNING),
                     row.getInt(SHARE), row.getInt(DELIVERED), row.getInt(AGE), row.getInt(GRACE_LEFT),
-                    row.getInt(MADE)));
+                    row.getInt(MADE), row.getBoolean(MAKING)));
         }
         GaveUp gaveUp = null;
         if (tag.contains(GAVE_UP, Tag.TAG_COMPOUND)) {

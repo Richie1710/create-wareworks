@@ -78,6 +78,19 @@ public final class OrderShare {
         return (int) Math.min(outstanding(requested, delivered, ahead, share), own - mayHaveArrived);
     }
 
+    /**
+     * How much of a share production still owes, for the goggles (ADR-081): of {@code producing} items to be made, none
+     * more than the share's undelivered part ({@code share - ownDelivered}; the stock part is delivered first, so made
+     * items that arrived come off this), and none more than {@code unmade}, what the share's root has not produced yet
+     * ({@code ProductionOrder#unfulfilledPromise}; {@link Long#MAX_VALUE} when it is not known). So
+     * {@code ownDelivered + beingMade <= share} always holds, and the number goes down run by run.
+     */
+    public static int beingMade(int share, int ownDelivered, int producing, long unmade) {
+        int own = Math.max(0, share);
+        int undelivered = own - Math.max(0, Math.min(own, ownDelivered));
+        return (int) Math.max(0L, Math.min(Math.min(Math.max(0, producing), undelivered), unmade));
+    }
+
     /** Whether the share is complete: every item of it was delivered. */
     public static boolean done(int requested, int delivered, int ahead, int share) {
         return outstanding(requested, delivered, ahead, share) == 0;

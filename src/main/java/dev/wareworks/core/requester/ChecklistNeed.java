@@ -49,7 +49,7 @@ public final class ChecklistNeed<I> {
 
     /**
      * What to order of a missing item at most, and how much of that production may make (ADR-081, rule R2: never more
-     * is made than the schematic still needs).
+     * is ordered made than the schematic still needs; whole runs may leave a surplus in stock).
      *
      * @param amount  what to order at most, at least 1 ({@link #need})
      * @param makeCap what of it may be made, {@code 1..amount}: all of it when the amount is the material list's

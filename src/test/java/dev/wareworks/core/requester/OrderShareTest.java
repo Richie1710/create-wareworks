@@ -81,4 +81,25 @@ class OrderShareTest {
         assertEquals(0, OrderShare.outstanding(74, 200, 10, 64), "never below nothing");
         assertEquals(0, OrderShare.outstanding(0, 0, 0, 0), "an empty share has nothing outstanding");
     }
+
+    @Test
+    void beingMadeGoesDownAsMadeItemsAreDelivered() {
+        // x16 ordered, 5 from stock and 11 made in three runs of four; the five in stock arrive first.
+        assertEquals(11, OrderShare.beingMade(16, 0, 11, 11));
+        assertEquals(11, OrderShare.beingMade(16, 5, 11, 11), "the stock part arrived, nothing made yet");
+        assertEquals(7, OrderShare.beingMade(16, 5, 11, 7), "one run produced, still in stock");
+        assertEquals(7, OrderShare.beingMade(16, 9, 11, 7), "and delivered");
+        assertEquals(3, OrderShare.beingMade(16, 13, 11, 3), "two runs produced and delivered");
+        assertEquals(3, OrderShare.beingMade(16, 13, 11, Long.MAX_VALUE), "without the root's promise as well");
+        assertEquals(0, OrderShare.beingMade(16, 16, 11, 0), "all of it arrived");
+        assertEquals(0, OrderShare.beingMade(16, 0, 0, Long.MAX_VALUE), "nothing made, nothing shown");
+        for (int delivered = 0; delivered <= 16; delivered++) {
+            for (long unmade : new long[] { 0L, 3L, 11L, Long.MAX_VALUE }) {
+                int made = OrderShare.beingMade(16, delivered, 11, unmade);
+                assertTrue(made >= 0 && delivered + made <= 16,
+                        "ordered 16 >= being made " + made + " + delivered " + delivered);
+            }
+        }
+        assertEquals(0, OrderShare.beingMade(16, 40, 11, 11), "a delivery count above the share is clamped");
+    }
 }

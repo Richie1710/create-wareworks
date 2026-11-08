@@ -783,11 +783,13 @@ dev.wareworks
 │                              dead-man switch and its live clock, the stale counter's one refresh, the reserve, strict
 │                              and plain requirements, the insert refusals, the terminal's chunk left free to unload,
 │                              one requester per cannon, two per terminal, the give-back and a save round trip; since
-│                              ADR-081 also stock first and the rest made, no more made than the list needs, a pattern
-│                              that cannot run, the reserve on ingredients, the clock standing while made, a failed
-│                              made part and a give-back that keep a player's click, and a made order's save round
-│                              trip, with the test playing the machine) with CannonFixture (the cannon and schematic
-│                              set-up it shares with SchematicannonGameTests) (issue #45, ADR-080, ADR-081)
+│                              ADR-081 also stock first and the rest made, no more ordered made than the list needs, the
+│                              goggles counting down run by run, a making row keeping its line with nothing left to
+│                              make, a pattern that cannot run and a refusal forgotten with its pattern, the reserve on
+│                              ingredients, the clock standing while made, a failed made part and a give-back that keep
+│                              a player's click, and a made order's save round trip, with the test playing the machine)
+│                              with CannonFixture (the cannon and schematic set-up it shares with
+│                              SchematicannonGameTests) (issue #45, ADR-080, ADR-081)
 │                              + layout builders (AisleFixture: one aisle as a player builds it;
 │                              ItemCensus: per-tick item census of a test, arm claws included since M12;
 │                              ConfigOverrides: in-memory server config overrides restored by an @AfterBatch hook, M5;
@@ -8333,16 +8335,17 @@ stands: never order an item twice while its order runs, lies in the buffer or ri
 player's request, only the requester's own share; one requester per cannon; reserves count (`AUTOMATION`); the owner
 is the inserting player; no item teleportation; no chunk loaded; no per-tick scans. Three rules follow from them and
 are binding here. **R1:** the requester never cancels a production order; a give-up or give-back takes back only its
-own share and its own root's promise, the chain runs on and its product lands in stock. **R2:** never more is made than
-the schematic still needs by the cannon's material list; for an item the list does not show (or the counter does not
-know, or the stale-counter fallback) only what the cannon reports missing is made, while stock keeps the old rule of a
-stack, because stock costs no ingredients. **R3:** a shortfall of the requester's own production is taken off its own
-share exactly, read from its own plan root, never guessed from the merged request. The traps: merged requests share
-one id (ADR-020), so a player's click and the requester's share can sit in one request, each backed by a root
-production order of its own; `ProductionOrders#reducePromise` walks every order backing a request **oldest first**, so
-it would take a merged player's earlier root first; `onProductionOrderFinished` already reduces the backing request by
-what a failed root still owed; and a player's stock click merged in behind can be delivered before the made items,
-which first-in-first-out credit (ADR-080 D9) would read as the requester's share having arrived.
+own share and its own root's promise, the chain runs on and its product lands in stock. **R2:** never more is ordered
+made than the schematic still needs by the cannon's material list; for an item the list does not show (or the counter
+does not know, or the stale-counter fallback) only what the cannon reports missing is ordered made, while stock keeps
+the old rule of a stack, because stock costs no ingredients. A pattern makes whole runs, so the runs may make a little
+more than was ordered; that surplus goes into stock, as with a terminal click. **R3:** a shortfall of the requester's
+own production is taken off its own share exactly, read from its own plan root, never guessed from the merged request.
+The traps: merged requests share one id (ADR-020), so a player's click and the requester's share can sit in one request,
+each backed by a root production order of its own; `ProductionOrders#reducePromise` walks every order backing a request
+**oldest first**, so it would take a merged player's earlier root first; `onProductionOrderFinished` already reduces the
+backing request by what a failed root still owed; and a player's stock click merged in behind can be delivered before
+the made items, which first-in-first-out credit (ADR-080 D9) would read as the requester's share having arrived.
 
 *Decision:*
 
@@ -8403,19 +8406,26 @@ which first-in-first-out credit (ADR-080 D9) would read as the requester's share
 * **D7. A retry wait after a failed attempt to make.** An attempt with a made part that was refused or came back short,
   and a decision that found no pattern for the item, wait `RequesterLimits.MAKE_RETRY_POLLS` = 5 polls (100 ticks at
   the default poll) before the next attempt to have something made; stock is still ordered on every poll. While a
-  refused attempt waits, its reason (and the plan refusal with its item) is shown instead of a plain "out of stock". The
-  wait is transient: a new missing-item signature and a fresh start clear it.
-* **D8. Four new statuses.** `RequesterStatus` gains `MAKING` (lit), `CANNOT_MAKE` (red: a chain refused for a reason
-  a player can act on, `MISSING_INGREDIENT`, `NO_ROOM`, `LOOP`, `TOO_MANY_STEPS`, `TOO_MANY_INGREDIENT_ITEMS`; the
-  goggle line names the plan refusal and its item), `MAKING_STOPPED` (red: the controller answers
-  `PRODUCTION_PAUSED`, the safety stop after a machine swallowed a batch, lifted at the station) and `PRODUCTION_BUSY`
-  (dark: the order slots are full or this terminal's one automation chain is open, passing by itself). `NOT_IN_STOCK`
-  without a plan refusal or with `NO_PATTERN` stays `OUT_OF_STOCK`. Statuses travel by name, so inserting them never
-  turns one known status into another, but an older client reads an unknown name as "no remote" (D9).
-  `RequesterSummary` gains the plan refusal, its item and each row's made part; a making row reads "<item> xN
-  ordered, M being made, K delivered" with no clock, because the clock stands. `MAKING_STOPPED` names the item the
-  safety stop halted, which the controller answers with `PRODUCTION_PAUSED` (`RequestResult#about`): an ingredient
-  further down the chain as often as the missing item, and the station's stopped list shows exactly that item.
+  refused attempt waits, its reason (and the plan refusal with its item) is shown instead of a plain "out of stock", but
+  only while it can still hold: a decision that finds no pattern for the item any more forgets it, and without a
+  production station it is not shown. The wait is transient: a new missing-item signature and a fresh start clear it.
+* **D8. Four new statuses.** `RequesterStatus` gains `MAKING` (lit), `CANNOT_MAKE` (red: a chain refused for a reason a
+  player can act on, `MISSING_INGREDIENT`, `NO_ROOM`, `LOOP`, `TOO_MANY_STEPS`, `TOO_MANY_INGREDIENT_ITEMS`; the goggle
+  line names the plan refusal and its item), `MAKING_STOPPED` (red: the controller answers `PRODUCTION_PAUSED`, the
+  safety stop after a machine swallowed a batch, lifted at the station) and `PRODUCTION_BUSY` (dark: the order slots are
+  full or this terminal's one automation chain is open, passing by itself). `NOT_IN_STOCK` without a plan refusal or
+  with `NO_PATTERN` stays `OUT_OF_STOCK`. Statuses travel by name, so inserting them never turns one known status into
+  another, but an older client reads an unknown name as "no remote" (D9). `RequesterSummary` gains the plan refusal, its
+  item and each row's made part; a making row reads "<item> xN ordered, M being made, K delivered" with no clock,
+  because the clock stands. M is what production still owes (`OrderShare#beingMade`): the recorded made part, never more
+  than `N − K` (the stock part arrives first) nor than what the own root has not produced yet (its `unfulfilledPromise`,
+  read on the poll), so it goes down run by run and `K + M ≤ N` always holds; the recorded `producing` stays as it is
+  for the give-back. Whether a row reads as making is the order's own state (`Row#making`, the summary tag `Making`),
+  not `M > 0`: a root that has produced its promise but not its whole result leaves M at 0 while the order still waits
+  and its clock stands, so the row must not fall back to the ordered line with a stopped clock. `MAKING_STOPPED` names
+  the item the safety stop halted, which the controller answers with `PRODUCTION_PAUSED` (`RequestResult#about`): an
+  ingredient further down the chain as often as the missing item, and the station's stopped list shows exactly that
+  item.
 * **D9. No save or config change beyond three optional tags; network version 24.** An order entry writes `Producing`
   and `Root` only when `producing > 0`, and `Unsure` only when `unsure > 0`; a 0.20.0-beta entry reads as an order
   from stock, unchanged behaviour, and a downgrade ignores the tags (the request completes normally). The retry wait,

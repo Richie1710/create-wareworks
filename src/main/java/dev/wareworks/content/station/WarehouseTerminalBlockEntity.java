@@ -854,8 +854,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * back the stock and the ingredients alike, and the controller's one multi-level chain per destination applies. The
      * cap is the amount handed to the controller, {@code min(amount, stock + maxMade)}: the controller plans what the
      * taker may not claim from that one snapshot, which is the stock read here, so it plans at most {@code maxMade}. A
-     * requester never has more made than the schematic still needs (rule R2), because it passes no more as
-     * {@code maxMade}.
+     * requester never orders more made than the schematic still needs (rule R2), because it passes no more as
+     * {@code maxMade}; the pattern's whole runs may leave a surplus in stock, as for a terminal click.
      * <p>
      * The <b>root</b> of the plan the call started is returned with the result: the open production order backing the
      * request that was not open before the call and is no step of a chain. A player's earlier root on the same merged

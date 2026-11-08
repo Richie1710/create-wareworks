@@ -5083,7 +5083,8 @@ that very plan, and then creates it:
   *(Both halves are M20 review fixes.)*
 * **A computer's or a Schematicannon Requester's request to a terminal** (`StockAccess.AUTOMATION`, issue #9 and
   issue #45, ADR-081): yes, under the same one-open-plan-per-destination rule, which they share when both order
-  through one terminal. The requester's made part is capped at what the schematic still needs (§3.11).
+  through one terminal. The requester's made part is capped at what the schematic still needs (§3.11); whole runs may
+  leave a surplus in stock.
 * **A stock rule's minimum stays single level** (§3.6.3). `RestockPlanner`, `RestockDecision`, `calledFor` and
   `RestockOutcome` are untouched: a rule never triggers production of an ingredient, and a player expresses depth with a
   second rule, visibly. What M20 adds on that side is only the guard in the other direction — a paused item is never
@@ -7458,11 +7459,12 @@ warehouse terminal, through a linked **Warehouse Remote** lying in its cradle. I
 into the terminal's buffer, exactly as for a stock-list click, and the player's own **funnel and belt** take the items
 from the buffer to a chest beside the cannon (the buffer is extract-only already). It orders **from stock first** and
 has what the warehouse lacks **made** through the aisle's production patterns, exactly as a terminal click's "make it?"
-answer or a computer's request would (ADR-081): a stack at a time at most, never more than the cannon's inventories
-hold or, by the cannon's material list, the schematic still needs (an item the list does not show is ordered a stack
-at a time from stock, and only what the cannon reports missing is made of it), and **never twice** while an order is
-on its way, being made or lies in the buffer. It never asks anybody anything and never cancels a production order. The
-clipboard order (§3.4.4) remains the way to have the whole material list delivered at once.
+answer or a computer's request would (ADR-081): a stack at a time at most, never more than the cannon's inventories hold
+or, by the cannon's material list, the schematic still needs (an item the list does not show is ordered a stack at a
+time from stock, and only what the cannon reports missing is ordered made of it), and **never twice** while an order is
+on its way, being made or lies in the buffer. That bounds what is ordered: a pattern makes whole runs, so a surplus
+beyond it goes into stock, as with a terminal click. It never asks anybody anything and never cancels a production
+order. The clipboard order (§3.4.4) remains the way to have the whole material list delivered at once.
 
 **The block** (`SchematicannonRequesterBlock`, `wareworks:schematicannon_requester`) is a directional block that is no
 warehouse member: it stands beside the cannon, anywhere within the remote's range of the terminal. Its **front faces
@@ -7579,7 +7581,9 @@ as strict.
 * **Retry wait.** After an attempt with a made part that was refused or came back short, and after a decision that
   found no pattern for the item, the next attempt to have something made waits `RequesterLimits.MAKE_RETRY_POLLS` = 5
   polls (5 s at the default poll); stock is still looked for on every poll. Meanwhile a refused attempt's reason stays
-  on the goggles instead of a plain "out of stock". The wait is not saved and ends with a new missing item.
+  on the goggles instead of a plain "out of stock", but only while it can still hold: a decision that finds no pattern
+  for the item any more forgets it, and without a production station it is not shown. The wait is not saved and ends
+  with a new missing item.
 
 **What the schematic still needs** (`ChecklistNeed`). Create's `MaterialChecklist` knows `required` and `gathered` per
 item, and only `updateChecklist()` fills it: when the printer starts, after a reload and when the cannon prints a book
@@ -7633,7 +7637,9 @@ lookup, only for such shares):
 3. While its own root is open the order stays **running** whatever first in, first out says: a player's stock click
    merged in behind can be delivered before the made items, and ending the share then would order the item twice.
 4. The goggles show the row "<item> xN ordered, M being made, K delivered" (no clock: it stands), and the lamp is lit
-   (`MAKING`).
+   (`MAKING`). M is what production still owes (`OrderShare#beingMade`): never more than `N − K`, since the stock part
+   arrives first, nor than what the own root has not produced yet, so it goes down run by run. The row stays "being
+   made" as long as the order is (`Row#making`), also once M is down to 0 before the root ends.
 
 Nothing is ever cancelled: a give-up or give-back takes back only the requester's own share and the promise of its own
 root, the chain runs on, and what it makes lands in stock, where the next order finds it first. When the request is
@@ -7749,13 +7755,15 @@ making (ADR-081).
 * JUnit: `RequesterLimitsTest`, `OrderAmountTest`, `ChecklistNeedTest`, `OrderShareTest`, `VariantPickTest`,
   `RequesterOrdersTest`, `RequesterStatusTest`, `ProductionOrdersTest` (`reducePromiseOf`); `ItemTooltipLengthTest`
   and `LangConsistencyTest` cover the description and the texts.
-* GameTests: `SchematicannonRequesterGameTests` (a real cannon printing through the requester, each with an item
-  census; since ADR-081 eleven production tests, in which the test plays the machine behind a production station
-  where one is needed and books what it takes and gives back: no pattern then the pattern, stock first, no more made
-  than the list needs, a pattern that cannot run, the reserve on ingredients, the clock standing while made, a failed
-  made part and a give-back that keep a player's click, a give-back right after a failed root that keeps one too, the
-  stopped ingredient named, a made order's save round trip), plus `WareworksItemGameTests` (recipe, grid, tab order),
-  `SchematicSafetyGameTests` (nothing in a print at the defaults) and `RemoteGameTests` (the shared terminal read).
+* GameTests: `SchematicannonRequesterGameTests` (a real cannon printing through the requester, each with an item census;
+  since ADR-081 thirteen production tests, in which the test plays the machine behind a production station where one is
+  needed and books what it takes and gives back: no pattern then the pattern, stock first (the goggles never showing
+  more being made than is still to come and counting down run by run), a making row keeping its line with nothing left
+  to make, no more ordered made than the list needs, a pattern that cannot run, a refusal to make forgotten once its
+  pattern is gone, the reserve on ingredients, the clock standing while made, a failed made part and a give-back that
+  keep a player's click, a give-back right after a failed root that keeps one too, the stopped ingredient named, a made
+  order's save round trip), plus `WareworksItemGameTests` (recipe, grid, tab order), `SchematicSafetyGameTests` (nothing
+  in a print at the defaults) and `RemoteGameTests` (the shared terminal read).
 * Visual scenarios `requester` (real clicks, the orders, the buffer and the belt, a rejoin mid order, English and
   German) and `requester-make` (the production path: stock first, no pattern, the pattern written with clicks, the
   rest made by a vanilla Crafter, English and German); `blocks`, `tooltips` and `ponder` (the scene
