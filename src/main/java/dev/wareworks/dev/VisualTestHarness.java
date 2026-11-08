@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
 import net.minecraft.CrashReport;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.sounds.SoundSource;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
@@ -31,6 +32,12 @@ import net.neoforged.neoforge.common.NeoForge;
  * On success the shot index is written and the game stops cleanly ({@link Minecraft#stop()}, exit code 0). On any exception,
  * step timeout or watchdog timeout the index is written with the reason and the game stops through a delayed crash report,
  * so the Gradle task fails. Every step and shot is logged with the prefix {@value #PREFIX}.
+ * <p>
+ * The test window runs while the owner works on another monitor, so on its first client ticks the harness turns the
+ * sound off ({@link #muteOnce}), stops the window from grabbing the mouse ({@link #keepMouseFree}) and makes it ignore
+ * real mouse clicks, mouse movement, scrolling, file drops and key presses ({@link #lockInput}). Scenario input never
+ * comes from the devices: world clicks and held keys go through {@code KeyMapping}, screen input through
+ * {@link ScreenInput}.
  */
 public final class VisualTestHarness {
     /** System property naming the scenario; the harness is inactive when it is unset. */
@@ -58,6 +65,8 @@ public final class VisualTestHarness {
     private boolean muted;
     /** Whether {@link #keepMouseFree} has replaced the window's focus callback yet. */
     private boolean mouseFreed;
+    /** Whether {@link #lockInput} has replaced the window's mouse and keyboard callbacks yet. */
+    private boolean inputLocked;
     /** Whether a step is being ticked right now; nested client tick loops must not advance the run. */
     private boolean ticking;
     /** Whether a frame callback is running right now; the client renders nested inside steps that pump its loop. */
@@ -108,6 +117,7 @@ public final class VisualTestHarness {
             return;
         harness.muteOnce();
         harness.keepMouseFree();
+        harness.lockInput();
         harness.tick();
     }
 
@@ -138,6 +148,61 @@ public final class VisualTestHarness {
         minecraft.setWindowActive(false);
         if (minecraft.mouseHandler.isMouseGrabbed())
             minecraft.mouseHandler.releaseMouse();
+    }
+
+    /**
+     * Makes the test window deaf to the real mouse and keyboard (owner's request 2026-11-08: a real left click into a
+     * creative test window broke a block and voided a run, twice). Once, the window's input callbacks that
+     * {@code MouseHandler#setup} and {@code KeyboardHandler#setup} install through {@code InputConstants
+     * #setupMouseCallbacks}/{@code #setupKeyboardCallbacks} - cursor position, mouse button, scroll, file drop, key and
+     * char-with-modifiers - and the cursor enter callback of {@code Window} are replaced with no-ops, and the old ones are
+     * freed like the focus callback in {@link #keepMouseFree}. Every mapping is released once, because a key held while
+     * the lock went in would never see its release. Window position, size, framebuffer, focus (already replaced),
+     * close and error handling stay untouched, so the window can still be moved, resized and closed.
+     * <p>
+     * Nothing a run sends goes through these callbacks: world clicks and held keys are {@code KeyMapping#click} and
+     * {@code KeyMapping#setDown}, screen input is {@link ScreenInput} (the handlers' {@code onPress}, {@code onScroll}
+     * and {@code keyPress} called directly, the cursor written into the mouse handler's fields), typed text is the
+     * screen's own {@code charTyped}. Without the key callback no real key release can reset a mapping a scenario holds,
+     * and without the cursor callback no real mouse moves the cursor a hover step has placed. Minecraft installs these
+     * callbacks only once, in its constructor ({@code Minecraft} calls both {@code setup}s; a fullscreen switch or
+     * {@code Window#setWindowed} changes the monitor of the same GLFW window), so the lock holds for the whole run. What
+     * GLFW reports when polled stays physical: {@code Screen#hasShiftDown} and friends still read the real keyboard,
+     * which {@link ScreenInput#requireNoModifiers} guards, and {@code KeyMapping#setAll} would read it too, but only
+     * {@code MouseHandler#grabMouse} calls it, which never runs on the inactive window ({@link #keepMouseFree}).
+     * Two more polls stay physical while the window has the OS focus: Ponder's hold-W on a tooltip
+     * ({@code PonderKeybinds} through {@code InputConstants#isKeyDown}) and Create's pressed look of an
+     * {@code IconButton} ({@code AllKeys#isMouseButtonDown}); neither is touched by a scenario.
+     */
+    private void lockInput() {
+        if (inputLocked)
+            return;
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getWindow() == null)
+            return;
+        long handle = minecraft.getWindow().getWindow();
+        freePrevious(GLFW.glfwSetCursorPosCallback(handle, (window, x, y) -> {
+        }));
+        freePrevious(GLFW.glfwSetMouseButtonCallback(handle, (window, button, action, modifiers) -> {
+        }));
+        freePrevious(GLFW.glfwSetScrollCallback(handle, (window, x, y) -> {
+        }));
+        freePrevious(GLFW.glfwSetDropCallback(handle, (window, count, names) -> {
+        }));
+        freePrevious(GLFW.glfwSetKeyCallback(handle, (window, key, scanCode, action, modifiers) -> {
+        }));
+        freePrevious(GLFW.glfwSetCharModsCallback(handle, (window, codePoint, modifiers) -> {
+        }));
+        freePrevious(GLFW.glfwSetCursorEnterCallback(handle, (window, entered) -> {
+        }));
+        KeyMapping.releaseAll();
+        inputLocked = true;
+        LOGGER.info(PREFIX + "input: the test window ignores real mouse and keyboard input");
+    }
+
+    private static void freePrevious(@Nullable Callback previous) {
+        if (previous != null)
+            previous.free();
     }
 
     /**

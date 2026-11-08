@@ -38,7 +38,8 @@ import net.minecraft.world.inventory.Slot;
  * {@code KeyboardHandler#keyPress}. So everything between the device and the screen runs as for a person (NeoForge's
  * screen input events, {@code Screen#afterMouseAction}, the GUI scale conversion, the screen's own hit testing); only the
  * GLFW event itself is missing. The mouse position is written into the mouse handler right before, in the same client
- * thread task, so a real mouse over the window cannot move it in between. No input is ever sent while no screen is open
+ * thread task; the real mouse and keyboard do not reach the handlers at all, because the harness has replaced the
+ * window's input callbacks ({@code VisualTestHarness#lockInput}). No input is ever sent while no screen is open
  * (the mouse handler would grab the mouse then).
  * <p>
  * <b>No modifier key is ever held, and none can be.</b> {@code Screen#hasShiftDown} and {@code hasControlDown} poll
