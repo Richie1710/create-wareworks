@@ -7,18 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0-beta] - 2026-11-08
+
 ### Changed
 
 - **Schematicannon Requester: what the warehouse does not have, it now has made**
-  ([#45](https://github.com/Richie1710/create-wareworks/issues/45)). When the cannon misses an item the warehouse
-  holds too little of, the requester takes what is in stock first and has the rest made by your machines through a
-  production pattern, as a terminal click would, but never more than the schematic still needs according to the
-  cannon's material list (a Stock Keeper's reserve still holds items and ingredients back). It still never orders an
-  item twice while it is on its way. While an order is being made, the lamp stays lit, the goggles say how many are
-  being made and the 10-minute switch waits for the machine. Taking the remote out gives back only the requester's own
-  share; production already running finishes and its items go into stock. With neither stock nor a pattern the lamp
-  turns red as before; a pattern that cannot run says why ("Oak Log is missing"), a stopped machine says so and names
-  the item the warehouse stopped making, and while the warehouse is busy making other things the requester waits.
+  ([#45](https://github.com/Richie1710/create-wareworks/issues/45)). When the cannon misses an item the warehouse holds
+  too little of, the requester takes what is in stock first and has the rest made by your machines through a production
+  pattern, as a terminal click would. It never orders more than the schematic still needs according to the cannon's
+  material list; since a pattern makes whole runs, a few extra items can be made, and they go into stock as with a
+  terminal click (a Stock Keeper's reserve still holds items and ingredients back). It still never orders an item twice
+  while it is on its way. While an order is being made, the lamp stays lit, the goggles say how many are still being
+  made and the 10-minute switch waits for the machine. Taking the remote out gives back only the requester's own share;
+  production already running finishes and its items go into stock. With neither stock nor a pattern the lamp turns red
+  as before; a pattern that cannot run says why ("Oak Log is missing"), a stopped machine says so and names the item the
+  warehouse stopped making, and while the warehouse is busy making other things the requester waits.
 - **Server and players have to update together.** A client with this version cannot join a server with an older one,
   and the other way round, because the Schematicannon Requester's goggles show new states. Worlds load unchanged.
 
@@ -1558,7 +1561,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.20.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.21.0-beta...HEAD
+[0.21.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.20.0-beta...v0.21.0-beta
 [0.20.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.19.0-beta...v0.20.0-beta
 [0.19.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.1-beta...v0.19.0-beta
 [0.18.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.0-beta...v0.18.1-beta
