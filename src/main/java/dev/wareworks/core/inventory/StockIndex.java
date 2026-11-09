@@ -42,6 +42,8 @@ public final class StockIndex<K, L> implements StockView<K, L> {
     private final Map<L, LocationEntry<K>> entries = new HashMap<>();
     private final Map<K, Map<L, Long>> countsByKey = new HashMap<>();
     private final Map<K, Long> totals = new HashMap<>();
+    /** Moves only when a key enters or leaves {@link #totals}: the cache key of everything built over the key set. */
+    private long keyGeneration;
     private final StockView<K, L> readOnlyView = new ReadOnlyView();
     private long totalItems;
     private int occupiedLocations;
@@ -159,10 +161,12 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         long delta = newCount - oldCount;
         totalItems += delta;
         long total = totals.getOrDefault(key, 0L) + delta;
-        if (total == 0)
-            totals.remove(key);
-        else
-            totals.put(key, total);
+        if (total == 0) {
+            if (totals.remove(key) != null)
+                keyGeneration++;
+        } else if (totals.put(key, total) == null) {
+            keyGeneration++;
+        }
 
         if (newCount == 0) {
             Map<L, Long> perLocation = countsByKey.get(key);
@@ -250,6 +254,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
     }
 
     @Override
+    public long keyGeneration() {
+        return keyGeneration;
+    }
+
+    @Override
     public boolean contains(L location) {
         return entries.containsKey(Objects.requireNonNull(location, "location"));
     }
@@ -274,6 +283,8 @@ public final class StockIndex<K, L> implements StockView<K, L> {
     public void clear() {
         entries.clear();
         countsByKey.clear();
+        if (!totals.isEmpty())
+            keyGeneration++;
         totals.clear();
         totalItems = 0;
         occupiedLocations = 0;
@@ -343,6 +354,11 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         @Override
         public Map<K, Long> totals() {
             return StockIndex.this.totals();
+        }
+
+        @Override
+        public long keyGeneration() {
+            return StockIndex.this.keyGeneration();
         }
 
         @Override

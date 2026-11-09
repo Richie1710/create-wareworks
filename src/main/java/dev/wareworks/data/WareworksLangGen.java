@@ -313,6 +313,7 @@ public final class WareworksLangGen {
                 case MISSING_INGREDIENTS -> "Ingredients are missing from the station";
                 case CRAFT_FAILED -> "The Crafter did not craft";
                 case RECIPE_CHANGED -> "The recipe no longer fits the pattern";
+                case FILTER_ITEM_REFUSED -> "The Crafter refuses an item the filter allowed";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_RESUMED), "The warehouse makes %1$s again");
@@ -895,10 +896,32 @@ public final class WareworksLangGen {
                 case CELL_NOT_ONE -> "Each cell must hold exactly 1 item";
                 case NOT_A_RECIPE -> "Not a crafting recipe";
                 case RESULT_DIFFERS -> "The recipe makes %1$s x%2$s";
+                case FILTER_NOT_CHECKABLE -> "The filter names no item to check";
                 default -> throw new IllegalStateException("no reason text for " + check);
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_CHECK_SKIPPED), "The Crafter Feeder skips this pattern");
+        // A filter cell the station refuses to write (ADR-082): the hotbar line of the edit.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_TOO_LARGE),
+                "This filter holds too much to go into a pattern");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_MAKES_RESULT),
+                "Refused: this filter allows the result itself");
+        // A filter cell's tooltip, the empty cell's hint and an order's "Uses" lines (ADR-082). Tooltip lines of a
+        // 216 px window at the 320 x 240 floor, measured by ProductionFilterTextWidthTest.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_CELL), "Any item this filter allows");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_MATCHES), "In stock, in the order used:");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_MATCH), "- %1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_MORE), "- and %1$s more");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_NONE), "Nothing in stock matches");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_SHORT), "No kind is enough for one run");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_DENY),
+                "Deny-List: anything else in stock may be used");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_CRAFTER),
+                "Only items the Crafter takes in this grid");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FILTER_HINT),
+                "A List or Attribute Filter allows a choice of items");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_ORDER_USES), "Uses %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_ORDER_USES_MORE), "and %1$s more");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RULES), "Rules");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_EMPTY_ROW), "Empty row");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM), "Minimum");
@@ -1142,6 +1165,7 @@ public final class WareworksLangGen {
                 case TOO_MANY_STEPS -> "Too many steps to make %1$s";
                 case TOO_MANY_INGREDIENT_ITEMS -> "Too many items to make %1$s";
                 case ORDERS_BUSY -> "No free order for %1$s";
+                case NO_MATCHING_ITEM -> "Nothing in stock fits %1$s";
             });
         }
 
@@ -1175,7 +1199,9 @@ public final class WareworksLangGen {
                 "Supplies your _machines_ with ingredients from a _pattern_. Works with _funnels_ and a _Mechanical "
                         + "Arm_.",
                 "When a batch is lost",
-                "The ring turns _red_; _Sneak-Right-Click_ restarts it.");
+                "The ring turns _red_; _Sneak-Right-Click_ restarts it.",
+                "With a filter in a pattern cell",
+                "Any item the _List_ or _Attribute Filter_ allows; the one with the most _stock_ first.");
 
         // Issue #34: what the block is and the one thing the Ponder scene cannot show a player holding the item.
         tooltip(lang, "block.wareworks.warehouse_crafter_feeder",

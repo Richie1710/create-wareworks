@@ -16,6 +16,9 @@ import com.simibubi.create.api.stress.BlockStressValues;
 import com.simibubi.create.content.kinetics.base.DirectionalAxisKineticBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
+import com.simibubi.create.content.logistics.filter.AttributeFilterWhitelistMode;
+import com.simibubi.create.content.logistics.item.filter.attribute.AllItemAttributeTypes;
+import com.simibubi.create.content.logistics.item.filter.attribute.ItemAttribute;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
@@ -37,6 +40,7 @@ import dev.wareworks.core.production.FeederCycle;
 import dev.wareworks.core.production.FeederStatus;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.production.SupplyLine;
 import dev.wareworks.network.ProductionScreenPayload;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
@@ -119,6 +123,8 @@ public final class CrafterFeederGameTests {
     private static final ItemKey HONEY_BOTTLE = ItemKey.of(Items.HONEY_BOTTLE);
     private static final ItemKey GLASS_BOTTLE = ItemKey.of(Items.GLASS_BOTTLE);
     private static final ItemKey HONEY_BLOCK = ItemKey.of(Items.HONEY_BLOCK);
+    private static final ItemKey BIRCH_PLANK = ItemKey.of(Items.BIRCH_PLANKS);
+    private static final ItemKey COBBLESTONE = ItemKey.of(Items.COBBLESTONE);
 
     /** Grid cells of the vanilla torch: coal on top of a stick, in the left column. */
     private static final int TOP_LEFT = 0;
@@ -1123,6 +1129,137 @@ public final class CrafterFeederGameTests {
                     helper.assertTrue(layout.feeder(helper).feedOrder().isEmpty(), "the feeder let go of the order");
                 })
                 .thenSucceed();
+    }
+
+    // --- filter cells (ADR-082) --------------------------------------------------------------------------------------
+
+    /**
+     * A filter cell is laid in segments: oak 4 and birch 4 for two tables of "any plank" are two segments of one run,
+     * each one kind in all four slots, never two kinds in the grid at once. The grid is empty afterwards and the census
+     * is on the craft ledger on every tick.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void crafterFeederFilterSegments(GameTestHelper helper) {
+        Layout layout = buildEmpty(helper, true);
+        layout.aisle().storage(COAL_RACK, PLANK.toStack(4), BIRCH_PLANK.toStack(4));
+        layout.aisle().storage(SPARE_RACK);
+        FilterCells.tablePattern(helper, layout.station(helper), 0, FilterCells.anyPlank());
+        Map<ItemKey, Long> start = ItemCensus.of(PLANK, 4, BIRCH_PLANK, 4);
+        List<Map<ItemKey, Long>> runs = List.of(Map.of(PLANK, -4L, FilterCells.TABLE, 1L),
+                Map.of(BIRCH_PLANK, -4L, FilterCells.TABLE, 1L));
+        boolean[] sawBoth = {false, false};
+        helper.onEachTick(() -> {
+            assertLedger(helper, start, 1, runs, "while a filter is laid in segments");
+            CrafterBlockEntity crafter = layout.crafter(helper);
+            Set<net.minecraft.world.item.Item> kinds = new HashSet<>();
+            for (int slot = 0; slot < 9; slot++) {
+                if (!crafter.getItem(slot).isEmpty())
+                    kinds.add(crafter.getItem(slot).getItem());
+            }
+            helper.assertTrue(kinds.size() <= 1, "never two kinds in the grid: " + kinds);
+            sawBoth[0] |= kinds.contains(Items.OAK_PLANKS);
+            sawBoth[1] |= kinds.contains(Items.BIRCH_PLANKS);
+        });
+        helper.startSequence()
+                .thenWaitUntil(() -> assertFilterStock(helper, layout, PLANK, 4))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(layout.station(helper).crafterCheck(0).check(), CrafterPatternCheck.VALID,
+                            "any plank in a 2 x 2 is a crafting table");
+                    order(helper, layout, FilterCells.TABLE, 2);
+                    List<SupplyLine<ItemKey>> lines = onlyOrder(helper, layout).lines();
+                    helper.assertValueEqual(lines.size(), 2, "two kinds, one run each");
+                    helper.assertTrue(lines.stream().allMatch(line -> line.required() == 4), "four planks each");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(layout.aisle().stationCount(OUTPUT_RACK, FilterCells.TABLE), 2L,
+                            "both tables reached the output");
+                    helper.assertValueEqual(onlyOrder(helper, layout).state(), ProductionOrderState.COMPLETE,
+                            "the order completed");
+                    helper.assertValueEqual(layout.feeder(helper).status(), FeederStatus.IDLE, "the feeder is idle");
+                })
+                .thenExecute(() -> {
+                    helper.assertValueEqual(assertLedger(helper, start, 1, runs, "at the end"), List.of(1, 1),
+                            "one table of each kind");
+                    helper.assertTrue(sawBoth[0] && sawBoth[1], "both kinds were laid, one after the other");
+                    CrafterBlockEntity crafter = layout.crafter(helper);
+                    for (int slot = 0; slot < 9; slot++)
+                        helper.assertTrue(crafter.getItem(slot).isEmpty(), "the grid is empty");
+                    assertNoSlotLocked(helper, crafter);
+                    helper.assertTrue(helper.getEntities(EntityType.ITEM).isEmpty(), "nothing was dropped");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * A filter that names no item cannot be checked against the Crafter (D14): "is smeltable" alone. With a feeder
+     * attached the pattern is {@code FILTER_NOT_CHECKABLE}, hidden from the planner, and nothing is fetched for it.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void crafterFeederFilterNotCheckable(GameTestHelper helper) {
+        Layout layout = buildEmpty(helper, true);
+        layout.aisle().storage(COAL_RACK, PLANK.toStack(STOCK));
+        layout.aisle().storage(SPARE_RACK);
+        ItemKey smeltable = FilterCells.attribute(AttributeFilterWhitelistMode.WHITELIST_DISJ,
+                new ItemAttribute.ItemAttributeEntry(AllItemAttributeTypes.SMELTABLE.createAttribute(), false));
+        FilterCells.tablePattern(helper, layout.station(helper), 0, smeltable);
+        Map<ItemKey, Long> conserved = ItemCensus.of(PLANK, STOCK);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while an unchecked filter waits"));
+        helper.startSequence()
+                .thenWaitUntil(() -> assertFilterStock(helper, layout, PLANK, STOCK))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(layout.station(helper).crafterCheck(0).check(),
+                            CrafterPatternCheck.FILTER_NOT_CHECKABLE, "the filter names nothing to check");
+                    helper.assertTrue(layout.station(helper).crafterCheck(0).check().refused(), "drawn red");
+                    WarehouseControllerBlockEntity controller = layout.aisle().controller();
+                    helper.assertTrue(controller.aislePatterns().isEmpty(), "hidden from the planner");
+                    RequestResult result = controller.request(layout.aisle().absoluteRackPos(OUTPUT_RACK),
+                            FilterCells.TABLE, 1);
+                    helper.assertFalse(result.isAccepted(), "so a table cannot be ordered: " + result);
+                    helper.assertValueEqual(controller.productionOrders().size(), 0, "no order");
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> helper.assertValueEqual(
+                        layout.aisle().stationCount(STATION_RACK, PLANK), 0L, "nothing was fetched"))
+                .thenSucceed();
+    }
+
+    /**
+     * At a feeder station a filter's candidates are narrowed to what the Crafter takes in that grid: a List Filter of
+     * oak planks and cobblestone in a planks grid never offers the cobblestone, though it is by far the largest stock.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void crafterFeederFilterNarrows(GameTestHelper helper) {
+        Layout layout = buildEmpty(helper, true);
+        layout.aisle().storage(COAL_RACK, PLANK.toStack(4), COBBLESTONE.toStack(64));
+        layout.aisle().storage(SPARE_RACK);
+        ItemKey list = FilterCells.list(Items.OAK_PLANKS, Items.COBBLESTONE);
+        FilterCells.tablePattern(helper, layout.station(helper), 0, list);
+        Map<ItemKey, Long> start = ItemCensus.of(PLANK, 4, COBBLESTONE, 64);
+        List<Map<ItemKey, Long>> runs = List.of(Map.of(PLANK, -4L, FilterCells.TABLE, 1L));
+        helper.onEachTick(() -> assertLedger(helper, start, 1, runs, "while a filter is narrowed"));
+        helper.startSequence()
+                .thenWaitUntil(() -> assertFilterStock(helper, layout, COBBLESTONE, 64))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(layout.station(helper).crafterCheck(0).check(), CrafterPatternCheck.VALID,
+                            "checked with the oak planks the list names first");
+                    order(helper, layout, FilterCells.TABLE, 1);
+                    List<SupplyLine<ItemKey>> lines = onlyOrder(helper, layout).lines();
+                    helper.assertValueEqual(lines.size(), 1, "one kind");
+                    helper.assertValueEqual(lines.getFirst().key(), PLANK, "the oak, never the cobblestone");
+                    RequestResult second = layout.aisle().controller().request(
+                            layout.aisle().absoluteRackPos(OUTPUT_RACK), FilterCells.TABLE, 1);
+                    helper.assertFalse(second.isAccepted(), "the cobblestone makes no table: " + second);
+                    helper.assertValueEqual(layout.aisle().controller().availableStock(COBBLESTONE), 64L,
+                            "and is never promised");
+                })
+                .thenSucceed();
+    }
+
+    /** The feeder is attached and {@code count} of {@code key} are in stock. */
+    private static void assertFilterStock(GameTestHelper helper, Layout layout, ItemKey key, long count) {
+        WarehouseControllerBlockEntity controller = layout.aisle().controller();
+        helper.assertValueEqual(controller.countOf(key), count, key + " in stock");
+        helper.assertValueEqual(controller.productionStations().size(), 1, "the station is recorded");
+        helper.assertTrue(layout.station(helper).attachedFeeder().isPresent(), "the feeder is attached");
     }
 
     // --- layout ------------------------------------------------------------------------------------------------------

@@ -2,6 +2,7 @@ package dev.wareworks.core.production;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.SequencedMap;
@@ -202,10 +203,41 @@ public final class SequentialPlans<K, L> {
      * slots the accepted chains have left. The configured order cap stays what it is, so a chain the earlier ones
      * crowded out is {@link PlanRefusal#ORDERS_BUSY} — waiting for an order to finish would let it through — and not
      * {@link PlanRefusal#TOO_MANY_STEPS} ({@link ProductionPlanInput#slotsBind()}).
+     * <p>
+     * The choices are the caller's with their free stock ({@link IngredientChoices#free}) less what the earlier lines
+     * and chains spent, so a later filter cell ranks its candidates by what is really left (ADR-082 D4): an earlier
+     * entry that took most of the largest kind does not keep that kind first, and the measurement picks the kind the
+     * real portion's request will pick.
      */
     private ProductionPlanInput<K, L> remaining() {
         return new ProductionPlanInput<>(base.patterns(), PlanBudget.of(this::available), base.limits(),
-                freeOrderSlots(), base.orderSlots(), base.pausedResults(), base.headroom());
+                freeOrderSlots(), base.orderSlots(), base.pausedResults(), base.headroom(), remainingChoices());
+    }
+
+    /**
+     * The caller's choices with the spent items taken off their free stock; candidates and plainness unchanged (the
+     * pattern argument is passed on as it is, so the content side still narrows by identity). {@link Long#MAX_VALUE}
+     * stays "no reserve information".
+     */
+    private IngredientChoices<K> remainingChoices() {
+        IngredientChoices<K> choices = base.choices();
+        return new IngredientChoices<>() {
+            @Override
+            public List<K> candidates(ProductionPattern<K> pattern, K choice) {
+                return choices.candidates(pattern, choice);
+            }
+
+            @Override
+            public long free(K key) {
+                long free = choices.free(key);
+                return free == Long.MAX_VALUE ? free : Math.max(0L, free - spent(key));
+            }
+
+            @Override
+            public boolean plain(K key) {
+                return choices.plain(key);
+            }
+        };
     }
 
     private static long saturatedAdd(long a, long b) {

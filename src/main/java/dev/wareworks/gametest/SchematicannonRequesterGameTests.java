@@ -1934,6 +1934,53 @@ public final class SchematicannonRequesterGameTests {
                 .thenSucceed();
     }
 
+    /**
+     * The requester has what it lacks made through a <b>filter cell</b> (ADR-082): six oak slabs, none in stock, and a
+     * pattern of three "any plank" cells. Of nine oak and three birch planks the one run takes the oak — the largest
+     * stock, although birch comes first by id and could pay the run too — in one line that remembers its filter, and the
+     * birch is untouched.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void filterRequesterMakes(GameTestHelper helper) {
+        ItemKey birch = ItemKey.of(Items.BIRCH_PLANKS);
+        AisleFixture aisle = warehouse(helper, true, PLANK.toStack(9), birch.toStack(3));
+        aisle.production(PRODUCTION_RACK);
+        aisle.input(INPUT_RACK);
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.OAK_SLAB.defaultBlockState(), 6));
+        scene.place(REQUESTER, Direction.EAST).setGraceSeconds(0);
+        Belt.start(helper, aisle, TERMINAL_RACK, CHEST, 0);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+        OrderLog log = OrderLog.watch(helper, REQUESTER);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> {
+                    WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+                    for (int cell = 0; cell < 3; cell++)
+                        helper.assertTrue(station.setPatternEntry(0, cell, FilterCells.anyPlank(), 1), "any plank");
+                    helper.assertTrue(station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, OAK_SLAB, 6),
+                            "six oak slabs");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(aisle.terminalAt(TERMINAL_RACK).producibleKeys()
+                        .contains(OAK_SLAB), "the slabs are producible"))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> helper.assertValueEqual(log.shares(Items.OAK_SLAB), List.of(6),
+                        "one order of what the schematic needs"))
+                .thenExecute(() -> {
+                    ProductionOrder<ItemKey, RackPosition> made = onlyProductionOrder(helper, aisle);
+                    helper.assertValueEqual(made.resultAmount(), 6, "one run");
+                    helper.assertValueEqual(made.lines().size(), 1, "paid by one kind");
+                    helper.assertValueEqual(made.lines().getFirst().key(), PLANK, "the largest stock");
+                    helper.assertValueEqual(made.lines().getFirst().required(), 3, "three planks");
+                    helper.assertValueEqual(made.lines().getFirst().choice(), Optional.of(FilterCells.anyPlank()),
+                            "remembering its filter");
+                    helper.assertValueEqual(aisle.controller().availableStock(birch), 3L, "the birch is untouched");
+                    assertShows(helper, REQUESTER, RequesterStatus.MAKING);
+                })
+                .thenSucceed();
+    }
+
     // --- the cannon's own settings ---------------------------------------------------------------------------------
 
     /**

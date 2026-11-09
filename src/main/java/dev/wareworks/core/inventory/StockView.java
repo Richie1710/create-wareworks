@@ -44,6 +44,12 @@ public interface StockView<K, L> {
      */
     Map<K, Long> totals();
 
+    /**
+     * A number that moves whenever a key enters or leaves {@link #keys()} and never on a mere count change (ADR-082): what
+     * a cache built over the key set — the stock matches of a filter — compares to know it is still current.
+     */
+    long keyGeneration();
+
     /** Whether {@code location} is indexed (possibly without stock). */
     boolean contains(L location);
 

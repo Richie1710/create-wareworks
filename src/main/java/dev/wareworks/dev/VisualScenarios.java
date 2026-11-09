@@ -47,6 +47,7 @@ final class VisualScenarios {
             Map.entry(JeiVisualScenario.NAME, JeiVisualScenario::new),
             Map.entry(PatternJeiVisualScenario.NAME, PatternJeiVisualScenario::new),
             Map.entry(FeederVisualScenario.NAME, FeederVisualScenario::new),
+            Map.entry(FilterCellVisualScenario.NAME, FilterCellVisualScenario::new),
             Map.entry(PatternStripVisualScenario.NAME, PatternStripVisualScenario::new),
             Map.entry(HandTruckVisualScenario.NAME, HandTruckVisualScenario::new),
             Map.entry(RemoteVisualScenario.NAME, RemoteVisualScenario::new),

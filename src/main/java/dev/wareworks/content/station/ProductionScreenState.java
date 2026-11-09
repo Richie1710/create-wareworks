@@ -24,8 +24,9 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
  * ({@link ProductionGoggleSummary}).
  * <p>
  * Both directions are bounded: at most {@value ProductionPatterns#MAX_SLOTS} patterns with
- * {@value ProductionPatterns#ENTRIES_PER_PATTERN} entries each and {@value #MAX_ORDERS} orders are ever written or
- * read, whatever a length prefix claims.
+ * {@value ProductionPatterns#ENTRIES_PER_PATTERN} entries each, {@value #MAX_ORDERS} orders and
+ * {@value #MAX_CHOICE_VIEWS} filter views of {@value #MAX_MATCHES_SHOWN} matches each are ever written or read, whatever
+ * a length prefix claims.
  *
  * @param patterns one entry list per pattern slot, in slot order
  * @param orders   the production orders at this station, newest last
@@ -37,9 +38,13 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
  * @param checks   the crafting recipe check of each pattern slot, in slot order; empty or
  *                 {@link CrafterPatternCheck#NOT_CHECKED} entries without a feeder. A slot past the end of the list
  *                 reads as not checked ({@link #check})
+ * @param choices  what the filter cells of the patterns would take (ADR-082): one view per filter of a slot, in slot
+ *                 order, at most {@value #MAX_CHOICE_VIEWS}. Empty for a station without a filter cell, and a filter
+ *                 past the bound has no view: the screen then draws the filter itself ({@link #choice})
  */
 public record ProductionScreenState(List<PatternView> patterns, List<OrderView> orders,
-                                    List<StoppedProduct> stopped, boolean feeder, List<PatternCheckView> checks) {
+                                    List<StoppedProduct> stopped, boolean feeder, List<PatternCheckView> checks,
+                                    List<ChoiceView> choices) {
     /**
      * Orders one payload carries; a station with more shows the first ones.
      * <p>
@@ -71,6 +76,18 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
      */
     public static final int MAX_DEPTH = PlanLimits.MAX_STEPS;
 
+    /**
+     * Filter views one payload carries (ADR-082), in slot order. A station whose filters go past it would be very
+     * unusual; a filter without a view shows only itself and its amount.
+     */
+    public static final int MAX_CHOICE_VIEWS = 64;
+
+    /** Stock matches a filter view names; the rest is a number ({@link ChoiceView#more()}). */
+    public static final int MAX_MATCHES_SHOWN = 4;
+
+    /** Items an order line names that a filter chose ({@link OrderView#uses()}); the rest is a number. */
+    public static final int MAX_USES_SHOWN = 4;
+
     public static final ProductionScreenState NONE =
             new ProductionScreenState(List.of(), List.of(), List.of());
 
@@ -79,6 +96,16 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         orders = List.copyOf(Objects.requireNonNull(orders, "orders"));
         stopped = List.copyOf(Objects.requireNonNull(stopped, "stopped"));
         checks = List.copyOf(Objects.requireNonNull(checks, "checks"));
+        choices = List.copyOf(Objects.requireNonNull(choices, "choices"));
+    }
+
+    /**
+     * A station without a filter cell: the shape every call site used before ADR-082, so a caller that says nothing about
+     * filters keeps describing patterns of exact items.
+     */
+    public ProductionScreenState(List<PatternView> patterns, List<OrderView> orders, List<StoppedProduct> stopped,
+            boolean feeder, List<PatternCheckView> checks) {
+        this(patterns, orders, stopped, feeder, checks, List.of());
     }
 
     /**
@@ -100,13 +127,98 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
     /**
      * One entry of a pattern slot.
      *
-     * @param entry the entry index: a grid cell, or {@value ProductionPatterns#RESULT_ENTRY} for the result
-     * @param key   the item
-     * @param count items per run
+     * @param entry  the entry index: a grid cell, or {@value ProductionPatterns#RESULT_ENTRY} for the result
+     * @param key    the item; for a filter cell the filter
+     * @param count  items per run
+     * @param filter whether this is a <b>filter cell</b> (ADR-082): any item the filter {@code key} allows pays for it
      */
-    public record EntryView(int entry, ItemKey key, int count) {
+    public record EntryView(int entry, ItemKey key, int count, boolean filter) {
         public EntryView {
             Objects.requireNonNull(key, "key");
+        }
+
+        /** An exact entry: every entry was one before ADR-082. */
+        public EntryView(int entry, ItemKey key, int count) {
+            this(entry, key, count, false);
+        }
+    }
+
+    /**
+     * One item in stock a filter cell allows, as its tooltip lists it (ADR-082).
+     *
+     * @param key       the item
+     * @param available how many of it a player's click may have, the reserve included as at the terminal
+     */
+    public record MatchView(ItemKey key, long available) {
+        public MatchView {
+            Objects.requireNonNull(key, "key");
+            available = Math.max(0L, available);
+        }
+    }
+
+    /**
+     * What one filter of one pattern slot would take right now (ADR-082). The server builds it from the aisle's stock in
+     * the planner's own pick order ({@code ChoiceAllocator#ranked}: plain items first, then the most free stock, then the
+     * most a player may have), so the cell says what an order placed now would pick.
+     *
+     * @param slot           the pattern slot
+     * @param filter         the filter, as the slot's cells hold it
+     * @param representative what the cell is drawn as: the first match, else the first item the filter names; empty when
+     *                       there is neither, and the screen draws the filter itself
+     * @param matches        the first {@value #MAX_MATCHES_SHOWN} matches in pick order
+     * @param more           how many more matches there are
+     * @param shortOfRun     whether there are matches but none of them alone pays one run: kinds are mixed only in whole
+     *                       runs
+     * @param deny           whether the filter is a deny filter, which allows anything in stock it does not name
+     * @param crafterLimited whether a Crafter Feeder narrows the matches to what the Crafter takes in this grid
+     * @param perRun         items of this filter one run takes: every cell of it in the slot together
+     */
+    public record ChoiceView(int slot, ItemKey filter, Optional<ItemKey> representative, List<MatchView> matches,
+                             int more, boolean shortOfRun, boolean deny, boolean crafterLimited, int perRun) {
+        public ChoiceView {
+            Objects.requireNonNull(filter, "filter");
+            Objects.requireNonNull(representative, "representative");
+            matches = List.copyOf(Objects.requireNonNull(matches, "matches"));
+            if (matches.size() > MAX_MATCHES_SHOWN)
+                matches = matches.subList(0, MAX_MATCHES_SHOWN);
+            more = Math.max(0, more);
+            perRun = Math.max(0, perRun);
+        }
+
+        void write(RegistryFriendlyByteBuf buffer) {
+            buffer.writeVarInt(slot);
+            ItemKey.STREAM_CODEC.encode(buffer, filter);
+            buffer.writeBoolean(representative.isPresent());
+            representative.ifPresent(key -> ItemKey.STREAM_CODEC.encode(buffer, key));
+            buffer.writeVarInt(matches.size());
+            for (MatchView match : matches) {
+                ItemKey.STREAM_CODEC.encode(buffer, match.key());
+                buffer.writeVarLong(match.available());
+            }
+            buffer.writeVarInt(more);
+            buffer.writeBoolean(shortOfRun);
+            buffer.writeBoolean(deny);
+            buffer.writeBoolean(crafterLimited);
+            buffer.writeVarInt(perRun);
+        }
+
+        static ChoiceView read(RegistryFriendlyByteBuf buffer) {
+            int slot = buffer.readVarInt();
+            ItemKey filter = ItemKey.STREAM_CODEC.decode(buffer);
+            Optional<ItemKey> representative = buffer.readBoolean()
+                    ? Optional.of(ItemKey.STREAM_CODEC.decode(buffer)) : Optional.empty();
+            int matchCount = Math.min(Math.max(0, buffer.readVarInt()), MAX_MATCHES_SHOWN);
+            List<MatchView> matches = new ArrayList<>(matchCount);
+            for (int i = 0; i < matchCount; i++) {
+                ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
+                matches.add(new MatchView(key, buffer.readVarLong()));
+            }
+            int more = buffer.readVarInt();
+            boolean shortOfRun = buffer.readBoolean();
+            boolean deny = buffer.readBoolean();
+            boolean crafterLimited = buffer.readBoolean();
+            return new ChoiceView(slot, filter, representative, matches, more, shortOfRun, deny, crafterLimited,
+                    buffer.readVarInt());
         }
     }
 
@@ -175,10 +287,14 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
      *                  an order fetches <b>nothing</b> at all until that step is done ({@code ProductionOrders
      *                  #hasOpenChildren}), which is the safety property of a chain and therefore said out loud rather
      *                  than guessed from the state
+     * @param uses      the items a filter cell chose for this order (ADR-082): one per supply line with a filter, in
+     *                  line order, with the line's whole amount, at most {@value #MAX_USES_SHOWN}. Empty for an order of
+     *                  exact ingredients, which shows nothing new
+     * @param usesMore  how many more such lines the order has
      */
     public record OrderView(UUID id, ProductionOrderState state, ItemKey result, int amount, long produced,
                             long missing, long delivered, Optional<UUID> plan, int depth, Optional<String> address,
-                            boolean waitingForStep) {
+                            boolean waitingForStep, List<EntryView> uses, int usesMore) {
         public OrderView {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(state, "state");
@@ -191,6 +307,17 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
             // Clamped here rather than at the reader, so the bound holds for every caller and not only for the wire.
             depth = Math.min(Math.max(0, depth), MAX_DEPTH);
             Objects.requireNonNull(address, "address");
+            uses = List.copyOf(Objects.requireNonNull(uses, "uses"));
+            if (uses.size() > MAX_USES_SHOWN)
+                uses = uses.subList(0, MAX_USES_SHOWN);
+            usesMore = Math.max(0, usesMore);
+        }
+
+        /** An order no filter chose an item for: every order was one before ADR-082. */
+        public OrderView(UUID id, ProductionOrderState state, ItemKey result, int amount, long produced, long missing,
+                long delivered, Optional<UUID> plan, int depth, Optional<String> address, boolean waitingForStep) {
+            this(id, state, result, amount, produced, missing, delivered, plan, depth, address, waitingForStep,
+                    List.of(), 0);
         }
 
         /**
@@ -242,6 +369,13 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
             buffer.writeVarInt(depth);
             buffer.writeOptional(address, (out, value) -> out.writeUtf(value, MAX_ADDRESS_LENGTH));
             buffer.writeBoolean(waitingForStep);
+            // Appended (ADR-082): an order of exact ingredients pays two zero bytes.
+            buffer.writeVarInt(uses.size());
+            for (EntryView use : uses) {
+                ItemKey.STREAM_CODEC.encode(buffer, use.key());
+                buffer.writeVarInt(use.count());
+            }
+            buffer.writeVarInt(usesMore);
         }
 
         /** Reads a line written by {@link #write}; an unknown state ordinal falls back to the first state. */
@@ -258,8 +392,15 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
             Optional<UUID> plan = buffer.readOptional(in -> in.readUUID());
             int depth = buffer.readVarInt();
             Optional<String> address = buffer.readOptional(in -> in.readUtf(MAX_ADDRESS_LENGTH));
+            boolean waitingForStep = buffer.readBoolean();
+            int useCount = Math.min(Math.max(0, buffer.readVarInt()), MAX_USES_SHOWN);
+            List<EntryView> uses = new ArrayList<>(useCount);
+            for (int i = 0; i < useCount; i++) {
+                ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
+                uses.add(new EntryView(i, key, buffer.readVarInt()));
+            }
             return new OrderView(id, state, result, amount, produced, missing, delivered, plan, depth, address,
-                    buffer.readBoolean());
+                    waitingForStep, uses, buffer.readVarInt());
         }
     }
 
@@ -276,6 +417,7 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
                 buffer.writeVarInt(entry.entry());
                 ItemKey.STREAM_CODEC.encode(buffer, entry.key());
                 buffer.writeVarInt(entry.count());
+                buffer.writeBoolean(entry.filter());
             }
         }
         int orderCount = Math.min(orders.size(), MAX_ORDERS);
@@ -293,6 +435,11 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         buffer.writeVarInt(checkCount);
         for (int i = 0; i < checkCount; i++)
             checks.get(i).write(buffer);
+        // Appended after the checks (ADR-082): a station without a filter cell pays one zero byte.
+        int choiceCount = Math.min(choices.size(), MAX_CHOICE_VIEWS);
+        buffer.writeVarInt(choiceCount);
+        for (int i = 0; i < choiceCount; i++)
+            choices.get(i).write(buffer);
     }
 
     /** Reads a state written by {@link #write}; bounded, and unknown ordinals fall back to the first state. */
@@ -305,7 +452,8 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
             for (int e = 0; e < entryCount; e++) {
                 int index = buffer.readVarInt();
                 ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
-                entries.add(new EntryView(index, key, buffer.readVarInt()));
+                int count = buffer.readVarInt();
+                entries.add(new EntryView(index, key, count, buffer.readBoolean()));
             }
             patterns.add(new PatternView(entries));
         }
@@ -322,7 +470,25 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         List<PatternCheckView> checks = new ArrayList<>(checkCount);
         for (int i = 0; i < checkCount; i++)
             checks.add(PatternCheckView.read(buffer));
-        return new ProductionScreenState(patterns, orders, stopped, feeder, checks);
+        int choiceCount = Math.min(Math.max(0, buffer.readVarInt()), MAX_CHOICE_VIEWS);
+        List<ChoiceView> choices = new ArrayList<>(choiceCount);
+        for (int i = 0; i < choiceCount; i++)
+            choices.add(ChoiceView.read(buffer));
+        return new ProductionScreenState(patterns, orders, stopped, feeder, checks, choices);
+    }
+
+    /**
+     * The view of filter {@code filter} in pattern slot {@code pattern} (ADR-082), if the server sent one: past
+     * {@value #MAX_CHOICE_VIEWS} views it sends none for the rest.
+     */
+    public Optional<ChoiceView> choice(int pattern, ItemKey filter) {
+        if (filter == null)
+            return Optional.empty();
+        for (ChoiceView view : choices) {
+            if (view.slot() == pattern && view.filter().equals(filter))
+                return Optional.of(view);
+        }
+        return Optional.empty();
     }
 
     /** The crafting recipe check of pattern slot {@code pattern}; not checked without a feeder or past the list. */

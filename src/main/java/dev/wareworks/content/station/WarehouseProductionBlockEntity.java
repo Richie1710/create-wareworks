@@ -4,6 +4,7 @@ import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -103,6 +104,11 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      */
     private WeakReference<Object> checksRecipes = new WeakReference<>(null);
     /**
+     * Whether the Crafter takes a key for a filter group of a slot ({@link #crafterTakes}, ADR-082), valid with
+     * {@link #checks}: cleared whenever they are.
+     */
+    private final Map<SlotChoiceKey, Boolean> crafterTakes = new HashMap<>();
+    /**
      * Runs of each open order the attached Crafter Feeder has laid into its Crafter (issue #34, ADR-067). Kept here and
      * saved with the station rather than with the feeder, so a feeder that is broken and placed again, or whose save
      * could not be read, knows how much of an order is already in the Crafter or crafted and never lays it twice.
@@ -146,15 +152,62 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      * fetching ingredients for a pattern the Crafter would not craft: a pattern that is not offered is never ordered.
      */
     public List<ProductionPattern<ItemKey>> activePatterns() {
-        if (level == null || level.isClientSide || attachedFeeder().isEmpty())
-            return patterns.patterns();
-        List<ProductionPattern<ItemKey>> usable = new ArrayList<>(patterns.size());
+        List<SlotPattern> slots = activeSlots();
+        List<ProductionPattern<ItemKey>> usable = new ArrayList<>(slots.size());
+        for (SlotPattern slot : slots)
+            usable.add(slot.pattern());
+        return List.copyOf(usable);
+    }
+
+    /**
+     * One pattern the warehouse may plan with, and the slot it is in (ADR-082): the slot is what narrows a filter's
+     * candidates to what the Crafter at this station takes ({@link #crafterTakes}).
+     */
+    public record SlotPattern(int slot, ProductionPattern<ItemKey> pattern) {
+    }
+
+    /** {@link #activePatterns()} with each pattern's slot, in slot order. */
+    public List<SlotPattern> activeSlots() {
+        boolean feeder = level != null && !level.isClientSide && attachedFeeder().isPresent();
+        List<SlotPattern> usable = new ArrayList<>(patterns.size());
         for (int slot = 0; slot < patterns.size(); slot++) {
             Optional<ProductionPattern<ItemKey>> pattern = patterns.patternAt(slot);
-            if (pattern.isPresent() && checkOf(slot).check() == CrafterPatternCheck.VALID)
-                usable.add(pattern.get());
+            if (pattern.isPresent() && (!feeder || checkOf(slot).check() == CrafterPatternCheck.VALID))
+                usable.add(new SlotPattern(slot, pattern.get()));
         }
         return List.copyOf(usable);
+    }
+
+    /**
+     * Server: whether the Crafter at this station takes {@code key} for the filter cells of {@code choice} in slot
+     * {@code slot} (ADR-082): always without a feeder; with one, the slot's checked reference grid with every cell of
+     * that filter set to {@code key} must make exactly the pattern's result. Cached until the patterns or the recipes
+     * change, so a planning pass asks the recipe book once per slot, filter and key.
+     */
+    public boolean crafterTakes(int slot, ItemKey choice, ItemKey key) {
+        if (level == null || level.isClientSide || attachedFeeder().isEmpty())
+            return true;
+        CrafterRecipeCheck.Result check = checkOf(slot);
+        if (check.check() != CrafterPatternCheck.VALID || check.reference().isEmpty())
+            return false;
+        SlotChoiceKey cacheKey = new SlotChoiceKey(slot, choice, key);
+        Boolean cached = crafterTakes.get(cacheKey);
+        if (cached != null)
+            return cached;
+        Optional<ItemKey> result = patterns.keyAt(slot, ProductionPatterns.RESULT_ENTRY);
+        CrafterGrid<ItemKey> layout = CrafterRecipeCheck.layoutOf(patterns, slot);
+        CrafterGrid<ItemKey> reference = check.reference().get();
+        List<ItemKey> cells = new ArrayList<>(CrafterGrid.SLOTS);
+        for (int cell = 0; cell < CrafterGrid.SLOTS; cell++)
+            cells.add(layout.at(cell).filter(choice::equals).isPresent() ? key : reference.at(cell).orElse(null));
+        boolean takes = result.isPresent() && CrafterRecipeCheck.makesExactly(level, CrafterGrid.ofNullable(cells),
+                result.get(), patterns.countAt(slot, ProductionPatterns.RESULT_ENTRY));
+        crafterTakes.put(cacheKey, takes);
+        return takes;
+    }
+
+    /** The cache key of {@link #crafterTakes}. */
+    private record SlotChoiceKey(int slot, ItemKey choice, ItemKey key) {
     }
 
     // --- the crafter feeder (issue #34, ADR-067) ---------------------------------------------------------------------
@@ -212,6 +265,7 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             checks = new CrafterRecipeCheck.Result[patterns.size()];
             checksRevision = patternsRevision;
             checksRecipes = new WeakReference<>(recipes);
+            crafterTakes.clear();
         }
         CrafterRecipeCheck.Result cached = checks[slot];
         if (cached == null) {
@@ -268,6 +322,31 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
     private void patternsChanged() {
         patternsRevision++;
         Arrays.fill(checks, null);
+        crafterTakes.clear();
+    }
+
+    /**
+     * What a player's edit of one pattern entry came to (ADR-082): written, nothing to change, or refused with the
+     * reason the hotbar line names.
+     */
+    public enum EditOutcome {
+        /** The entry changed. */
+        CHANGED,
+        /** Nothing changed: the same entry, an out-of-range index, or a refused item. */
+        UNCHANGED,
+        /** The filter encodes into more than {@link PatternFilterCells#MAX_FILTER_BYTES} (D16). */
+        FILTER_TOO_LARGE,
+        /** A filter cell would let the slot's result through, in either direction of the edit (D12). */
+        FILTER_LETS_RESULT;
+
+        /** The hotbar line of a refusal, or {@code null} for an outcome that is none. */
+        public String langKey() {
+            return switch (this) {
+                case FILTER_TOO_LARGE -> WareworksLang.PRODUCTION_FILTER_TOO_LARGE;
+                case FILTER_LETS_RESULT -> WareworksLang.PRODUCTION_FILTER_MAKES_RESULT;
+                default -> null;
+            };
+        }
     }
 
     /**
@@ -294,16 +373,19 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      * result the grid does not make was chosen by the player, for another machine, and is left alone, and so is every
      * result while only a cell's amount changes. A cell holding more than one item is no crafting grid.
      */
-    public boolean editPatternEntry(int pattern, int entry, ItemKey key, int count) {
+    public EditOutcome editPatternEntry(int pattern, int entry, ItemKey key, int count) {
         if (level == null || level.isClientSide || isRemoved())
-            return false;
+            return EditOutcome.UNCHANGED;
+        EditOutcome refused = refusedFilterEdit(pattern, entry, key);
+        if (refused != null)
+            return refused;
         Optional<ItemKey> result = patterns.keyAt(pattern, ProductionPatterns.RESULT_ENTRY);
         boolean follows = pattern >= 0 && pattern < patterns.size() && entry >= 0
                 && entry < ProductionPatterns.GRID_CELLS
                 && !patterns.keyAt(pattern, entry).equals(Optional.ofNullable(key))
                 && (result.isEmpty() || isWhatTheGridMakes(pattern, result.get()));
         if (!follows)
-            return setPatternEntry(pattern, entry, key, count);
+            return setPatternEntry(pattern, entry, key, count) ? EditOutcome.CHANGED : EditOutcome.UNCHANGED;
         if (result.isPresent())
             patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY, null, ProductionEntry.MIN_COUNT);
         patterns.setEntry(pattern, entry, key, count);
@@ -311,7 +393,35 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                 ItemKey.of(made), made.getCount()));
         patternsChanged();
         setChanged();
-        return true;
+        return EditOutcome.CHANGED;
+    }
+
+    /**
+     * The refusal of a filter edit (ADR-082), or {@code null}: a filter into a grid cell must fit (D16) and must not let
+     * the slot's result through, and a result must not be let through by any filter cell of the slot (D12). The core
+     * leaves the result out of a filter's candidates anyway; refusing here keeps a player from writing a pattern that
+     * reads as making its own ingredient.
+     */
+    private EditOutcome refusedFilterEdit(int pattern, int entry, ItemKey key) {
+        if (key == null || pattern < 0 || pattern >= patterns.size())
+            return null;
+        if (entry >= 0 && entry < ProductionPatterns.GRID_CELLS && PatternFilterCells.isFilter(key)) {
+            if (!PatternFilterCells.fits(key, level.registryAccess()))
+                return EditOutcome.FILTER_TOO_LARGE;
+            Optional<ItemKey> result = patterns.keyAt(pattern, ProductionPatterns.RESULT_ENTRY);
+            if (result.isPresent()
+                    && PatternFilterCells.test(PatternFilterCells.resolve(key), level, result.get()))
+                return EditOutcome.FILTER_LETS_RESULT;
+            return null;
+        }
+        if (entry == ProductionPatterns.RESULT_ENTRY) {
+            for (int cell = 0; cell < ProductionPatterns.GRID_CELLS; cell++) {
+                if (patterns.isFilterAt(pattern, cell) && PatternFilterCells.test(
+                        PatternFilterCells.resolve(patterns.keyAt(pattern, cell).orElseThrow()), level, key))
+                    return EditOutcome.FILTER_LETS_RESULT;
+            }
+        }
+        return null;
     }
 
     private boolean isWhatTheGridMakes(int pattern, ItemKey result) {
@@ -320,27 +430,44 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                 .isPresent();
     }
 
-    /** What pattern slot {@code pattern}'s grid makes in a Crafter; nothing if a cell holds more than one item. */
+    /**
+     * What pattern slot {@code pattern}'s grid makes in a Crafter; nothing if a cell holds more than one item. A filter
+     * group is read as the first item its filter names (D13), and a group that names none makes nothing, so the result
+     * does not follow.
+     */
     private Optional<ItemStack> recipeOfGrid(int pattern) {
-        CrafterGrid<ItemKey> grid = CrafterRecipeCheck.layoutOf(patterns, pattern);
+        Optional<CrafterGrid<ItemKey>> grid = CrafterRecipeCheck.referenceLayout(patterns, pattern, level);
+        if (grid.isEmpty())
+            return Optional.empty();
         int[] counts = new int[CrafterGrid.SLOTS];
         for (int cell = 0; cell < CrafterGrid.SLOTS; cell++)
             counts[cell] = patterns.countAt(pattern, cell);
-        return grid.allCellsSingle(counts) ? CrafterRecipeCheck.makes(level, grid) : Optional.empty();
+        return grid.get().allCellsSingle(counts) ? CrafterRecipeCheck.makes(level, grid.get()) : Optional.empty();
     }
 
     /**
      * Server: overwrites one pattern slot with a recipe a player laid from a recipe viewer (ADR-076). The caller has
-     * checked that {@code result} is none of {@code cells}.
+     * checked that {@code result} is none of {@code cells}. Every cell is exact.
      */
     public void writePattern(int pattern, CrafterGrid<ItemKey> cells, List<Integer> counts, ItemKey result,
             int resultCount) {
+        writePattern(pattern, cells, new boolean[CrafterGrid.SLOTS], counts, result, resultCount);
+    }
+
+    /**
+     * {@link #writePattern(int, CrafterGrid, List, ItemKey, int)} with the cells that are filter cells (ADR-082), e.g.
+     * the "is tagged" filters a recipe viewer's tag ingredients became. A flagged cell whose key is no configured filter
+     * is written exact.
+     */
+    public void writePattern(int pattern, CrafterGrid<ItemKey> cells, boolean[] filterCells, List<Integer> counts,
+            ItemKey result, int resultCount) {
         if (level == null || level.isClientSide || isRemoved())
             return;
         patterns.clearPattern(pattern);
         for (int cell = 0; cell < CrafterGrid.SLOTS; cell++) {
             int index = cell;
-            cells.at(cell).ifPresent(key -> patterns.setEntry(pattern, index, key, counts.get(index)));
+            boolean filter = index < filterCells.length && filterCells[index];
+            cells.at(cell).ifPresent(key -> patterns.setEntry(pattern, index, key, counts.get(index), filter));
         }
         patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY, result, resultCount);
         patternsChanged();

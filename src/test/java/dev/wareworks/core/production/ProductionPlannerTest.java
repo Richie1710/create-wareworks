@@ -651,6 +651,15 @@ class ProductionPlannerTest {
         ProductionPlanResult<String, String> missing = ProductionPlanner.plan(input(chain), CHEST, 1);
         refused(missing, PlanRefusal.MISSING_INGREDIENT, LOG);
         seen.add(PlanRefusal.MISSING_INGREDIENT);
+        // A filter cell nothing in stock fits and nothing makes (ADR-082) names the filter.
+        String anyPlank = "filter:planks";
+        ProductionPattern<String> filtered = ProductionPattern.fromGrid(
+                List.of(new ProductionEntry<>(anyPlank, 4)), new ProductionEntry<>(TABLE, 1), Set.of(anyPlank));
+        ProductionPlanResult<String, String> unmatched = ProductionPlanner.plan(
+                input(aisle(CRAFTER, filtered)).withChoices(IngredientChoices.of(Map.of(anyPlank, List.of(PLANK)))),
+                TABLE, 1);
+        refused(unmatched, PlanRefusal.NO_MATCHING_ITEM, anyPlank);
+        seen.add(PlanRefusal.NO_MATCHING_ITEM);
         assertEquals(EnumSet.allOf(PlanRefusal.class), seen, "every refusal has a case here");
         for (PlanRefusal refusal : PlanRefusal.values())
             assertTrue(refusal.langKey().startsWith("gui.production.plan.refusal."), refusal::langKey);

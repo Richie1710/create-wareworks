@@ -2,9 +2,11 @@ package dev.wareworks.core.production;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * What one run of a player's machine turns into what ({@code docs/warehouse-system.md} §3.5, ADR-024): the ingredients
@@ -30,13 +32,23 @@ import java.util.Objects;
  * result that is produced from …). Refusing it at construction keeps that loop unrepresentable instead of guarding
  * against it in every reader.</li>
  * </ul>
+ * <b>Choice ingredients (ADR-082).</b> A cell may hold a Create List or Attribute Filter instead of an exact item. Its
+ * key is then the <i>filter's own</i> key, and that key is one of {@link #choices()}: an ingredient that any item the
+ * filter allows may pay for. The pattern stays a value — equal filters merge in {@link #fromGrid} like equal items,
+ * different filters stay apart — and it never resolves a filter itself: the planners ask an
+ * {@link IngredientChoices} which keys may pay for a choice, and {@link ChoiceAllocator} pays it in whole runs, the
+ * largest stock first. An order is always created from the concrete keys that were chosen ({@link NodeLine}), never
+ * from a choice, so nothing downstream of a plan ever sees a filter key. The result is always one exact item.
+ * <p>
  * Immutable and pure: no Minecraft types, so the whole producible computation is unit tested without a game.
  *
  * @param ingredients what one run consumes, 1..{@value #MAX_INGREDIENTS} entries with distinct keys
  * @param result      what one run is expected to yield
+ * @param choices     the ingredient keys that are choices (filters) rather than exact items; every one of them is an
+ *                    ingredient key. Empty for a pattern of exact items, which is every pattern before ADR-082
  * @param <K>         item key type
  */
-public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, ProductionEntry<K> result) {
+public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, ProductionEntry<K> result, Set<K> choices) {
     /** Edge length of the authoring grid: a pattern reads like a vanilla crafting recipe. */
     public static final int GRID_WIDTH = 3;
     /** Cells of the authoring grid, {@value #GRID_WIDTH} x {@value #GRID_WIDTH}. */
@@ -62,6 +74,16 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
         if (seen.contains(result.key()))
             throw new IllegalArgumentException("a pattern must not produce one of its own ingredients: "
                     + result.key());
+        choices = Set.copyOf(Objects.requireNonNull(choices, "choices"));
+        for (K choice : choices) {
+            if (!seen.contains(choice))
+                throw new IllegalArgumentException("a choice must be one of the ingredients: " + choice);
+        }
+    }
+
+    /** A pattern of exact ingredients only, as every pattern was before ADR-082. */
+    public ProductionPattern(List<ProductionEntry<K>> ingredients, ProductionEntry<K> result) {
+        this(ingredients, result, Set.of());
     }
 
     /**
@@ -78,7 +100,21 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
      *                                  one of the ingredients
      */
     public static <K> ProductionPattern<K> fromGrid(List<ProductionEntry<K>> cells, ProductionEntry<K> result) {
+        return fromGrid(cells, result, Set.of());
+    }
+
+    /**
+     * {@link #fromGrid(List, ProductionEntry)} with filter cells (ADR-082): the keys in {@code choices} are filters,
+     * and cells holding the same filter merge into one choice ingredient exactly as equal items merge — four cells of
+     * "any plank" become one choice of 4. Two different filters stay two ingredients even when they allow the same
+     * items; the planner resolves the overlap ({@link ChoiceAllocator#payOrder}).
+     *
+     * @param choices the cell keys that are filters; keys that no cell holds are ignored
+     */
+    public static <K> ProductionPattern<K> fromGrid(List<ProductionEntry<K>> cells, ProductionEntry<K> result,
+            Set<K> choices) {
         Objects.requireNonNull(cells, "cells");
+        Objects.requireNonNull(choices, "choices");
         if (cells.isEmpty() || cells.size() > GRID_SIZE)
             throw new IllegalArgumentException("a pattern grid holds 1.." + GRID_SIZE + " filled cells: "
                     + cells.size());
@@ -87,7 +123,12 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
             Objects.requireNonNull(cell, "cell");
             merged.merge(cell.key(), cell, (existing, added) -> existing.plus(added.count()));
         }
-        return new ProductionPattern<>(List.copyOf(merged.values()), result);
+        Set<K> used = new LinkedHashSet<>();
+        for (K choice : choices) {
+            if (merged.containsKey(choice))
+                used.add(choice);
+        }
+        return new ProductionPattern<>(List.copyOf(merged.values()), result, used);
     }
 
     /** A pattern of one ingredient, e.g. one log to four planks. */
@@ -101,13 +142,51 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
         return result.key().equals(key);
     }
 
-    /** Whether one run of this pattern consumes {@code key}. */
+    /**
+     * Whether one run of this pattern consumes exactly {@code key}: an exact ingredient. Never true for a choice
+     * (ADR-082), whose key is a filter no rack holds; what a choice may consume is the planner's question
+     * ({@link IngredientChoices}).
+     */
     public boolean consumes(K key) {
         for (ProductionEntry<K> ingredient : ingredients) {
-            if (ingredient.key().equals(key))
+            if (ingredient.key().equals(key) && !choices.contains(key))
                 return true;
         }
         return false;
+    }
+
+    /** Whether {@code key} is one of this pattern's choice ingredients (a filter cell, ADR-082). */
+    public boolean isChoice(K key) {
+        return choices.contains(key);
+    }
+
+    /** Whether any ingredient of this pattern is a choice (ADR-082). */
+    public boolean hasChoices() {
+        return !choices.isEmpty();
+    }
+
+    /** The exact ingredients, in pattern order. */
+    public List<ProductionEntry<K>> exactIngredients() {
+        if (choices.isEmpty())
+            return ingredients;
+        List<ProductionEntry<K>> exact = new ArrayList<>(ingredients.size());
+        for (ProductionEntry<K> ingredient : ingredients) {
+            if (!choices.contains(ingredient.key()))
+                exact.add(ingredient);
+        }
+        return List.copyOf(exact);
+    }
+
+    /** The choice ingredients (ADR-082), in pattern order. */
+    public List<ProductionEntry<K>> choiceIngredients() {
+        if (choices.isEmpty())
+            return List.of();
+        List<ProductionEntry<K>> chosen = new ArrayList<>(choices.size());
+        for (ProductionEntry<K> ingredient : ingredients) {
+            if (choices.contains(ingredient.key()))
+                chosen.add(ingredient);
+        }
+        return List.copyOf(chosen);
     }
 
     /** Items one run consumes in total, over all ingredients. */

@@ -3965,3 +3965,36 @@ you get tired of waiting, and put it back before judging check 160.
      orders as soon as the computer's chain is done. Taking the remote out while the requester's own chain runs gives
      back only its share: the chain finishes and its items go into stock, and a click of yours merged into the same
      request keeps its amount.
+
+## BS. Filter cells in production patterns (ADR-082)
+
+> `ProductionFilterGameTests` checks the server side (classification, largest stock, whole runs, reserves, the screen's
+> data, the hotbar refusals and the JEI lay without JEI). What a person has to judge, with oak, birch, spruce and dark
+> oak planks in stock and a station behind a crafting machine:
+
+459. **Clicking a filter in.** Configure an Attribute Filter "is tagged #minecraft:planks" in Create's screen, hold it
+     and click the four cells of the top-left 2 x 2 of a pattern: each shows the plank the warehouse holds most of, with
+     the filter as a small badge in its top-left corner and a thin gold frame; the result follows to Crafting Table. Shift-click the filter in your
+     inventory: it goes into the first free cell. Does the badge read as "any of these"?
+460. **A blank filter stays an item.** Click a blank List Filter and a Package Filter into a cell: they are plain items
+     (no frame, no badge), and so is any filter clicked into the result cell.
+461. **The tooltip.** Hover a filter cell: the filter's own name and summary, "Any item this filter allows", then "In
+     stock, in the order used:" with the planks and their amounts (a plank held by a Stock Keeper reserve comes last,
+     whatever its amount). Are the numbers the terminal's numbers for the same items?
+     Order a table at the terminal: is the first line the plank that was taken?
+462. **Refusals.** Put "is tagged #minecraft:planks" into a pattern whose result is Oak Planks: the action bar says it
+     is refused, and the cell stays empty. Do the same with a List Filter that holds a written book of several full
+     pages (more than 4096 bytes in all): "This filter holds too much to go into a pattern". Is either line clear?
+463. **Deny.** An Attribute Filter in deny mode: the tooltip warns in gold that anything else in stock may be used. Is
+     that warning enough?
+464. **A reserve.** A Stock Keeper reserve on the birch: a redstone request takes the other planks, and a terminal click
+     takes them first and asks about the reserve only when the free planks run out.
+465. **Orders say what they use.** After a mixed order (one kind too short for all runs), hover the order at the station
+     and at the terminal: "Uses Birch Planks x16" and "Uses Oak Planks x8".
+466. **JEI** (with `-Pwareworks.jei`). Press **+** on the Chest: eight filter cells "is tagged #minecraft:planks", the
+     result Chest. Press **+** on the Torch: the stick is a filter "is tagged #c:rods/wooden", the coal stays an item.
+467. **Two players on a dedicated server.** Both with the station screen open: a filter clicked in by one appears for
+     the other within half a second, with the same matches.
+468. **An old world.** A world saved before this version with patterns: every pattern reads and makes exactly as
+     before, and a filter that was an ingredient item there stays an item.
+469. **36 patterns.** A filter cell in pattern 36 of a station with 36 patterns: drawn and listed like in pattern 1.

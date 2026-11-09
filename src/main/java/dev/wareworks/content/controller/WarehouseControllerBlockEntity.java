@@ -40,6 +40,8 @@ import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.HomePointStatus;
+import dev.wareworks.content.station.PatternFilterCells;
+import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalFluidOutcome;
 import dev.wareworks.content.station.TerminalFluids;
@@ -85,12 +87,17 @@ import dev.wareworks.core.optimizer.RelocationStock;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
+import dev.wareworks.core.production.ChoiceAllocator;
+import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.FetchPreview;
+import dev.wareworks.core.production.IngredientChoices;
+import dev.wareworks.core.production.NodeLine;
 import dev.wareworks.core.production.PlanBudget;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.production.PlanNode;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProduciblePlanner;
+import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionOrders;
@@ -366,6 +373,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             new ProductionOrders<>(configuredMaxProductionOrders());
     /** Job planning and reservations; derived from the crane's job, not saved. */
     private final CraneDispatch dispatch = new CraneDispatch(this);
+    /** What the filter cells of this aisle's patterns allow (ADR-082); asked at clicks and passes, never ticked. */
+    private final FilterMatchCache filterMatches = new FilterMatchCache();
     /**
      * The Warehouse Optimizer orders of this warehouse (issue #46, ADR-079), by optimizer: the items each asked to move
      * up to a better storage location, its trips left and what it moved. Saved
@@ -1718,8 +1727,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     // --- production (M11, ADR-024) --------------------------------------------------------------------------------
 
-    /** One pattern of one production station of this aisle. */
-    public record AislePattern(RackPosition station, ProductionPattern<ItemKey> pattern) {
+    /**
+     * One pattern of one production station of this aisle, with the pattern slot it is in: the slot narrows a filter
+     * cell's candidates to what a Crafter at that station takes (ADR-082).
+     */
+    public record AislePattern(RackPosition station, int slot, ProductionPattern<ItemKey> pattern) {
     }
 
     /** The production station records of this aisle. */
@@ -1733,21 +1745,34 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * Read live (one block entity lookup per production station), not cached: an aisle has a handful of them, the
      * patterns live in the stations themselves, and this is only asked when a request arrives or a terminal screen
      * refreshes — never per tick and never per planner candidate.
+     * <p>
+     * It also tells the filter cache which filters the stations hold, in aisle order and from every slot, complete or not
+     * ({@link FilterMatchCache#retain}), so the cache keeps exactly the aisle's filters and never evicts one in use.
      */
     public List<AislePattern> aislePatterns() {
         if (level == null || level.isClientSide || layout == null)
             return List.of();
         List<AislePattern> found = new ArrayList<>();
+        Set<ItemKey> filters = new LinkedHashSet<>();
         for (LocationRecord record : membership.records(LocationKind.PRODUCTION)) {
             BlockPos pos = layout.rackPos(record.position());
             if (!level.isLoaded(pos))
                 continue;
             if (level.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station && !station.isRemoved()) {
-                for (ProductionPattern<ItemKey> pattern : station.activePatterns())
-                    found.add(new AislePattern(record.position(), pattern));
+                for (WarehouseProductionBlockEntity.SlotPattern slot : station.activeSlots())
+                    found.add(new AislePattern(record.position(), slot.slot(), slot.pattern()));
+                ProductionPatterns patterns = station.patterns();
+                for (int slot = 0; slot < patterns.size(); slot++)
+                    filters.addAll(patterns.filterGroups(slot).keySet());
             }
         }
+        filterMatches.retain(filters);
         return List.copyOf(found);
+    }
+
+    /** This aisle's filter cache (ADR-082); for the scale GameTest. */
+    public FilterMatchCache filterMatches() {
+        return filterMatches;
     }
 
     /**
@@ -1782,12 +1807,46 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
         if (productionOrders.isFull())
             return 0L;
+        IngredientChoices<ItemKey> choices = ingredientChoices(patterns, available);
         long best = 0L;
         for (AislePattern candidate : patterns) {
             if (candidate.pattern().produces(key))
-                best = Math.max(best, ProduciblePlanner.producibleAmount(candidate.pattern(), available));
+                best = Math.max(best, ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices));
         }
         return best;
+    }
+
+    /**
+     * What may pay for the filter cells of {@code patterns} (ADR-082), for a caller whose items are worth
+     * {@code available}: built once per click or pass, and {@link IngredientChoices#none()} when no pattern has a filter
+     * cell, so an aisle without filters pays nothing for the question. The free stock that ranks a filter's candidates is
+     * the warehouse's own automation's ({@link StockAccess#AUTOMATION}), above every reserve.
+     *
+     * @param patterns the very pattern objects the planner is then given; the candidates are narrowed by identity
+     */
+    IngredientChoices<ItemKey> ingredientChoices(List<AislePattern> patterns, ToLongFunction<ItemKey> available) {
+        if (level == null || level.isClientSide || layout == null)
+            return IngredientChoices.none();
+        boolean any = false;
+        for (AislePattern candidate : patterns)
+            any |= candidate.pattern().hasChoices();
+        if (!any)
+            return IngredientChoices.none();
+        ToLongFunction<ItemKey> free = StockAvailability.of(stockRules(), StockAccess.AUTOMATION,
+                availabilityLookup());
+        return new AisleChoices(level, filterMatches, stock.readOnlyView(), dispatch.relocationsByKey().keySet(),
+                patterns, available, free, this::productionStationAt);
+    }
+
+    /** The loaded production station at rack position {@code rack} of this aisle, if there is one. */
+    private Optional<WarehouseProductionBlockEntity> productionStationAt(RackPosition rack) {
+        if (level == null || layout == null)
+            return Optional.empty();
+        BlockPos pos = layout.rackPos(rack);
+        if (!level.isLoaded(pos))
+            return Optional.empty();
+        return level.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station && !station.isRemoved()
+                ? Optional.of(station) : Optional.empty();
     }
 
     /**
@@ -1827,9 +1886,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         boolean full = productionOrders.isFull();
         Map<ItemKey, Long> amounts = new LinkedHashMap<>();
         ToLongFunction<ItemKey> available = availabilityLookup();
+        IngredientChoices<ItemKey> choices = full ? IngredientChoices.none() : ingredientChoices(patterns, available);
         for (AislePattern candidate : patterns) {
             long amount = full ? 0L
-                    : ProduciblePlanner.producibleAmount(candidate.pattern(), available);
+                    : ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices);
             // Two patterns for one item do not add up: the best single one is what is certainly reachable (§3.5.2).
             amounts.merge(candidate.pattern().result().key(), amount, Math::max);
         }
@@ -2007,8 +2067,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         int freeSlots = slots - productionOrders.openCount();
         // productionRoomFor answers Long.MAX_VALUE for an item no rule caps, which is exactly ProductionPlanInput's
         // "as much room as anyone could ask for", so an aisle without stock keepers pays nothing for the question.
+        // The keys that may pay a filter cell are measured with the same availability as everything else (ADR-082).
         return new ProductionPlanInput<>(stationPatterns, PlanBudget.of(ingredients), limits, freeSlots, slots,
-                stockPauses::containsKey, this::productionRoomFor);
+                stockPauses::containsKey, this::productionRoomFor, ingredientChoices(patterns, ingredients));
     }
 
     /**
@@ -2158,21 +2219,26 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         for (int index = plan.steps() - 1; index >= 0; index--) {
             PlanNode<ItemKey, RackPosition> node = plan.node(index);
             ProductionOrder<ItemKey, RackPosition> order;
+            // Every order is built from the node's concrete lines (ADR-082): a filter cell became the keys the plan chose,
+            // and the order never refers back to its pattern.
             if (node.isRoot()) {
                 order = ProductionOrder.start(UUID.randomUUID(), node.station(), node.pattern(), node.runs(),
-                        UUID::randomUUID, now, timeout, stock.count(plan.result()), backingRequest, promised);
+                        node.lines(), UUID::randomUUID, now, timeout, stock.count(plan.result()), backingRequest,
+                        promised);
             } else {
                 ProductionOrder<ItemKey, RackPosition> parent = byNode.get(node.parent());
-                Optional<UUID> line = parent == null ? Optional.empty() : lineFor(parent, node.result());
+                Optional<UUID> line = parent == null || node.parentLine() < 0
+                        || node.parentLine() >= parent.lines().size() ? Optional.empty()
+                        : Optional.of(parent.lines().get(node.parentLine()).id());
                 if (line.isEmpty()) {
-                    // Unreachable: a node's result is an ingredient of its parent's pattern by construction. Creating
-                    // nothing is the only safe answer, because a step without a parent line is not a step at all.
+                    // Unreachable: a node names a line of its parent by construction (ProductionPlan checks it).
+                    // Creating nothing is the only safe answer, because a step without a parent line is not a step.
                     Wareworks.LOGGER.warn("Production plan for {} at {} dropped: step {} has no line to feed",
                             plan.result(), worldPosition, index);
                     return 0;
                 }
                 order = ProductionOrder.step(UUID.randomUUID(), node.station(), node.pattern(), node.runs(),
-                        UUID::randomUUID, now, timeout, line.get());
+                        node.lines(), UUID::randomUUID, now, timeout, line.get());
             }
             byNode.put(index, order);
         }
@@ -2184,15 +2250,6 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         setChanged();
         markChunkKeepDirty(); // M19: an open order is work, and every step of a plan is one of these
         return promised;
-    }
-
-    /** The ingredient line of {@code parent} that asks for {@code key}; a pattern merges duplicates, so at most one. */
-    private static Optional<UUID> lineFor(ProductionOrder<ItemKey, RackPosition> parent, ItemKey key) {
-        for (SupplyLine<ItemKey> line : parent.lines()) {
-            if (line.key().equals(key))
-                return Optional.of(line.id());
-        }
-        return Optional.empty();
     }
 
     /**
@@ -2280,9 +2337,86 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             });
             int depth = plan.isPresent() ? productionOrders.depthOf(order.id()) : 0;
             boolean waiting = waitsForStep(order);
+            // What a filter cell chose for this order (ADR-082): the concrete lines, which never change once created.
+            List<ProductionScreenState.EntryView> uses = new ArrayList<>(ProductionScreenState.MAX_USES_SHOWN);
+            int usesMore = 0;
+            for (SupplyLine<ItemKey> line : order.lines()) {
+                if (line.choice().isEmpty())
+                    continue;
+                if (uses.size() < ProductionScreenState.MAX_USES_SHOWN)
+                    uses.add(new ProductionScreenState.EntryView(uses.size(), line.key(), line.required()));
+                else
+                    usesMore++;
+            }
             views.add(new ProductionScreenState.OrderView(order.id(), order.state(), order.result(),
                     order.resultAmount(), order.produced(), order.outstandingIngredients(),
-                    order.deliveredIngredients(), plan, depth, stationAddress(order.station()), waiting));
+                    order.deliveredIngredients(), plan, depth, stationAddress(order.station()), waiting, uses,
+                    usesMore));
+        }
+        return List.copyOf(views);
+    }
+
+    /**
+     * What the filter cells of {@code station}'s patterns would take right now (ADR-082, {@code warehouse-system.md}
+     * §3.5.8): one view per filter of a slot, in slot order, at most {@link ProductionScreenState#MAX_CHOICE_VIEWS}.
+     * <p>
+     * The matches are this aisle's stock keys the filter allows, without the slot's result, narrowed to what the Crafter
+     * takes while a Crafter Feeder is attached and the slot's check passed, and ranked exactly as a player's order would
+     * pick them ({@link ChoiceAllocator#ranked}: plain items first, then the most free stock, then the most a player may
+     * have). The number shown with each is what a player may have of it, as the terminal shows it.
+     * <p>
+     * Cost: only while a station screen is open, at its push interval. The stock matches of a filter come from the
+     * {@link FilterMatchCache}, which rebuilds them only when a key came or went; no inventory is read.
+     */
+    public List<ProductionScreenState.ChoiceView> choiceViews(WarehouseProductionBlockEntity station) {
+        Objects.requireNonNull(station, "station");
+        if (level == null || level.isClientSide || layout == null)
+            return List.of();
+        ProductionPatterns patterns = station.patterns();
+        List<ProductionScreenState.ChoiceView> views = new ArrayList<>();
+        AisleChoices choices = null;
+        ToLongFunction<ItemKey> player = null;
+        ChoiceAllocator.FreeMemo<ItemKey> free = null;
+        PlanBudget<ItemKey> budget = null;
+        boolean feeder = station.attachedFeeder().isPresent();
+        for (int slot = 0; slot < patterns.size(); slot++) {
+            for (Map.Entry<ItemKey, Integer> group : patterns.filterGroups(slot).entrySet()) {
+                if (views.size() >= ProductionScreenState.MAX_CHOICE_VIEWS)
+                    return List.copyOf(views);
+                if (choices == null) {
+                    ToLongFunction<ItemKey> lookup = availabilityLookup();
+                    player = StockAvailability.of(stockRules(), StockAccess.PLAYER, lookup);
+                    choices = new AisleChoices(level, filterMatches, stock.readOnlyView(),
+                            dispatch.relocationsByKey().keySet(), List.of(), player,
+                            StockAvailability.of(stockRules(), StockAccess.AUTOMATION, lookup),
+                            this::productionStationAt);
+                    free = new ChoiceAllocator.FreeMemo<>(choices);
+                    budget = PlanBudget.of(player);
+                }
+                ItemKey filter = group.getKey();
+                int perRun = group.getValue();
+                int pattern = slot;
+                List<ItemKey> stocked = new ArrayList<>(choices.stockMatches(filter,
+                        patterns.keyAt(slot, ProductionPatterns.RESULT_ENTRY)));
+                if (feeder && station.crafterCheck(slot).check() == CrafterPatternCheck.VALID)
+                    stocked.removeIf(key -> !station.crafterTakes(pattern, filter, key));
+                stocked.sort(ItemKey.ORDER);
+                List<ItemKey> ranked = ChoiceAllocator.ranked(stocked, budget, choices, key -> false, free);
+                List<ProductionScreenState.MatchView> matches = new ArrayList<>();
+                boolean oneRun = false;
+                for (ItemKey key : ranked) {
+                    long available = player.applyAsLong(key);
+                    oneRun |= available >= perRun;
+                    if (matches.size() < ProductionScreenState.MAX_MATCHES_SHOWN)
+                        matches.add(new ProductionScreenState.MatchView(key, available));
+                }
+                Optional<ItemKey> representative = ranked.isEmpty()
+                        ? PatternFilterCells.examples(filter, level).stream().findFirst()
+                        : Optional.of(ranked.getFirst());
+                views.add(new ProductionScreenState.ChoiceView(slot, filter, representative, matches,
+                        ranked.size() - matches.size(), !ranked.isEmpty() && !oneRun,
+                        PatternFilterCells.denies(filter), feeder, perRun));
+            }
         }
         return List.copyOf(views);
     }
@@ -2311,10 +2445,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             ToLongFunction<ItemKey> available) {
         AislePattern best = null;
         long bestAmount = 0L;
+        IngredientChoices<ItemKey> choices = ingredientChoices(patterns, available);
         for (AislePattern candidate : patterns) {
             if (!candidate.pattern().produces(key))
                 continue;
-            long amount = ProduciblePlanner.producibleAmount(candidate.pattern(), available);
+            long amount = ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices);
             if (amount > bestAmount) {
                 best = candidate;
                 bestAmount = amount;
@@ -4721,17 +4856,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Map<ItemKey, List<ProductionPattern<ItemKey>>> byResult = patternsByResult(patterns);
         ToLongFunction<ItemKey> available = patterns.isEmpty() ? key -> 0L
                 : StockAvailability.of(stockRules(), StockAccess.AUTOMATION, availabilityLookup());
+        // A filter cell is paid with free stock only, like every ingredient of an automatic order (ADR-082).
+        IngredientChoices<ItemKey> choices = ingredientChoices(patterns, available);
         List<RestockInput<ItemKey>> inputs = new ArrayList<>(evaluations.size());
         for (StockRuleEvaluation<ItemKey> evaluation : evaluations) {
             ItemKey key = evaluation.key();
             inputs.add(new RestockInput<>(evaluation.rule(), evaluation.levels(), evaluation.governs(),
                     stockPauses.containsKey(key), productionOrders.openRestockCountFor(key),
-                    byResult.getOrDefault(key, List.of())));
+                    byResult.getOrDefault(key, List.of()), choices));
         }
         productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
         RestockPlan<ItemKey> plan = RestockPlanner.plan(inputs, limits, productionOrders.openRestockCount(),
                 productionOrders.isFull(), available);
-        plan.order().ifPresent(decision -> startRestockOrder(decision, patterns, available));
+        // The order pays its filter cells as the decision measured them: without the kinds another rule calls for.
+        IngredientChoices<ItemKey> payWith = choices.excluding(RestockPlanner.calledFor(inputs));
+        plan.order().ifPresent(decision -> startRestockOrder(decision, patterns, available, payWith));
         applyRestockOutcomes(plan);
     }
 
@@ -4755,7 +4894,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * @return whether an order was really started
      */
     private boolean startRestockOrder(RestockDecision<ItemKey> decision, List<AislePattern> patterns,
-            ToLongFunction<ItemKey> available) {
+            ToLongFunction<ItemKey> available, IngredientChoices<ItemKey> choices) {
         if (level == null || layout == null || decision.pattern().isEmpty())
             return false;
         ProductionPattern<ItemKey> chosen = decision.pattern().get();
@@ -4772,16 +4911,62 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // The planner's own run count, not a second derivation of it: it already bounded the runs by the rule's
         // headroom, by what one order may spend in ingredient items and by what the ingredients allow, and rounding the
         // amount up again here would order more than the rule may have (M15 review fix).
-        int runs = Math.min(decision.runs(), ProduciblePlanner.runsPossible(chosen, available));
+        int runs = Math.min(decision.runs(), ProduciblePlanner.runsPossible(chosen, available, choices));
         if (runs < 1)
             return false;
-        ProductionOrder<ItemKey, RackPosition> order = ProductionOrder.restock(UUID.randomUUID(), station, chosen,
-                runs, UUID::randomUUID, level.getGameTime(), productionTimeoutTicks());
+        ProductionOrder<ItemKey, RackPosition> order;
+        if (chosen.hasChoices()) {
+            // A filter cell becomes the keys one payment chose, the largest free stock first (ADR-082); a payment that
+            // falls short starts nothing.
+            Optional<List<NodeLine<ItemKey>>> lines = restockLines(chosen, runs, available, choices);
+            if (lines.isEmpty())
+                return false;
+            order = ProductionOrder.restock(UUID.randomUUID(), station, chosen, runs, lines.get(), UUID::randomUUID,
+                    level.getGameTime(), productionTimeoutTicks());
+        } else {
+            order = ProductionOrder.restock(UUID.randomUUID(), station, chosen, runs, UUID::randomUUID,
+                    level.getGameTime(), productionTimeoutTicks());
+        }
         if (!productionOrders.add(order))
             return false;
         setChanged();
         markChunkKeepDirty(); // M19: an automatic restock order is work like any other order
         return true;
+    }
+
+    /**
+     * The concrete lines of {@code runs} runs of a pattern with filter cells (ADR-082), paid once out of a fresh budget
+     * over {@code available} in {@link ChoiceAllocator#payOrder} order; empty when any ingredient falls short.
+     */
+    private static Optional<List<NodeLine<ItemKey>>> restockLines(ProductionPattern<ItemKey> pattern, int runs,
+            ToLongFunction<ItemKey> available, IngredientChoices<ItemKey> choices) {
+        PlanBudget<ItemKey> budget = PlanBudget.of(available);
+        ChoiceAllocator.FreeMemo<ItemKey> free = new ChoiceAllocator.FreeMemo<>(choices);
+        ItemKey result = pattern.result().key();
+        List<ProductionEntry<ItemKey>> ingredients = pattern.ingredients();
+        List<List<NodeLine<ItemKey>>> segments = new ArrayList<>(Collections.nCopies(ingredients.size(), null));
+        for (int index : ChoiceAllocator.payOrder(pattern, choice -> choices.candidates(pattern, choice), budget)) {
+            ProductionEntry<ItemKey> ingredient = ingredients.get(index);
+            long need = (long) ingredient.count() * runs;
+            if (!pattern.isChoice(ingredient.key())) {
+                if (budget.take(ingredient.key(), need) < need)
+                    return Optional.empty();
+                segments.set(index, List.of(NodeLine.exact(ingredient.key(), need)));
+                continue;
+            }
+            ChoiceAllocator.Payment<ItemKey> payment = ChoiceAllocator.pay(ingredient.count(), runs,
+                    choices.candidates(pattern, ingredient.key()), budget, choices, result::equals, free);
+            if (payment.remainderRuns() > 0)
+                return Optional.empty();
+            List<NodeLine<ItemKey>> lines = new ArrayList<>(payment.parts().size());
+            for (ChoiceAllocator.Part<ItemKey> part : payment.parts())
+                lines.add(NodeLine.chosen(part.key(), (long) part.runs() * ingredient.count(), ingredient.key()));
+            segments.set(index, lines);
+        }
+        List<NodeLine<ItemKey>> all = new ArrayList<>();
+        for (List<NodeLine<ItemKey>> segment : segments)
+            all.addAll(segment);
+        return Optional.of(List.copyOf(all));
     }
 
     /**

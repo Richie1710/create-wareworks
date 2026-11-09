@@ -1,12 +1,14 @@
 package dev.wareworks.network;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.RecipeTagCells;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.production.ProductionEntry;
 import io.netty.buffer.Unpooled;
@@ -16,6 +18,7 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.network.connection.ConnectionType;
 
 /**
@@ -35,9 +38,17 @@ import net.neoforged.neoforge.network.connection.ConnectionType;
  * @param cells       per cell, row-major, the items it accepts in the recipe's order; an empty list is an empty cell
  * @param counts      per cell the items of one run, parallel to {@code cells}
  * @param result      what one run makes; empty only with {@code crafting}
+ * @param tags        per cell, parallel to {@code cells}, the item tag the client proposes for the recipe's ingredient
+ *                    there (ADR-082, {@code RecipeTagCells#tagFor}): the server writes such a cell as an "is tagged"
+ *                    Attribute Filter when its own copy of {@code recipe} names that tag as an ingredient and the tag
+ *                    holds the item it picked and not the result ({@code RecipeTagCells#filterFor}). An id that is no
+ *                    valid resource location reads as no tag
+ * @param recipe      the id of the recipe the viewer laid, the server's only source of which ingredients are tags; empty
+ *                    lays every cell exact
  */
 public record ProductionPatternLayPayload(int containerId, int pattern, boolean crafting, List<List<ItemKey>> cells,
-                                          List<Integer> counts, Optional<ProductionEntry<ItemKey>> result)
+                                          List<Integer> counts, Optional<ProductionEntry<ItemKey>> result,
+                                          List<Optional<ResourceLocation>> tags, Optional<ResourceLocation> recipe)
         implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<ProductionPatternLayPayload> TYPE =
             new CustomPacketPayload.Type<>(Wareworks.asResource("production_pattern_lay"));
@@ -54,6 +65,15 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
             copied.add(List.copyOf(Objects.requireNonNull(cell, "cell")));
         cells = List.copyOf(copied);
         counts = List.copyOf(counts);
+        tags = List.copyOf(Objects.requireNonNull(tags, "tags"));
+        Objects.requireNonNull(recipe, "recipe");
+    }
+
+    /** A lay without tags: every cell exact, as before ADR-082. */
+    public ProductionPatternLayPayload(int containerId, int pattern, boolean crafting, List<List<ItemKey>> cells,
+            List<Integer> counts, Optional<ProductionEntry<ItemKey>> result) {
+        this(containerId, pattern, crafting, cells, counts, result,
+                Collections.nCopies(cells.size(), Optional.empty()), Optional.empty());
     }
 
     /**
@@ -62,7 +82,10 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
      */
     public boolean wellFormed() {
         return TerminalCraftLayPayload.wellFormed(cells) && counts.size() == cells.size()
-                && (crafting || result.isPresent());
+                && tags.size() == cells.size() && (crafting || result.isPresent())
+                && tags.stream().allMatch(tag -> tag.isEmpty()
+                        || tag.get().toString().length() <= RecipeTagCells.MAX_TAG_LENGTH)
+                && recipe.map(id -> id.toString().length() <= RecipeTagCells.MAX_TAG_LENGTH).orElse(true);
     }
 
     /**
@@ -72,7 +95,8 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
      */
     public static Optional<ProductionPatternLayPayload> fitted(int containerId, int pattern, boolean crafting,
             List<? extends List<ItemKey>> cells, List<Integer> counts, Optional<ProductionEntry<ItemKey>> result,
-            RegistryAccess registries, ConnectionType connectionType) {
+            List<Optional<ResourceLocation>> tags, Optional<ResourceLocation> recipe, RegistryAccess registries,
+            ConnectionType connectionType) {
         Objects.requireNonNull(registries, "registries");
         Objects.requireNonNull(connectionType, "connectionType");
         if (!TerminalCraftLayPayload.wellFormed(cells))
@@ -85,7 +109,7 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
             for (List<ItemKey> cell : cells)
                 cut.add(cell.subList(0, Math.min(cell.size(), limit)));
             ProductionPatternLayPayload payload =
-                    new ProductionPatternLayPayload(containerId, pattern, crafting, cut, counts, result);
+                    new ProductionPatternLayPayload(containerId, pattern, crafting, cut, counts, result, tags, recipe);
             if (!payload.wellFormed())
                 return Optional.empty();
             RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(Unpooled.buffer(), registries, connectionType);
@@ -121,6 +145,7 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
                     + " cells, not " + size);
         List<List<ItemKey>> cells = new ArrayList<>(size);
         List<Integer> counts = new ArrayList<>(size);
+        List<Optional<ResourceLocation>> tags = new ArrayList<>(size);
         for (int cell = 0; cell < size; cell++) {
             int candidates = buffer.readVarInt();
             if (candidates < 0 || candidates > TerminalCraftLayPayload.MAX_CANDIDATES)
@@ -131,13 +156,21 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
                 keys.add(ItemKey.STREAM_CODEC.decode(buffer));
             cells.add(keys);
             counts.add(ProductionEntry.clampCellCount(buffer.readVarInt()));
+            // An id that does not parse is no tag, never a decoder error: the cell is then laid exact.
+            tags.add(buffer.readBoolean()
+                    ? Optional.ofNullable(ResourceLocation.tryParse(buffer.readUtf(RecipeTagCells.MAX_TAG_LENGTH)))
+                    : Optional.empty());
         }
         Optional<ProductionEntry<ItemKey>> result = Optional.empty();
         if (buffer.readBoolean()) {
             ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
             result = Optional.of(new ProductionEntry<>(key, ProductionEntry.clampCellCount(buffer.readVarInt())));
         }
-        return new ProductionPatternLayPayload(containerId, pattern, crafting, cells, counts, result);
+        // Like a tag: an id that does not parse is no recipe, and every cell is laid exact.
+        Optional<ResourceLocation> recipe = buffer.readBoolean()
+                ? Optional.ofNullable(ResourceLocation.tryParse(buffer.readUtf(RecipeTagCells.MAX_TAG_LENGTH)))
+                : Optional.empty();
+        return new ProductionPatternLayPayload(containerId, pattern, crafting, cells, counts, result, tags, recipe);
     }
 
     /** @throws EncoderException when the payload is not well-formed; {@link #fitted} never builds such a payload */
@@ -157,12 +190,17 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
             for (ItemKey key : cells.get(cell))
                 ItemKey.STREAM_CODEC.encode(buffer, key);
             buffer.writeVarInt(counts.get(cell));
+            Optional<ResourceLocation> tag = tags.get(cell);
+            buffer.writeBoolean(tag.isPresent());
+            tag.ifPresent(id -> buffer.writeUtf(id.toString(), RecipeTagCells.MAX_TAG_LENGTH));
         }
         buffer.writeBoolean(result.isPresent());
         result.ifPresent(entry -> {
             ItemKey.STREAM_CODEC.encode(buffer, entry.key());
             buffer.writeVarInt(entry.count());
         });
+        buffer.writeBoolean(recipe.isPresent());
+        recipe.ifPresent(id -> buffer.writeUtf(id.toString(), RecipeTagCells.MAX_TAG_LENGTH));
     }
 
     @Override

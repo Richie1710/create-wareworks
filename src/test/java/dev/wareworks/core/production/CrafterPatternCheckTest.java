@@ -16,7 +16,8 @@ class CrafterPatternCheckTest {
     @Test
     void theWireOrdinalsAreStable() {
         assertEquals(List.of(CrafterPatternCheck.NOT_CHECKED, CrafterPatternCheck.INCOMPLETE, CrafterPatternCheck.VALID,
-                CrafterPatternCheck.CELL_NOT_ONE, CrafterPatternCheck.NOT_A_RECIPE, CrafterPatternCheck.RESULT_DIFFERS),
+                CrafterPatternCheck.CELL_NOT_ONE, CrafterPatternCheck.NOT_A_RECIPE, CrafterPatternCheck.RESULT_DIFFERS,
+                CrafterPatternCheck.FILTER_NOT_CHECKABLE),
                 List.of(CrafterPatternCheck.values()), "append new checks, never insert them");
         for (CrafterPatternCheck check : CrafterPatternCheck.values())
             assertEquals(check, CrafterPatternCheck.byOrdinal(check.ordinal()));
@@ -31,7 +32,7 @@ class CrafterPatternCheckTest {
     @Test
     void onlyACompleteButWrongPatternIsRefused() {
         for (CrafterPatternCheck check : List.of(CrafterPatternCheck.CELL_NOT_ONE, CrafterPatternCheck.NOT_A_RECIPE,
-                CrafterPatternCheck.RESULT_DIFFERS)) {
+                CrafterPatternCheck.RESULT_DIFFERS, CrafterPatternCheck.FILTER_NOT_CHECKABLE)) {
             assertTrue(check.refused(), check.name());
             assertFalse(check.usable(), check.name());
         }

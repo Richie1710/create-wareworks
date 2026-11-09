@@ -42,7 +42,12 @@ public enum FeederStatus {
      * The loaded order's grid is no longer the crafting recipe it was checked against (a {@code /reload} or a datapack
      * removed or changed it): nothing more is laid and the grid is not pulsed, and the order times out as usual.
      */
-    RECIPE_CHANGED;
+    RECIPE_CHANGED,
+    /**
+     * The Crafter's recipe does not take the item a filter cell chose for this batch (ADR-082): nothing is laid, the
+     * ingredients stay in the buffer and the order times out as usual.
+     */
+    FILTER_ITEM_REFUSED;
 
     private static final String LANG_PREFIX = "gui.crafter_feeder.status.";
 

@@ -190,6 +190,9 @@ public record RequestConfirmation<K>(K key, long amount, long fromReserve, long 
     private static <K> Map<K, Long> demandOf(Optional<? extends ProductionPattern<K>> pattern, long runs) {
         if (pattern.isEmpty() || runs <= 0L)
             return Map.of();
+        // A choice is a filter no rack holds: what a pattern with choices spends is a plan's leaf demand (ADR-082, D11).
+        if (pattern.get().hasChoices())
+            throw new IllegalArgumentException("a pattern with choices is measured with ofPlan");
         Map<K, Long> demand = new LinkedHashMap<>();
         for (ProductionEntry<K> ingredient : pattern.get().ingredients())
             demand.merge(ingredient.key(), (long) ingredient.count() * runs, Long::sum);

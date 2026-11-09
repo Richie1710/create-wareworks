@@ -4534,7 +4534,9 @@ most 36 since issue #35, ADR-068).
 
 * **The grid is for reading; the planner gets a multiset.** `ProductionPattern.fromGrid` merges the cells that name
   the same item into one ingredient, so three cells of one plank are "3 planks". That merge is not cosmetic: the crane
-  carries **one item key per trip**, so without it three cells would be three crane trips for three planks.
+  carries **one item key per trip**, so without it three cells would be three crane trips for three planks. Cells that
+  hold the same filter merge the same way into one **choice** ingredient (ADR-082, §3.5.8); two different filters stay
+  apart even when they allow the same items, and a filter never merges with an exact item.
 * **Counts.** One cell (and the result) holds 1..64 items per run (`ProductionEntry.MAX_PER_CELL`); a *merged*
   ingredient may therefore reach 9 x 64 = 576 (`ProductionEntry.MAX_COUNT`). Repeats **between cells** are allowed and
   are the point; the merged ingredient list has distinct keys by construction.
@@ -4543,7 +4545,8 @@ most 36 since issue #35, ADR-068).
   it. Refusing it in `ProductionPatterns#setEntry` (in both directions) keeps the loop *unrepresentable* instead of
   something every reader has to defend against.
 * **Editing consumes nothing.** The cells are **ghost items**: only an `ItemKey` and a count are stored, set from what
-  the player carries or clicks. A pattern is a description, not an inventory.
+  the player carries or clicks. A pattern is a description, not an inventory. A filter cell stores the filter's ghost
+  the same way, and nothing ever takes the filter itself (ADR-082).
 * **A slot is a draft.** A half-written slot (cells but no result) is simply not a pattern yet: `patterns()` returns
   only the complete ones, so the strict, pure `ProductionPattern` never has to represent a draft.
 * **The result follows a crafting grid** (ADR-076). A player's edit of a cell's item
@@ -4555,7 +4558,13 @@ most 36 since issue #35, ADR-068).
   selected. `IngredientPicker` picks one item per cell as at the terminal. A crafting recipe keeps its cells and takes
   its result from the server's recipes (`CrafterRecipeCheck#makes`); any other recipe is laid out by `PatternLay`, with
   the client's counts and result, which trust nothing a click could not set. A refusal leaves the slot as it was and is
-  said over the hotbar. Nothing moves, and an open order keeps the lines it was created with.
+  said over the hotbar. Nothing moves, and an open order keeps the lines it was created with. Since ADR-082 a cell
+  whose recipe ingredient is exactly one item tag is laid as an Attribute Filter "is tagged <tag>" instead of the
+  picked item (`RecipeTagCells`), as long as the tag holds the picked item and not the result; every other cell, a list
+  of items such as a torch's coal or charcoal included, stays the exact picked item (§3.5.8).
+* **A cell may hold a filter** (ADR-082, §3.5.8). A configured Create List Filter or Attribute Filter in a grid cell is
+  a **filter cell**: any item it allows pays for that cell, the largest stock first. Cells of one filter merge like
+  cells of one item (four cells of "any plank" are one choice of four). The result is always one exact item.
 
 #### 3.5.2 Producible items (`ProduciblePlanner` is single level; the chain is §3.5.6)
 
@@ -4582,6 +4591,13 @@ refreshes — never per tick and never per planner candidate).
   item's patterns the same way and starts with the same one, but it may fall back to the next when the subtree under the
   preferred pattern cannot be made (§3.5.6) — a chain the aisle really can make must not be refused because one pattern
   out of two is a dead end.
+* **A filter cell counts in whole runs over the items it allows** (ADR-082, §3.5.8). For a pattern with choices
+  `ProduciblePlanner#runsPossible` asks the controller's `IngredientChoices` which keys may pay and pays each choice
+  through `ChoiceAllocator` (largest free stock first, whole runs, at most 8 keys); a key that holds less than one run
+  adds nothing. When no two ingredients can share a key the answer is a closed sum; otherwise it is a binary search whose
+  answer some allocation really reached, so it may underestimate with odd overlaps but never over-promises. The
+  `ToLongFunction`-only overloads know no choices and make 0 of such a pattern. `firstMissingIngredient` names the
+  filter of a choice that cannot pay one run.
 
 #### 3.5.3 Production orders
 
@@ -4616,6 +4632,13 @@ Ordering a producible item that is not (fully) in stock creates a **production o
 * **Batching, not one order per craft.** The order runs `pattern.runsFor(amount)` runs, and each ingredient becomes
   **one `SupplyLine` of `count × runs` items** — ten planks from "1 log → 4 planks" are 3 runs, i.e. one line of 3
   logs and therefore **one crane trip**, not three.
+  * **A filter cell becomes one line per item it chose** (ADR-082): oak 8 and birch 4 for three tables are two lines,
+    each a whole number of runs and each remembering its filter (`SupplyLine.choice`). Every line is still one key and
+    one `SupplyNeed`, so the crane still carries one key per trip; an order holds at most `ProductionOrder.MAX_LINES`
+    = 72 lines (9 ingredients × 8 keys). Two lines of one order may share a key (an exact cell and a filter that allows
+    the same item); every per-key sum already adds them. An order of a pattern with choices is always built from these
+    resolved lines and never from its pattern (the pattern-based factories refuse it), so an edit, `/reload` or a tag
+    change never alters an open order.
 * **Each ingredient line has its own id**, which the `SUPPLY` job carries. That is what lets the reservation ledger
   track each ingredient separately and `committedToRequest` answer "how much of this ingredient is already on its
   way", so the planner never plans a second trip for items already in the grabber.
@@ -4808,14 +4831,16 @@ Classes:
     really has open, check reach, clamp indices and counts, and answer at most `MAX_EDITS_PER_TICK` (8) per tick. A
     cancellation is refused for an order that does not run at *this* station, so a crafted payload cannot reach into
     another aisle.
-* **Persistence.** Patterns are saved with the station (`Patterns: [{Slot, Entries: [{Entry, Item: ItemKey, Count}]}]`,
+* **Persistence.** Patterns are saved with the station (`Patterns: [{Slot, Entries: [{Entry, Item: ItemKey, Count,
+  Filter?}]}]`, `Filter: 1b` only on a filter cell since ADR-082, so an entry saved before is exact),
   bounded loading, never throws; a save always writes the list, and a tag that is no full save — a schematic print
   landing on the standing station, which carries no patterns — leaves them alone, issue #25, ADR-061); orders are
   saved with the controller
   (`ProductionOrders: [{Id, Station, Result, ResultAmount, State, Produced, StockSeen, Request?, Lines: [...]}]`,
   at most `MAX_SAVED_ORDERS` (256), invalid entries skipped, deadlines recomputed on load). Since M20 an order may
   additionally carry `Parent?`, the ingredient line of the order it is a step for, written only when there is one
-  (§3.5.6).
+  (§3.5.6). Since ADR-082 a line may carry `Choice?`, the filter that chose it (an `ItemKey`, written only when there is
+  one), and an order loads up to `ProductionOrder.MAX_LINES` (72) lines instead of 9.
 * **Goggles.** The station shows its patterns, the orders running there, the oldest order's state, ingredients still
   to fetch and results still awaited; the controller adds "Production stations: N" and "Production orders: N" (both
   left out of the synced tag while they are 0, so the aisles without a production station pay nothing). Since M20 the
@@ -4995,6 +5020,16 @@ Depth first, in pattern order, post-order (children before parents):
    * **The pattern ranking is measured against the *starting* snapshot**, not against what the walk has already spent.
      That makes the choice independent of the order the branches are walked in, which is what makes a plan reproducible
      **and** its cost monotone in the root's runs — the property the clamp below stands on.
+5. **A choice ingredient is paid after the exact ones** (ADR-082, §3.5.8). The exact ingredients are paid in pattern
+   order, then the choices, the most constrained first, each through `ChoiceAllocator#pay` out of the same `PlanBudget`
+   (largest free stock first, whole runs, a second key only when the first is short, never the pattern's result or a
+   key on the walk's path, which is excluded rather than a `LOOP`). What stock does not pay is made from **one**
+   producible candidate, the most producible first; each further candidate tried costs one of the walk's extra
+   attempts. With no candidate the walk refuses with `NO_MATCHING_ITEM`, naming the filter; a candidate whose own
+   subtree fails reports the deepest refusal as before. A node carries its concrete lines (`NodeLine`, one per item, in
+   pattern order), and a child names the line it feeds **by index** (`PlanNode#parentLine`), so a key that appears in an
+   exact line and in a choice line is still unambiguous. Each node costs at most 9 × (64 + 16) more budget operations;
+   the walk's bounds are unchanged.
 * **A plan is a tree, not a graph, and that costs something.** Two branches that need the same intermediate get a step
   each, one per parent ingredient line, and each makes whole runs, so one plan commits more raw material than the chain
   strictly needs. Pooling one step's surplus into the other branch was considered and **rejected**: such an order's
@@ -5019,6 +5054,7 @@ check's job rather than a counter's.
 | The warehouse has stopped making something | the safety stop (§3.6.4) | `PAUSED` → `RequestRejection.PRODUCTION_PAUSED` | the stopped item |
 | Nothing makes the ordered item at all | no pattern for the **ordered** key | `NO_PATTERN` | the ordered item |
 | A leaf nobody has and nothing makes | the budget cannot pay one run | `MISSING_INGREDIENT` | that ingredient |
+| A filter cell nothing pays (ADR-082) | no allowed key pays one run and none can be made | `NO_MATCHING_ITEM` → `NOT_IN_STOCK`, like `MISSING_INGREDIENT` | the filter |
 
 * **Every refusal names an item** (`ProductionPlanResult#about`), because that is what makes it something a player can
   act on. A reason without an item is the status line M11 already had. A refusal is **derived, never serialized**: it
@@ -5059,7 +5095,8 @@ check's job rather than a counter's.
 that very plan, and then creates it:
 
 * **Root first, added children first.** A step names an ingredient **line** of its parent, so the orders are *built* from
-  the root down (a child needs its parent's line id) and *added* children first through `addAll`.
+  the root down (a child needs its parent's line id) and *added* children first through `addAll`. The orders are built
+  from each node's concrete lines, and a child takes the id of the line at its `parentLine` index (ADR-082).
 * **What the request is promised is `ProductionPlan#rootPromise`** — at most what was asked for. A pattern makes whole
   runs, so the orders may yield more; that surplus lands in stock and was promised to nobody.
 * **A smaller grant re-walks.** The queue may grant less than the plan offered (a merge cap, another station's share), so
@@ -5370,7 +5407,8 @@ production order ─▶ SUPPLY jobs ─▶ station buffer ─▶ feeder (lays sl
   stations serves neither and says so. It needs rotation (`crafterFeederRequiresRotation`, §9) and takes
   `crafterFeederStressImpact` SU per RPM (registered through `WareworksStress`, so it follows the config).
 * **Patterns.** It uses the station's own patterns (up to `maxProductionPatterns`); there is no new pattern type. Cell
-  *i* of a pattern's grid is Crafter slot *i* (`CrafterGrid#slotOf`, pinned by `CrafterGridTest`).
+  *i* of a pattern's grid is Crafter slot *i* (`CrafterGrid#slotOf`, pinned by `CrafterGridTest`). A filter cell
+  (ADR-082, §3.5.8) is laid with one concrete item per batch, see "Filter cells" and "Laying" below.
 * **The recipe check.** While a feeder is attached, every pattern slot is checked against the crafting recipes the
   Crafter itself uses (`CrafterBlock.getPotentialResults`, in `content.station.CrafterRecipeCheck`, cached in the station
   until a pattern or the recipe manager changes): `VALID`, `CELL_NOT_ONE` (a filled cell holds more than one item — a
@@ -5379,9 +5417,18 @@ production order ─▶ SUPPLY jobs ─▶ station buffer ─▶ feeder (lays sl
   restocking rules and the terminal read, so the warehouse never offers, plans or fetches for it, and no ingredient is
   wasted on it. The station's screen draws it red with the reason; its goggles count the skipped slots. Without a
   feeder nothing is checked and every complete pattern is used, exactly as before.
+  * **Filter cells** (ADR-082). The check gives each filter group the first item its filter names
+    (`PatternFilterCells#examples`: a List Filter's items, an allow-mode Attribute Filter's "is tagged" members that
+    pass the whole filter) and, if that grid is no recipe, tries the other examples one group at a time, at most 32
+    evaluations (`CrafterRecipeCheck.MAX_FILTER_EVALUATIONS`); the grid that passed is the slot's reference. A group
+    whose filter names nothing checkable (deny mode, an attribute that is not a tag) is `FILTER_NOT_CHECKABLE`: red and
+    unused, but only at a feeder station. A filter's candidates there are narrowed to the keys the Crafter takes in
+    that reference grid (`WarehouseProductionBlockEntity#crafterTakes`, `CrafterRecipeCheck#makesExactly`), so the
+    warehouse never fetches an allowed item the Crafter would refuse.
 * **One order at a time.** Idle, the feeder looks every 10 ticks for the oldest order of its station whose ingredients
   have **all** been delivered (`DELIVERED`) and that maps onto a valid slot (`CrafterFeedPlan#match`: same result, a
-  whole number of runs, every ingredient line exactly runs × the merged pattern count). It loads that order only into
+  whole number of runs, every ingredient line exactly runs × the merged pattern count; a filter's lines together
+  runs × its count, each a whole number of runs). It loads that order only into
   an **empty** grid, so two orders never mix, and only for the runs that are really left
   (`CrafterFeedPlan#remainingRuns`): the station saves how many runs of each open order a feeder has laid, so a feeder
   that is broken and placed again in the middle of an order (it then also loads an order that waits for its result
@@ -5394,7 +5441,13 @@ production order ─▶ SUPPLY jobs ─▶ station buffer ─▶ feeder (lays sl
   ever goes into an empty grid. Before each batch the layout is checked against the recipes once more — a `/reload` can
   change them while an order runs — and a layout that no longer makes the order's result is not laid ("The recipe no
   longer fits the pattern"; the order times out with its ingredients in the buffer). Everything is simulated first, for
-  every key and every slot, so a refusal never leaves half a batch anywhere. **The feeder holds no items**: an item is in the buffer, in the Crafter, in the block in front
+  every key and every slot, so a refusal never leaves half a batch anywhere. An order that used a filter is laid in
+  **segments** (ADR-082, `CrafterFeedPlan#segment`): a segment uses one key per filter group in all of that group's
+  cells and lasts until the next line boundary of any group (oak 4 + birch 4 for two tables over four cells are two
+  segments of one run), so a Crafter slot never holds two kinds. The segment is worked out again from the runs already
+  laid before every batch, a batch never crosses its end, and the set of filled cells is the same in every segment, so
+  the slot locks stay. A concrete grid the Crafter refuses is not laid (`FILTER_ITEM_REFUSED`, "The Crafter refuses an
+  item the filter allowed"). **The feeder holds no items**: an item is in the buffer, in the Crafter, in the block in front
   of the Crafter's output, or dropped — the §8 invariant with the Crafter as the machine.
 * **Pulsing.** One rising redstone edge gives the Crafter one craft, four ticks later. The feeder gives a **weak** signal
   on its front face only, high for 2 ticks, and the next edge comes `max(8, ceil(256 / |RPM|))` ticks after the last
@@ -5412,9 +5465,11 @@ production order ─▶ SUPPLY jobs ─▶ station buffer ─▶ feeder (lays sl
 * **Blocked.** A blocked feeder stops pulsing and says why on its goggles (`FeederStatus`): no station, two stations, no
   warehouse, no Crafter, nothing or something full in front of the Crafter's output, no rotation, a grid that is not
   empty when an order waits, a grid changed by hand, another signal on the Crafter, missing ingredients, a pulse that
-  crafted nothing, a recipe that no longer fits the pattern. The order waits under its usual timeout.
+  crafted nothing, a recipe that no longer fits the pattern, an item a filter allowed that the Crafter refuses
+  (ADR-082). The order waits under its usual timeout.
 * **Persistence.** The feeder saves the order it serves, the slot, a snapshot of the 9-cell layout (a later pattern edit
-  does not change a running feed), the result item and how many one run makes, the runs not laid yet and the side and
+  does not change a running feed; with filter cells it is the concrete layout of the segment in the grid, so ADR-082
+  saves nothing new here), the result item and how many one run makes, the runs not laid yet and the side and
   lock masks of the Crafter it locked; the station saves the runs laid per open order. What lies in the grid is never saved by Wareworks: it is in the Crafter, and the feeder reads it back. The
   first tick after a load lowers a signal saved high; a craft the Crafter had already scheduled is in the chunk's tick
   list and still happens. Breaking the feeder gives the Crafter its slots back and leaves the grid to the player.
@@ -5430,6 +5485,74 @@ production order ─▶ SUPPLY jobs ─▶ station buffer ─▶ feeder (lays sl
   Crafter and the station broken mid-order, a reload inside a pulse); a feeder phase in `runRobustnessTest`; the visual
   scenario `feeder`; the Ponder scene `warehouse/crafter_feeder` ("Crafting with a Vanilla Crafter", for the feeder and
   the production station).
+
+#### 3.5.8 Filter cells: any item a filter allows (ADR-082)
+
+A pattern cell may hold a Create **List Filter** or **Attribute Filter** instead of an exact item, as a ghost like
+every cell: "any `#minecraft:planks`" for a crafting table, or "oak, birch or spruce" so that a rare wood stays in the
+racks. The owner's rules (2026-11-09): the result stays one exact item; of several matching items the one with the
+**largest available stock** is taken first and kinds are mixed only when one is short; reserves count as before.
+
+* **Which cell is a filter cell** (`content.station.PatternFilterCells`). The server decides from the item: a List
+  Filter with listed items, or an Attribute Filter with attributes. A blank filter, a Package Filter and the result
+  entry stay exact; the client never sends a flag. A filter cell stores the filter's ghost (count 1, enchantments and
+  attribute modifiers at the item's defaults, which Create's test ignores), saved as `{Entry, Item, Count, Filter: 1b}`;
+  an entry without `Filter` (every save before ADR-082) is exact, even a configured filter. A filter whose encoded key
+  passes 4096 bytes is refused (`EditOutcome.FILTER_TOO_LARGE`), and so is a filter that would let the slot's result
+  through, in either direction of the edit (`FILTER_LETS_RESULT`); both are said over the hotbar.
+* **In the core a filter cell is a choice ingredient** (`ProductionPattern.choices`): its key is the filter's own
+  `ItemKey`, and the core never tests a filter itself. It asks `IngredientChoices`, which the controller implements
+  (`content.controller.AisleChoices`, built once per click or pass): the keys in stock the filter allows
+  (`FilterMatchCache`, Create's own `FilterItemStack#test`, cached per filter and rebuilt only when a key entered or left
+  the stock, `StockIndex#keyGeneration`; the cache holds the first 128 distinct filters of the aisle's stations in
+  aisle order and never evicts one still in use, and a filter beyond them allows nothing and is logged), including keys a relocation carries in flight, without the pattern's result
+  and without keys the access may have none of, the 64 most available; plus up to 16 results of the aisle's patterns
+  the filter allows, which may be made. At a station with a Crafter Feeder only keys the Crafter takes in that grid
+  remain (`WarehouseProductionBlockEntity#crafterTakes`).
+* **Paying a choice** (`core.production.ChoiceAllocator`, the one implementation, used by `ProduciblePlanner`,
+  `ProductionPlanner` and restocking). Exact ingredients are paid first, then choices, the most constrained first.
+  Candidates are ranked: plain items before component variants, then the most **free** stock (above every reserve,
+  less what the plan and, in a list or craft-fetch measurement, the earlier lines and chains took), then the most the
+  access may have, then a stable order. Each key pays **whole runs** only, the first one all of them
+  if it can; a second key is taken only when the first is short, at most 8 keys per choice. What no stock pays is made
+  from one producible candidate (a chain step, §3.5.6); with no candidate at all the click is refused with
+  `PlanRefusal.NO_MATCHING_ITEM`, naming the filter. Example: oak 9, birch 6 and cherry 4 planks, three crafting tables
+  of four planks each: oak 8 and birch 4, the cherry untouched.
+* **Orders hold concrete items.** A plan node carries its concrete lines, and an order is created from them: one supply
+  line per item, each remembering the filter that chose it (`SupplyLine.choice`, saved as `Choice`), up to 72 lines. The
+  crane still carries one item key per trip, reservations and goggles see concrete keys only, and an order never looks
+  back at its pattern: editing the pattern, `/reload`, a tag change or a restart changes nothing in an open order.
+* **The Crafter Feeder** lays such an order in segments of one key per filter group (`CrafterFeedPlan#segment`), so a
+  Crafter slot never holds two kinds, and re-checks the concrete grid before each batch (`FILTER_ITEM_REFUSED` when the
+  Crafter refuses an allowed item). A pattern whose filter names no item that could be checked is
+  `FILTER_NOT_CHECKABLE` at a feeder station (red, never ordered). The result follows the grid (ADR-076) with each filter
+  read as the first item it names.
+* **The screen.** A filter cell is drawn as what an order would take now (the first stock match, else the first item
+  the filter names) with the filter as a small badge in its corner and a thin gold frame; its amount is red while no kind
+  in stock pays one run. Its tooltip gives Create's own name and summary of the filter, "Any item this filter allows",
+  then "In stock, in the order used:" with up to four matches in the order an order takes them and what a player may
+  have of each (else "Nothing in stock
+  matches"), and where they apply "No kind is enough for one run", the deny warning and "Only items the Crafter takes in
+  this grid". The server builds these views (`WarehouseControllerBlockEntity#choiceViews`) only while a screen is open,
+  at the push interval, and sends them only on change. An empty grid cell's tooltip says that a filter may go in. An
+  order's tooltip, at the station and at the terminal, names the items a filter chose ("Uses Birch Planks x8").
+* **JEI's "+"** writes a cell whose recipe ingredient is exactly one item tag as an Attribute Filter "is tagged
+  <tag>" (`RecipeTagCells`), when the tag holds the item the server picked and not the result; a list of items (a
+  torch's coal or charcoal) stays exact, and a tag that holds the result leaves that one cell exact without refusing the
+  recipe. Which ingredient is a tag only the server knows (a client's recipe arrives with every ingredient as a list of
+  items), so the lay names the recipe and the server reads the tags from its own copy of it.
+* **Everything that plans production benefits** without logic of its own: terminal requests and the make-first offer,
+  chains, list orders, Stock Keeper restocking (free stock only), computers, redstone and the Schematicannon Requester.
+  For restocking, a kind another rule is below its minimum on is left out of a filter cell (decision and order alike)
+  rather than stopping the whole pattern; the rule waits for that kind, and names it, only when nothing else the filter
+  allows can pay one run.
+* **Cost.** Nothing per tick. The filter cache is asked inside a click, a terminal's producible pass, a restock
+  evaluation, a station edit and a station screen push. A filter's examples (`PatternFilterCells#examples`) are
+  remembered per filter until a `/reload`, and computing them walks each tag once and runs at most 64 Create tests. The producible pass at a deliberate worst case (8 stations x 36
+  patterns with two filters of 64 candidates, 2000 stock keys) takes about 4 to 7 ms (`ProductionScaleTest`).
+* **Tests.** JUnit `ChoiceAllocatorTest`, `ChoiceIngredientTest`, `RestockChoiceTest`, `ProductionFilterTextWidthTest`
+  and the extended planner and feeder tests; GameTests `gametest.ProductionFilterGameTests` and filter tests in
+  `CrafterFeederGameTests`, `SchematicannonRequesterGameTests` and `TerminalCraftChainGameTests`.
 
 ### 3.6 Warehouse Stock Keeper (`content.station`, M15)
 
@@ -7899,6 +8022,8 @@ and is owned by the dock, exactly as the rail count was.
     * `restore(location, counts)` sets counts without slot information, for loading a save. `snapshotOf` stays empty until the next snapshot.
     * `countsAt(location)` returns the per-key counts of one location, for saving.
     * `readOnlyView()` returns a `StockView` that cannot be cast back to the index.
+    * `keyGeneration()` (ADR-082) is bumped only when a key enters or leaves the index, never on a count change, so a
+      cache of "which stock keys a filter allows" knows when to rebuild (`content.controller.FilterMatchCache`).
 * **Implementation (M2, controller):**
   * **Snapshot queue (M2 review fix, refinement of source 2).** Storage locations waiting for a read are kept in `core.inventory.SnapshotQueue` (de-duplicated, FIFO, urgent before background), and the controller reads at most `maxSnapshotsPerTick` (config, default 4) of them per tick. Urgent: a location that joins (indexed empty at once), a content hint (below), a location that takes over another one's counts. Background: counts restored from a save (§3.3.1). Reason: the design rule "scans only on demand and throttled". The first version read every joining location in the same tick, i.e. up to 2·(L+1)·H full inventory reads in one tick after a dock link, a mast height increase or a dock rotated and back. A single joining location is still read in the tick it joins. **M8 review fix:** a polled location whose rack position is not loaded is put **back** into the queue. `SnapshotQueue#poll` has already removed it, so dropping it left its restored counts to the round robin alone, which needs up to 2·(L+1)·H·`snapshotIntervalTicks` to come round (about 9 minutes at the default caps).
   * **Content hints (M2 review fix, ADR-013).** The warehouse interface reports content changes of its attached inventory (`onNeighborChange`) and block updates at the attached position (`neighborChanged`) through `WarehouseRegistry#contentChanged`; the controller queues that location as urgent. A hopper line feeding a chest therefore costs at most one read per tick for that location (de-duplication), not one per item. Inventories that change silently (no `setChanged`) are still found by the round robin.

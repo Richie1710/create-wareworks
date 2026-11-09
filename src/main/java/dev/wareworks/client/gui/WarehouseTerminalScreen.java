@@ -4287,6 +4287,8 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (order.missing() > 0)
             tooltip.add(WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_MISSING,
                     LangNumberFormat.format(order.missing())).copy().withStyle(ChatFormatting.GRAY));
+        // The items a filter cell chose for it (ADR-082), as the station's own order line names them.
+        tooltip.addAll(WarehouseProductionScreen.usesLines(order));
         if (order.lostIngredients())
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_INGREDIENTS_LOST).copy()
                     .withStyle(ChatFormatting.GOLD));

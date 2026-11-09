@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Production patterns take List and Attribute Filters.** Put a configured Create List Filter or Attribute Filter into
+  a pattern cell instead of an item, and any item the filter allows pays for that cell, for example any plank of the
+  `#minecraft:planks` tag, or only oak, birch and spruce while a rare wood stays untouched. The warehouse uses the
+  allowed item with the **largest stock** first and mixes kinds only in whole runs when one kind alone is short; a Stock
+  Keeper's reserve still holds items back as before. The result stays one item. The cell shows the item an order would
+  take now with the filter as a small badge, and its tooltip lists the matching items in stock in the order an order
+  uses them; an order says in its tooltip which items it uses. The Crafter Feeder lays one kind per batch, so a Crafter
+  slot never holds two kinds. A filter that would let the pattern's own result through, or one too large for a
+  pattern, is refused with a line over the hotbar. It works everywhere production does: terminal requests and the
+  make-first offer, production chains, Stock Keeper restocking, computers, redstone requests and the Schematicannon
+  Requester. Open orders keep the items they chose, and worlds with patterns load unchanged.
+
+### Changed
+
+- **JEI's "+" at a production station writes a tag ingredient as a filter.** A recipe cell that takes any item of a
+  tag, such as the planks of a chest, becomes an Attribute Filter "is tagged" for that tag instead of one picked item.
+  An ingredient that lists items, such as a torch's coal or charcoal, stays the item it was.
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because the production station's screen and JEI's "+" send new data. Worlds load unchanged.
+
 ## [0.21.0-beta] - 2026-11-08
 
 ### Changed

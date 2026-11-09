@@ -442,4 +442,39 @@ class SequentialPlansTest {
         assertEquals(0, fetch.freeOrderSlots(), "a craft fetch's lines are requested together and share the slots");
         assertTrue(fetch.plan(PLANK, 4L).refusedWith(PlanRefusal.ORDERS_BUSY));
     }
+
+    /**
+     * A filter cell of a later list entry ranks its kinds by what the earlier entries left (ADR-082 D4), not by the
+     * snapshot's free stock: 100 oak and 64 birch, the first entry takes 60 oak, so the 8 chests of the second entry
+     * are paid with birch alone, as the real portion would be, and never mixed with the 40 oak that are left.
+     */
+    @Test
+    void aLaterFilterCellRanksItsKindsByWhatTheEarlierEntriesLeft() {
+        String anyPlank = "filter:#planks";
+        String oak = "oak";
+        String birch = "birch";
+        ProductionPattern<String> chests = new ProductionPattern<>(List.of(new ProductionEntry<>(anyPlank, 8)),
+                new ProductionEntry<>(CHEST, 1), Set.of(anyPlank));
+        stock.put(oak, 100L);
+        stock.put(birch, 64L);
+        IngredientChoices<String> choices = new IngredientChoices<>() {
+            @Override
+            public List<String> candidates(ProductionPattern<String> pattern, String choice) {
+                return List.of(birch, oak);
+            }
+
+            @Override
+            public long free(String key) {
+                return stock.getOrDefault(key, 0L);
+            }
+        };
+        SequentialPlans<String, String> list = SequentialPlans.forList(ProductionPlanInput.of(
+                List.of(StationPattern.of(CRAFTER, chests)), PlanBudget.ofMap(stock), PlanLimits.UNBOUNDED, 16)
+                .withChoices(choices));
+        assertEquals(60L, list.take(oak, 60L));
+        ProductionPlan<String, String> plan = list.plan(CHEST, 8L).orElseThrow();
+        assertEquals(Map.of(birch, 64L), plan.leafDemand(), "birch alone covers all eight runs");
+        assertEquals(40L, list.available(oak), "the oak the first entry left is untouched");
+        assertEquals(0L, list.available(birch));
+    }
 }

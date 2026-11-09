@@ -199,8 +199,19 @@ public final class WareworksNetwork {
      * {@code PRODUCTION_BUSY}), which an older client reads as "no remote", and the plan refusal, the item it is about
      * and each row's made part, which an older client never shows. The goggle data is no payload, but it crosses the
      * same connection, so the versions must not mix.
+     * <p>
+     * <b>{@code "25"} is ADR-082</b> (filter cells in production patterns): {@link ProductionScreenPayload}'s
+     * {@code ProductionScreenState} gained the filter flag of every pattern entry, the filter views after the checks,
+     * and the items an order line uses after {@code waitingForStep}; a reader of the old shape would misread the entries
+     * and leave the rest in the buffer. {@link TerminalOrdersPayload} carries the same order lines.
+     * {@link ProductionPatternLayPayload} gained one optional item tag per cell after its count, which an older server
+     * would read as the next cell. {@code CrafterPatternCheck.FILTER_NOT_CHECKABLE} (by ordinal),
+     * {@code FeederStatus.FILTER_ITEM_REFUSED} (by name) and {@code PlanRefusal.NO_MATCHING_ITEM} (by name) are new.
+     * {@link ProductionPatternPayload} is unchanged: the server tells a filter cell from the item. Saves gained
+     * {@code Filter} on pattern entries and {@code Choice} on supply lines, and an order may hold up to 72 lines; an older
+     * build reads a filter cell as an exact ingredient that is never in stock.
      */
-    public static final String VERSION = "24";
+    public static final String VERSION = "25";
 
     private WareworksNetwork() {
     }

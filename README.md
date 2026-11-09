@@ -120,8 +120,9 @@ teleported: every item you put in or take out is carried by the crane, where you
 * **Warehouse Production Station**: holds production patterns; the crane delivers ingredients to it for your own Create
   machines, a funnel, chute, belt or Mechanical Arm carries them on, and the product comes back into storage. Order
   something whose **ingredients have to be made first** and the whole chain is planned at the click — one order per step,
-  at your own machines. Wareworks never crafts on its own; at a terminal you can craft by hand from what the crane
-  delivered.
+  at your own machines. A pattern cell can hold a Create **List or Attribute Filter**, such as "any plank", and the
+  warehouse then uses the allowed item it holds most of. Wareworks never crafts on its own; at a terminal you can craft
+  by hand from what the crane delivered.
 * **Warehouse Crafter Feeder**: makes a **vanilla Crafter** the machine behind a production station. It sits on the
   station's back, lays each order's ingredients into the Crafter exactly as the pattern's grid shows them and pulses the
   Crafter once per run; the result goes into a Warehouse Input in front of the Crafter. While it is attached, the

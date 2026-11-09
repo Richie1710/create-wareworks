@@ -3,6 +3,7 @@ package dev.wareworks.core.stock;
 import java.util.List;
 import java.util.Objects;
 
+import dev.wareworks.core.production.IngredientChoices;
 import dev.wareworks.core.production.ProductionPattern;
 
 /**
@@ -22,16 +23,32 @@ import dev.wareworks.core.production.ProductionPattern;
  * @param paused     whether the safety stop is holding this rule ({@link StockRulePause})
  * @param openOrders automatic production orders that are already open for this item, whichever rule started them
  * @param patterns   the patterns of the aisle that make this item, in aisle order; empty when none does
+ * @param choices    which keys may pay a choice ingredient of those patterns (ADR-082), for the AUTOMATION access;
+ *                   {@link IngredientChoices#none()} when nobody passed any
  * @param <K>        item key type
  */
 public record RestockInput<K>(StockRule<K> rule, StockLevels levels, boolean governs, boolean paused, int openOrders,
-                              List<ProductionPattern<K>> patterns) {
+                              List<ProductionPattern<K>> patterns, IngredientChoices<K> choices) {
     public RestockInput {
         Objects.requireNonNull(rule, "rule");
+        if (choices == null)
+            choices = IngredientChoices.none();
         if (levels == null)
             levels = StockLevels.NONE;
         patterns = List.copyOf(Objects.requireNonNull(patterns, "patterns"));
         openOrders = Math.max(0, openOrders);
+    }
+
+    /** An input without choices, as every input was before ADR-082. */
+    public RestockInput(StockRule<K> rule, StockLevels levels, boolean governs, boolean paused, int openOrders,
+            List<ProductionPattern<K>> patterns) {
+        this(rule, levels, governs, paused, openOrders, patterns, IngredientChoices.none());
+    }
+
+    /** This input with the keys that may pay a choice ingredient (ADR-082). */
+    public RestockInput<K> withChoices(IngredientChoices<K> next) {
+        return new RestockInput<>(rule, levels, governs, paused, openOrders, patterns,
+                Objects.requireNonNull(next, "choices"));
     }
 
     /** A governing, unpaused rule with no open order of its own. */

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.jetbrains.annotations.Nullable;
@@ -23,13 +24,18 @@ import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.network.ProductionPatternLayPayload;
 import dev.wareworks.network.ProductionScreenPayload;
 import dev.wareworks.registry.WareworksMenuTypes;
+import dev.wareworks.util.WareworksLang;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.neoforged.api.distmarker.Dist;
@@ -227,13 +233,25 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         return menu.takeEditBudget() ? menu : null;
     }
 
-    /** Server: writes one pattern entry, or clears the whole slot; every check happens in the station. */
+    /**
+     * Server: writes one pattern entry, or clears the whole slot; every check happens in the station. A filter the
+     * station refuses (ADR-082: too large, or it lets the slot's result through) is said over the hotbar, because the
+     * cell simply staying as it was would explain nothing.
+     */
     private boolean edit(Player player, int pattern, int entry, @Nullable ItemKey key, int count) {
         if (!mayEdit(player))
             return false;
-        boolean changed = entry == CLEAR_WHOLE_PATTERN
-                ? contentHolder.clearPattern(pattern)
-                : contentHolder.editPatternEntry(pattern, entry, key, count);
+        boolean changed;
+        if (entry == CLEAR_WHOLE_PATTERN) {
+            changed = contentHolder.clearPattern(pattern);
+        } else {
+            WarehouseProductionBlockEntity.EditOutcome outcome =
+                    contentHolder.editPatternEntry(pattern, entry, key, count);
+            String refusal = outcome.langKey();
+            if (refusal != null)
+                player.displayClientMessage(WareworksLang.translateDirect(refusal), true);
+            changed = outcome == WarehouseProductionBlockEntity.EditOutcome.CHANGED;
+        }
         if (changed)
             markDirty();
         return changed;
@@ -258,7 +276,8 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
      * Server: overwrites a pattern slot with a recipe from a recipe viewer (ADR-076). {@link IngredientPicker} picks one
      * item per cell by what the buffer and the aisle hold. A crafting recipe must then be a recipe of the server's,
      * which also says the result; anything else keeps the client's result and counts. With any refusal the slot stays as
-     * it was. Nothing moves and nothing is ordered: a pattern is ghost items.
+     * it was. Nothing moves and nothing is ordered: a pattern is ghost items. A cell the viewer says is one item tag is
+     * written as an "is tagged" Attribute Filter where {@link RecipeTagCells#filterFor} allows it (ADR-082).
      */
     public LayResult lay(Player player, ProductionPatternLayPayload payload) {
         if (!mayEdit(player) || payload.pattern() < 0 || payload.pattern() >= contentHolder.patterns().size())
@@ -288,7 +307,29 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         }
         if (cells.contains(result))
             return LayResult.MAKES_ITS_INGREDIENT;
-        contentHolder.writePattern(payload.pattern(), grid, counts, result, resultCount);
+        // A cell whose ingredient is one item tag becomes an "is tagged" Attribute Filter (ADR-082, owner decision 3),
+        // decided after the concrete grid said what it makes. A tag that is unknown here, does not hold the picked item
+        // or holds the result leaves the cell exact: that is never a refusal.
+        // Only a tag the server's own copy of the named recipe has as an ingredient: the client cannot tell a tag from a
+        // list of items that equals it (RecipeTagCells), and a list stays exact.
+        Set<TagKey<Item>> recipeTags = payload.recipe()
+                .flatMap(id -> CrafterRecipeCheck.ingredientsOf(contentHolder.getLevel(), id))
+                .map(RecipeTagCells::recipeTags).orElse(Set.of());
+        boolean[] filterCells = new boolean[CraftGrid.SIZE];
+        List<ItemKey> written = new ArrayList<>(cells);
+        for (int cell = 0; cell < CraftGrid.SIZE; cell++) {
+            ItemKey chosen = cells.get(cell);
+            Optional<ResourceLocation> tag = payload.tags().get(cell);
+            if (chosen == null || tag.isEmpty() || !recipeTags.contains(TagKey.create(Registries.ITEM, tag.get())))
+                continue;
+            Optional<ItemKey> filter = RecipeTagCells.filterFor(tag.get(), chosen, result);
+            if (filter.isPresent()) {
+                written.set(cell, filter.get());
+                filterCells[cell] = true;
+            }
+        }
+        contentHolder.writePattern(payload.pattern(), CrafterGrid.ofNullable(written), filterCells, counts, result,
+                resultCount);
         markDirty();
         return LayResult.LAID;
     }
@@ -424,13 +465,14 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             List<ProductionScreenState.EntryView> entries = new ArrayList<>(ProductionPatterns.ENTRIES_PER_PATTERN);
             for (int entry = 0; entry < ProductionPatterns.ENTRIES_PER_PATTERN; entry++) {
                 int index = entry;
-                patterns.keyAt(slot, index).ifPresent(key -> entries.add(
-                        new ProductionScreenState.EntryView(index, key, patterns.countAt(slot, index))));
+                patterns.keyAt(slot, index).ifPresent(key -> entries.add(new ProductionScreenState.EntryView(index,
+                        key, patterns.countAt(slot, index), patterns.isFilterAt(slot, index))));
             }
             views.add(new ProductionScreenState.PatternView(entries));
         }
         List<ProductionScreenState.OrderView> orders = List.of();
         List<StoppedProduct> stopped = List.of();
+        List<ProductionScreenState.ChoiceView> choices = List.of();
         BlockPos pos = contentHolder.getBlockPos();
         Optional<WarehouseControllerBlockEntity> controller =
                 WarehouseRegistry.findController(contentHolder.getLevel(), pos);
@@ -444,6 +486,10 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             // What the safety stop is holding of this station's own products (M20): the same answer its goggles and its
             // block state are built from, so a player cannot be told one thing by the block and another by its screen.
             stopped = contentHolder.stoppedProducts(controller.get());
+            // What each filter cell would take right now (ADR-082), ranked as an order would pick it.
+            choices = controller.get().choiceViews(contentHolder);
+        } else {
+            choices = choicesWithoutAisle(patterns, contentHolder.getLevel());
         }
         // The crafting recipe check of every slot while a Crafter Feeder is attached (issue #34, ADR-067): the same
         // cached answer the station filters its planner patterns with, so the screen's red slot is exactly a slot the
@@ -456,7 +502,27 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
                         .map(made -> new ProductionScreenState.EntryView(ProductionPatterns.RESULT_ENTRY,
                                 ItemKey.of(made), made.getCount()))));
         }
-        return new ProductionScreenState(views, orders, stopped, feeder, checks);
+        return new ProductionScreenState(views, orders, stopped, feeder, checks, choices);
+    }
+
+    /**
+     * The filter views of a station no warehouse is behind (ADR-082): no stock to match, so each filter is drawn as the
+     * first item it names.
+     */
+    private List<ProductionScreenState.ChoiceView> choicesWithoutAisle(ProductionPatterns patterns, Level level) {
+        List<ProductionScreenState.ChoiceView> views = new ArrayList<>();
+        boolean feeder = contentHolder.attachedFeeder().isPresent();
+        for (int slot = 0; slot < patterns.size(); slot++) {
+            for (var group : patterns.filterGroups(slot).entrySet()) {
+                if (views.size() >= ProductionScreenState.MAX_CHOICE_VIEWS)
+                    return views;
+                ItemKey filter = group.getKey();
+                views.add(new ProductionScreenState.ChoiceView(slot, filter,
+                        PatternFilterCells.examples(filter, level).stream().findFirst(), List.of(), 0, false,
+                        PatternFilterCells.denies(filter), feeder, group.getValue()));
+            }
+        }
+        return views;
     }
 
     private long gameTime() {

@@ -1,12 +1,15 @@
 package dev.wareworks.core.production;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
 
 /**
@@ -75,6 +78,15 @@ import java.util.function.ToLongFunction;
  * request was told the amount it was granted. A refusal is therefore always about something a smaller order cannot
  * escape.
  * <p>
+ * <h2>Choice ingredients (ADR-082)</h2>
+ * A filter cell is paid by {@link ChoiceAllocator}: whole runs, the largest stock first, several kinds only when one is
+ * short. The keys it may use come from {@link ProductionPlanInput#choices()}, never the step's own result and never an
+ * item the chain is making further up (those are left out, not refused as a loop). What stock cannot pay is made from
+ * <b>one</b> producible candidate, the one that could make the most right now first; a further candidate costs one of
+ * the walk's extra attempts. When no allowed item is in stock and nothing makes one, the step is refused with
+ * {@link PlanRefusal#NO_MATCHING_ITEM}, naming the filter. Every step carries its concrete lines ({@link PlanNode#lines()})
+ * and every child the index of the line it feeds, so the orders a plan creates never hold a filter.
+ * <p>
  * <b>At a step limit of 1 this is the pre-M20 planner</b>, answer for answer: one order for the ordered item, its runs
  * clamped by the ingredients in the racks, and {@link PlanRefusal#MISSING_INGREDIENT} naming the first ingredient one
  * run cannot be paid for.
@@ -128,7 +140,7 @@ public final class ProductionPlanner {
         // without a walk: the warehouse has stopped making it, or nothing here makes it at all.
         if (input.isPaused(key))
             return ProductionPlanResult.refused(PlanRefusal.PAUSED, key);
-        Map<K, List<StationPattern<K, L>>> ranked = new LinkedHashMap<>();
+        PlanCache<K, L> ranked = new PlanCache<>(input.choices());
         List<StationPattern<K, L>> roots = candidatesFor(input, ranked, key);
         if (roots.isEmpty())
             return ProductionPlanResult.refused(PlanRefusal.NO_PATTERN, key);
@@ -163,7 +175,7 @@ public final class ProductionPlanner {
      * the largest one in at most 31 walks instead of walking down run by run.
      */
     private static <K, L> Attempt<K, L> largestThatFits(ProductionPlanInput<K, L> input,
-            Map<K, List<StationPattern<K, L>>> ranked, StationPattern<K, L> root, K key, long amount,
+            PlanCache<K, L> ranked, StationPattern<K, L> root, K key, long amount,
             Attempt<K, L> fits, int hi) {
         Attempt<K, L> best = fits;
         int lo = fits.rootRuns();
@@ -181,7 +193,7 @@ public final class ProductionPlanner {
     }
 
     private static <K, L> Attempt<K, L> attempt(ProductionPlanInput<K, L> input,
-            Map<K, List<StationPattern<K, L>>> ranked, StationPattern<K, L> root, K key, long amount, int rootRuns) {
+            PlanCache<K, L> ranked, StationPattern<K, L> root, K key, long amount, int rootRuns) {
         return new Walk<>(input, ranked).run(root, key, amount, rootRuns);
     }
 
@@ -197,12 +209,66 @@ public final class ProductionPlanner {
      * stands the very pattern {@code startProductionOrder} picks today.
      */
     private static <K, L> List<StationPattern<K, L>> candidatesFor(ProductionPlanInput<K, L> input,
-            Map<K, List<StationPattern<K, L>>> cache, K key) {
-        List<StationPattern<K, L>> found = cache.get(key);
+            PlanCache<K, L> cache, K key) {
+        List<StationPattern<K, L>> found = cache.ranked.get(key);
         if (found == null) {
             found = rank(input, key);
-            cache.put(key, found);
+            cache.ranked.put(key, found);
         }
+        return found;
+    }
+
+    /**
+     * What one plan remembers across all its walks: the ranked patterns of every item, the candidates of every choice
+     * of every pattern (asked of {@link IngredientChoices} once per pattern object and choice), the make candidates of
+     * every choice, and the free stock memo of {@link ChoiceAllocator}.
+     */
+    private static final class PlanCache<K, L> {
+        private final Map<K, List<StationPattern<K, L>>> ranked = new LinkedHashMap<>();
+        private final Map<ProductionPattern<K>, Map<K, List<K>>> choiceCandidates = new IdentityHashMap<>();
+        private final Map<ProductionPattern<K>, Map<K, List<K>>> makeCandidates = new IdentityHashMap<>();
+        private final ChoiceAllocator.FreeMemo<K> free;
+
+        private PlanCache(IngredientChoices<K> choices) {
+            this.free = new ChoiceAllocator.FreeMemo<>(choices);
+        }
+    }
+
+    /** The keys that may pay {@code choice} of {@code pattern}, asked once per plan. */
+    private static <K, L> List<K> choiceCandidates(ProductionPlanInput<K, L> input, PlanCache<K, L> cache,
+            ProductionPattern<K> pattern, K choice) {
+        return cache.choiceCandidates.computeIfAbsent(pattern, p -> new HashMap<>())
+                .computeIfAbsent(choice, c -> List.copyOf(input.choices().candidates(pattern, c)));
+    }
+
+    /**
+     * The candidates of {@code choice} the aisle could <b>make</b>: a pattern here produces them and they are not paused,
+     * the one that could make the most right now first, ties in candidate order (D8). Remembered for the whole plan.
+     */
+    private static <K, L> List<K> makeCandidates(ProductionPlanInput<K, L> input, PlanCache<K, L> cache,
+            ProductionPattern<K> pattern, K choice) {
+        Map<K, List<K>> byChoice = cache.makeCandidates.computeIfAbsent(pattern, p -> new HashMap<>());
+        List<K> found = byChoice.get(choice);
+        if (found != null)
+            return found;
+        ToLongFunction<K> snapshot = input.budget()::snapshot;
+        List<K> makers = new ArrayList<>(2);
+        Map<K, Long> producible = new HashMap<>();
+        for (K candidate : choiceCandidates(input, cache, pattern, choice)) {
+            if (input.isPaused(candidate) || producible.containsKey(candidate))
+                continue;
+            List<StationPattern<K, L>> patterns = candidatesFor(input, cache, candidate);
+            if (patterns.isEmpty())
+                continue;
+            long best = 0L;
+            for (StationPattern<K, L> maker : patterns)
+                best = Math.max(best, ProduciblePlanner.producibleAmount(maker.pattern(), snapshot, input.choices()));
+            producible.put(candidate, best);
+            makers.add(candidate);
+        }
+        makers.sort(Comparator.comparingLong((K candidate) -> producible.get(candidate)).reversed());
+        found = List.copyOf(makers);
+        byChoice.put(choice, found);
         return found;
     }
 
@@ -214,7 +280,8 @@ public final class ProductionPlanner {
             if (!candidate.produces(key))
                 continue;
             candidates.add(candidate);
-            producible.put(candidate, ProduciblePlanner.producibleAmount(candidate.pattern(), snapshot));
+            producible.put(candidate,
+                    ProduciblePlanner.producibleAmount(candidate.pattern(), snapshot, input.choices()));
         }
         if (candidates.size() > 1) {
             // A stable sort, so the head is "the best, ties by aisle order" and the tail keeps aisle order too.
@@ -277,6 +344,13 @@ public final class ProductionPlanner {
         private final int depth;
         private final Draft<K, L> parent;
         private final List<Draft<K, L>> children = new ArrayList<>(2);
+        /** The concrete lines of the step, set once all its ingredients are paid (ADR-082). */
+        private List<NodeLine<K>> lines = List.of();
+        /** The ingredient of the parent this step feeds, and the position within that ingredient's lines. */
+        private int feedsIngredient;
+        private int feedsPosition;
+        /** The index of the parent's line this step feeds, resolved when the parent's lines are known. */
+        private int parentLine = PlanNode.NO_PARENT;
 
         private Draft(StationPattern<K, L> station, int runs, long needed, int depth, Draft<K, L> parent) {
             this.station = station;
@@ -302,7 +376,7 @@ public final class ProductionPlanner {
      */
     private static final class Walk<K, L> {
         private final ProductionPlanInput<K, L> input;
-        private final Map<K, List<StationPattern<K, L>>> ranked;
+        private final PlanCache<K, L> ranked;
         private final PlanBudget<K> budget;
         private final int stepLimit;
         private final List<Draft<K, L>> created = new ArrayList<>();
@@ -321,7 +395,7 @@ public final class ProductionPlanner {
         private PlanRefusal refusal;
         private K about;
 
-        private Walk(ProductionPlanInput<K, L> input, Map<K, List<StationPattern<K, L>>> ranked) {
+        private Walk(ProductionPlanInput<K, L> input, PlanCache<K, L> ranked) {
             this.input = input;
             this.ranked = ranked;
             this.budget = input.budget().fresh();
@@ -399,8 +473,9 @@ public final class ProductionPlanner {
             ProductionPattern<K> pattern = station.pattern();
             // A pattern that would consume what a step further up makes closes the loop the other way round — two
             // patterns that are inverses of each other. Refused even when that item is in the racks: converting it
-            // into itself is never what the click meant. It rules out this pattern, not the item.
-            for (ProductionEntry<K> ingredient : pattern.ingredients()) {
+            // into itself is never what the click meant. It rules out this pattern, not the item. A choice is never a
+            // loop by itself: the items on the path are left out of what may pay it (ADR-082, D9).
+            for (ProductionEntry<K> ingredient : pattern.exactIngredients()) {
                 if (path.contains(ingredient.key()))
                     return refuse(PlanRefusal.LOOP, ingredient.key());
             }
@@ -421,8 +496,17 @@ public final class ProductionPlanner {
             plannedOutput.merge(key, (long) pattern.resultFor(runs), Long::sum);
             path.add(key);
             try {
-                for (ProductionEntry<K> ingredient : pattern.ingredients()) {
+                List<ProductionEntry<K>> ingredients = pattern.ingredients();
+                List<List<NodeLine<K>>> segments = new ArrayList<>(Collections.nCopies(ingredients.size(), null));
+                for (int index : payOrder(station)) {
+                    ProductionEntry<K> ingredient = ingredients.get(index);
+                    if (pattern.isChoice(ingredient.key())) {
+                        if (!payChoice(node, station, ingredient, index, runs, depth, segments))
+                            return null;
+                        continue;
+                    }
                     long need = (long) ingredient.count() * runs;
+                    segments.set(index, List.of(NodeLine.exact(ingredient.key(), need)));
                     // What the racks can pay for is paid for and is a leaf; only what is left over becomes a step, so
                     // three planks in stock of the eight a chest needs are used rather than made a second time.
                     long remainder = need - budget.take(ingredient.key(), need);
@@ -431,12 +515,110 @@ public final class ProductionPlanner {
                     Draft<K, L> child = expand(ingredient.key(), remainder, node, depth + 1, null);
                     if (child == null)
                         return null; // the refusal of the deepest question is the one that is reported
+                    child.feedsIngredient = index;
+                    child.feedsPosition = 0;
                     node.children.add(child);
                 }
+                // The lines in pattern ingredient order, and every child pointed at the line it feeds.
+                int[] offsets = new int[segments.size()];
+                List<NodeLine<K>> lines = new ArrayList<>(segments.size());
+                for (int index = 0; index < segments.size(); index++) {
+                    offsets[index] = lines.size();
+                    lines.addAll(segments.get(index));
+                }
+                node.lines = List.copyOf(lines);
+                for (Draft<K, L> child : node.children)
+                    child.parentLine = offsets[child.feedsIngredient] + child.feedsPosition;
             } finally {
                 path.remove(path.size() - 1);
             }
             return node;
+        }
+
+        /** The order the ingredients of {@code station}'s pattern are paid in ({@link ChoiceAllocator#payOrder}). */
+        private int[] payOrder(StationPattern<K, L> station) {
+            ProductionPattern<K> pattern = station.pattern();
+            if (!pattern.hasChoices()) {
+                int[] order = new int[pattern.ingredients().size()];
+                for (int i = 0; i < order.length; i++)
+                    order[i] = i;
+                return order;
+            }
+            return ChoiceAllocator.payOrder(pattern, choice -> choiceCandidates(input, ranked, pattern, choice),
+                    budget);
+        }
+
+        /**
+         * Pays one choice ingredient (ADR-082): out of stock in whole runs, the largest first, and what stock cannot pay
+         * from one producible candidate. Sets {@code segments[index]} and adds the child, or answers {@code false} with
+         * {@link #refusal} set.
+         */
+        private boolean payChoice(Draft<K, L> node, StationPattern<K, L> station, ProductionEntry<K> ingredient,
+                int index, int runs, int depth, List<List<NodeLine<K>>> segments) {
+            ProductionPattern<K> pattern = station.pattern();
+            K choice = ingredient.key();
+            int count = ingredient.count();
+            // Never the step's own result, and never an item the chain is making further up: a filter that allows them
+            // is not a loop, it simply cannot use them here (D9).
+            Predicate<K> excluded = path::contains;
+            ChoiceAllocator.Payment<K> payment = ChoiceAllocator.pay(count, runs,
+                    choiceCandidates(input, ranked, pattern, choice), budget, input.choices(), excluded, ranked.free);
+            List<NodeLine<K>> lines = new ArrayList<>(payment.parts().size() + 1);
+            for (ChoiceAllocator.Part<K> part : payment.parts())
+                lines.add(NodeLine.chosen(part.key(), (long) part.runs() * count, choice));
+            if (payment.remainderRuns() > 0) {
+                long rest = (long) payment.remainderRuns() * count;
+                Reported<K> reported = new Reported<>();
+                boolean tried = false;
+                Draft<K, L> child = null;
+                K made = null;
+                for (K candidate : makeCandidates(input, ranked, pattern, choice)) {
+                    if (excluded.test(candidate))
+                        continue;
+                    if (lines.size() >= ChoiceAllocator.MAX_KEYS_PER_CHOICE && positionOf(lines, candidate) < 0)
+                        continue;
+                    // The best candidate is always tried; a further one costs one of the walk's extra attempts (D8).
+                    if (tried && extraAttempts-- <= 0)
+                        break;
+                    tried = true;
+                    Mark<K> mark = mark();
+                    child = expand(candidate, rest, node, depth + 1, null);
+                    if (child != null) {
+                        made = candidate;
+                        break;
+                    }
+                    reported.record(refusal, about);
+                    restore(mark);
+                }
+                if (child == null) {
+                    if (tried)
+                        refuse(reported.reason(), reported.about());
+                    else
+                        refuse(PlanRefusal.NO_MATCHING_ITEM, choice);
+                    return false;
+                }
+                int position = positionOf(lines, made);
+                if (position < 0) {
+                    lines.add(NodeLine.chosen(made, rest, choice));
+                    position = lines.size() - 1;
+                } else {
+                    NodeLine<K> merged = lines.get(position);
+                    lines.set(position, NodeLine.chosen(made, merged.amount() + rest, choice));
+                }
+                child.feedsIngredient = index;
+                child.feedsPosition = position;
+                node.children.add(child);
+            }
+            segments.set(index, List.copyOf(lines));
+            return true;
+        }
+
+        private static <K> int positionOf(List<NodeLine<K>> lines, K key) {
+            for (int i = 0; i < lines.size(); i++) {
+                if (lines.get(i).key().equals(key))
+                    return i;
+            }
+            return -1;
         }
 
         /** Room left under {@code key}'s own maximum, minus what this plan already means to make of it. */
@@ -478,7 +660,8 @@ public final class ProductionPlanner {
                 Draft<K, L> draft = ordered.get(i);
                 int parent = draft.parent == null ? PlanNode.NO_PARENT : indices.get(draft.parent);
                 nodes.add(new PlanNode<>(i, parent, draft.depth, draft.station.station(), draft.station.pattern(),
-                        draft.runs, draft.needed));
+                        draft.runs, draft.needed, draft.lines,
+                        draft.parent == null ? PlanNode.NO_PARENT : draft.parentLine));
             }
             return nodes;
         }

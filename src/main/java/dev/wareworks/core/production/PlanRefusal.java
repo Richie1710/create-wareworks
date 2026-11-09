@@ -19,7 +19,7 @@ import java.util.Locale;
  * planner tests: reordering them, or putting one in the middle, can never shift a sentence on a client of another build.
  * <p>
  * <b>Precedence</b> at one node, in the order {@link ProductionPlanner} tests them: {@link #PAUSED}, {@link #LOOP},
- * {@link #NO_PATTERN} / {@link #MISSING_INGREDIENT}, {@link #NO_ROOM}, {@link #TOO_MANY_STEPS} /
+ * {@link #NO_PATTERN} / {@link #MISSING_INGREDIENT} / {@link #NO_MATCHING_ITEM}, {@link #NO_ROOM}, {@link #TOO_MANY_STEPS} /
  * {@link #ORDERS_BUSY}, {@link #TOO_MANY_INGREDIENT_ITEMS}. The structural answers come first because they make every
  * later question meaningless, and because a smaller order cannot cure them.
  */
@@ -97,7 +97,14 @@ public enum PlanRefusal {
      * would not fit into an <b>empty</b> aisle either is {@link #TOO_MANY_STEPS} instead
      * ({@link ProductionPlanInput#slotsBind()}).
      */
-    ORDERS_BUSY;
+    ORDERS_BUSY,
+    /**
+     * A choice ingredient (a filter cell, ADR-082) cannot be paid: no item the filter allows is in stock for a whole run,
+     * and nothing in the aisle makes one either. Names the <b>filter</b>, so the sentence reads "Nothing in stock fits
+     * Attribute Filter". The sibling of {@link #MISSING_INGREDIENT}; when an allowed item could be made but its own chain
+     * fails, that deeper refusal is reported instead ("Oak Log is missing"). Not structural.
+     */
+    NO_MATCHING_ITEM;
 
     private static final String LANG_PREFIX = "gui.production.plan.refusal.";
 

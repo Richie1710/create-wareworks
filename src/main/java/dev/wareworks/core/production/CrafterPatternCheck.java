@@ -24,7 +24,13 @@ public enum CrafterPatternCheck {
     /** The grid matches no crafting recipe. */
     NOT_A_RECIPE,
     /** The grid is a crafting recipe, but it makes another item or another amount than the pattern says. */
-    RESULT_DIFFERS;
+    RESULT_DIFFERS,
+    /**
+     * A filter cell names no item a recipe could be checked with (ADR-082): a deny filter, or an Attribute Filter
+     * without an "is tagged" entry. A feeder would fetch items for a grid nobody verified, so the pattern is unused while
+     * a feeder is attached.
+     */
+    FILTER_NOT_CHECKABLE;
 
     /** The check with this ordinal, or {@link #NOT_CHECKED} for an ordinal a newer version wrote. */
     public static CrafterPatternCheck byOrdinal(int ordinal) {
@@ -34,7 +40,7 @@ public enum CrafterPatternCheck {
 
     /** Whether the pattern is complete but the feeder refuses it, which the screen draws in red with the reason. */
     public boolean refused() {
-        return this == CELL_NOT_ONE || this == NOT_A_RECIPE || this == RESULT_DIFFERS;
+        return this == CELL_NOT_ONE || this == NOT_A_RECIPE || this == RESULT_DIFFERS || this == FILTER_NOT_CHECKABLE;
     }
 
     /** Whether the planner may use the pattern: always without a feeder, and with one only after a passed check. */

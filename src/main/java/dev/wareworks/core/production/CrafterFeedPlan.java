@@ -1,9 +1,12 @@
 package dev.wareworks.core.production;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.function.IntPredicate;
 
 /**
@@ -15,6 +18,11 @@ import java.util.function.IntPredicate;
  * comparing those numbers ({@link #runsFor}): same result, a whole number of runs, and every line exactly
  * {@code count x runs}. Two slots that pass are both the same crafting recipe in another arrangement (or the same one
  * twice), so either is correct, and the first one in slot order wins ({@link #match}).
+ * <p>
+ * <b>Filter cells (ADR-082).</b> A choice ingredient is paid by one line per chosen key, each a whole number of runs and
+ * each naming its filter ({@link SupplyLine#choice()}). {@link #runsFor} matches those lines by filter, and
+ * {@link #segment} lays the order in segments: one key per filter group per batch, so a Crafter slot never holds two
+ * kinds at once.
  * <p>
  * Pure: no Minecraft types.
  */
@@ -54,12 +62,18 @@ public final class CrafterFeedPlan {
             return OptionalInt.empty();
         int runs = order.resultAmount() / perRun;
         List<SupplyLine<K>> lines = order.lines();
-        if (lines.size() != pattern.ingredients().size())
+        int exactLines = 0;
+        for (SupplyLine<K> line : lines) {
+            if (line.choice().isEmpty())
+                exactLines++;
+        }
+        List<ProductionEntry<K>> exact = pattern.exactIngredients();
+        if (exactLines != exact.size())
             return OptionalInt.empty();
-        for (ProductionEntry<K> ingredient : pattern.ingredients()) {
+        for (ProductionEntry<K> ingredient : exact) {
             boolean found = false;
             for (SupplyLine<K> line : lines) {
-                if (!line.key().equals(ingredient.key()))
+                if (line.choice().isPresent() || !line.key().equals(ingredient.key()))
                     continue;
                 if ((long) ingredient.count() * runs != line.required())
                     return OptionalInt.empty();
@@ -69,7 +83,89 @@ public final class CrafterFeedPlan {
             if (!found)
                 return OptionalInt.empty();
         }
-        return OptionalInt.of(runs);
+        // Every choice of the pattern is paid by its own group of lines, each a whole number of runs, together exactly
+        // the order's runs; and no line may be left over (ADR-082).
+        int matched = exactLines;
+        for (ProductionEntry<K> ingredient : pattern.choiceIngredients()) {
+            long sum = 0L;
+            int group = 0;
+            for (SupplyLine<K> line : lines) {
+                if (line.choice().filter(ingredient.key()::equals).isEmpty())
+                    continue;
+                if (line.required() % ingredient.count() != 0)
+                    return OptionalInt.empty();
+                sum += line.required();
+                group++;
+            }
+            if (group == 0 || sum != (long) ingredient.count() * runs)
+                return OptionalInt.empty();
+            matched += group;
+        }
+        return matched == lines.size() ? OptionalInt.of(runs) : OptionalInt.empty();
+    }
+
+    /**
+     * One segment of an order with filter cells (ADR-082): the concrete layout to lay, and how many runs it lasts.
+     *
+     * @param layout the grid with every filter cell set to the key that pays this run
+     * @param runs   runs this layout lasts from the run the segment was asked for; {@link Integer#MAX_VALUE} when the
+     *               grid has no filter cell (one layout for every run), 0 when the lines hold no further run
+     */
+    public record Segment<K>(CrafterGrid<K> layout, int runs) {
+        public Segment {
+            Objects.requireNonNull(layout, "layout");
+            if (runs < 0)
+                throw new IllegalArgumentException("runs must not be negative: " + runs);
+        }
+    }
+
+    /**
+     * The segment that starts at run {@code runsDone} of an order (ADR-082): every cell of a filter {@code c} holds the
+     * key of the line that pays run {@code runsDone} of {@code c} — lines in line order, {@code required / cells} runs
+     * each — and the segment lasts until the next line boundary of any filter. A Crafter slot therefore never holds two
+     * kinds in one batch, and the cells that are filled are the same in every segment.
+     *
+     * @param cells    the slot's grid as authored, with the filter keys in the filter cells ({@code layoutOf})
+     * @param choices  the pattern's choice keys
+     * @param lines    the order's supply lines
+     * @param runsDone runs of the order already laid
+     */
+    public static <K> Segment<K> segment(CrafterGrid<K> cells, Set<K> choices, List<SupplyLine<K>> lines,
+            int runsDone) {
+        Objects.requireNonNull(cells, "cells");
+        Objects.requireNonNull(choices, "choices");
+        Objects.requireNonNull(lines, "lines");
+        Map<K, Integer> perKey = cells.cellsPerKey();
+        List<Optional<K>> layout = new ArrayList<>(cells.cells());
+        long end = Long.MAX_VALUE;
+        int done = Math.max(0, runsDone);
+        for (Map.Entry<K, Integer> used : perKey.entrySet()) {
+            K choice = used.getKey();
+            if (!choices.contains(choice))
+                continue;
+            int count = Math.max(1, used.getValue());
+            long covered = 0L;
+            K key = null;
+            for (SupplyLine<K> line : lines) {
+                if (line.choice().filter(choice::equals).isEmpty())
+                    continue;
+                long next = covered + line.required() / count;
+                if (done < next) {
+                    key = line.key();
+                    end = Math.min(end, next);
+                    break;
+                }
+                covered = next;
+            }
+            if (key == null)
+                return new Segment<>(cells, 0);
+            for (int cell = 0; cell < CrafterGrid.SLOTS; cell++) {
+                if (layout.get(cell).filter(choice::equals).isPresent())
+                    layout.set(cell, Optional.of(key));
+            }
+        }
+        int runs = end == Long.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.min(Integer.MAX_VALUE, end - done);
+        return new Segment<>(new CrafterGrid<>(layout), runs);
     }
 
     /**

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.UUID;
 
 import org.jetbrains.annotations.Nullable;
@@ -26,6 +27,7 @@ import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
+import dev.wareworks.core.production.SupplyLine;
 import dev.wareworks.util.GoggleObservers;
 import dev.wareworks.util.SyncThrottle;
 import dev.wareworks.util.WareworksLang;
@@ -119,7 +121,13 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
     private static final class Feed {
         private final UUID order;
         private final int slot;
-        private final CrafterGrid<ItemKey> layout;
+        /**
+         * The concrete layout of the segment being laid. Without filter cells it is the slot's grid for the whole order;
+         * with them it is replaced before every batch by the segment the next run belongs to (ADR-082,
+         * {@link CrafterFeedPlan#segment}), so a Crafter slot never holds two kinds. The filled cells are the same in
+         * every segment, so the slot locks never change.
+         */
+        private CrafterGrid<ItemKey> layout;
         @Nullable
         private final ResourceLocation result;
         /** Result items one run makes, as the pattern said when the order was loaded; 0 if unknown. */
@@ -398,8 +406,11 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
         Candidate found = candidate.get();
         ResourceLocation result = station.patterns().keyAt(found.slot(), ProductionPatterns.RESULT_ENTRY)
                 .map(key -> BuiltInRegistries.ITEM.getKey(key.getItem())).orElse(null);
-        feed = new Feed(found.order(), found.slot(), CrafterRecipeCheck.layoutOf(station.patterns(), found.slot()),
-                result, found.perRun(), found.runs());
+        CrafterGrid<ItemKey> layout = CrafterRecipeCheck.layoutOf(station.patterns(), found.slot());
+        if (!found.choices().isEmpty())
+            layout = CrafterFeedPlan.segment(layout, found.choices(), found.lines(),
+                    station.feederLaidRuns(found.order())).layout();
+        feed = new Feed(found.order(), found.slot(), layout, result, found.perRun(), found.runs());
         applyLocks(feed, crafter);
         craftFailed = false;
         pollTimer = 0;
@@ -410,10 +421,13 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
     /**
      * An order to load.
      *
-     * @param runs   runs still to lay ({@link CrafterFeedPlan#remainingRuns}), at least 1
-     * @param perRun result items one run makes
+     * @param runs    runs still to lay ({@link CrafterFeedPlan#remainingRuns}), at least 1
+     * @param perRun  result items one run makes
+     * @param choices the slot's filter keys (ADR-082), empty for a slot of exact cells
+     * @param lines   the order's supply lines, which say which kind pays which run of a filter
      */
-    private record Candidate(UUID order, int slot, int runs, int perRun) {
+    private record Candidate(UUID order, int slot, int runs, int perRun, Set<ItemKey> choices,
+                             List<SupplyLine<ItemKey>> lines) {
     }
 
     /**
@@ -453,7 +467,8 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
                     controller.onCrafterFeederTookIngredients(order.id());
                 continue;
             }
-            return Optional.of(new Candidate(order.id(), slot, runs, perRun));
+            Set<ItemKey> choices = slots.get(slot).map(ProductionPattern::choices).orElse(Set.of());
+            return Optional.of(new Candidate(order.id(), slot, runs, perRun, choices, order.lines()));
         }
         return Optional.empty();
     }
@@ -470,8 +485,8 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
         }
         if (pollTimer > 0) {
             pollTimer--;
-            return status == FeederStatus.MISSING_INGREDIENTS || status == FeederStatus.RECIPE_CHANGED ? status
-                    : FeederStatus.FEEDING;
+            return status == FeederStatus.MISSING_INGREDIENTS || status == FeederStatus.RECIPE_CHANGED
+                    || status == FeederStatus.FILTER_ITEM_REFUSED ? status : FeederStatus.FEEDING;
         }
         Optional<WarehouseControllerBlockEntity> controller = station.controllerForFeeder();
         if (controller.isEmpty()) {
@@ -484,13 +499,35 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
             release(crafter);
             return FeederStatus.IDLE;
         }
-        if (!recipeHolds(feed)) {
-            // A /reload or a datapack changed the recipe since the order was loaded: lay nothing more of it, and let the
-            // order time out like any order whose machine does nothing. The ingredients stay in the buffer.
-            pollTimer = IDLE_POLL_TICKS;
-            return FeederStatus.RECIPE_CHANGED;
+        // A slot with filter cells is laid in segments (ADR-082): the grid is empty here, so the layout may change to
+        // the kind that pays the next run, and the batch never runs past that kind's last run.
+        boolean filtered = holdsFilterCells(station, feed.slot);
+        int segmentRuns = Integer.MAX_VALUE;
+        if (filtered) {
+            Set<ItemKey> choices = station.patterns().patternAt(feed.slot).map(ProductionPattern::choices)
+                    .orElse(Set.of());
+            CrafterFeedPlan.Segment<ItemKey> segment = CrafterFeedPlan.segment(
+                    CrafterRecipeCheck.layoutOf(station.patterns(), feed.slot), choices, order.get().lines(),
+                    station.feederLaidRuns(feed.order));
+            if (segment.runs() <= 0) {
+                // The slot was edited since the order was loaded and its lines no longer say what to lay.
+                pollTimer = IDLE_POLL_TICKS;
+                return FeederStatus.FILTER_ITEM_REFUSED;
+            }
+            if (!segment.layout().equals(feed.layout)) {
+                feed.layout = segment.layout();
+                setChanged();
+            }
+            segmentRuns = segment.runs();
         }
-        FeederStatus laid = lay(station, controller.get(), crafterPos);
+        if (!recipeHolds(feed)) {
+            // A /reload or a datapack changed the recipe since the order was loaded, or the Crafter does not take the
+            // kind a filter chose: lay nothing more of it, and let the order time out like any order whose machine
+            // does nothing. The ingredients stay in the buffer.
+            pollTimer = IDLE_POLL_TICKS;
+            return filtered ? FeederStatus.FILTER_ITEM_REFUSED : FeederStatus.RECIPE_CHANGED;
+        }
+        FeederStatus laid = lay(station, controller.get(), crafterPos, segmentRuns);
         if (laid != FeederStatus.FEEDING)
             pollTimer = IDLE_POLL_TICKS;
         return laid;
@@ -501,7 +538,7 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
      * the slot, so a refusal never leaves half a batch anywhere.
      */
     private FeederStatus lay(WarehouseProductionBlockEntity station, WarehouseControllerBlockEntity controller,
-            BlockPos crafterPos) {
+            BlockPos crafterPos, int segmentRuns) {
         IItemHandler grid = level.getCapability(Capabilities.ItemHandler.BLOCK, crafterPos, facing().getOpposite());
         if (grid == null)
             return FeederStatus.NO_CRAFTER;
@@ -511,7 +548,7 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
             if (key.isPresent())
                 smallestStack = Math.min(smallestStack, key.get().getMaxStackSize());
         }
-        int batch = CrafterFeedPlan.batch(feed.toLay, smallestStack);
+        int batch = Math.min(CrafterFeedPlan.batch(feed.toLay, smallestStack), segmentRuns);
         if (batch <= 0)
             return FeederStatus.IDLE;
         for (Map.Entry<ItemKey, Integer> need : feed.layout.cellsPerKey().entrySet()) {
@@ -599,6 +636,15 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
         if (target == null)
             return FeederStatus.NO_OUTPUT;
         return CrafterOutputFit.fits(target, leaving.get()) ? null : FeederStatus.OUTPUT_FULL;
+    }
+
+    /** Whether pattern slot {@code slot} of {@code station} holds a filter cell (ADR-082). */
+    private static boolean holdsFilterCells(WarehouseProductionBlockEntity station, int slot) {
+        for (int cell = 0; cell < CrafterGrid.SLOTS; cell++) {
+            if (station.patterns().isFilterAt(slot, cell))
+                return true;
+        }
+        return false;
     }
 
     /**

@@ -160,6 +160,8 @@ final class ControllerPersistence {
     private static final String LINE_LIST = "Lines";
     private static final String REQUIRED = "Required";
     private static final String DELIVERED = "Delivered";
+    /** The filter a supply line pays (ADR-082); absent on every exact line. */
+    private static final String CHOICE = "Choice";
     private static final String REQUEST = "Request";
     /** Marks an order the warehouse started by itself to refill a stock rule (M15 part 2). */
     private static final String RESTOCK = "Restock";
@@ -633,6 +635,12 @@ final class ControllerPersistence {
                     lineTag.put(ITEM, keyTag);
                     lineTag.putInt(REQUIRED, line.required());
                     lineTag.putInt(DELIVERED, line.delivered());
+                    // Only on a line that pays a filter cell (ADR-082), so every other line saves what it always did.
+                    if (line.choice().isPresent()) {
+                        Tag choiceTag = line.choice().get().save(registries);
+                        if (!(choiceTag instanceof CompoundTag compound && compound.isEmpty()))
+                            lineTag.put(CHOICE, choiceTag);
+                    }
                     lines.add(lineTag);
                 }
                 if (!complete || lines.isEmpty())
@@ -691,14 +699,18 @@ final class ControllerPersistence {
             return Optional.empty();
         List<SupplyLine<ItemKey>> lines = new ArrayList<>();
         ListTag lineTags = entry.getList(LINES, Tag.TAG_COMPOUND);
-        for (int i = 0; i < lineTags.size() && lines.size() < ProductionPattern.MAX_INGREDIENTS; i++) {
+        // Up to one line per kind that pays a filter cell (ADR-082); a save from before it holds at most nine.
+        for (int i = 0; i < lineTags.size() && lines.size() < ProductionOrder.MAX_LINES; i++) {
             CompoundTag lineTag = lineTags.getCompound(i);
             int required = lineTag.getInt(REQUIRED);
             Optional<ItemKey> key = ItemKey.load(registries, lineTag.get(ITEM));
             if (!lineTag.hasUUID(ID) || key.isEmpty() || required < 1)
                 continue;
             int delivered = Mth.clamp(lineTag.getInt(DELIVERED), 0, required);
-            lines.add(new SupplyLine<>(lineTag.getUUID(ID), key.get(), required, delivered));
+            // No choice means an exact ingredient, which is every line saved before ADR-082.
+            Optional<ItemKey> choice = lineTag.contains(CHOICE) ? ItemKey.load(registries, lineTag.get(CHOICE))
+                    : Optional.empty();
+            lines.add(new SupplyLine<>(lineTag.getUUID(ID), key.get(), required, delivered, choice));
         }
         if (lines.isEmpty())
             return Optional.empty(); // an order without ingredients could never finish and promises nothing

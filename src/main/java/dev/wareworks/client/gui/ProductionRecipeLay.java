@@ -10,6 +10,7 @@ import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.network.ProductionPatternLayPayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
@@ -39,17 +40,22 @@ public final class ProductionRecipeLay {
      * @param cells    the nine cells row-major, each with its candidates
      * @param counts   per cell the items of one run
      * @param result   what one run makes; empty only with {@code crafting}
+     * @param tags     per cell the item tag the client proposes for its ingredient (ADR-082); the server decides
+     *                 whether the cell becomes a filter
+     * @param recipe   the laid recipe's id, which the server reads its tags from; empty lays every cell exact
      * @return whether the lay was sent
      */
     public static boolean lay(ProductionMenu menu, boolean crafting, List<List<ItemKey>> cells, List<Integer> counts,
-            Optional<ProductionEntry<ItemKey>> result) {
+            Optional<ProductionEntry<ItemKey>> result, List<Optional<ResourceLocation>> tags,
+            Optional<ResourceLocation> recipe) {
         Objects.requireNonNull(menu, "menu");
         ClientPacketListener connection = Minecraft.getInstance().getConnection();
         Optional<WarehouseProductionScreen> screen = WarehouseProductionScreen.forMenu(menu.containerId);
         if (!canLay(menu) || screen.isEmpty() || connection == null)
             return false;
         Optional<ProductionPatternLayPayload> payload = ProductionPatternLayPayload.fitted(menu.containerId,
-                screen.get().selectedPattern(), crafting, cells, counts, result, connection.registryAccess(),
+                screen.get().selectedPattern(), crafting, cells, counts, result, tags, recipe,
+                connection.registryAccess(),
                 connection.getConnectionType());
         payload.ifPresent(PacketDistributor::sendToServer);
         return payload.isPresent();

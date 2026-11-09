@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.ToLongFunction;
 
+import dev.wareworks.core.production.IngredientChoices;
 import dev.wareworks.core.production.ProduciblePlanner;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionPattern;
@@ -37,7 +38,8 @@ import dev.wareworks.core.production.ProductionPattern;
  * that item instead. Without this, two rules whose patterns are inverses of each other — iron ingot to iron block and
  * back, both plain vanilla recipes — convert the same items back and forth for as long as the world runs, and a lossy
  * pair drains to zero (M15 review fix). It is the sentence a reserve already says, one level up: what a rule is asking
- * for is not free for another rule's automation.
+ * for is not free for another rule's automation. A filter cell (ADR-082) is not stopped by such an item: it is paid with
+ * the other kinds it allows, and waits for (and names) the called-for kind only when nothing else can pay one run.
  * <p>
  * <b>An order never overshoots its own maximum.</b> The shortfall is still rounded <b>up</b> to whole runs — a pattern
  * cannot be cut, which is why "keep 256" settles a little above 256 — but never past the whole runs the rule's own
@@ -110,16 +112,20 @@ public final class RestockPlanner {
         long amount = limits.boundAmount(shortfall);
         if (amount <= 0L)
             return RestockDecision.of(key, RestockOutcome.SATISFIED);
-        // Patterns whose ingredients another rule is itself short of are not run at all: whichever of them could make
-        // the most, spending those items is taking what that other rule is asking for.
+        // Patterns with an exact ingredient another rule is itself short of are not run at all: whichever of them could
+        // make the most, spending those items is taking what that other rule is asking for. A filter cell only leaves
+        // those kinds out (ADR-082): the rest of what it allows still pays, and the cell waits for the other rule only
+        // when nothing else can pay one run.
+        IngredientChoices<K> allChoices = input.choices();
+        IngredientChoices<K> choices = allChoices.excluding(calledFor);
         List<ProductionPattern<K>> usable = withoutCalledFor(patterns, calledFor);
         if (usable.isEmpty())
             return waitingForCalledFor(key, patterns, calledFor);
         // The best pattern is the one that could make the most right now, exactly as a request picks it, so a rule and
         // a player ordering the same item behave the same way.
-        ProductionPattern<K> chosen = bestPattern(usable, availableToAutomation);
+        ProductionPattern<K> chosen = bestPattern(usable, availableToAutomation, choices);
         if (chosen == null)
-            return waitingFor(key, usable, availableToAutomation);
+            return waitingFor(key, usable, availableToAutomation, choices, allChoices, calledFor);
         // The shortfall rounded UP to whole runs: a pattern cannot be cut, which is why "keep 256" settles a little
         // above 256 and why one number is enough for a player.
         int runs = chosen.runsFor(amount);
@@ -134,9 +140,9 @@ public final class RestockPlanner {
         // What one order may really spend, measured in ingredient items rather than in product: this is the size the
         // first loss the safety stop allows is bounded by, and maxRestockOrdersPerRule sequences the rest.
         runs = Math.min(runs, limits.boundRuns(chosen.ingredientItems()));
-        runs = Math.min(runs, ProduciblePlanner.runsPossible(chosen, availableToAutomation));
+        runs = Math.min(runs, ProduciblePlanner.runsPossible(chosen, availableToAutomation, choices));
         if (runs < 1)
-            return waitingFor(key, usable, availableToAutomation);
+            return waitingFor(key, usable, availableToAutomation, choices, allChoices, calledFor);
         return RestockDecision.order(key, runs, chosen);
     }
 
@@ -171,11 +177,13 @@ public final class RestockPlanner {
 
     /**
      * The items a governing rule of this pass is itself below its minimum on — what no other rule's order may spend.
+     * The content layer pays the ordered pattern's filter cells without them ({@link IngredientChoices#excluding}),
+     * exactly as the decision measured it.
      * <p>
      * A paused rule counts too: it still calls for its item, and the safety stop only stops it from ordering. A rule's
      * own item can never be in its own way, because a pattern may not produce one of its own ingredients.
      */
-    private static <K> Set<K> calledFor(List<RestockInput<K>> inputs) {
+    public static <K> Set<K> calledFor(List<RestockInput<K>> inputs) {
         Set<K> keys = new LinkedHashSet<>();
         for (RestockInput<K> input : inputs) {
             if (input.governs() && input.rule().isBelowMinimum(input.levels()))
@@ -184,25 +192,29 @@ public final class RestockPlanner {
         return keys;
     }
 
-    /** The patterns that consume none of {@code calledFor}; the list itself when that set is empty. */
+    /** The patterns with no exact ingredient among {@code calledFor}; the list itself when that set is empty. */
     private static <K> List<ProductionPattern<K>> withoutCalledFor(List<ProductionPattern<K>> patterns,
             Set<K> calledFor) {
         if (calledFor.isEmpty())
             return patterns;
         List<ProductionPattern<K>> usable = new ArrayList<>(patterns.size());
         for (ProductionPattern<K> pattern : patterns) {
-            if (!consumesAnyOf(pattern, calledFor))
+            if (consumedOf(pattern, calledFor) == null)
                 usable.add(pattern);
         }
         return usable;
     }
 
-    private static <K> boolean consumesAnyOf(ProductionPattern<K> pattern, Set<K> keys) {
+    /**
+     * The first exact ingredient of {@code pattern} among {@code keys}, or {@code null}. A choice ingredient (ADR-082)
+     * never blocks here: its candidates are paid without {@code keys} ({@link IngredientChoices#excluding}).
+     */
+    private static <K> K consumedOf(ProductionPattern<K> pattern, Set<K> keys) {
         for (ProductionEntry<K> ingredient : pattern.ingredients()) {
-            if (keys.contains(ingredient.key()))
-                return true;
+            if (!pattern.isChoice(ingredient.key()) && keys.contains(ingredient.key()))
+                return ingredient.key();
         }
-        return false;
+        return null;
     }
 
     /**
@@ -212,21 +224,20 @@ public final class RestockPlanner {
     private static <K> RestockDecision<K> waitingForCalledFor(K key, List<ProductionPattern<K>> patterns,
             Set<K> calledFor) {
         for (ProductionPattern<K> pattern : patterns) {
-            for (ProductionEntry<K> ingredient : pattern.ingredients()) {
-                if (calledFor.contains(ingredient.key()))
-                    return RestockDecision.waitingFor(key, ingredient.key());
-            }
+            K consumed = consumedOf(pattern, calledFor);
+            if (consumed != null)
+                return RestockDecision.waitingFor(key, consumed);
         }
         return RestockDecision.of(key, RestockOutcome.WAITING_FOR_INGREDIENTS);
     }
 
     /** The pattern that could make the most of the item right now, or {@code null} when none can make any. */
     private static <K> ProductionPattern<K> bestPattern(List<ProductionPattern<K>> patterns,
-            ToLongFunction<? super K> available) {
+            ToLongFunction<? super K> available, IngredientChoices<K> choices) {
         ProductionPattern<K> best = null;
         long bestAmount = 0L;
         for (ProductionPattern<K> pattern : patterns) {
-            long amount = ProduciblePlanner.producibleAmount(pattern, available);
+            long amount = ProduciblePlanner.producibleAmount(pattern, available, choices);
             if (amount > bestAmount) {
                 best = pattern;
                 bestAmount = amount;
@@ -239,13 +250,27 @@ public final class RestockPlanner {
      * "The ingredients are not there", naming the first ingredient of the <b>first</b> pattern that one run cannot be
      * paid for. The first pattern in aisle order is used so that the same warehouse always names the same item; a
      * player who supplies it makes that pattern runnable, and the next evaluation orders.
+     *
+     * @param choices    what the decision pays with: {@code allChoices} without {@code calledFor}
+     * @param allChoices the rule's own choices, to name a kind another rule calls for
      */
     private static <K> RestockDecision<K> waitingFor(K key, List<ProductionPattern<K>> patterns,
-            ToLongFunction<? super K> available) {
+            ToLongFunction<? super K> available, IngredientChoices<K> choices, IngredientChoices<K> allChoices,
+            Set<K> calledFor) {
         for (ProductionPattern<K> pattern : patterns) {
-            ProductionEntry<K> missing = ProduciblePlanner.firstMissingIngredient(pattern, 1, available).orElse(null);
-            if (missing != null)
-                return RestockDecision.waitingFor(key, missing.key());
+            // A choice that cannot pay one run is named by its filter (ADR-082), unless a kind it allows is one another
+            // rule calls for: then that kind, the item that gets both rules moving, as for an exact ingredient.
+            ProductionEntry<K> missing = ProduciblePlanner.firstMissingIngredient(pattern, 1, available, choices)
+                    .orElse(null);
+            if (missing == null)
+                continue;
+            if (pattern.isChoice(missing.key())) {
+                for (K candidate : allChoices.candidates(pattern, missing.key())) {
+                    if (calledFor.contains(candidate))
+                        return RestockDecision.waitingFor(key, candidate);
+                }
+            }
+            return RestockDecision.waitingFor(key, missing.key());
         }
         // Every pattern could pay for one run, yet none could make anything: only reachable for a result count of 0,
         // which a pattern cannot have. Reported without an item rather than guessed at.

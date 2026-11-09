@@ -86,6 +86,11 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      * baseline at all.
      */
     public static final long BASELINE_PENDING = Long.MAX_VALUE;
+    /**
+     * Supply lines one order may hold: every ingredient of a pattern, each choice paid with up to
+     * {@value ChoiceAllocator#MAX_KEYS_PER_CHOICE} kinds (ADR-082). Bounds the save data as well.
+     */
+    public static final int MAX_LINES = ProductionPattern.MAX_INGREDIENTS * ChoiceAllocator.MAX_KEYS_PER_CHOICE;
 
     public ProductionOrder {
         Objects.requireNonNull(id, "id");
@@ -97,6 +102,9 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
         if (lines.isEmpty())
             throw new IllegalArgumentException("a production order needs at least one ingredient line");
+        if (lines.size() > MAX_LINES)
+            throw new IllegalArgumentException("a production order holds at most " + MAX_LINES + " lines: "
+                    + lines.size());
         if (resultAmount < 1)
             throw new IllegalArgumentException("resultAmount must be at least 1: " + resultAmount);
         produced = Math.max(0L, produced);
@@ -191,17 +199,64 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         return start(id, station, pattern, runs, lineIds, now, timeoutTicks, 0L, null, 0L, true, null);
     }
 
+    /**
+     * A new order for {@code runs} runs of {@code pattern}, delivering the concrete {@code lines} a plan chose
+     * (ADR-082): one {@link SupplyLine} per {@link NodeLine}, each with a fresh id and the filter that chose it. This is
+     * how every order of a pattern with choices is created; the order never refers back to its pattern afterwards.
+     * See {@link #start(UUID, Object, ProductionPattern, int, Supplier, long, long, long, UUID, long)} for the rest.
+     */
+    public static <K, L> ProductionOrder<K, L> start(UUID id, L station, ProductionPattern<K> pattern, int runs,
+            List<NodeLine<K>> lines, Supplier<UUID> lineIds, long now, long timeoutTicks, long resultStockNow,
+            @Nullable UUID backingRequest, long promisedToRequest) {
+        return build(id, station, pattern, runs, Objects.requireNonNull(lines, "lines"), lineIds, now, timeoutTicks,
+                resultStockNow, backingRequest, promisedToRequest, false, null);
+    }
+
+    /** {@link #step(UUID, Object, ProductionPattern, int, Supplier, long, long, UUID)} with the plan's concrete lines. */
+    public static <K, L> ProductionOrder<K, L> step(UUID id, L station, ProductionPattern<K> pattern, int runs,
+            List<NodeLine<K>> lines, Supplier<UUID> lineIds, long now, long timeoutTicks, UUID parentLine) {
+        return build(id, station, pattern, runs, Objects.requireNonNull(lines, "lines"), lineIds, now, timeoutTicks,
+                0L, null, 0L, false, Objects.requireNonNull(parentLine, "parentLine"));
+    }
+
+    /** {@link #restock(UUID, Object, ProductionPattern, int, Supplier, long, long)} with concrete lines. */
+    public static <K, L> ProductionOrder<K, L> restock(UUID id, L station, ProductionPattern<K> pattern, int runs,
+            List<NodeLine<K>> lines, Supplier<UUID> lineIds, long now, long timeoutTicks) {
+        return build(id, station, pattern, runs, Objects.requireNonNull(lines, "lines"), lineIds, now, timeoutTicks,
+                0L, null, 0L, true, null);
+    }
+
     private static <K, L> ProductionOrder<K, L> start(UUID id, L station, ProductionPattern<K> pattern, int runs,
             Supplier<UUID> lineIds, long now, long timeoutTicks, long resultStockNow, @Nullable UUID backingRequest,
             long promisedToRequest, boolean restock, @Nullable UUID parentLine) {
         Objects.requireNonNull(pattern, "pattern");
+        // A choice is a filter no rack holds; an order of it must be built from the keys a plan chose (ADR-082, D11).
+        if (pattern.hasChoices())
+            throw new IllegalArgumentException("a pattern with choices needs planned lines: " + pattern.result());
+        return build(id, station, pattern, runs, null, lineIds, now, timeoutTicks, resultStockNow, backingRequest,
+                promisedToRequest, restock, parentLine);
+    }
+
+    private static <K, L> ProductionOrder<K, L> build(UUID id, L station, ProductionPattern<K> pattern, int runs,
+            @Nullable List<NodeLine<K>> planned, Supplier<UUID> lineIds, long now, long timeoutTicks,
+            long resultStockNow, @Nullable UUID backingRequest, long promisedToRequest, boolean restock,
+            @Nullable UUID parentLine) {
+        Objects.requireNonNull(pattern, "pattern");
         Objects.requireNonNull(lineIds, "lineIds");
         if (runs < 1)
             throw new IllegalArgumentException("runs must be at least 1: " + runs);
-        List<SupplyLine<K>> lines = new ArrayList<>(pattern.ingredients().size());
-        for (ProductionEntry<K> ingredient : pattern.ingredients())
-            lines.add(SupplyLine.of(Objects.requireNonNull(lineIds.get(), "line id"), ingredient.key(),
-                    ingredient.totalFor(runs)));
+        List<SupplyLine<K>> lines;
+        if (planned == null) {
+            lines = new ArrayList<>(pattern.ingredients().size());
+            for (ProductionEntry<K> ingredient : pattern.ingredients())
+                lines.add(SupplyLine.of(Objects.requireNonNull(lineIds.get(), "line id"), ingredient.key(),
+                        ingredient.totalFor(runs)));
+        } else {
+            lines = new ArrayList<>(planned.size());
+            for (NodeLine<K> line : planned)
+                lines.add(new SupplyLine<>(Objects.requireNonNull(lineIds.get(), "line id"), line.key(),
+                        (int) Math.min(Integer.MAX_VALUE, line.amount()), 0, line.choice()));
+        }
         return new ProductionOrder<>(id, station, pattern.result().key(), pattern.resultFor(runs), lines,
                 ProductionOrderState.WAITING_FOR_INGREDIENTS, deadline(now, timeoutTicks), 0L,
                 Math.max(0L, resultStockNow), Optional.ofNullable(backingRequest), promisedToRequest, restock,

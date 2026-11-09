@@ -41,12 +41,15 @@ import java.util.function.ToLongFunction;
  *                      result of every open order ("the warehouse always takes back what it sent out for") and would
  *                      make the question depend on unrelated orders that are in flight rather than on this click
  *                      (M20 review fix)
+ * @param choices       which keys may pay a choice ingredient (a filter cell, ADR-082), built by the content layer for
+ *                      the access of this click; {@link IngredientChoices#none()} where nobody passed any, so a pattern
+ *                      with choices cannot be paid there
  * @param <K>           item key type
  * @param <L>           location type
  */
 public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, PlanBudget<K> budget, PlanLimits limits,
                                         int freeOrderSlots, int orderSlots, Predicate<? super K> pausedResults,
-                                        ToLongFunction<? super K> headroom) {
+                                        ToLongFunction<? super K> headroom, IngredientChoices<K> choices) {
     /** What {@link #headroom()} answers for an item no rule caps: as much room as anyone could ask for. */
     public static final long UNLIMITED_ROOM = Long.MAX_VALUE;
 
@@ -56,8 +59,18 @@ public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, Pla
         Objects.requireNonNull(limits, "limits");
         Objects.requireNonNull(pausedResults, "pausedResults");
         Objects.requireNonNull(headroom, "headroom");
+        if (choices == null)
+            choices = IngredientChoices.none();
         freeOrderSlots = Math.max(0, freeOrderSlots);
         orderSlots = Math.max(freeOrderSlots, orderSlots);
+    }
+
+    /** An input without choices ({@link IngredientChoices#none()}), as every input was before ADR-082. */
+    public ProductionPlanInput(List<StationPattern<K, L>> patterns, PlanBudget<K> budget, PlanLimits limits,
+            int freeOrderSlots, int orderSlots, Predicate<? super K> pausedResults,
+            ToLongFunction<? super K> headroom) {
+        this(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults, headroom,
+                IngredientChoices.none());
     }
 
     /**
@@ -81,7 +94,8 @@ public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, Pla
 
     /** This input with the items the warehouse has stopped making. */
     public ProductionPlanInput<K, L> withPaused(Predicate<? super K> paused) {
-        return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, paused, headroom);
+        return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, paused, headroom,
+                choices);
     }
 
     /** This input with a fixed set of paused items. */
@@ -92,7 +106,14 @@ public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, Pla
 
     /** This input with the room every item's own maximum leaves. */
     public ProductionPlanInput<K, L> withHeadroom(ToLongFunction<? super K> room) {
-        return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults, room);
+        return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults, room,
+                choices);
+    }
+
+    /** This input with the keys that may pay a choice ingredient (ADR-082). */
+    public ProductionPlanInput<K, L> withChoices(IngredientChoices<K> next) {
+        return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults,
+                headroom, Objects.requireNonNull(next, "choices"));
     }
 
     /** Whether the warehouse has stopped making {@code key}. */

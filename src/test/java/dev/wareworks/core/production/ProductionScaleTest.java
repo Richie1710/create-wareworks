@@ -53,6 +53,11 @@ class ProductionScaleTest {
     private static final int RUNS = 1000;
     /** Loose ceiling per median, so a slow CI machine cannot fail the build over noise. */
     private static final double CEILING_MS = 5.0;
+    /**
+     * Loose ceiling for the filter-cell aisle (ADR-082), whose every one of its 288 patterns asks 128 candidates: a
+     * shape far past what a real aisle holds, kept as the worst case rather than as the typical one.
+     */
+    private static final double FILTER_CEILING_MS = 25.0;
 
     /** One aisle of {@code STATIONS} stations with {@code perStation} patterns each, and what it is asked. */
     private record Aisle(List<StationPattern<String, Integer>> patterns, Map<String, Long> stock, List<String> results,
@@ -221,5 +226,76 @@ class ProductionScaleTest {
                 ms / Math.max(1e-6, old.get(name)))));
         System.out.print(report);
         full.forEach((name, ms) -> assertTrue(ms < CEILING_MS, name + " took " + ms + " ms"));
+    }
+
+    /**
+     * Filter cells at the cap (ADR-082): {@value #STATIONS} stations × 36 patterns, each with two choice ingredients of
+     * 64 candidates over 2 000 stock keys, through the terminal's producible pass and a plan — once with the two
+     * candidate lists of a pattern disjoint from each other and from its exact cells (the closed form), once
+     * overlapping (a real payment probe per pattern). The numbers printed are the ones quoted in
+     * {@link ProduciblePlanner}'s class comment.
+     */
+    @Test
+    void filterCellsAtTheCapStayCheap() {
+        double[] disjoint = filterCells(false);
+        double[] overlapping = filterCells(true);
+        System.out.printf(java.util.Locale.ROOT, "ProductionScaleTest (filter cells): %d patterns x 2 choices of 64 "
+                + "candidates over 2000 keys: producible pass %.4f ms disjoint, %.4f ms overlapping; plan %.4f ms / "
+                + "%.4f ms%n", STATIONS * ProductionPatterns.MAX_SLOTS, disjoint[0], overlapping[0], disjoint[1],
+                overlapping[1]);
+        for (double ms : new double[] {disjoint[0], disjoint[1], overlapping[0], overlapping[1]})
+            assertTrue(ms < FILTER_CEILING_MS, "took " + ms + " ms");
+    }
+
+    /** Median ms of the producible pass and of one plan over the filter-cell aisle. */
+    private static double[] filterCells(boolean overlap) {
+        int keys = 2000;
+        int candidatesPerChoice = 64;
+        Map<String, Long> stock = new HashMap<>();
+        for (int i = 0; i < keys; i++)
+            stock.put("stock" + i, 16L + i % 97);
+        for (int i = 0; i < 64; i++)
+            stock.put("exact" + i, 1_000L);
+        Map<String, List<String>> byChoice = new HashMap<>();
+        List<StationPattern<String, Integer>> patterns = new ArrayList<>();
+        int total = STATIONS * ProductionPatterns.MAX_SLOTS;
+        for (int p = 0; p < total; p++) {
+            String first = "filter" + (2 * p);
+            String second = "filter" + (2 * p + 1);
+            int base = p * 13;
+            byChoice.put(first, window(base, candidatesPerChoice, keys));
+            byChoice.put(second, window(base + (overlap ? 32 : candidatesPerChoice), candidatesPerChoice, keys));
+            List<ProductionEntry<String>> cells = new ArrayList<>();
+            cells.add(new ProductionEntry<>(first, 4));
+            cells.add(new ProductionEntry<>(second, 2));
+            for (int i = 0; i < 7; i++)
+                cells.add(new ProductionEntry<>(overlap ? "stock" + Math.floorMod(base + i, keys)
+                        : "exact" + Math.floorMod(p * 7 + i, 64), 1));
+            patterns.add(StationPattern.of(p % STATIONS, ProductionPattern.fromGrid(cells,
+                    new ProductionEntry<>("filtered" + p, 1), Set.of(first, second))));
+        }
+        IngredientChoices<String> choices = IngredientChoices.of(byChoice);
+        ToLongFunction<String> available = key -> stock.getOrDefault(key, 0L);
+        Work pass = () -> {
+            long sum = 0L;
+            for (StationPattern<String, Integer> candidate : patterns)
+                sum += ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices);
+            return sum;
+        };
+        assertTrue(pass.run() > 0L, "the filters really pay");
+        ProductionPlanInput<String, Integer> input = ProductionPlanInput.of(patterns, PlanBudget.ofMap(stock),
+                PlanLimits.DEFAULT, PlanLimits.DEFAULT.maxSteps()).withChoices(choices);
+        Work plan = () -> ProductionPlanner.plan(input, "filtered" + (total - 1), 8L).accepted() ? 1L : 0L;
+        assertEquals(1L, plan.run());
+        median(pass);
+        median(plan);
+        return new double[] {median(pass), median(plan)};
+    }
+
+    private static List<String> window(int start, int size, int keys) {
+        List<String> keysInWindow = new ArrayList<>(size);
+        for (int i = 0; i < size; i++)
+            keysInWindow.add("stock" + Math.floorMod(start + i, keys));
+        return keysInWindow;
     }
 }

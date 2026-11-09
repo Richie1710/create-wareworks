@@ -2,8 +2,12 @@ package dev.wareworks.content.station;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -37,6 +41,12 @@ import net.minecraft.nbt.Tag;
  * stage 1 could never resolve it. Repeating an item across grid cells is <i>allowed</i> — it is the whole point of a
  * grid — and is what the merge above turns into one larger ingredient.
  * <p>
+ * <b>Filter cells (ADR-082).</b> A grid cell may hold a configured Create List or Attribute Filter instead of an exact
+ * item ({@link PatternFilterCells#isFilter}); it is flagged as a filter cell and stores the filter's ghost
+ * ({@link PatternFilterCells#ghostOf}). {@link #patternAt} hands the keys of flagged cells to the planner as
+ * {@link ProductionPattern#choices()}. The result entry is never a filter cell, and an entry saved without the flag is an
+ * exact cell — also a configured filter in an old save, which therefore loads exactly as it did.
+ * <p>
  * <b>Bounded loading.</b> Save data is untrusted (block entity data on items, {@code /data merge}, schematics), so a
  * load reads at most {@value #MAX_SLOTS} slots with at most {@value #ENTRIES_PER_PATTERN} entries each and clamps every
  * count; reading never throws, and an entry whose item cannot be decoded is dropped like any other unreadable item.
@@ -61,11 +71,15 @@ public final class ProductionPatterns {
     private static final String ENTRY = "Entry";
     private static final String ITEM = "Item";
     private static final String COUNT = "Count";
+    /** Present ({@code 1b}) only on a filter cell (ADR-082); a missing flag is an exact cell. */
+    private static final String FILTER = "Filter";
 
     /** One pattern slot: {@value #GRID_CELLS} grid cells and one result, each optional. */
     private static final class Draft {
         private final ItemKey[] keys = new ItemKey[ENTRIES_PER_PATTERN];
         private final int[] counts = new int[ENTRIES_PER_PATTERN];
+        /** Whether a grid cell is a filter cell (ADR-082); never true for the result. */
+        private final boolean[] filters = new boolean[ENTRIES_PER_PATTERN];
 
         private Draft() {
             Arrays.fill(counts, ProductionEntry.MIN_COUNT);
@@ -82,6 +96,7 @@ public final class ProductionPatterns {
         private void clear() {
             Arrays.fill(keys, null);
             Arrays.fill(counts, ProductionEntry.MIN_COUNT);
+            Arrays.fill(filters, false);
         }
     }
 
@@ -117,6 +132,32 @@ public final class ProductionPatterns {
         return Optional.ofNullable(slots.get(pattern).keys[entry]);
     }
 
+    /** Whether one entry is a filter cell (ADR-082): a grid cell holding a configured List or Attribute Filter. */
+    public boolean isFilterAt(int pattern, int entry) {
+        return inRange(pattern, entry) && slots.get(pattern).keys[entry] != null && slots.get(pattern).filters[entry];
+    }
+
+    /**
+     * The filters of pattern slot {@code pattern} (ADR-082), each once, in the order of their first filter cell, with
+     * the items of it one run takes: every cell holding that filter together, as {@link #patternAt} merges them. Empty
+     * for a slot without a filter cell; also answered for a slot that has no result yet.
+     */
+    public Map<ItemKey, Integer> filterGroups(int pattern) {
+        if (pattern < 0 || pattern >= slots.size())
+            return Map.of();
+        Draft draft = slots.get(pattern);
+        Map<ItemKey, Integer> groups = new LinkedHashMap<>();
+        for (int cell = 0; cell < GRID_CELLS; cell++) {
+            if (draft.keys[cell] != null && draft.filters[cell])
+                groups.putIfAbsent(draft.keys[cell], 0);
+        }
+        for (int cell = 0; cell < GRID_CELLS && !groups.isEmpty(); cell++) {
+            if (draft.keys[cell] != null && groups.containsKey(draft.keys[cell]))
+                groups.merge(draft.keys[cell], draft.counts[cell], Integer::sum);
+        }
+        return groups;
+    }
+
     /** The count of one entry (at least 1, also for an unset entry). */
     public int countAt(int pattern, int entry) {
         return inRange(pattern, entry) ? slots.get(pattern).counts[entry] : ProductionEntry.MIN_COUNT;
@@ -146,6 +187,16 @@ public final class ProductionPatterns {
      * its own ingredients, in either direction)
      */
     public boolean setEntry(int pattern, int entry, @Nullable ItemKey key, int count) {
+        return setEntry(pattern, entry, key, count,
+                key != null && entry >= 0 && entry < GRID_CELLS && PatternFilterCells.isFilter(key));
+    }
+
+    /**
+     * {@link #setEntry(int, int, ItemKey, int)} with the filter flag given (ADR-082): a save's flag, or what the server
+     * classified. The flag is forced off for the result and for a key that is no configured filter, and a filter cell
+     * stores the filter's ghost ({@link PatternFilterCells#ghostOf}).
+     */
+    public boolean setEntry(int pattern, int entry, @Nullable ItemKey key, int count, boolean filter) {
         if (!inRange(pattern, entry))
             return false;
         Draft draft = slots.get(pattern);
@@ -155,14 +206,18 @@ public final class ProductionPatterns {
                 return false;
             draft.keys[entry] = null;
             draft.counts[entry] = ProductionEntry.MIN_COUNT;
+            draft.filters[entry] = false;
             return true;
         }
-        if (!accepts(draft, entry, key))
+        boolean isFilter = filter && entry != RESULT_ENTRY && PatternFilterCells.isFilter(key);
+        ItemKey stored = isFilter ? PatternFilterCells.ghostOf(key) : key;
+        if (!accepts(draft, entry, stored))
             return false;
-        if (key.equals(draft.keys[entry]) && draft.counts[entry] == clamped)
+        if (stored.equals(draft.keys[entry]) && draft.counts[entry] == clamped && draft.filters[entry] == isFilter)
             return false;
-        draft.keys[entry] = key;
+        draft.keys[entry] = stored;
         draft.counts[entry] = clamped;
+        draft.filters[entry] = isFilter;
         return true;
     }
 
@@ -211,15 +266,20 @@ public final class ProductionPatterns {
         if (draft.keys[RESULT_ENTRY] == null)
             return Optional.empty();
         List<ProductionEntry<ItemKey>> cells = new ArrayList<>(GRID_CELLS);
+        Set<ItemKey> choices = new LinkedHashSet<>();
         for (int cell = 0; cell < GRID_CELLS; cell++) {
-            if (draft.keys[cell] != null)
+            if (draft.keys[cell] != null) {
                 cells.add(new ProductionEntry<>(draft.keys[cell], draft.counts[cell]));
+                // A key is a choice when any cell holding it is a filter cell (ADR-082).
+                if (draft.filters[cell])
+                    choices.add(draft.keys[cell]);
+            }
         }
         if (cells.isEmpty())
             return Optional.empty();
         try {
             return Optional.of(ProductionPattern.fromGrid(cells,
-                    new ProductionEntry<>(draft.keys[RESULT_ENTRY], draft.counts[RESULT_ENTRY])));
+                    new ProductionEntry<>(draft.keys[RESULT_ENTRY], draft.counts[RESULT_ENTRY]), choices));
         } catch (IllegalArgumentException e) {
             // setEntry refuses everything that could get here; a crafted save could still contain it.
             return Optional.empty();
@@ -242,8 +302,9 @@ public final class ProductionPatterns {
     // --- persistence ---------------------------------------------------------------------------------------------
 
     /**
-     * NBT form: {@code Patterns: [{Slot: int, Entries: [{Entry: int, Item: <ItemKey>, Count: int}]}]}. Empty slots and
-     * unset entries are left out, so an untouched station saves almost nothing. Never throws.
+     * NBT form: {@code Patterns: [{Slot: int, Entries: [{Entry: int, Item: <ItemKey>, Count: int, Filter: 1b}]}]}, the
+     * {@code Filter} flag only on a filter cell (ADR-082). Empty slots and unset entries are left out, so an untouched
+     * station saves almost nothing. Never throws.
      */
     public ListTag save(HolderLookup.Provider registries) {
         ListTag list = new ListTag();
@@ -264,6 +325,8 @@ public final class ProductionPatterns {
                     entryTag.putInt(ENTRY, entry);
                     entryTag.put(ITEM, keyTag);
                     entryTag.putInt(COUNT, draft.counts[entry]);
+                    if (draft.filters[entry])
+                        entryTag.putBoolean(FILTER, true);
                     entries.add(entryTag);
                 } catch (RuntimeException e) {
                     Wareworks.LOGGER.warn("Could not save production pattern entry {} of slot {}", entry, pattern, e);
@@ -306,8 +369,10 @@ public final class ProductionPatterns {
                 CompoundTag entryTag = entries.getCompound(e);
                 try {
                     int entry = entryTag.getInt(ENTRY);
+                    // No flag means exact, also for a configured filter an old save holds (ADR-082).
+                    boolean filter = entryTag.getBoolean(FILTER);
                     ItemKey.load(registries, entryTag.get(ITEM))
-                            .ifPresent(key -> setEntry(pattern, entry, key, entryTag.getInt(COUNT)));
+                            .ifPresent(key -> setEntry(pattern, entry, key, entryTag.getInt(COUNT), filter));
                 } catch (RuntimeException ex) {
                     Wareworks.LOGGER.warn("Skipping unreadable production pattern entry {}", entryTag, ex);
                 }

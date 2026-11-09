@@ -81,6 +81,7 @@ public record ProductionPlan<K, L>(List<PlanNode<K, L>> nodes, int depth, long i
         }
         if (roots != 1)
             throw new IllegalArgumentException("a plan has exactly one root, not " + roots);
+        nodes = withResolvedLines(nodes);
         if (depth < 0)
             throw new IllegalArgumentException("depth must not be negative: " + depth);
         if (ingredientItems < 0L)
@@ -89,6 +90,74 @@ public record ProductionPlan<K, L>(List<PlanNode<K, L>> nodes, int depth, long i
             throw new IllegalArgumentException("requested must be at least 1: " + requested);
         if (rootPromise < 1L || rootPromise > requested)
             throw new IllegalArgumentException("rootPromise must be within 1.." + requested + ": " + rootPromise);
+    }
+
+    /**
+     * The nodes with every {@link PlanNode#PARENT_LINE_BY_KEY} resolved to the parent's line of the node's result, and
+     * the lines checked (ADR-082): each ingredient is paid exactly ({@code count × runs}, an exact key by its own line,
+     * a choice by the lines that name it), each choice line is a whole number of runs, at most
+     * {@value ChoiceAllocator#MAX_KEYS_PER_CHOICE} keys pay one choice, a step holds at most
+     * {@link ProductionOrder#MAX_LINES} lines, and a step feeds a parent line of its own result.
+     */
+    private static <K, L> List<PlanNode<K, L>> withResolvedLines(List<PlanNode<K, L>> nodes) {
+        List<PlanNode<K, L>> resolved = new ArrayList<>(nodes.size());
+        for (PlanNode<K, L> node : nodes) {
+            checkLines(node);
+            if (node.isRoot()) {
+                resolved.add(node);
+                continue;
+            }
+            List<NodeLine<K>> parentLines = nodes.get(node.parent()).lines();
+            int line = node.parentLine();
+            if (line == PlanNode.PARENT_LINE_BY_KEY) {
+                for (int i = 0; i < parentLines.size(); i++) {
+                    if (parentLines.get(i).key().equals(node.result())) {
+                        line = i;
+                        break;
+                    }
+                }
+                if (line == PlanNode.PARENT_LINE_BY_KEY)
+                    throw new IllegalArgumentException("node " + node.index() + " makes nothing its parent needs");
+                node = node.withParentLine(line);
+            }
+            if (line >= parentLines.size() || !parentLines.get(line).key().equals(node.result()))
+                throw new IllegalArgumentException("node " + node.index() + " does not feed a line of its result");
+            resolved.add(node);
+        }
+        return List.copyOf(resolved);
+    }
+
+    private static <K, L> void checkLines(PlanNode<K, L> node) {
+        ProductionPattern<K> pattern = node.pattern();
+        List<NodeLine<K>> lines = node.lines();
+        if (lines.size() > ProductionOrder.MAX_LINES)
+            throw new IllegalArgumentException("node " + node.index() + " holds too many lines: " + lines.size());
+        int matched = 0;
+        for (ProductionEntry<K> ingredient : pattern.ingredients()) {
+            long need = (long) ingredient.count() * node.runs();
+            long paid = 0L;
+            int keys = 0;
+            boolean choice = pattern.isChoice(ingredient.key());
+            for (NodeLine<K> line : lines) {
+                boolean belongs = choice ? line.choice().filter(ingredient.key()::equals).isPresent()
+                        : line.choice().isEmpty() && line.key().equals(ingredient.key());
+                if (!belongs)
+                    continue;
+                if (choice && line.amount() % ingredient.count() != 0)
+                    throw new IllegalArgumentException("node " + node.index() + " pays a choice in part of a run");
+                paid += line.amount();
+                keys++;
+                matched++;
+            }
+            if (paid != need)
+                throw new IllegalArgumentException("node " + node.index() + " pays " + paid + " of " + need + " for "
+                        + ingredient.key());
+            if (choice ? keys > ChoiceAllocator.MAX_KEYS_PER_CHOICE : keys != 1)
+                throw new IllegalArgumentException("node " + node.index() + " pays " + ingredient.key() + " with "
+                        + keys + " lines");
+        }
+        if (matched != lines.size())
+            throw new IllegalArgumentException("node " + node.index() + " holds a line no ingredient asks for");
     }
 
     /** Production orders this plan creates. */

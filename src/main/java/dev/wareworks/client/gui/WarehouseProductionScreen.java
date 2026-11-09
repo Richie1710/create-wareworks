@@ -10,6 +10,7 @@ import com.simibubi.create.foundation.gui.AllGuiTextures;
 import com.simibubi.create.foundation.gui.menu.AbstractSimiContainerScreen;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.PatternFilterCells;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.ProductionPatterns;
@@ -79,6 +80,14 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * <p>
  * <b>A recipe viewer writes into the selected tab</b> (ADR-076). JEI's recipe screen opens over this one without closing
  * the menu and hands it back, so {@link #forMenu} finds the screen, and with it the selection, while it is covered.
+ * <p>
+ * <b>A cell may hold a filter</b> (ADR-082). Clicking a configured List or Attribute Filter into a grid cell makes it a
+ * filter cell: the server decides that from the item, and any item the filter allows pays for it, the largest stock
+ * first. Such a cell is drawn as what an order would take now (the first stock match the server sent, else the first
+ * item the filter names) with the filter as a small badge in its corner and a thin gold frame; its amount turns red
+ * while no kind in stock is enough for one run. Its tooltip names the filter with Create's own summary, then the stock
+ * matches in pick order with what a player may have of each. An order that took items for a filter says which in its
+ * tooltip ({@link #usesLines}), here and at the terminal.
  */
 public class WarehouseProductionScreen extends AbstractSimiContainerScreen<ProductionMenu> {
     private static final int TITLE_Y = 2;
@@ -111,6 +120,12 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private static final int COLOR_SCROLL_THUMB = 0xFFC8C8C8;
     /** The scroll bar's tick for the selected pattern's row while the wheel has scrolled it out of view. */
     private static final int COLOR_SCROLL_SELECTED = 0xFFFBDC7D;
+    /** The frame of a filter cell (ADR-082): the scroll bar's gold tick, the screen's one colour for "chosen for you". */
+    private static final int COLOR_FILTER_FRAME = COLOR_SCROLL_SELECTED;
+    /** How large a filter cell's badge (the filter itself) is drawn in its corner. */
+    private static final float FILTER_BADGE_SCALE = 0.5F;
+    /** The badge lies above the item and below the amount ({@link #COUNT_SHIFT_Z}). */
+    private static final int FILTER_BADGE_Z = 60;
 
     /** Usable width of a row of text: the window without its two margins — 216 px, as in the terminal. */
     public static final int ROW_WIDTH = ProductionMenuLayout.WIDTH - 2 * ProductionMenuLayout.MARGIN;
@@ -379,7 +394,11 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                     && state.stoppedOf(entry.get().key()).isPresent())
                 graphics.fill(cellX, cellY, cellX + ProductionMenuLayout.SLOT, cellY + ProductionMenuLayout.SLOT,
                         COLOR_STOPPED_TINT);
-            entry.ifPresent(view -> renderEntry(graphics, view, cellX + ITEM_INSET, cellY + ITEM_INSET));
+            entry.ifPresent(view -> renderEntry(graphics, selectedPattern, view, cellX + ITEM_INSET,
+                    cellY + ITEM_INSET));
+            if (entry.isPresent() && entry.get().filter())
+                graphics.renderOutline(cellX, cellY, ProductionMenuLayout.SLOT, ProductionMenuLayout.SLOT,
+                        COLOR_FILTER_FRAME);
         }
         // The arrow between the grid and the result: this is a pattern, not a crafting grid. A pattern the Crafter
         // Feeder refuses gets a red frame round grid and result and a red cross where the arrow was (issue #34).
@@ -419,7 +438,9 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             if (stoppedAt(pattern).isPresent())
                 graphics.fill(tabX, tabY, tabX + ProductionMenuLayout.SLOT, tabY + ProductionMenuLayout.SLOT,
                         COLOR_STOPPED_TINT);
-            state.result(pattern).ifPresent(view -> renderEntry(graphics, view, tabX + ITEM_INSET, tabY + ITEM_INSET));
+            int tabPattern = pattern;
+            state.result(pattern).ifPresent(view -> renderEntry(graphics, tabPattern, view, tabX + ITEM_INSET,
+                    tabY + ITEM_INSET));
             // A pattern the Crafter Feeder refuses is marked under its own tab, whichever pattern is selected, as a
             // stopped product is (issue #34); a bar rather than a tint, so a tab can say both at once.
             if (refusedAt(pattern).isPresent())
@@ -465,21 +486,35 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         return false;
     }
 
-    /** One ghost item with its per-run amount. */
-    private void renderEntry(GuiGraphics graphics, ProductionScreenState.EntryView view, int x, int y) {
-        ItemStack stack = view.key().toStack();
+    /**
+     * One ghost item with its per-run amount. A filter cell (ADR-082) is drawn as what an order would take now, with the
+     * filter as a badge in its top-left corner, and its amount in red while no kind in stock pays one run; without a
+     * view from the server it shows the filter itself.
+     */
+    private void renderEntry(GuiGraphics graphics, int pattern, ProductionScreenState.EntryView view, int x, int y) {
+        Optional<ProductionScreenState.ChoiceView> choice = view.filter()
+                ? state.choice(pattern, view.key()) : Optional.empty();
+        Optional<ItemKey> shown = choice.flatMap(ProductionScreenState.ChoiceView::representative);
         PoseStack pose = graphics.pose();
         pose.pushPose();
         pose.translate(x, y, 0);
-        GuiGameElement.of(stack).render(graphics);
+        GuiGameElement.of(shown.orElse(view.key()).toStack()).render(graphics);
         pose.popPose();
+        if (shown.isPresent()) {
+            pose.pushPose();
+            pose.translate(x, y, FILTER_BADGE_Z);
+            GuiGameElement.of(view.key().toStack()).scale(FILTER_BADGE_SCALE).render(graphics);
+            pose.popPose();
+        }
+        boolean shortOfRun = choice.map(ProductionScreenState.ChoiceView::shortOfRun).orElse(false);
         pose.pushPose();
         pose.translate(0, 0, COUNT_SHIFT_Z);
         pose.scale(COUNT_SCALE, COUNT_SCALE, 1.0F);
         String text = Integer.toString(view.count());
         int right = Math.round((x + ProductionMenuLayout.SLOT - 2 - ITEM_INSET) / COUNT_SCALE) - font.width(text);
         int bottom = Math.round((y + ProductionMenuLayout.SLOT - 2 - ITEM_INSET) / COUNT_SCALE) - font.lineHeight;
-        graphics.drawString(font, text, right, bottom, COLOR_TEXT, true);
+        graphics.drawString(font, text, right, bottom, shortOfRun ? WarehouseTerminalScreen.COLOR_ERROR : COLOR_TEXT,
+                true);
         pose.popPose();
     }
 
@@ -723,13 +758,19 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         }
         int cell = cellAt(mouseX, mouseY);
         if (cell != NONE) {
-            state.entry(selectedPattern, cell)
-                    .ifPresent(view -> tooltip.addAll(getTooltipFromItem(minecraft, view.key().toStack())));
+            Optional<ProductionScreenState.EntryView> entry = state.entry(selectedPattern, cell);
+            entry.ifPresent(view -> tooltip.addAll(getTooltipFromItem(minecraft, view.key().toStack())));
+            entry.filter(ProductionScreenState.EntryView::filter).ifPresent(view -> tooltip.addAll(
+                    filterLines(view, state.choice(selectedPattern, view.key()))));
             tooltip.add(WareworksLang.translateDirect(cell == ProductionMenuLayout.RESULT_CELL
                     ? WareworksLang.PRODUCTION_RESULT : WareworksLang.PRODUCTION_INGREDIENT).copy()
                     .withStyle(ChatFormatting.GRAY));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            // An empty grid cell also teaches that a filter may go in (ADR-082).
+            if (entry.isEmpty() && cell != ProductionMenuLayout.RESULT_CELL)
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_HINT).copy()
+                        .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             return tooltip;
         }
         int order = orderAt(mouseX, mouseY);
@@ -740,6 +781,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_MISSING,
                         Component.literal(LangNumberFormat.format(view.missing()))).copy()
                         .withStyle(ChatFormatting.GRAY));
+            tooltip.addAll(usesLines(view));
             if (view.lostIngredients())
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_INGREDIENTS_LOST).copy()
                         .withStyle(ChatFormatting.GOLD));
@@ -748,6 +790,66 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         }
         return tooltip;
+    }
+
+    /**
+     * What a filter cell's tooltip says under the filter's own name and summary (ADR-082, {@code warehouse-system.md}
+     * §3.5.8): that any allowed item pays, the stock matches in the order an order would pick them with what a player
+     * may have of each (or that nothing in stock matches), and, when they apply, that no kind alone pays one run, that a
+     * deny filter allows anything else, and that a Crafter Feeder narrows the matches. Without a view from the server
+     * only the first line and the deny warning are known. Public for the dev harness.
+     */
+    public static List<Component> filterLines(ProductionScreenState.EntryView entry,
+            Optional<ProductionScreenState.ChoiceView> choice) {
+        List<Component> lines = new ArrayList<>();
+        lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_CELL)));
+        if (choice.isPresent()) {
+            ProductionScreenState.ChoiceView view = choice.get();
+            if (view.matches().isEmpty()) {
+                lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_NONE).copy()
+                        .withStyle(ChatFormatting.GOLD));
+            } else {
+                lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_MATCHES)));
+                for (ProductionScreenState.MatchView match : view.matches())
+                    lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_MATCH,
+                            match.key().toStack().getHoverName(), LangNumberFormat.format(match.available()))));
+                if (view.more() > 0)
+                    lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_MORE,
+                            LangNumberFormat.format(view.more()))));
+                if (view.shortOfRun())
+                    lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_SHORT).copy()
+                            .withStyle(ChatFormatting.GOLD));
+            }
+        }
+        if (choice.map(ProductionScreenState.ChoiceView::deny).orElseGet(() -> PatternFilterCells.denies(entry.key())))
+            lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_DENY).copy()
+                    .withStyle(ChatFormatting.GOLD));
+        if (choice.map(ProductionScreenState.ChoiceView::crafterLimited).orElse(false))
+            lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_CRAFTER)));
+        return lines;
+    }
+
+    /**
+     * The tooltip lines of an order a filter chose items for (ADR-082): "Uses Birch Planks x8" per concrete item, and how
+     * many more there are. Nothing for an order of exact ingredients. Shared with the terminal's order lines, so the two
+     * screens name the same items the same way.
+     */
+    public static List<Component> usesLines(ProductionScreenState.OrderView order) {
+        if (order.uses().isEmpty())
+            return List.of();
+        List<Component> lines = new ArrayList<>(order.uses().size() + 1);
+        for (ProductionScreenState.EntryView use : order.uses())
+            lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER_USES,
+                    WareworksLang.translateDirect(WareworksLang.GOGGLES_ITEM_COUNT, use.key().toStack().getHoverName(),
+                            LangNumberFormat.format(use.count())))));
+        if (order.usesMore() > 0)
+            lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER_USES_MORE,
+                    LangNumberFormat.format(order.usesMore()))));
+        return lines;
+    }
+
+    private static Component gray(Component line) {
+        return line.copy().withStyle(ChatFormatting.GRAY);
     }
 
     /**

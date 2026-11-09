@@ -3,6 +3,7 @@ package dev.wareworks.dev;
 import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -12,21 +13,25 @@ import org.lwjgl.glfw.GLFW;
 import dev.wareworks.client.compat.jei.JeiRuntimeAccess;
 import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.PatternFilterCells;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
+import dev.wareworks.util.WareworksLang;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -43,7 +48,9 @@ import net.neoforged.fml.ModList;
  * real click on the tab and on the "+" ({@link JeiVisualScenario.JeiScreens}): a crafting recipe (the Chest), Create's
  * saw (Andesite Alloy to Shafts, {@link #SAWN}), and
  * the "+" of a recipe with a fluid (Chocolate Glazed Berries at the spout), which must be greyed out, lay nothing on a
- * click and say why in both languages. JEI's every-tick check must lay nothing on any recipe, and the tab selected at
+ * click and say why in both languages, and the Torch. A tag ingredient is laid as an "is tagged" Attribute Filter cell
+ * (ADR-082): the Chest's eight {@code #minecraft:planks} cells and the Torch's {@code #c:rods/wooden} stick; the filter
+ * cell's tooltip is shot in both languages. The Torch's coal-or-charcoal list and the saw's one item stay exact cells. JEI's every-tick check must lay nothing on any recipe, and the tab selected at
  * the click is the one written: the others stay empty.
  */
 public final class PatternJeiVisualScenario implements VisualScenario {
@@ -70,6 +77,8 @@ public final class PatternJeiVisualScenario implements VisualScenario {
             "chocolate_glazed_berries");
 
     private final VisualLanguage language = new VisualLanguage(LANGUAGE_TIMEOUT_TICKS, SETTLE_TICKS);
+    /** The English line of a filter cell's tooltip, so the German round can prove it is not reading it again. */
+    private volatile String englishFilterLine = "";
 
     @Override
     public String name() {
@@ -119,15 +128,18 @@ public final class PatternJeiVisualScenario implements VisualScenario {
         crafting(script);
         saw(script);
         fluid(script, "en");
+        torch(script);
         close(script);
         language.switchTo(script, "patternjei: ", "de_de");
         open(script);
         fluid(script, "de");
+        filterTooltip(script, "-de");
         close(script);
         language.switchTo(script, "patternjei: ", "en_us");
         script.client("patternjei: every check passed", context -> LOGGER.info(PREFIX
                 + "patternjei: ALL CHECKS PASSED (crafting and saw laid with one click each into the selected tab, "
-                + "a fluid recipe greyed out, English and German)"));
+                + "a tag ingredient laid as an 'is tagged' filter cell and an item list as an exact cell, a fluid "
+                + "recipe greyed out, English and German)"));
     }
 
     @Override
@@ -154,13 +166,80 @@ public final class PatternJeiVisualScenario implements VisualScenario {
                         Optional<ProductionScreenState.EntryView> entry = state.entry(0, cell);
                         if (entry.isEmpty() || entry.get().count() != 1)
                             throw new VisualTestException("cell " + cell + " of the Chest is " + entry);
+                        // ADR-082, owner decision 3: the Chest's #minecraft:planks becomes an "is tagged" filter cell.
+                        if (!entry.get().filter() || !entry.get().key().equals(PatternFilterCells.inTag(ItemTags.PLANKS)))
+                            throw new VisualTestException("cell " + cell + " of the Chest is no 'is tagged "
+                                    + "#minecraft:planks' filter cell: " + entry);
                     }
                     if (state.result(1).isPresent())
                         throw new VisualTestException("tab 2 was written as well");
-                    LOGGER.info(PREFIX + "patternjei: CHECK PASS the Chest is laid into tab 1 with its result");
+                    LOGGER.info(PREFIX + "patternjei: CHECK PASS the Chest is laid into tab 1 with its result, its "
+                            + "eight cells as 'is tagged #minecraft:planks' filter cells");
                 });
         script.client("patternjei: park the mouse", PatternJeiVisualScenario::parkMouse).waitTicks(SETTLE_TICKS)
                 .shot("patternjei-chest-laid");
+        filterTooltip(script, "");
+    }
+
+    /**
+     * The tooltip of a laid filter cell of the Chest (tab 1): the filter's own name and Create's summary of the tag,
+     * then our line that any item it allows pays. Without an aisle there are no matches to list. {@code suffix} is
+     * {@code ""} in English and {@code "-de"} in German, where the line must be another text than the English one.
+     */
+    private void filterTooltip(VisualScript script, String suffix) {
+        selectTab(script, 0);
+        script.client("patternjei: rest the cursor on a filter cell of the Chest", context -> ScreenInput.hover(
+                        context.minecraft(), ScreenInput.productionCell(screen(context), 0)))
+                .waitTicks(SETTLE_TICKS)
+                .client("patternjei: CHECK the filter cell's tooltip" + suffix, context -> {
+                    WarehouseProductionScreen screen = screen(context);
+                    List<String> tooltip = ScreenInput.productionTooltip(screen, ScreenInput.productionCell(screen, 0))
+                            .stream().map(Component::getString).toList();
+                    String name = PatternFilterCells.inTag(ItemTags.PLANKS).toStack().getHoverName().getString();
+                    String line = WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_CELL).getString();
+                    if (tooltip.isEmpty() || !tooltip.getFirst().equals(name) || !tooltip.contains(line)
+                            || tooltip.stream().noneMatch(text -> text.contains("minecraft:planks")))
+                        throw new VisualTestException("the filter cell's tooltip is " + tooltip);
+                    if (suffix.isEmpty())
+                        englishFilterLine = line;
+                    else if (line.equals(englishFilterLine) || line.isBlank())
+                        throw new VisualTestException("'" + line + "' is no German translation of '"
+                                + englishFilterLine + "'");
+                    LOGGER.info(PREFIX + "patternjei: CHECK PASS the filter cell's tooltip{}: {}", suffix, tooltip);
+                })
+                .shot("patternjei-chest-filter" + suffix);
+    }
+
+    /**
+     * The Torch into tab 4: its stick is {@code #c:rods/wooden} and becomes an "is tagged" filter cell, its coal is
+     * NeoForge's list of coal and charcoal and stays one exact item.
+     */
+    private void torch(VisualScript script) {
+        selectTab(script, 3);
+        showRecipes(script, "the Torch", () -> Items.TORCH, CRAFTING, true);
+        clickPlus(script, "the Torch");
+        script.until("patternjei: the Torch arrives in tab 4", context -> hasResult(context, 3, Items.TORCH, 4),
+                SCREEN_TIMEOUT_TICKS)
+                .client("patternjei: CHECK the Torch's grid", context -> {
+                    ProductionScreenState state = screen(context).state();
+                    ItemKey rods = PatternFilterCells.inTag(ItemTags.create(
+                            ResourceLocation.fromNamespaceAndPath("c", "rods/wooden")));
+                    List<ProductionScreenState.EntryView> cells = new ArrayList<>();
+                    for (int cell = 0; cell < ProductionPatterns.GRID_CELLS; cell++)
+                        state.entry(3, cell).ifPresent(cells::add);
+                    List<ProductionScreenState.EntryView> filters = cells.stream()
+                            .filter(ProductionScreenState.EntryView::filter).toList();
+                    List<ProductionScreenState.EntryView> exact = cells.stream().filter(entry -> !entry.filter())
+                            .toList();
+                    if (filters.size() != 1 || !filters.getFirst().key().equals(rods) || exact.size() != 1
+                            || !(exact.getFirst().key().equals(ItemKey.of(Items.COAL))
+                                    || exact.getFirst().key().equals(ItemKey.of(Items.CHARCOAL))))
+                        throw new VisualTestException("the Torch's cells are " + cells);
+                    LOGGER.info(PREFIX + "patternjei: CHECK PASS the Torch lays its stick as an 'is tagged "
+                            + "#c:rods/wooden' filter cell and its coal as the exact {}", exact.getFirst().key());
+                });
+        script.client("patternjei: park the mouse", PatternJeiVisualScenario::parkMouse).waitTicks(SETTLE_TICKS)
+                .shot("patternjei-torch-laid");
     }
 
     private void saw(VisualScript script) {
@@ -176,6 +255,9 @@ public final class PatternJeiVisualScenario implements VisualScenario {
                     Optional<ProductionScreenState.EntryView> out = state.result(1);
                     if (in.isEmpty() || out.isEmpty() || !out.get().key().equals(ItemKey.of(BuiltInRegistries.ITEM.get(SAWN))))
                         throw new VisualTestException("the saw's pattern is " + in + " -> " + out);
+                    // Its input is one item, no tag: the cell stays exact (ADR-082).
+                    if (in.get().filter())
+                        throw new VisualTestException("the saw's input became a filter cell: " + in);
                     if (!hasResult(context, 0, Items.CHEST, 1))
                         throw new VisualTestException("tab 1 changed");
                     LOGGER.info(PREFIX + "patternjei: CHECK PASS the saw lays {} x{} -> {} x{}", in.get().key(),
@@ -318,7 +400,7 @@ public final class PatternJeiVisualScenario implements VisualScenario {
             level.setBlockAndUpdate(pos.immutable(), Blocks.AIR.defaultBlockState());
         level.setBlockAndUpdate(origin, WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
                 .setValue(WarehouseProductionBlock.FACING, FRONT));
-        if (station(level, origin).patterns().size() < 3 || ProductionPatterns.MAX_SLOTS < 3)
+        if (station(level, origin).patterns().size() < 4 || ProductionPatterns.MAX_SLOTS < 4)
             throw new VisualTestException("the station has too few patterns for this run");
     }
 

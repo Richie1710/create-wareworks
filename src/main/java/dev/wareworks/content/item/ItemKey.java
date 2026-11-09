@@ -111,6 +111,14 @@ public final class ItemKey {
         return stack.getItem();
     }
 
+    /**
+     * Whether this key carries no component changes: the plain item, not an enchanted, damaged, named or otherwise
+     * changed one. Plain keys are picked first wherever several keys may serve (ADR-080, ADR-082).
+     */
+    public boolean isPlain() {
+        return stack.isComponentsPatchEmpty();
+    }
+
     /** Component-aware max stack size of this key (at least 1). */
     public int getMaxStackSize() {
         return stack.getMaxStackSize();

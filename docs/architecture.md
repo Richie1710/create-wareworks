@@ -201,6 +201,9 @@ dev.wareworks
 │   │                          at its own turn and a chain paying for the rest out of what the earlier lines and
 │   │                          chains left), FetchPreview (per line its take and its chain) and ChainPreview (what one
 │   │                          short line's chain would promise and make, or the refusal that names its item);
+│   │                          filter cells (ADR-082): IngredientChoices (what may pay for a choice ingredient, the
+│   │                          content layer's answer), ChoiceAllocator (the one implementation of "largest stock
+│   │                          first, whole runs, mix only when short"), NodeLine (a plan node's concrete line);
 │   │                          the crafter feeder (issue #34, ADR-067): CrafterGrid (pattern cell i is Crafter slot
 │   │                          i; runs in a grid), CrafterFeedPlan (which slot an order belongs to, the batch),
 │   │                          CrafterPatternCheck (the recipe check's verdict, by ordinal on the wire), FeederCycle
@@ -339,6 +342,9 @@ dev.wareworks
 │   │                          AisleFilters (store filters **and** storage priorities of the aisle's storage locations,
 │   │                          cached for planning, both read in one lookup per location, M8 + M16, ADR-028; the name
 │   │                          was kept on purpose);
+│   │                          FilterMatchCache (what the filters of an aisle's production patterns allow, cached per
+│   │                          filter and stock key set, ADR-082) and AisleChoices (the controller's IngredientChoices,
+│   │                          built once per click or pass);
 │   │                          AisleStockRules (the controller's own, saved copy of its keepers' stock rules, M15,
 │   │                          ADR-027; the pauses of the safety stop live in the controller beside it, and since M20
 │   │                          they are armed by every kind of order and are keyed by item alone, ADR-032, next to the
@@ -465,6 +471,9 @@ dev.wareworks
 │                              CrafterRecipeCheck (the second class that may look up recipes: it evaluates and runs
 │                              none), CrafterOutputFit (whether a craft's result and remainders fit in front of the
 │                              Crafter), CrafterFeederGoggleSummary;
+│                              filter cells (ADR-082): PatternFilterCells (which keys are filter cells, the ghost a
+│                              cell stores, a filter's examples) and RecipeTagCells (which cells of a recipe viewer's
+│                              recipe stand for an item tag, and the "is tagged" filter such a cell becomes);
 │                              the Warehouse Optimizer (issue #46, ADR-079): WarehouseOptimizerBlock / BlockEntity
 │                              (the aisle member that lists items to move up; no items, no capability, no arm point,
 │                              no ticker), OptimizerRows (its 16 ghost rows and their NBT), OptimizerMenu (the actions
@@ -917,6 +926,11 @@ dev.wareworks
 │                              made without a pattern, the pattern written with real clicks, the rest made by a vanilla
 │                              Crafter behind a Crafter Feeder, the clock standing and no second order while made, a
 │                              census around every act and craft, English and German, issue #45, ADR-081),
+│                              FilterCellVisualScenario (filter cells in a production pattern with real clicks: an
+│                              "is tagged" filter clicked into four cells and its tooltip, the largest stock taken,
+│                              a List Filter configured in Create's own screen keeping the dark oak out, kinds mixed in
+│                              whole runs and laid in segments by a Crafter Feeder, a chain made from a log, the
+│                              refusal, the 320 x 240 floor, a census around every act, English and German, ADR-082),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -8493,6 +8507,142 @@ cancelled and the remote taken out before the next poll: the player's merged cli
 planks, not the slabs). Where a test needs the machine, it plays it behind the station and books what it takes and
 gives back in the census.
 The visual scenario `requester-make` shows the production path with real clicks in English and German.
+
+### ADR-082 — A production pattern cell may hold a Create List or Attribute Filter: any item it allows pays, the largest stock first, kinds mixed only in whole runs; JEI's "+" writes a tag ingredient as an "is tagged" filter (amends ADR-024, ADR-032, ADR-067 and ADR-076)
+
+*Context:* a pattern cell held one exact `ItemKey`, so a crafting table "of any planks" could not be told to the
+warehouse: `ProductionPattern.fromGrid` merged cells by key equality, every planner compared keys exactly and nothing
+resolved a tag. The owner asked on 2026-11-09 whether a pattern could say "any `#minecraft:planks`", or "oak, birch or
+spruce but not my rare wood", and decided three things, binding here: **(1)** a cell may hold a Create List Filter or
+Attribute Filter as a ghost copy, never consumed, and the result stays one exact item; **(2)** when several items match,
+the warehouse takes the one with the **largest available stock** first and mixes items only when one alone is not
+enough, a Stock Keeper's reserve counting as before for the access in use; **(3)** JEI's "+" writes an Attribute Filter
+"is tagged <tag>" into a cell whose recipe ingredient is a tag. The hard rules stay: only the crane moves items, storage
+only through `Capabilities.ItemHandler.BLOCK`, no per-tick scans, `core.*` without Minecraft, old saves unchanged.
+
+*Decision:*
+
+* **D1. The filter's own key is the ingredient key**, marked in `ProductionPattern.choices`. A pattern stays a value:
+  record equality, `fromGrid` merging (four cells of one filter are one choice of four), NBT and the screens keep
+  working. A site that forgot a choice fails benignly: a filter item is never in stock, so it reads "missing", never a
+  wrong delivery.
+* **D2. The server classifies a cell from the item** (`PatternFilterCells#isFilter`): a List Filter with listed items or
+  an Attribute Filter with attributes. A blank filter (Create would test it as "the same item"), a Package Filter and the
+  result entry stay exact. `ProductionPatternPayload` is unchanged and the client never sends a flag. A filter cell
+  stores the filter's ghost (count 1, enchantments and attribute modifiers back at the item's defaults, what
+  `FilterItemStack.of` ignores), so equal filters are one key.
+* **D3. Whole runs everywhere.** A choice is paid run by run in whole runs of one key (`ChoiceAllocator#pay`); an amount
+  below one run of a key is not used, and the shortfall is made or the order shortened. One rule, one code path, and
+  every order is feedable by a Crafter Feeder.
+* **D4. Pick order** (`ChoiceAllocator#ranked`): plain keys before component variants (`ItemKey#isPlain`, ADR-080's
+  rule), then the most **free** stock (above every reserve, the `AUTOMATION` availability) less what the plan already
+  took (in a `SequentialPlans` measurement also what the earlier lines and chains took, so a list's question picks the
+  kinds its portions will pick), then the most available to the access in use, then candidate order. For `AUTOMATION` the two numbers are one,
+  which is owner decision 2 exactly; a player may still reach a reserve with the existing question, as the last resort.
+* **D5. Payment order:** exact ingredients first in pattern order, then choices, most constrained first (fewest
+  candidates that could pay a run). A broad filter must not eat the only birch a narrow one needs.
+* **D6. Bounds:** at most `MAX_KEYS_PER_CHOICE` = 8 keys pay one choice, so an order holds at most
+  `ProductionOrder.MAX_LINES` = 72 lines; a filter offers at most 64 stock keys (the most available) and 16 producible
+  results (`AisleChoices`).
+* **D7. Lines carry their filter.** A plan node carries concrete `NodeLine`s; a child names its parent's line by index.
+  An order is created from them and never refers back to its pattern: supply lines, crane trips (one key per trip),
+  reservations, persistence and goggles see concrete keys only. `SupplyLine.choice` names the filter that chose a line.
+* **D8. A short choice is made** from one producible candidate, the most producible first; a fallback costs one of the
+  walk's extra attempts. Splitting the remainder over two producible keys is a documented limitation.
+* **D9. Exclusions:** the pattern's own result and every key on the walk's path never pay a choice (not a `LOOP`
+  refusal); paused items are never made. Automatic restocking leaves out of a choice every kind another governing rule
+  is below its minimum on (`IngredientChoices#excluding`, in the decision and in the order's payment), instead of
+  stopping the whole pattern; it waits for and names such a kind only when nothing else allowed can pay one run.
+* **D10. `PlanRefusal.NO_MATCHING_ITEM`** names the filter when nothing allowed can pay a run and nothing makes one; a
+  make candidate whose subtree fails reports the deepest refusal as before ("Oak Log is missing").
+* **D11. A guard against unresolved filter keys.** The pattern-based `ProductionOrder.start/step/restock` and
+  `RequestConfirmation.of(pattern, runs)` throw for a pattern with choices, so every order of one is built from resolved
+  lines and every confirmation from the plan's concrete `leafDemand`.
+* **D12. A filter that lets the result through.** A player's edit is refused both ways with a hotbar line
+  (`EditOutcome.FILTER_LETS_RESULT`); a JEI lay keeps that one cell exact instead of refusing the recipe (a saw's
+  `#minecraft:oak_logs` holds `stripped_oak_log`); a load accepts it, and the core excludes the result anyway.
+* **D13. Result following** (ADR-076) reads each filter group as the first item its filter names
+  (`PatternFilterCells#examples`); with none the result does not follow. Examples are remembered per filter until the
+  recipe manager changes (a `/reload`), and one computation walks each tag once and runs at most
+  `MAX_EXAMPLE_TESTS` = 64 Create tests, so a screen push or an edit costs nothing for a filter already seen.
+* **D14.** At a Crafter Feeder station a pattern whose filter names no checkable item is
+  `CrafterPatternCheck.FILTER_NOT_CHECKABLE` (red, unused); without a feeder it is used. A feeder station narrows a
+  filter's candidates to what the Crafter takes in that grid (`WarehouseProductionBlockEntity#crafterTakes`) and lays
+  each order in segments of one key per filter group, so a Crafter slot never holds two kinds
+  (`CrafterFeedPlan#segment`, `FeederStatus.FILTER_ITEM_REFUSED`).
+* **D15. Deny filters are allowed** and warned about in the cell's tooltip; their candidates are anything in stock,
+  capped by D6.
+* **D16. A filter is refused when its encoded key passes 4096 bytes** (`EditOutcome.FILTER_TOO_LARGE`): patterns are
+  saved and synced, and nested list filters grow.
+* **D17. Goggles and Ponder are unchanged.** The station's item tooltip (`condition2`/`behaviour2`) and the empty cell's
+  hint teach the feature.
+* **D18. The screen** draws a filter cell as what an order would take now (the first stock match, else the first
+  example) with the filter as a half-size badge and a gold frame, its amount red while no kind pays one run. Its tooltip
+  is Create's own name and summary of the filter, then "In stock, in the order used:" with up to four matches in pick
+  order (a reserve or a variant can put a larger amount below a smaller one, so the header names the order, not the
+  size) and what a player may have of each (`ProductionScreenState.ChoiceView`, built by
+  `WarehouseControllerBlockEntity#choiceViews` from the `FilterMatchCache` only while a screen is open, at its push
+  interval, sent only on change), and the short, deny and Crafter lines where they apply. An order line's tooltip names the items a filter chose ("Uses Birch Planks x8"), at
+  the station and at the terminal (`OrderView.uses`).
+* **D19. JEI's "+".** The handler sends one optional tag per cell (`ProductionPatternLayPayload.tags`) and the
+  recipe's id (`.recipe`): for a crafting recipe the cell's ingredient comes from JEI's `getGuiSlotIndexToIngredientMap`
+  (since 19.16.1, the slots it shows), for other recipes from the recipe's ingredients matched to a slot by the items JEI
+  shows (`RecipeTagCells#slotTag`, `#cellTags`). A client's recipe has lost its tags (the recipe sync writes every
+  ingredient as a list of items), so the client only proposes the tag whose members are exactly the ingredient's items
+  (`RecipeTagCells#tagFor`), and the server keeps it only where its own copy of the named recipe has that tag as an
+  ingredient (`CrafterRecipeCheck#ingredientsOf`, `RecipeTagCells#recipeTags`). Only an ingredient that is exactly one
+  tag counts; a list of items (a torch's coal or charcoal, which a client cannot tell from `#minecraft:coals`) or a
+  custom ingredient stays exact, and so does every cell of a lay without a recipe id. The server still picks a concrete
+  key per cell and checks a crafting recipe on that concrete grid; a cell then becomes `PatternFilterCells#inTag(tag)`
+  only when the tag exists and is not empty, holds the picked key, and does not hold the result
+  (`RecipeTagCells#filterFor`). A laid filter is the very key a player configures by hand with the same
+  attribute, because the mode is written explicitly as Create's own screen does. JEI never lays a deny filter.
+* **D20. Network version 25.** The screen state, the order lines, the lay payload and three enum constants changed
+  (`WareworksNetwork` lists them). Saves gained `Filter` on pattern entries and `Choice` on supply lines.
+
+*Alternatives rejected:*
+* **Filter objects inside the pattern** (a `KeyFilter`/`PatternIngredient` type): it binds a controller cache into a
+  value type and retypes some forty call sites for no gain over a flagged key.
+* **Mixing kinds within a run.** Two code paths, and a Crafter Feeder could not lay such a run.
+* **An ingredient index on supply lines** instead of the filter key: it does not survive a pattern edit.
+* **A concrete pattern resolved per click**: it cannot mix kinds when one is short.
+* **Keeping the filter inside the order**: lines would change under a running order with every stock change.
+* **Splitting a mixed order into several orders**: the order cap would bind far earlier.
+* **A filter flag sent by the client**: the server can tell from the item, and must not trust the client.
+* **Refusing a JEI lay whose tag holds the result**: it breaks real recipes; the one cell stays exact instead.
+* **`IIngredientHelper#getTagKeyEquivalent`** for the JEI side: its API default is empty and its override is visible
+  only in JEI's bytecode.
+
+*Amends:* **ADR-024** (a pattern cell is no longer always one exact item; the result still is, and Wareworks still
+crafts nothing); **ADR-032** (the walk pays choices out of the same `PlanBudget`, a node carries its concrete lines and a
+child names its parent's line by index, which replaces `lineFor`; `NO_MATCHING_ITEM` joins the refusals);
+**ADR-067** (the recipe check reads filter groups through their examples, `FILTER_NOT_CHECKABLE`; a feeder station
+narrows candidates to what its Crafter takes and lays an order in segments of one key per group);
+**ADR-076** (the result follows the grid through each filter's first example; a recipe viewer's lay may write
+"is tagged" filters).
+
+*Limitations accepted:* an aisle plans with at most 128 distinct filters (`FilterMatchCache.MAX_FILTERS`): the cache
+holds the first 128 of its stations' filters in aisle order and never evicts one in use (a least-recently-used cache
+would miss on every access of a pass that cycles through more), and a filter beyond them allows nothing, with a log
+warning; an amount below one run of a key is not used (D3); a short choice is made from one producible
+key only (D8); with pathological overlaps between filters the producible amount a terminal shows may be an underestimate,
+never an over-promise; an older build reading a new save takes a filter cell for an exact ingredient that is never in
+stock, and keeps at most 9 lines of an order (a downgrade is not supported).
+
+*Consequences:* `core.production` gains `IngredientChoices`, `ChoiceAllocator` and `NodeLine`; `ProductionPattern`,
+`PlanNode`, `ProductionPlan`, `SupplyLine`, `ProductionOrder`, the planners, `CrafterFeedPlan` and `RestockPlanner`
+learn choices. `content.controller` gains `FilterMatchCache` and `AisleChoices`; `content.station` gains
+`PatternFilterCells` and `RecipeTagCells`. Everything that plans production benefits without logic of its own: terminal
+requests and the make-first offer, chains, list orders, Stock Keeper restocking, computers, redstone and the
+Schematicannon Requester (ADR-081). JUnit: `ChoiceAllocatorTest`, `ChoiceIngredientTest`, `RestockChoiceTest`, the
+extended planner, scale and feeder tests, and `ProductionFilterTextWidthTest` for the screen's texts. GameTests:
+`ProductionFilterGameTests` (classification, old saves, refusals, largest stock, whole runs, reserves, list and deny
+filters, a chain, open orders, restock, migration, the screen state, the edit path with its hotbar line, the JEI lay
+without JEI, and the bounds of the filter cache and of a filter's examples), plus filter tests in `CrafterFeederGameTests`, `SchematicannonRequesterGameTests` and
+`TerminalCraftChainGameTests`. Visual: the scenario `filtercells` (`dev.FilterCellVisualScenario`) and a Torch step
+plus filter checks in `patternjei`. The cost of the producible pass at a deliberate worst case (8 stations x 36 patterns,
+two filters of 64 candidates each, 2000 stock keys) is about 4 to 7 ms (`ProductionScaleTest`), over the 1 ms the design
+aimed at; a real aisle is far below that case.
 
 ## Persistence & sync
 

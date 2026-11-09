@@ -575,7 +575,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         long available = key == null ? 0L : controller.availableTo(StockAccess.AUTOMATION, key);
         long availableToPlayer = key != null ? controller.availableTo(StockAccess.PLAYER, key)
                 : VariantPick.pick(controller.stockIndex().keys(), candidate -> candidate.getItem() == item,
-                        SchematicannonRequesterBlockEntity::isPlain,
+                        ItemKey::isPlain,
                         candidate -> controller.availableTo(StockAccess.PLAYER, candidate), ItemKey.ORDER)
                         .map(candidate -> controller.availableTo(StockAccess.PLAYER, candidate)).orElse(0L);
         long cannonRoom = cannon.roomFor(sized, stack);
@@ -590,7 +590,7 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
             Set<ItemKey> producible = controller.productionStations().isEmpty() ? Set.of()
                     : controller.producibleKeys();
             orderKey = VariantPick.toMake(producible, candidate -> candidate.getItem() == item,
-                    SchematicannonRequesterBlockEntity::isPlain, ItemKey.ORDER).orElse(null);
+                    ItemKey::isPlain, ItemKey.ORDER).orElse(null);
             if (orderKey == null) {
                 makeRetryAt = now + RequesterLimits.makeRetryTicks(pollTicks);
                 // No pattern makes it any more (removed, or its station broken): an earlier refusal no longer holds.
@@ -665,13 +665,9 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         if (picked != null && picked.getItem() == item && controller.availableTo(StockAccess.AUTOMATION, picked) > 0)
             return picked;
         picked = VariantPick.pick(controller.stockIndex().keys(), candidate -> candidate.getItem() == item,
-                SchematicannonRequesterBlockEntity::isPlain,
+                ItemKey::isPlain,
                 candidate -> controller.availableTo(StockAccess.AUTOMATION, candidate), ItemKey.ORDER).orElse(null);
         return picked;
-    }
-
-    private static boolean isPlain(ItemKey key) {
-        return key.toStack(1).isComponentsPatchEmpty();
     }
 
     /**

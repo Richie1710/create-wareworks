@@ -1470,6 +1470,35 @@ public final class WareworksLang {
      * its arrow's tooltip. It is the consequence the red says: the warehouse never orders it, so nothing is wasted.
      */
     public static final String PRODUCTION_CHECK_SKIPPED = "gui.production.check.skipped";
+    /** Hotbar line: a filter too large to be written into a pattern cell (ADR-082, D16). */
+    public static final String PRODUCTION_FILTER_TOO_LARGE = "gui.production.filter.too_large";
+    /** Hotbar line: a filter cell that would let the pattern's own result through (ADR-082, D12). */
+    public static final String PRODUCTION_FILTER_MAKES_RESULT = "gui.production.filter.makes_result";
+    /** {@code "Any item this filter allows"}: what a filter cell is, under the filter's own name (ADR-082). */
+    public static final String PRODUCTION_FILTER_CELL = "gui.production.filter.cell";
+    /**
+     * {@code "In stock, in the order used:"}: heads the stock matches of a filter cell, in the order an order picks them
+     * (plain items first, then free stock above reserves), which is not always the largest number shown first.
+     */
+    public static final String PRODUCTION_FILTER_MATCHES = "gui.production.filter.matches";
+    /** {@code "- %1$s x%2$s"}: one stock match of a filter cell (item, what a player may have of it). */
+    public static final String PRODUCTION_FILTER_MATCH = "gui.production.filter.match";
+    /** {@code "- and %1$s more"}: the matches past the ones named. */
+    public static final String PRODUCTION_FILTER_MORE = "gui.production.filter.more";
+    /** {@code "Nothing in stock matches"}: a filter cell without a stock match. */
+    public static final String PRODUCTION_FILTER_NONE = "gui.production.filter.none";
+    /** {@code "No kind is enough for one run"}: matches exist, but kinds are mixed only in whole runs. */
+    public static final String PRODUCTION_FILTER_SHORT = "gui.production.filter.short";
+    /** The warning of a deny filter: it allows anything in stock it does not name (ADR-082, D15). */
+    public static final String PRODUCTION_FILTER_DENY = "gui.production.filter.deny";
+    /** {@code "Only items the Crafter takes in this grid"}: a Crafter Feeder narrows the matches. */
+    public static final String PRODUCTION_FILTER_CRAFTER = "gui.production.filter.crafter";
+    /** The empty grid cell's second hint: a List or Attribute Filter may go in. */
+    public static final String PRODUCTION_FILTER_HINT = "gui.production.filter.hint";
+    /** {@code "Uses %1$s"}: an order line's tooltip names an item a filter chose for it (ADR-082). */
+    public static final String PRODUCTION_ORDER_USES = "gui.production.order.uses";
+    /** {@code "and %1$s more"}: the items past the ones named, under the last "Uses" line. */
+    public static final String PRODUCTION_ORDER_USES_MORE = "gui.production.order.uses_more";
     /**
      * {@code "The recipe makes %1$s x%2$s"}: the reason of a pattern whose grid is a crafting recipe for another result
      * or amount, with what the recipe really makes. The other two reasons have keys of their own

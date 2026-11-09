@@ -15,6 +15,7 @@ import dev.wareworks.client.gui.ProductionRecipeLay;
 import dev.wareworks.client.gui.TerminalRecipeLay;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
+import dev.wareworks.content.station.RecipeTagCells;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.production.PatternLay;
 import dev.wareworks.core.production.ProductionEntry;
@@ -27,10 +28,15 @@ import mezz.jei.api.recipe.transfer.IRecipeTransferHandlerHelper;
 import mezz.jei.api.recipe.transfer.IUniversalRecipeTransferHandler;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.Ingredient;
+import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 
 /**
@@ -54,15 +60,27 @@ import net.minecraft.world.item.crafting.RecipeHolder;
  * be rewritten at any time, and the running orders carry their own copy of it.
  * <p>
  * <b>Shift on "+"</b> is ignored, for the reason {@link TerminalCraftTransferHandler} gives.
+ * <p>
+ * <b>Tag ingredients become filters</b> (ADR-082, owner decision 3). A cell whose recipe ingredient is one plain item
+ * tag, such as a chest's {@code #minecraft:planks}, is sent with that tag and the recipe's id, and the server writes it
+ * as an "is tagged" Attribute Filter, so any plank in stock pays for it. The client's copy of a recipe has lost its
+ * tags (every ingredient arrives as a list of items), so the tag sent is only proposed: the tag whose members are the
+ * ingredient's items ({@link RecipeTagCells#tagFor}), and the server keeps it only where its own copy of the recipe
+ * names that tag. For a crafting recipe the ingredient of a cell comes from JEI's own map of grid cells to ingredients
+ * ({@link IRecipeTransferHandlerHelper#getGuiSlotIndexToIngredientMap}, since 19.16.1); for any other recipe from the
+ * recipe's ingredients, matched to a slot by the items JEI shows for it ({@link RecipeTagCells#slotTag}). An
+ * ingredient that lists items (NeoForge's coal or charcoal) or is custom stays exact. {@code IIngredientHelper#getTagKeyEquivalent} is deliberately not used: its API default is empty, and what
+ * overrides it is visible only in JEI's bytecode.
  */
 final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferHandler<ProductionMenu> {
+    private final IRecipeTransferHandlerHelper helper;
     private final IRecipeTransferError hidden;
     private final IRecipeTransferError notOnlyItems;
     private final IRecipeTransferError tooManyInputs;
     private final IRecipeTransferError makesIngredient;
 
     ProductionRecipeTransferHandler(IRecipeTransferHandlerHelper helper) {
-        Objects.requireNonNull(helper, "helper");
+        this.helper = Objects.requireNonNull(helper, "helper");
         hidden = helper.createInternalError();
         notOnlyItems = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_NOT_ONLY_ITEMS));
         tooManyInputs = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_TOO_MANY_INPUTS));
@@ -95,16 +113,18 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
         Object value = recipe instanceof RecipeHolder<?> holder ? holder.value() : recipe;
         if (value instanceof CraftingRecipe crafting && inputs.size() == CraftGrid.SIZE
                 && crafting.canCraftInDimensions(CraftGrid.WIDTH, CraftGrid.WIDTH))
-            return layCrafting(container, inputs, doTransfer);
+            return layCrafting(container, recipe, inputs, doTransfer);
         Optional<ProductionEntry<ItemKey>> result = result(value, recipeSlots);
         if (result.isEmpty())
             return hidden;
         List<PatternLay.Input<ItemKey>> laid = new ArrayList<>(inputs.size());
+        List<IRecipeSlotView> filled = new ArrayList<>(inputs.size());
         for (IRecipeSlotView input : inputs) {
             if (input.isEmpty())
                 continue;
             int count = input.getItemStacks().findFirst().map(ItemStack::getCount).orElse(1);
             laid.add(new PatternLay.Input<>(TerminalRecipeLay.candidates(input.getItemStacks()), count));
+            filled.add(input);
         }
         PatternLay.Layout<ItemKey> layout = PatternLay.layout(laid, result.get().key());
         if (layout.refusal().isPresent())
@@ -115,11 +135,30 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
             };
         if (!doTransfer)
             return null;
-        return ProductionRecipeLay.lay(container, false, layout.cells(), layout.counts(), result) ? null : hidden;
+        List<Optional<ResourceLocation>> tags = machineTags(value, laid, filled, result.get().key(), layout.cells());
+        return ProductionRecipeLay.lay(container, false, layout.cells(), layout.counts(), result, tags,
+                recipeId(recipe)) ? null : hidden;
+    }
+
+    /**
+     * The tag of each laid cell of a machine's recipe: each input takes the one plain tag of the recipe's ingredients
+     * that every item JEI shows for it carries, and a cell takes the tag of the input it was laid from
+     * ({@link RecipeTagCells#cellTags}). A recipe that is no {@link Recipe} has no tags.
+     */
+    private static List<Optional<ResourceLocation>> machineTags(Object recipe, List<PatternLay.Input<ItemKey>> laid,
+            List<IRecipeSlotView> inputs, ItemKey result, List<List<ItemKey>> cells) {
+        List<Ingredient> ingredients = recipe instanceof Recipe<?> known ? known.getIngredients() : List.of();
+        List<List<ItemKey>> candidates = new ArrayList<>(laid.size());
+        List<Optional<TagKey<Item>>> tags = new ArrayList<>(laid.size());
+        for (int input = 0; input < laid.size(); input++) {
+            candidates.add(laid.get(input).candidates());
+            tags.add(RecipeTagCells.slotTag(ingredients, inputs.get(input).getItemStacks().toList()));
+        }
+        return RecipeTagCells.cellTags(candidates, tags, result, cells);
     }
 
     @Nullable
-    private IRecipeTransferError layCrafting(ProductionMenu container, List<IRecipeSlotView> inputs,
+    private IRecipeTransferError layCrafting(ProductionMenu container, Object recipe, List<IRecipeSlotView> inputs,
             boolean doTransfer) {
         if (inputs.stream().noneMatch(input -> TerminalRecipeLay.namesAnItem(input.getItemStacks())))
             return hidden;
@@ -129,7 +168,34 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
         for (IRecipeSlotView input : inputs)
             cells.add(TerminalRecipeLay.candidates(input.getItemStacks()));
         List<Integer> counts = Collections.nCopies(CraftGrid.SIZE, ProductionEntry.MIN_COUNT);
-        return ProductionRecipeLay.lay(container, true, cells, counts, Optional.empty()) ? null : hidden;
+        return ProductionRecipeLay.lay(container, true, cells, counts, Optional.empty(), gridTags(recipe),
+                recipeId(recipe)) ? null : hidden;
+    }
+
+    /**
+     * The id of the laid recipe, which the server reads the recipe's tags from: the client's copy of a recipe has lost
+     * them ({@link RecipeTagCells}). A recipe that is no {@link RecipeHolder} has none, and is laid exact.
+     */
+    private static Optional<ResourceLocation> recipeId(Object recipe) {
+        return recipe instanceof RecipeHolder<?> holder ? Optional.of(holder.id()) : Optional.empty();
+    }
+
+    /**
+     * The tag of each grid cell of a crafting recipe, from JEI's own map of its grid cells to the recipe's ingredients,
+     * which places a small recipe exactly in the slots JEI shows it in ({@link RecipeTagCells#gridTags}). A special
+     * recipe's map is empty, and so is every answer if JEI cannot give one.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Optional<ResourceLocation>> gridTags(Object recipe) {
+        if (recipe instanceof RecipeHolder<?> holder && holder.value() instanceof CraftingRecipe) {
+            try {
+                return RecipeTagCells.gridTags(
+                        helper.getGuiSlotIndexToIngredientMap((RecipeHolder<CraftingRecipe>) holder), CraftGrid.SIZE);
+            } catch (RuntimeException e) {
+                return Collections.nCopies(CraftGrid.SIZE, Optional.empty());
+            }
+        }
+        return Collections.nCopies(CraftGrid.SIZE, Optional.empty());
     }
 
     /** The one result a pattern for this recipe makes: see the class description. */

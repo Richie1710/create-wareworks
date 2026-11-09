@@ -17,6 +17,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.PatternFilterCells;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.TerminalCraftOrderState;
 import dev.wareworks.content.station.TerminalCraftOutcome;
@@ -47,6 +48,7 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -273,6 +275,49 @@ public final class TerminalCraftChainGameTests {
                     ItemCensus.change(expected, STICK, STICKS_PER_CRAFT);
                     ItemCensus.assertEquals(helper, expected, "one craft moves exactly one recipe's items", player);
                     helper.assertValueEqual(aisle.stationCount(TERMINAL_RACK, PLANK), 0L, "both planks were used");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * The make-first offer through a <b>filter cell</b> (ADR-082): the saw's pattern takes "any log" instead of an oak
+     * log. Sticks x1 need two planks, the racks hold none; the offer names the planks with the whole run's four, and the
+     * Yes has the chain made from the logs in stock — one line of oak logs, remembering its filter.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void filterTerminalMakeOffer(GameTestHelper helper) {
+        AisleFixture aisle = chainAisle(helper, LOGS_IN_STOCK);
+        ItemKey anyLog = PatternFilterCells.inTag(ItemTags.LOGS);
+        helper.assertTrue(aisle.productionAt(SAW_RACK).setPatternEntry(0, 0, anyLog, 1), "the saw takes any log");
+        Player player = playerAt(helper, aisle);
+        Map<ItemKey, Long> expected = ItemCensus.of(LOG, LOGS_IN_STOCK);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, expected, "while a filter chain is offered", player));
+        AtomicReference<WarehouseTerminalMenu> screen = new AtomicReference<>();
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertChainReady(helper, aisle, LOGS_IN_STOCK))
+                .thenExecute(() -> {
+                    WarehouseTerminalMenu menu = openMenu(player, terminal(aisle));
+                    screen.set(menu);
+                    TerminalCraftOutcome asked = fetch(player, menu, 1, 0L, false);
+                    assertOutcome(helper, asked, TerminalCraftResult.ASKING, 1, null, "sticks x1 with no planks");
+                    CraftFetchQuestion<ItemKey> question = asked.question().orElseThrow();
+                    helper.assertValueEqual(question.producing(), (long) PLANKS_PER_LOG,
+                            "a Yes agrees to the whole run's four planks");
+                    assertNothingStarted(helper, aisle, "measuring the offer");
+                    TerminalCraftOutcome yes = fetch(player, menu, 1, PLANKS_PER_LOG, true);
+                    assertOutcome(helper, yes, TerminalCraftResult.STARTED, 1, STICK, "the Yes");
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().openProductionOrders().size(), 1,
+                        "the portion started the chain"))
+                .thenExecute(() -> {
+                    ProductionOrder<ItemKey, RackPosition> root = aisle.controller().openProductionOrders().getFirst();
+                    helper.assertValueEqual(root.result(), PLANK, "the chain makes the planks");
+                    helper.assertValueEqual(root.lines().size(), 1, "of one kind of log");
+                    helper.assertValueEqual(root.lines().getFirst().key(), LOG, "the oak logs in stock");
+                    helper.assertValueEqual(root.lines().getFirst().choice(), Optional.of(anyLog), "for the filter");
+                    helper.assertValueEqual(aisle.controller().availableStock(LOG), (long) LOGS_IN_STOCK - 1,
+                            "one log is promised");
                 })
                 .thenSucceed();
     }

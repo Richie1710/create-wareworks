@@ -1,5 +1,6 @@
 package dev.wareworks.core.production;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -26,13 +27,23 @@ import java.util.Objects;
  *                ({@link ProductionPlan#rootPromise()}, i.e. the ordered amount or less when the plan had to be made
  *                smaller), and for every other node the part of a parent's ingredient line that the racks could not pay
  *                for otherwise. Never the whole run — {@link #output()} is that, and it is regularly larger
+ * @param lines   the concrete ingredient lines of this step (ADR-082) in pattern ingredient order, and within a choice
+ *                in allocation order: one line per exact ingredient and one per key that pays a choice. The order is
+ *                created from them and never from the pattern
+ * @param parentLine the index of the parent's line this step feeds, {@value #NO_PARENT} for the root. A line index and
+ *                not a key, because one key may appear in an exact line and in a choice line of the same parent
  * @param <K>     item key type
  * @param <L>     location type
  */
 public record PlanNode<K, L>(int index, int parent, int depth, L station, ProductionPattern<K> pattern, int runs,
-                             long needed) {
+                             long needed, List<NodeLine<K>> lines, int parentLine) {
     /** What {@link #parent()} is for a node nobody waits for: the plan's root. */
     public static final int NO_PARENT = -1;
+    /**
+     * A {@link #parentLine()} still to be resolved by key: what the compatibility constructor leaves for a non-root node,
+     * and what {@link ProductionPlan} replaces with the parent's line of this node's result.
+     */
+    public static final int PARENT_LINE_BY_KEY = -2;
 
     public PlanNode {
         Objects.requireNonNull(station, "station");
@@ -49,6 +60,29 @@ public record PlanNode<K, L>(int index, int parent, int depth, L station, Produc
             throw new IllegalArgumentException("runs must be at least 1: " + runs);
         if (needed < 1L)
             throw new IllegalArgumentException("needed must be at least 1: " + needed);
+        lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
+        if (lines.isEmpty())
+            throw new IllegalArgumentException("a step needs at least one ingredient line");
+        if (parent == NO_PARENT ? parentLine != NO_PARENT : parentLine < 0 && parentLine != PARENT_LINE_BY_KEY)
+            throw new IllegalArgumentException("parentLine must name a line of the parent, and only the root has none: "
+                    + parentLine);
+    }
+
+    /**
+     * A step of a pattern without choices: its lines are the pattern's exact ingredients for {@code runs} runs, and a
+     * non-root step feeds the parent's line of its result ({@link #PARENT_LINE_BY_KEY}, resolved by
+     * {@link ProductionPlan}).
+     *
+     * @throws IllegalArgumentException for a pattern with choices, whose lines only a planner can work out
+     */
+    public PlanNode(int index, int parent, int depth, L station, ProductionPattern<K> pattern, int runs, long needed) {
+        this(index, parent, depth, station, pattern, runs, needed, NodeLine.exactLinesOf(pattern, Math.max(1, runs)),
+                parent == NO_PARENT ? NO_PARENT : PARENT_LINE_BY_KEY);
+    }
+
+    /** This node with its parent line resolved to {@code line}. */
+    PlanNode<K, L> withParentLine(int line) {
+        return new PlanNode<>(index, parent, depth, station, pattern, runs, needed, lines, line);
     }
 
     /** Whether this is the ordered item's own step, the one a request waits for. */

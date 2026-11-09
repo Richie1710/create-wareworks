@@ -61,7 +61,8 @@ class CrafterFeederTextWidthTest {
     private static final String FEEDER_LABEL = "gui.production.feeder";
     /** The tooltip lines of a refused pattern, without arguments. */
     private static final List<String> TOOLTIP_LINES = List.of("gui.production.check.cell_not_one",
-            "gui.production.check.not_a_recipe", "gui.production.check.skipped");
+            "gui.production.check.not_a_recipe", "gui.production.check.skipped",
+            "gui.production.check.filter_not_checkable");
     private static final String RESULT_DIFFERS = "gui.production.check.result_differs";
     /** Goggle rows without an item in them; their only argument, if any, is a count. */
     private static final List<String> GOGGLE_ROWS = List.of("gui.goggles.crafter_feeder",
@@ -73,7 +74,7 @@ class CrafterFeederTextWidthTest {
             "gui.crafter_feeder.status.no_rotation", "gui.crafter_feeder.status.grid_not_empty",
             "gui.crafter_feeder.status.grid_disturbed", "gui.crafter_feeder.status.external_signal",
             "gui.crafter_feeder.status.missing_ingredients", "gui.crafter_feeder.status.craft_failed",
-            "gui.crafter_feeder.status.recipe_changed");
+            "gui.crafter_feeder.status.recipe_changed", "gui.crafter_feeder.status.filter_item_refused");
     /** The goggle row that names the order's item and its runs. */
     private static final String FEEDING = "gui.crafter_feeder.feeding";
 
