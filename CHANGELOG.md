@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0-beta] - 2026-11-09
+
 ### Added
 
 - **Production patterns take List and Attribute Filters.** Put a configured Create List Filter or Attribute Filter into
@@ -25,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **JEI's "+" at a production station writes a tag ingredient as a filter.** A recipe cell that takes any item of a
   tag, such as the planks of a chest, becomes an Attribute Filter "is tagged" for that tag instead of one picked item.
-  An ingredient that lists items, such as a torch's coal or charcoal, stays the item it was.
+  An ingredient that lists items, such as a torch's coal or charcoal, stays the item it was. For crafting recipes this
+  needs JEI 19.16.1 or newer; an older JEI lays them with exact items as before.
 - **Server and players have to update together.** A client with this version cannot join a server with an older one,
   and the other way round, because the production station's screen and JEI's "+" send new data. Worlds load unchanged.
 
@@ -1583,7 +1586,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.21.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.22.0-beta...HEAD
+[0.22.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.21.0-beta...v0.22.0-beta
 [0.21.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.20.0-beta...v0.21.0-beta
 [0.20.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.19.0-beta...v0.20.0-beta
 [0.19.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.18.1-beta...v0.19.0-beta
