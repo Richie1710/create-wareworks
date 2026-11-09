@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 
+import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
 import org.lwjgl.glfw.GLFW;
 
 import dev.wareworks.client.compat.jei.JeiRuntimeAccess;
@@ -50,8 +51,16 @@ import net.neoforged.fml.ModList;
  * the "+" of a recipe with a fluid (Chocolate Glazed Berries at the spout), which must be greyed out, lay nothing on a
  * click and say why in both languages, and the Torch. A tag ingredient is laid as an "is tagged" Attribute Filter cell
  * (ADR-082): the Chest's eight {@code #minecraft:planks} cells and the Torch's {@code #c:rods/wooden} stick; the filter
- * cell's tooltip is shot in both languages. The Torch's coal-or-charcoal list and the saw's one item stay exact cells. JEI's every-tick check must lay nothing on any recipe, and the tab selected at
- * the click is the one written: the others stay empty.
+ * cell's tooltip is shot in both languages. The Torch's coal-or-charcoal list and the saw's one item stay exact cells.
+ * JEI's every-tick check must lay nothing on any recipe, and the tab selected at the click is the one written: the
+ * others stay empty.
+ * <p>
+ * The run also works with an older JEI, which {@code jei_version_range} admits, and says in the log which path it
+ * took: below JEI {@value #GRID_MAP_JEI} the handler has no grid ingredient map (ADR-082 D19), so the Chest and the
+ * Torch are expected with exact cells and the Chest cell's tooltip is shot without a filter line ({@code -cell}
+ * instead of {@code -filter}); below JEI {@value #CREATE_PLUGIN_JEI} Create's JEI plugin does not load (ADR-063), so
+ * the saw and the spout recipe are skipped after checking that JEI really lacks their categories. The version is read
+ * from JEI's mods.toml at run time, with no compile-time JEI internals.
  */
 public final class PatternJeiVisualScenario implements VisualScenario {
     public static final String NAME = "patternjei";
@@ -76,9 +85,21 @@ public final class PatternJeiVisualScenario implements VisualScenario {
     private static final ResourceLocation GLAZED = ResourceLocation.fromNamespaceAndPath("create",
             "chocolate_glazed_berries");
 
+    /** The first JEI with {@code IRecipeTransferHandlerHelper#getGuiSlotIndexToIngredientMap} (ADR-082 D19). */
+    static final String GRID_MAP_JEI = "19.16.1";
+    /** The JEI Create 6.0.10 is built against; below it Create's JEI plugin, with the saw and the spout, fails. */
+    static final String CREATE_PLUGIN_JEI = "19.21.0.247";
+
     private final VisualLanguage language = new VisualLanguage(LANGUAGE_TIMEOUT_TICKS, SETTLE_TICKS);
-    /** The English line of a filter cell's tooltip, so the German round can prove it is not reading it again. */
+    /**
+     * The English line of a filter cell's tooltip (under a JEI without tag cells the exact cell's item name), so the
+     * German round can prove it is not reading it again.
+     */
     private volatile String englishFilterLine = "";
+    /** Whether the loaded JEI lays a crafting recipe's tag ingredients as filter cells; set when the pass is built. */
+    private boolean tagCells = true;
+    /** Whether the loaded JEI runs Create's JEI plugin (saw and spout categories); set when the pass is built. */
+    private boolean createPlugin = true;
 
     @Override
     public String name() {
@@ -124,22 +145,68 @@ public final class PatternJeiVisualScenario implements VisualScenario {
             close(script);
             return;
         }
+        tagCells = jeiAtLeast(GRID_MAP_JEI);
+        createPlugin = jeiAtLeast(CREATE_PLUGIN_JEI);
+        script.client("patternjei: name the path this JEI takes", context -> LOGGER.info(PREFIX
+                + "patternjei: JEI {}: {}; {}", jeiVersion(),
+                tagCells ? "crafting recipes lay tag ingredients as 'is tagged' filter cells"
+                        : "older than " + GRID_MAP_JEI + " (no grid ingredient map), crafting recipes are expected"
+                                + " with exact cells",
+                createPlugin ? "Create's saw and spout recipes are laid"
+                        : "older than " + CREATE_PLUGIN_JEI + " (Create's JEI plugin does not load), the saw and the"
+                                + " spout recipe are skipped"));
         open(script);
         crafting(script);
-        saw(script);
-        fluid(script, "en");
+        if (createPlugin) {
+            saw(script);
+            fluid(script, "en");
+        } else {
+            createCategoriesMissing(script);
+        }
         torch(script);
         close(script);
         language.switchTo(script, "patternjei: ", "de_de");
         open(script);
-        fluid(script, "de");
+        if (createPlugin)
+            fluid(script, "de");
         filterTooltip(script, "-de");
         close(script);
         language.switchTo(script, "patternjei: ", "en_us");
+        String summary = (createPlugin ? "crafting and saw laid with one click each into the selected tab, "
+                : "crafting laid with one click each into the selected tab (saw and spout skipped: no Create JEI "
+                        + "plugin), ")
+                + (tagCells ? "a tag ingredient laid as an 'is tagged' filter cell and an item list as an exact cell"
+                        : "tag ingredients laid as exact cells (JEI before " + GRID_MAP_JEI + ")")
+                + (createPlugin ? ", a fluid recipe greyed out" : "") + ", English and German";
         script.client("patternjei: every check passed", context -> LOGGER.info(PREFIX
-                + "patternjei: ALL CHECKS PASSED (crafting and saw laid with one click each into the selected tab, "
-                + "a tag ingredient laid as an 'is tagged' filter cell and an item list as an exact cell, a fluid "
-                + "recipe greyed out, English and German)"));
+                + "patternjei: ALL CHECKS PASSED (" + summary + ")"));
+    }
+
+    /** Whether the loaded JEI is {@code version} or newer, read from JEI's mods.toml. */
+    private static boolean jeiAtLeast(String version) {
+        return ModList.get().getModContainerById(JEI_MOD_ID).map(container -> container.getModInfo().getVersion()
+                .compareTo(new DefaultArtifactVersion(version)) >= 0).orElse(true);
+    }
+
+    private static String jeiVersion() {
+        return ModList.get().getModContainerById(JEI_MOD_ID).map(container -> container.getModInfo().getVersion()
+                .toString()).orElse("none");
+    }
+
+    /**
+     * Under a JEI older than Create's pin the saw and the spout steps are skipped; that is only right while JEI really
+     * lacks Create's categories, so a JEI that has them fails the run here.
+     */
+    private static void createCategoriesMissing(VisualScript script) {
+        ArmVisualScenario.untilOrFail(script, "patternjei: JEI is running", context -> JeiRuntimeAccess.available(),
+                JEI_TIMEOUT_TICKS, context -> "JEI has no runtime");
+        script.client("patternjei: CHECK JEI lacks Create's saw and spout categories", context -> {
+            if (JeiRuntimeAccess.knowsCategory(SAWING) || JeiRuntimeAccess.knowsCategory(FILLING))
+                throw new VisualTestException("JEI " + jeiVersion() + " knows Create's categories, but the run "
+                        + "skipped the saw and the spout");
+            LOGGER.info(PREFIX + "patternjei: CHECK PASS JEI {} has no {} or {} category: the saw and the spout are "
+                    + "skipped", jeiVersion(), SAWING, FILLING);
+        });
     }
 
     @Override
@@ -166,6 +233,13 @@ public final class PatternJeiVisualScenario implements VisualScenario {
                         Optional<ProductionScreenState.EntryView> entry = state.entry(0, cell);
                         if (entry.isEmpty() || entry.get().count() != 1)
                             throw new VisualTestException("cell " + cell + " of the Chest is " + entry);
+                        if (!tagCells) {
+                            // JEI before 19.16.1 has no grid ingredient map: the cell is one exact plank (D19).
+                            if (entry.get().filter() || !entry.get().key().toStack().is(ItemTags.PLANKS))
+                                throw new VisualTestException("cell " + cell + " of the Chest is no exact plank: "
+                                        + entry);
+                            continue;
+                        }
                         // ADR-082, owner decision 3: the Chest's #minecraft:planks becomes an "is tagged" filter cell.
                         if (!entry.get().filter() || !entry.get().key().equals(PatternFilterCells.inTag(ItemTags.PLANKS)))
                             throw new VisualTestException("cell " + cell + " of the Chest is no 'is tagged "
@@ -174,7 +248,9 @@ public final class PatternJeiVisualScenario implements VisualScenario {
                     if (state.result(1).isPresent())
                         throw new VisualTestException("tab 2 was written as well");
                     LOGGER.info(PREFIX + "patternjei: CHECK PASS the Chest is laid into tab 1 with its result, its "
-                            + "eight cells as 'is tagged #minecraft:planks' filter cells");
+                            + "eight cells as {}", tagCells ? "'is tagged #minecraft:planks' filter cells"
+                                    : "exact " + state.entry(0, 0).orElseThrow().key() + " (JEI before "
+                                            + GRID_MAP_JEI + ")");
                 });
         script.client("patternjei: park the mouse", PatternJeiVisualScenario::parkMouse).waitTicks(SETTLE_TICKS)
                 .shot("patternjei-chest-laid");
@@ -185,8 +261,14 @@ public final class PatternJeiVisualScenario implements VisualScenario {
      * The tooltip of a laid filter cell of the Chest (tab 1): the filter's own name and Create's summary of the tag,
      * then our line that any item it allows pays. Without an aisle there are no matches to list. {@code suffix} is
      * {@code ""} in English and {@code "-de"} in German, where the line must be another text than the English one.
+     * Under a JEI without tag cells the cell is an exact plank: its tooltip starts with the plank's name, in German
+     * another one than in English, and has no filter line.
      */
     private void filterTooltip(VisualScript script, String suffix) {
+        if (!tagCells) {
+            exactCellTooltip(script, suffix);
+            return;
+        }
         selectTab(script, 0);
         script.client("patternjei: rest the cursor on a filter cell of the Chest", context -> ScreenInput.hover(
                         context.minecraft(), ScreenInput.productionCell(screen(context), 0)))
@@ -210,6 +292,33 @@ public final class PatternJeiVisualScenario implements VisualScenario {
                 .shot("patternjei-chest-filter" + suffix);
     }
 
+    /** {@link #filterTooltip} under a JEI before 19.16.1: the Chest's cell is an exact plank. */
+    private void exactCellTooltip(VisualScript script, String suffix) {
+        selectTab(script, 0);
+        script.client("patternjei: rest the cursor on an exact cell of the Chest", context -> ScreenInput.hover(
+                        context.minecraft(), ScreenInput.productionCell(screen(context), 0)))
+                .waitTicks(SETTLE_TICKS)
+                .client("patternjei: CHECK the exact cell's tooltip" + suffix, context -> {
+                    WarehouseProductionScreen screen = screen(context);
+                    ItemKey plank = screen.state().entry(0, 0).orElseThrow(
+                            () -> new VisualTestException("the Chest's first cell is empty")).key();
+                    List<String> tooltip = ScreenInput.productionTooltip(screen, ScreenInput.productionCell(screen, 0))
+                            .stream().map(Component::getString).toList();
+                    String name = plank.toStack().getHoverName().getString();
+                    String filterLine = WareworksLang.translateDirect(WareworksLang.PRODUCTION_FILTER_CELL).getString();
+                    if (tooltip.isEmpty() || !tooltip.getFirst().equals(name) || tooltip.contains(filterLine))
+                        throw new VisualTestException("the exact cell's tooltip is " + tooltip);
+                    if (suffix.isEmpty())
+                        englishFilterLine = name;
+                    else if (name.equals(englishFilterLine) || name.isBlank())
+                        throw new VisualTestException("'" + name + "' is no German name of '" + englishFilterLine
+                                + "'");
+                    LOGGER.info(PREFIX + "patternjei: CHECK PASS the exact cell's tooltip{} (JEI before {}): {}",
+                            suffix, GRID_MAP_JEI, tooltip);
+                })
+                .shot("patternjei-chest-cell" + suffix);
+    }
+
     /**
      * The Torch into tab 4: its stick is {@code #c:rods/wooden} and becomes an "is tagged" filter cell, its coal is
      * NeoForge's list of coal and charcoal and stays one exact item.
@@ -231,6 +340,16 @@ public final class PatternJeiVisualScenario implements VisualScenario {
                             .filter(ProductionScreenState.EntryView::filter).toList();
                     List<ProductionScreenState.EntryView> exact = cells.stream().filter(entry -> !entry.filter())
                             .toList();
+                    if (!tagCells) {
+                        // JEI before 19.16.1: the stick is an exact stick as well (D19).
+                        List<ItemKey> keys = exact.stream().map(ProductionScreenState.EntryView::key).toList();
+                        if (!filters.isEmpty() || exact.size() != 2 || !keys.contains(ItemKey.of(Items.STICK))
+                                || !(keys.contains(ItemKey.of(Items.COAL)) || keys.contains(ItemKey.of(Items.CHARCOAL))))
+                            throw new VisualTestException("the Torch's cells are " + cells);
+                        LOGGER.info(PREFIX + "patternjei: CHECK PASS the Torch lays its stick and its coal as the exact "
+                                + "{} (JEI before {})", keys, GRID_MAP_JEI);
+                        return;
+                    }
                     if (filters.size() != 1 || !filters.getFirst().key().equals(rods) || exact.size() != 1
                             || !(exact.getFirst().key().equals(ItemKey.of(Items.COAL))
                                     || exact.getFirst().key().equals(ItemKey.of(Items.CHARCOAL))))

@@ -71,7 +71,9 @@ grid). The mod compiles against JEI's API and never bundles or requires it:
   `ModLoadingIssue.error("fml.modloadingissue.missingdependency.optional")` (read in the bytecode of FML loader 4.0.45).
   That is why the floor is not Create's pin: the "+" works on older JEIs too (run on 19.8.4.110, 19.19.6.236,
   19.21.0.247, 19.57.0.451 and 19.64.0.454), and a floor at 19.21.0.247 would have stopped every client with an older
-  JEI (ADR-063). Below 19.21.0.247 Create's own JEI plugin fails to load (`CreateJEI` needs `ISubtypeInterpreter`,
+  JEI (ADR-063). The tag cells of a "+" at a production station (ADR-082) need JEI **19.16.1** or newer
+  (`IRecipeTransferHandlerHelper#getGuiSlotIndexToIngredientMap`); an older JEI lays a crafting recipe there with exact
+  cells (the missing method's `LinkageError` is caught and logged once). Below 19.21.0.247 Create's own JEI plugin fails to load (`CreateJEI` needs `ISubtypeInterpreter`,
   logged by JEI as `Failed to load`), which is Create's matter. Nothing is reported when JEI is absent, and the
   `side = "CLIENT"` entry is not checked on a dedicated server. The CurseForge upload lists JEI as an optional relation
   (`optional('jei')` in `publishMods`).

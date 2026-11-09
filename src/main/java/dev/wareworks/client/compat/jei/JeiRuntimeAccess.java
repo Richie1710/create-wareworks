@@ -77,6 +77,12 @@ public final class JeiRuntimeAccess {
         return type.isPresent() && showRecipes(current, type.get(), output);
     }
 
+    /** Whether the running JEI knows the recipe category {@code category}, for a harness that skips what JEI lacks. */
+    public static boolean knowsCategory(ResourceLocation category) {
+        IJeiRuntime current = runtime;
+        return current != null && current.getJeiHelpers().getRecipeType(category).isPresent();
+    }
+
     private static <T> boolean showRecipes(IJeiRuntime current, RecipeType<T> type, ItemStack output) {
         IFocus<ItemStack> focus = current.getJeiHelpers().getFocusFactory().createFocus(RecipeIngredientRole.OUTPUT,
                 VanillaTypes.ITEM_STACK, output.copy());

@@ -5675,7 +5675,9 @@ recipe screen hands the terminal back, where JEI's item list ends) was read in t
   after a first build with the floor at 19.21.0.247). An API an older JEI lacked would not be contained — JEI's
   `PluginCaller` catches a `LinkageError` only around a plugin's registration, while JEI 19.21 asks the transfer
   handler from its recipe screen (`RecipeTransferUtil`) and catches only a `RuntimeException` there — which is why the
-  floor is the oldest JEI the "+" was run with and not lower. Below 19.21.0.247 Create's own JEI plugin does not load
+  floor is the oldest JEI the "+" was run with and not lower. A later call into newer API must therefore catch the
+  `LinkageError` itself: the tag cells of ADR-082 D19 need `getGuiSlotIndexToIngredientMap` (JEI 19.16.1+), and an older
+  JEI lays a crafting recipe at a production station with exact cells. Below 19.21.0.247 Create's own JEI plugin does not load
   (`CreateJEI` needs `ISubtypeInterpreter`), so the panel reaches JEI as no exclusion area; JEI's item list still ends
   right of the folded-out window, whose `imageWidth` covers the panel. In the API the mod
   uses, 19.57 only adds members or turns abstract ones into defaults, with one exception: 19.52.0 deprecated the
@@ -8559,7 +8561,9 @@ only through `Capabilities.ItemHandler.BLOCK`, no per-tick scans, `core.*` witho
   `RequestConfirmation.of(pattern, runs)` throw for a pattern with choices, so every order of one is built from resolved
   lines and every confirmation from the plan's concrete `leafDemand`.
 * **D12. A filter that lets the result through.** A player's edit is refused both ways with a hotbar line
-  (`EditOutcome.FILTER_LETS_RESULT`); a JEI lay keeps that one cell exact instead of refusing the recipe (a saw's
+  (`EditOutcome.FILTER_LETS_RESULT`), also when the result follows the grid (D13): a followed result that a filter
+  cell of the slot lets through (a List Filter [iron ingot, iron nugget] alone makes nine nuggets) puts the slot back
+  as it was; a JEI lay keeps that one cell exact instead of refusing the recipe (a saw's
   `#minecraft:oak_logs` holds `stripped_oak_log`); a load accepts it, and the core excludes the result anyway.
 * **D13. Result following** (ADR-076) reads each filter group as the first item its filter names
   (`PatternFilterCells#examples`); with none the result does not follow. Examples are remembered per filter until the
@@ -8586,7 +8590,9 @@ only through `Capabilities.ItemHandler.BLOCK`, no per-tick scans, `core.*` witho
   the station and at the terminal (`OrderView.uses`).
 * **D19. JEI's "+".** The handler sends one optional tag per cell (`ProductionPatternLayPayload.tags`) and the
   recipe's id (`.recipe`): for a crafting recipe the cell's ingredient comes from JEI's `getGuiSlotIndexToIngredientMap`
-  (since 19.16.1, the slots it shows), for other recipes from the recipe's ingredients matched to a slot by the items JEI
+  (since 19.16.1, the slots it shows; JEI 19.8.4.110 to 19.16.0, still in `jei_version_range` per ADR-063, lacks the
+  method, so the handler catches the `LinkageError` along with a `RuntimeException`, logs it once and lays a crafting
+  recipe with exact cells), for other recipes from the recipe's ingredients matched to a slot by the items JEI
   shows (`RecipeTagCells#slotTag`, `#cellTags`). A client's recipe has lost its tags (the recipe sync writes every
   ingredient as a list of items), so the client only proposes the tag whose members are exactly the ingredient's items
   (`RecipeTagCells#tagFor`), and the server keeps it only where its own copy of the named recipe has that tag as an
@@ -8637,10 +8643,13 @@ requests and the make-first offer, chains, list orders, Stock Keeper restocking,
 Schematicannon Requester (ADR-081). JUnit: `ChoiceAllocatorTest`, `ChoiceIngredientTest`, `RestockChoiceTest`, the
 extended planner, scale and feeder tests, and `ProductionFilterTextWidthTest` for the screen's texts. GameTests:
 `ProductionFilterGameTests` (classification, old saves, refusals, largest stock, whole runs, reserves, list and deny
-filters, a chain, open orders, restock, migration, the screen state, the edit path with its hotbar line, the JEI lay
+filters, a chain, open orders, restock, migration, the screen state, the edit path with its hotbar line (also for a
+followed result), the JEI lay
 without JEI, and the bounds of the filter cache and of a filter's examples), plus filter tests in `CrafterFeederGameTests`, `SchematicannonRequesterGameTests` and
 `TerminalCraftChainGameTests`. Visual: the scenario `filtercells` (`dev.FilterCellVisualScenario`) and a Torch step
-plus filter checks in `patternjei`. The cost of the producible pass at a deliberate worst case (8 stations x 36 patterns,
+plus filter checks in `patternjei`, which reads JEI's version at run time: on 19.8.4.110 (no grid ingredient map, no
+Create JEI plugin) it expects the Chest and the Torch with exact cells and skips the saw and the spout after checking
+that JEI lacks their categories. The cost of the producible pass at a deliberate worst case (8 stations x 36 patterns,
 two filters of 64 candidates each, 2000 stock keys) is about 4 to 7 ms (`ProductionScaleTest`), over the 1 ms the design
 aimed at; a real aisle is far below that case.
 

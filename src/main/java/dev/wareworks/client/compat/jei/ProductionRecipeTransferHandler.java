@@ -11,6 +11,7 @@ import org.jetbrains.annotations.Nullable;
 import com.simibubi.create.content.processing.recipe.ProcessingOutput;
 import com.simibubi.create.content.processing.recipe.ProcessingRecipe;
 
+import dev.wareworks.Wareworks;
 import dev.wareworks.client.gui.ProductionRecipeLay;
 import dev.wareworks.client.gui.TerminalRecipeLay;
 import dev.wareworks.content.item.ItemKey;
@@ -67,12 +68,16 @@ import net.minecraft.world.item.crafting.RecipeHolder;
  * tags (every ingredient arrives as a list of items), so the tag sent is only proposed: the tag whose members are the
  * ingredient's items ({@link RecipeTagCells#tagFor}), and the server keeps it only where its own copy of the recipe
  * names that tag. For a crafting recipe the ingredient of a cell comes from JEI's own map of grid cells to ingredients
- * ({@link IRecipeTransferHandlerHelper#getGuiSlotIndexToIngredientMap}, since 19.16.1); for any other recipe from the
- * recipe's ingredients, matched to a slot by the items JEI shows for it ({@link RecipeTagCells#slotTag}). An
- * ingredient that lists items (NeoForge's coal or charcoal) or is custom stays exact. {@code IIngredientHelper#getTagKeyEquivalent} is deliberately not used: its API default is empty, and what
- * overrides it is visible only in JEI's bytecode.
+ * ({@link IRecipeTransferHandlerHelper#getGuiSlotIndexToIngredientMap}, since 19.16.1; an older JEI lays a crafting
+ * recipe with exact cells); for any other recipe from the recipe's ingredients, matched to a slot by the items JEI
+ * shows for it ({@link RecipeTagCells#slotTag}). An ingredient that lists items (NeoForge's coal or charcoal) or is
+ * custom stays exact. {@code IIngredientHelper#getTagKeyEquivalent} is deliberately not used: its API default is empty,
+ * and what overrides it is visible only in JEI's bytecode.
  */
 final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferHandler<ProductionMenu> {
+    /** Whether the fallback for a JEI without the grid ingredient map was logged; once per game. */
+    private static boolean exactCellsLogged;
+
     private final IRecipeTransferHandlerHelper helper;
     private final IRecipeTransferError hidden;
     private final IRecipeTransferError notOnlyItems;
@@ -183,7 +188,9 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
     /**
      * The tag of each grid cell of a crafting recipe, from JEI's own map of its grid cells to the recipe's ingredients,
      * which places a small recipe exactly in the slots JEI shows it in ({@link RecipeTagCells#gridTags}). A special
-     * recipe's map is empty, and so is every answer if JEI cannot give one.
+     * recipe's map is empty, and so is every answer if JEI cannot give one. The map exists since JEI 19.16.1; an older
+     * JEI, which {@code jei_version_range} still admits, has no such method, and its crafting recipes are laid with
+     * exact cells.
      */
     @SuppressWarnings("unchecked")
     private List<Optional<ResourceLocation>> gridTags(Object recipe) {
@@ -191,7 +198,12 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
             try {
                 return RecipeTagCells.gridTags(
                         helper.getGuiSlotIndexToIngredientMap((RecipeHolder<CraftingRecipe>) holder), CraftGrid.SIZE);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
+                if (e instanceof LinkageError && !exactCellsLogged) {
+                    exactCellsLogged = true;
+                    Wareworks.LOGGER.info("JEI before 19.16.1 has no grid ingredient map ({}): crafting recipes are"
+                            + " laid into a production pattern with exact cells", e.toString());
+                }
                 return Collections.nCopies(CraftGrid.SIZE, Optional.empty());
             }
         }

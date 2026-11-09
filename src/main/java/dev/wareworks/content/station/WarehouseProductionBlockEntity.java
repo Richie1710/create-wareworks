@@ -371,7 +371,8 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      * when a cell's item changes: it becomes what the grid makes now, or empty when that is no crafting recipe. A plank
      * alone makes a button, and a player on the way to a chest must not end up with a chest grid that says "button". A
      * result the grid does not make was chosen by the player, for another machine, and is left alone, and so is every
-     * result while only a cell's amount changes. A cell holding more than one item is no crafting grid.
+     * result while only a cell's amount changes. A cell holding more than one item is no crafting grid. A followed result
+     * that a filter cell of the slot lets through is refused like a chosen one (D12, ADR-082): the slot stays as it was.
      */
     public EditOutcome editPatternEntry(int pattern, int entry, ItemKey key, int count) {
         if (level == null || level.isClientSide || isRemoved())
@@ -386,11 +387,22 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                 && (result.isEmpty() || isWhatTheGridMakes(pattern, result.get()));
         if (!follows)
             return setPatternEntry(pattern, entry, key, count) ? EditOutcome.CHANGED : EditOutcome.UNCHANGED;
+        Optional<ItemKey> oldCell = patterns.keyAt(pattern, entry);
+        int oldCellCount = patterns.countAt(pattern, entry);
+        boolean oldCellFilter = patterns.isFilterAt(pattern, entry);
+        int resultCount = patterns.countAt(pattern, ProductionPatterns.RESULT_ENTRY);
         if (result.isPresent())
             patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY, null, ProductionEntry.MIN_COUNT);
         patterns.setEntry(pattern, entry, key, count);
-        recipeOfGrid(pattern).ifPresent(made -> patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY,
-                ItemKey.of(made), made.getCount()));
+        Optional<ItemStack> made = recipeOfGrid(pattern);
+        if (made.isPresent() && filterCellLets(pattern, ItemKey.of(made.get()))) {
+            // The followed result would be let through by a filter cell of the slot (D12): the slot goes back as it was.
+            patterns.setEntry(pattern, entry, oldCell.orElse(null), oldCellCount, oldCellFilter);
+            result.ifPresent(old -> patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY, old, resultCount));
+            return EditOutcome.FILTER_LETS_RESULT;
+        }
+        made.ifPresent(stack -> patterns.setEntry(pattern, ProductionPatterns.RESULT_ENTRY, ItemKey.of(stack),
+                stack.getCount()));
         patternsChanged();
         setChanged();
         return EditOutcome.CHANGED;
@@ -414,14 +426,19 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                 return EditOutcome.FILTER_LETS_RESULT;
             return null;
         }
-        if (entry == ProductionPatterns.RESULT_ENTRY) {
-            for (int cell = 0; cell < ProductionPatterns.GRID_CELLS; cell++) {
-                if (patterns.isFilterAt(pattern, cell) && PatternFilterCells.test(
-                        PatternFilterCells.resolve(patterns.keyAt(pattern, cell).orElseThrow()), level, key))
-                    return EditOutcome.FILTER_LETS_RESULT;
-            }
-        }
+        if (entry == ProductionPatterns.RESULT_ENTRY && filterCellLets(pattern, key))
+            return EditOutcome.FILTER_LETS_RESULT;
         return null;
+    }
+
+    /** Whether a filter cell of pattern slot {@code pattern} lets {@code result} through (D12). */
+    private boolean filterCellLets(int pattern, ItemKey result) {
+        for (int cell = 0; cell < ProductionPatterns.GRID_CELLS; cell++) {
+            if (patterns.isFilterAt(pattern, cell) && PatternFilterCells.test(
+                    PatternFilterCells.resolve(patterns.keyAt(pattern, cell).orElseThrow()), level, result))
+                return true;
+        }
+        return false;
     }
 
     private boolean isWhatTheGridMakes(int pattern, ItemKey result) {

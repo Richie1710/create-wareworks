@@ -218,6 +218,45 @@ public final class ProductionFilterGameTests {
                 .thenSucceed();
     }
 
+    /**
+     * A result that follows the grid is refused too when a filter cell lets it through (D12). A List Filter [iron ingot,
+     * iron nugget] alone in an empty slot reads as an iron ingot, which makes nine nuggets the filter allows. A List
+     * Filter [oak planks, oak pressure plate] alone makes a button, which it does not allow; an oak plank beside it would
+     * turn the button into a pressure plate it does allow. Both edits leave the slot as it was.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void filterRefusesFollowedResult(GameTestHelper helper) {
+        AisleFixture aisle = filterAisle(helper, false);
+        helper.startSequence()
+                .thenExecute(() -> {
+                    WarehouseProductionBlockEntity station = aisle.productionAt(SAW_RACK);
+                    ProductionPatterns patterns = station.patterns();
+                    ItemKey ingotOrNugget = FilterCells.list(Items.IRON_INGOT, Items.IRON_NUGGET);
+                    helper.assertValueEqual(station.editPatternEntry(0, 0, ingotOrNugget, 1),
+                            WarehouseProductionBlockEntity.EditOutcome.FILTER_LETS_RESULT,
+                            "the filter that would make its own nuggets is refused");
+                    helper.assertValueEqual(patterns.keyAt(0, 0), Optional.empty(), "no cell written");
+                    helper.assertValueEqual(patterns.keyAt(0, ProductionPatterns.RESULT_ENTRY), Optional.empty(),
+                            "and no result");
+
+                    ItemKey plankOrPlate = FilterCells.list(Items.OAK_PLANKS, Items.OAK_PRESSURE_PLATE);
+                    ItemKey button = ItemKey.of(Items.OAK_BUTTON);
+                    helper.assertValueEqual(station.editPatternEntry(1, 0, plankOrPlate, 1),
+                            WarehouseProductionBlockEntity.EditOutcome.CHANGED, "the filter alone is fine");
+                    helper.assertValueEqual(patterns.keyAt(1, ProductionPatterns.RESULT_ENTRY), Optional.of(button),
+                            "its result follows to a button");
+                    helper.assertValueEqual(station.editPatternEntry(1, 1, OAK, 1),
+                            WarehouseProductionBlockEntity.EditOutcome.FILTER_LETS_RESULT,
+                            "the plank that would make a pressure plate is refused");
+                    helper.assertValueEqual(patterns.keyAt(1, 1), Optional.empty(), "the plank is not written");
+                    helper.assertTrue(patterns.isFilterAt(1, 0), "the filter stays");
+                    helper.assertValueEqual(patterns.keyAt(1, ProductionPatterns.RESULT_ENTRY), Optional.of(button),
+                            "and the result is still the button");
+                    helper.assertValueEqual(patterns.countAt(1, ProductionPatterns.RESULT_ENTRY), 1, "of one");
+                })
+                .thenSucceed();
+    }
+
     // --- largest stock first -----------------------------------------------------------------------------------------
 
     /**
